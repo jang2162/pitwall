@@ -23,6 +23,11 @@ ignore = [
   { id = "RUSTSEC-2026-0367", reason = "zip 4 via tauri-plugin-updater (Windows only, extracts only signature-verified bytes, we ship raw msi); remove when the plugin moves to zip >= 9" },
   { id = "RUSTSEC-2026-0368", reason = "zip 4 via tauri-plugin-updater (Windows only, extracts only signature-verified bytes, we ship raw msi); remove when the plugin moves to zip >= 9" },
   { id = "RUSTSEC-2026-0369", reason = "zip 4 via tauri-plugin-updater (Windows only, extracts only signature-verified bytes, we ship raw msi); remove when the plugin moves to zip >= 9" },
+  # zip 4 의 `ZipArchive::extract` 가 symlink 항목의 거짓 크기로 프로세스를 abort 한다. pw-tools 는 zip 9 로 옮겼고 `extract` 를
+  # 쓰지 않는다 — 남은 zip 4 는 tauri-plugin-updater 2.14.0(2.x 최신, 2026-11-11 확인)뿐이다. 무시 근거는 위 세 건과 같다:
+  # Windows 전용 의존성, updater.rs `extract_zip` 은 minisign 검증 뒤의 `install_inner` 안에서만 돈다, 우리 Windows 산출물은
+  # raw .msi 다. 플러그인이 zip >=9 로 옮기면 걷는다.
+  { id = "RUSTSEC-2026-0429", reason = "zip 4 via tauri-plugin-updater 2.14.0 (checked 2026-11-11; Windows only, extract runs only after minisign verification, we ship raw msi); remove when the plugin moves to zip >= 9" },
 ]
 # 업스트림이 고쳐 ignore 가 낡으면 경고로 드러낸다.
 unused-ignored-advisory = "warn"

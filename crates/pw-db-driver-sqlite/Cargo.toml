@@ -15,7 +15,7 @@ pw-db-driver = { path = "../pw-db-driver" }
 pw-db-types = { path = "../pw-db-types" }
 # 로컬 저장소(pw-core)와 같은 판이다(결정 M3-D2). `hooks` 는 ATTACH 대상을 루트 판정에 거는 authorizer, `column_decltype` 은
 # 결과 열의 선언 타입. 확장 로드 기능(`load_extension`)은 켜지 않는다(결정 M3-D13).
-rusqlite = { version = "0.40.2", features = ["bundled", "hooks", "column_decltype"] }
+rusqlite = { version = "0.41.1", features = ["bundled", "hooks", "column_decltype"] }
 tempfile = { version = "3.27.0", optional = true }
 # 연결 스레드의 답을 async 쪽에서 기다린다.
 tokio = { workspace = true, features = ["sync"] }

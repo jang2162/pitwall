@@ -89,10 +89,10 @@ pub(crate) fn open(spec: &ConnectionSpec) -> Result<(Connection, Guard), DbError
     } else {
         OpenFlags::SQLITE_OPEN_READ_WRITE
     };
-    let conn = Connection::open_with_flags(path, access | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+    let mut conn = Connection::open_with_flags(path, access | OpenFlags::SQLITE_OPEN_NO_MUTEX)
         .map_err(|e| map(e, None))?;
     let guard = Guard::default();
-    harden(&conn, spec, &guard).map_err(|e| guard.error(e))?;
+    harden(&mut conn, spec, &guard).map_err(|e| guard.error(e))?;
     if spec.read_only {
         guard
             .set_query_only(&conn, true)
@@ -103,7 +103,7 @@ pub(crate) fn open(spec: &ConnectionSpec) -> Result<(Connection, Guard), DbError
     Ok((conn, guard))
 }
 
-fn harden(conn: &Connection, spec: &ConnectionSpec, guard: &Guard) -> rusqlite::Result<()> {
+fn harden(conn: &mut Connection, spec: &ConnectionSpec, guard: &Guard) -> rusqlite::Result<()> {
     disable_load_extension(conn)?;
     conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
     conn.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)?;

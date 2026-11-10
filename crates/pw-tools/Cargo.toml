@@ -40,11 +40,13 @@ toml_edit = "0.25.17"
 tracing = "0.1.44"
 # 받을 주소의 형식 검사(https 만 — 결정 M4-D17). reqwest 가 이미 쓰는 판이다.
 url = "2.5.8"
-# registry 릴리스 산출물 `registry.json.zip` 을 푼다. 데스크톱 업데이터가 이미 쓰는 판에 deflate 만 켠다.
-zip = { version = "4.6.1", default-features = false, features = ["deflate-flate2"] }
+# registry 릴리스 산출물 `registry.json.zip` · 도구 .zip 을 푼다. deflate 만 켠다. 9 미만은 RUSTSEC-2026-0429 가 걸린다(데스크톱
+# 업데이터는 아직 zip 4 를 따로 끌어온다 — deny.toml).
+zip = { version = "9.5.0", default-features = false, features = ["deflate-flate2"] }
 # 설치기가 `.tar.gz` 를 푼다(M4-04). 데스크톱 업데이터가 이미 쓰는 판이다 — 기본 기능(xattr)은 켜지 않는다.
 tar = { version = "0.4.46", default-features = false }
-# zip 의 deflate 백엔드(기본 `rust_backend` — miniz_oxide). 데스크톱 업데이터 · tar 가 이미 쓰는 판이다.
+# zip 의 deflate 백엔드(기본 `rust_backend` — miniz_oxide). zip 9 는 flate2 를 기본 기능 없이 끌어오므로 여기서 켠다. 데스크톱
+# 업데이터 · tar 가 이미 쓰는 판이다.
 flate2 = "1.1.10"
 
 [dev-dependencies]

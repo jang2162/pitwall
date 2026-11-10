@@ -327,7 +327,7 @@ impl Worker {
         in_transaction: Arc<AtomicBool>,
         cancelled: Arc<AtomicBool>,
     ) -> DbResult<Self> {
-        let (conn, guard) = guard::open(spec)?;
+        let (mut conn, guard) = guard::open(spec)?;
         let watched = cancelled.clone();
         conn.progress_handler(
             CANCEL_CHECK_OPS,
@@ -501,7 +501,6 @@ impl Worker {
         }
         let columns = statement
             .columns()
-            .iter()
             .map(|column| ColumnMeta {
                 name: column.name().to_owned(),
                 db_type: column.decl_type().unwrap_or_default().to_owned(),

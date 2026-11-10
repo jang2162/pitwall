@@ -1537,7 +1537,7 @@ Apache License
 
 ### Apache License 2.0 (Apache-2.0)
 
-Used by: rmcp 3.5.1, ryu 1.0.23, serial2 0.2.38, sync_wrapper 1.0.2
+Used by: rmcp 3.9.0, ryu 1.0.23, serial2 0.2.38, sync_wrapper 1.0.2
 
 ```text
 Apache License
@@ -3192,7 +3192,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### MIT License (MIT)
 
-Used by: libsqlite3-sys 0.38.2, rusqlite 0.40.2
+Used by: libsqlite3-sys 0.39.1, rusqlite 0.41.1
 
 ```text
 Copyright (c) 2014 The rusqlite developers
@@ -5811,7 +5811,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### MIT License (MIT)
 
-Used by: chacha20 0.10.2
+Used by: chacha20 0.10.2, zeroize_derive 1.5.0
 
 ```text
 Copyright (c) 2019-2026 The RustCrypto Project Developers
@@ -8797,7 +8797,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### MIT License (MIT)
 
-Used by: adler2 2.0.1, anyhow 1.0.104, async-channel 2.5.0, async-executor 1.14.0, async-io 2.6.0, async-lock 3.4.2, async-process 2.5.0, async-signal 0.2.14, async-task 4.7.1, async-trait 0.1.92, atomic-waker 1.1.2, blocking 1.7.0, camino 1.2.6, cargo_metadata 0.19.2, cargo-platform 0.1.9, concurrent-queue 2.5.0, displaydoc 0.2.7, dtoa 1.0.11, dyn-clone 1.0.20, endi 1.1.1, erased-serde 0.4.10, etcetera 0.11.0, event-listener 5.4.2, event-listener-strategy 0.5.4, fastrand 2.5.0, futures-lite 2.6.1, hermit-abi 0.5.3, inventory 0.3.25, itoa 1.0.18, lazy_static 1.5.1, linux-raw-sys 0.12.1, num_enum 0.7.6, num_enum_derive 0.7.6, once_cell 1.21.4, ordered-stream 0.2.0, parking 2.2.1, pastey 0.2.3, pin-project-lite 0.2.17, piper 0.2.5, polling 3.11.0, portable-atomic 1.15.0, portable-atomic-util 0.2.8, proc-macro-crate 1.3.1, proc-macro-crate 2.0.2, proc-macro-crate 3.5.0, proc-macro2 1.0.107, quote 1.0.47, ref-cast 1.0.27, ref-cast-impl 1.0.27, rustix 1.1.5, rustversion 1.0.23, semver 1.0.28, serde 1.0.229, serde_core 1.0.229, serde_derive 1.0.229, serde_derive_internals 0.29.1, serde_derive_internals 0.30.0, serde_json 1.0.154, serde_repr 0.1.21, serde-untagged 0.1.9, servo_arc 0.4.3, simd_cesu8 1.2.0, syn 1.0.109, syn 2.0.119, syn 3.0.9, thiserror 1.0.69, thiserror 2.0.21, thiserror-impl 1.0.69, thiserror-impl 2.0.21, typeid 1.0.3, unic-langid 0.9.6, unic-langid-impl 0.9.6, unicode-ident 1.0.27, wasi 0.11.1+wasi-snapshot-preview1, wasi 0.14.7+wasi-0.2.4, wasip2 1.0.4+wasi-0.2.12, wasm-streams 0.5.0, wit-bindgen 0.57.1, x11 2.21.0, x11-dl 2.21.0, zmij 1.0.23, zvariant_utils 4.2.0
+Used by: adler2 2.0.1, anyhow 1.0.104, async-channel 2.5.0, async-executor 1.14.1, async-io 2.6.0, async-lock 3.4.2, async-process 2.5.0, async-signal 0.2.14, async-task 4.7.1, async-trait 0.1.92, atomic-waker 1.1.2, blocking 1.7.0, camino 1.2.6, cargo_metadata 0.19.2, cargo-platform 0.1.9, concurrent-queue 2.5.0, displaydoc 0.2.7, dtoa 1.0.11, dyn-clone 1.0.20, endi 1.1.1, erased-serde 0.4.10, etcetera 0.11.0, event-listener 5.4.2, event-listener-strategy 0.5.4, fastrand 2.5.0, futures-lite 2.6.1, hermit-abi 0.5.3, inventory 0.3.25, itoa 1.0.18, lazy_static 1.5.1, linux-raw-sys 0.12.1, num_enum 0.7.6, num_enum_derive 0.7.6, once_cell 1.21.4, ordered-stream 0.2.0, parking 2.2.1, pastey 0.2.3, pin-project-lite 0.2.17, piper 0.2.5, polling 3.11.0, portable-atomic 1.15.0, portable-atomic-util 0.2.8, proc-macro-crate 1.3.1, proc-macro-crate 2.0.2, proc-macro-crate 3.5.0, proc-macro2 1.0.107, quote 1.0.47, ref-cast 1.0.27, ref-cast-impl 1.0.27, rustix 1.1.5, rustversion 1.0.23, semver 1.0.28, serde 1.0.229, serde_core 1.0.229, serde_derive 1.0.229, serde_derive_internals 0.29.1, serde_derive_internals 0.30.0, serde_json 1.0.154, serde_repr 0.1.21, serde-untagged 0.1.9, servo_arc 0.4.3, simd_cesu8 1.2.0, syn 1.0.109, syn 2.0.119, syn 3.0.9, thiserror 1.0.69, thiserror 2.0.21, thiserror-impl 1.0.69, thiserror-impl 2.0.21, typed-path 0.13.0, typeid 1.0.3, unic-langid 0.9.6, unic-langid-impl 0.9.6, unicode-ident 1.0.27, wasi 0.11.1+wasi-snapshot-preview1, wasi 0.14.7+wasi-0.2.4, wasip2 1.0.4+wasi-0.2.12, wasm-streams 0.5.0, wit-bindgen 0.57.1, x11 2.21.0, x11-dl 2.21.0, zmij 1.0.23, zvariant_utils 4.2.0
 
 ```text
 Permission is hereby granted, free of charge, to any
@@ -9098,7 +9098,7 @@ SOFTWARE.
 
 ### MIT License (MIT)
 
-Used by: tracing-core 0.1.36
+Used by: tracing-core 0.1.36, zip 9.5.0
 
 ```text
 The MIT License (MIT)
@@ -9296,7 +9296,7 @@ THE SOFTWARE.
 
 ### MIT License (MIT)
 
-Used by: nix 0.28.0
+Used by: nix 0.28.0, nix 0.31.3
 
 ```text
 The MIT License (MIT)
@@ -10191,6 +10191,27 @@ INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
 PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
 HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+### MIT No Attribution (MIT-0)
+
+Used by: constant_time_eq 0.6.1
+
+```text
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 

@@ -238,7 +238,10 @@ impl Unpacker {
             let mut entry = zip
                 .by_index(i)
                 .map_err(|e| ExtractError::Corrupt(e.to_string()))?;
-            let name = entry.name().to_owned();
+            let name = entry
+                .name()
+                .map_err(|e| ExtractError::Corrupt(e.to_string()))?
+                .into_owned();
             let kind = if entry.is_symlink() {
                 let mut target = String::new();
                 // 링크의 대상 글은 짧다 — 상한을 두고 읽는다.

@@ -127,7 +127,10 @@ pub(crate) fn unzip_with(
         let entry = archive
             .by_index_raw(i)
             .map_err(|e| format!("registry.json.zip: {e}"))?;
-        let name = entry.name().to_owned();
+        let name = entry
+            .name()
+            .map_err(|e| format!("registry.json.zip: {e}"))?
+            .into_owned();
         let unsafe_name = name.is_empty()
             || name.starts_with('/')
             || name.contains('\\')
