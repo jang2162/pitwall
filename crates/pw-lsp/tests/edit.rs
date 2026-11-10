@@ -1077,9 +1077,11 @@ async fn a_second_edit_while_the_first_waits_is_refused() {
                 "workspace/executeCommand",
                 vec![apply_edit_request(&main), apply_edit_request(&main)],
             )
+            // 명령의 답이 오면 흐름이 끝나 기다리던 편집도 버려진다 — 창이 첫 편집에 답할 때까지(두 번째 거절 확인 + 300 ms)
+            // 충분히 늦게 답한다. 1.5 s 로는 느린 CI 러너에서 그 전에 끝났다(run 42910504824).
             .reply(
                 "workspace/executeCommand",
-                Reply::result(json!(null)).delayed(1500),
+                Reply::result(json!(null)).delayed(6000),
             ),
             &fix,
         ),
