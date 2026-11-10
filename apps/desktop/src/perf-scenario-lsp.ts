@@ -81,8 +81,12 @@ export const TYPING_KEYS = 300;
 export const KEY_MS = 50;
 export const TYPING_TEXT = "item.perfItem3 + value ";
 
-/** 심볼 인덱스: 질의(합성 저장소 `crates/pw-index/tests/perf_repo.rs` 의 이름 — M4-15 · M4-16 의 질의와 같다). */
-export const SYMBOL_QUERY = "handleItem1234x5";
+/**
+ * 심볼 인덱스: 질의(합성 저장소 `crates/pw-index/tests/support/perf_repo.rs` 에 있는 이름). 키마다 그 질의의 결과 줄을 기다리므로
+ * 모든 접두가 결과를 내야 한다 — M4-15 · M4-16 의 `handleItem1234x5` 는 동사가 `verbs[k % 6]` 이라 저장소에 없고(마지막 키 0개)
+ * 결과 줄이 생기지 않아 시간 초과했다. 길이는 같은 16자다.
+ */
+export const SYMBOL_QUERY = "handleItem1234x6";
 export const CLASS_QUERY = "Widget1234";
 export const INDEX_POLL_MS = 50;
 export const INDEX_TIMEOUT_MS = 180_000;
