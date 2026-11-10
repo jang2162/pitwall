@@ -381,7 +381,8 @@ impl Env {
             .collect()
     }
 
-    /// 그 서버 로그 파일들(`$STATE/logs/lsp/<서버>-*.log`)의 끝 `lines` 줄 — 실 서버 시험이 실패할 때 서버가 남긴 예외를 보인다.
+    /// 그 서버 로그 파일들(`$STATE/logs/lsp/<서버>-*.log`, 있으면 `<서버>-data/.metadata/.log`)의 끝 `lines` 줄 — 실 서버 시험이
+    /// 실패할 때 서버가 남긴 예외를 보인다.
     pub fn server_log_tail(&self, server: &str, lines: usize) -> String {
         let dir = pw_lsp::log::lsp_log_dir(&self.paths.state);
         let mut files: Vec<PathBuf> = fs::read_dir(&dir)
@@ -395,6 +396,11 @@ impl Env {
             })
             .collect();
         files.sort();
+        // jdtls 는 예외를 자기 작업 폴더의 Eclipse 로그에 쓴다(`-data <base>/jdtls-data`, 시험이 정한다).
+        let workspace_log = self.base.join(format!("{server}-data/.metadata/.log"));
+        if workspace_log.is_file() {
+            files.push(workspace_log);
+        }
         let mut out = String::new();
         for file in files {
             let text = fs::read_to_string(&file).unwrap_or_default();
