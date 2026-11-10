@@ -1761,7 +1761,8 @@ mod measure {
         }
         locked |= screen_locked()?;
         let ended = epoch_ms();
-        let memory = sample(group);
+        let servers = server_pids(app_pid);
+        let memory = sample_pids(members(group).into_iter().chain(servers.iter().copied()));
         if !memory.processes.iter().any(|p| p.pid == app_pid) {
             return Err(format!(
                 "run {index}: the app {app_pid} exited before the memory sample"
@@ -1780,7 +1781,7 @@ mod measure {
         } else {
             None
         };
-        let split = lsp::split(&memory);
+        let split = lsp::split(&memory, &servers);
         Ok(LspRun {
             index,
             warmup,
@@ -1995,7 +1996,13 @@ mod measure {
 
     /// 책임 프로세스가 `group` 인 프로세스(앱 + 그 앱이 요청한 WebKit 등)의 메모리.
     fn sample(group: u32) -> Memory {
-        let mut processes: Vec<Process> = members(group)
+        sample_pids(members(group))
+    }
+
+    /// 이 pid 들의 메모리(같은 pid 는 한 번).
+    fn sample_pids(pids: impl IntoIterator<Item = u32>) -> Memory {
+        let pids: std::collections::BTreeSet<u32> = pids.into_iter().collect();
+        let mut processes: Vec<Process> = pids
             .into_iter()
             .filter_map(|pid| {
                 let usage = macos::usage(pid)?;
@@ -2027,6 +2034,15 @@ mod measure {
             .collect();
         pids.dedup();
         pids
+    }
+
+    /// 앱 프로세스의 자손(언어 서버와 그 자식 — 앱의 책임 그룹에 들지 않는다, [`lsp::descendants`]).
+    fn server_pids(app_pid: u32) -> std::collections::BTreeSet<u32> {
+        let parents: Vec<(u32, u32)> = macos::all_pids()
+            .into_iter()
+            .filter_map(|pid| Some((pid, macos::parent_pid(pid)?)))
+            .collect();
+        lsp::descendants(app_pid, &parents)
     }
 
     /// 책임 프로세스가 `group` 인 살아 있는 프로세스(그 pid 자신 포함).

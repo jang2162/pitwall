@@ -252,6 +252,24 @@ pub fn usage(pid: u32) -> Option<Usage> {
     })
 }
 
+/// 부모 pid. 끝났거나 다른 사용자의 프로세스면 `None`.
+pub fn parent_pid(pid: u32) -> Option<u32> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: PROC_PIDTBSDINFO 는 proc_bsdinfo 하나를 채우고 쓴 바이트 수를 돌려준다.
+    let n = unsafe {
+        libc::proc_pidinfo(
+            pid as libc::c_int,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    // SAFETY: 크기만큼 채워졌으면 초기화됐다.
+    (n == size).then(|| unsafe { info.assume_init() }.pbi_ppid)
+}
+
 pub fn alive(pid: u32) -> bool {
     // SAFETY: 신호 0 은 존재 확인만 한다.
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
@@ -320,6 +338,20 @@ mod tests {
         }
         assert_eq!(responsible, Some(pid));
         assert_ne!(responsible_pid(std::process::id()), Some(pid));
+    }
+
+    /// 언어 서버는 앱의 책임 그룹 밖에 있을 수 있어 앱 pid 의 자손으로 찾는다 — 그 바탕인 부모 pid.
+    #[test]
+    fn a_child_reports_this_process_as_its_parent() {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("5")
+            .spawn()
+            .unwrap();
+        let parent = parent_pid(child.id());
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(parent, Some(std::process::id()));
+        assert_eq!(parent_pid(u32::MAX >> 1), None);
     }
 
     #[test]

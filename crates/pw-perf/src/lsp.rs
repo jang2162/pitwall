@@ -10,6 +10,7 @@
 //! - `lsp-idle`: `--project`(이 저장소의 사본)를 신뢰로 등록하고 `[lsp.rust-analyzer] path` 를 `--lsp-server` 로. 서버가 준비된 뒤
 //!   `--idle-secs` 를 기다려 메모리를 잰다 — Pitwall 의 프로세스와 서버(그 밖의 이름)를 나눠 적는다.
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -101,11 +102,11 @@ pub const DEFINITIONS: &[(&str, &str)] = &[
     ),
     (
         "idle",
-        "`lsp-idle`: this repository's copy registered trusted with the real server at `--lsp-server`; after the file opened and the server stayed ready for 15 s, wait idle_secs and sample phys_footprint; Pitwall's processes (`pitwall` and WebKit) and the server's (every other process of the instance) are reported apart",
+        "`lsp-idle`: this repository's copy registered trusted with the real server at `--lsp-server`; after the file opened and the server stayed ready for 15 s, wait idle_secs and sample phys_footprint; Pitwall's processes (`pitwall`, WebKit and the instance's helpers) and the server's (the descendants of the app process — the server is not in the app's responsible-pid group) are reported apart",
     ),
     (
         "memory",
-        "phys_footprint by the responsible-pid group, sampled after the scenario (symbols: after the popups — the Rust index lives in the `pitwall` process)",
+        "phys_footprint by the responsible-pid group plus the descendants of the app process (the language server and its children), sampled after the scenario (symbols: after the popups — the Rust index lives in the `pitwall` process)",
     ),
 ];
 
@@ -570,25 +571,44 @@ fn round(x: f64) -> f64 {
     (x * 10.0).round() / 10.0
 }
 
-/// 메모리를 Pitwall(앱 · WebKit)과 서버(그 밖)로 나눈다.
+/// 메모리를 Pitwall(앱 · WebKit)과 서버로 나눈다.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
 pub struct MemorySplit {
+    /// `pitwall` 과 그 밖의 보조 프로세스(SandboxHelper 등 — 서버도 WebKit 도 아닌 것).
     pub app_footprint_bytes: u64,
     pub webkit_footprint_bytes: u64,
     pub server_footprint_bytes: u64,
     pub server_rss_bytes: u64,
 }
 
-pub fn split(memory: &Memory) -> MemorySplit {
+/// `root` 의 자손 pid(자신은 빼고, 손자 이하 포함). `parents` 는 살아 있는 프로세스마다 (pid, 부모 pid).
+///
+/// 언어 서버는 앱의 책임 프로세스 그룹에 들지 않는다(2026-11-10 실측 — 그룹에는 rust-analyzer 가 없었다). 그래서 서버는 앱
+/// 프로세스의 자손으로 찾는다. WebKit 의 프로세스는 launchd 의 자식이라 여기에 들지 않는다.
+pub fn descendants(root: u32, parents: &[(u32, u32)]) -> BTreeSet<u32> {
+    let mut found = BTreeSet::new();
+    let mut frontier = vec![root];
+    while let Some(parent) = frontier.pop() {
+        for &(pid, ppid) in parents {
+            if ppid == parent && pid != root && found.insert(pid) {
+                frontier.push(pid);
+            }
+        }
+    }
+    found
+}
+
+/// `servers`(앱 pid 의 자손 — [`descendants`])는 서버 몫, `pitwall` 은 앱, WebKit 은 WebKit, 그 밖(그룹의 보조 프로세스)은 앱 몫.
+pub fn split(memory: &Memory, servers: &BTreeSet<u32>) -> MemorySplit {
     let mut s = MemorySplit::default();
     for p in &memory.processes {
-        if p.name == "pitwall" {
-            s.app_footprint_bytes += p.footprint_bytes;
-        } else if p.name.starts_with("com.apple.WebKit") {
+        if p.name.starts_with("com.apple.WebKit") {
             s.webkit_footprint_bytes += p.footprint_bytes;
-        } else {
+        } else if p.name != "pitwall" && servers.contains(&p.pid) {
             s.server_footprint_bytes += p.footprint_bytes;
             s.server_rss_bytes += p.rss_bytes;
+        } else {
+            s.app_footprint_bytes += p.footprint_bytes;
         }
     }
     s
@@ -980,7 +1000,7 @@ pub fn summarize_lsp(runs: &[LspRun]) -> Vec<Row> {
     let s = per(&|r| Some(mb(r.split.app_footprint_bytes)));
     push(
         "app_footprint_mb",
-        "  of which the app process (`pitwall` — Host, LSP client, symbol index)",
+        "  of which the app process (`pitwall` — Host, LSP client, symbol index — and the instance's helpers)",
         s,
         " MB",
         None,
@@ -1472,17 +1492,39 @@ mod tests {
                 p(3, "com.apple.WebKit.GPU", 20),
                 p(4, "rust-analyzer", 900),
                 p(5, "rust-analyzer-proc-macro-srv", 40),
+                // 앱의 책임 그룹에 든 macOS 보조 프로세스 — 서버가 아니다(2026-11-10 의 실측이 이것을 서버로 셌다).
+                p(6, "com.apple.audio.SandboxHelper", 5),
+                p(7, "SetStoreUpdateService", 2),
             ],
         };
+        let servers = BTreeSet::from([4, 5]);
         assert_eq!(
-            split(&memory),
+            split(&memory, &servers),
             MemorySplit {
-                app_footprint_bytes: 60,
+                app_footprint_bytes: 67,
                 webkit_footprint_bytes: 170,
                 server_footprint_bytes: 940,
                 server_rss_bytes: 1880,
             }
         );
+    }
+
+    #[test]
+    fn the_servers_are_every_descendant_of_the_app_process() {
+        // 100 = 앱. 4 = 서버, 5 = 서버의 자식(proc-macro 서버), 9 = 서버의 손자. 2 · 3 = WebKit(launchd 1 의 자식), 50 = 남.
+        let parents = [
+            (100, 1),
+            (2, 1),
+            (3, 1),
+            (4, 100),
+            (5, 4),
+            (9, 5),
+            (50, 1),
+            (51, 50),
+        ];
+        assert_eq!(descendants(100, &parents), BTreeSet::from([4, 5, 9]));
+        assert_eq!(descendants(4, &parents), BTreeSet::from([5, 9]));
+        assert!(descendants(77, &parents).is_empty());
     }
 
     #[test]
