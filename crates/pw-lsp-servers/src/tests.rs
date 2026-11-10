@@ -392,10 +392,11 @@ impl Fixture {
         let projects = Projects::new(paths.clone(), None, bus);
         let bin = tmp.path().join("shell bin");
         fs::create_dir_all(&bin).unwrap();
+        // 기기의 `JAVA_HOME`(CI 러너는 늘 있다)이 런타임 환경으로 새면 「java 가 아닌 서버는 JAVA_HOME 을 받지 않는다」를 가를 수 없다.
         let shell = executable(
             &tmp.path().join("fake-shell"),
             &format!(
-                "PATH='{}:/usr/bin:/bin'; export PATH\nPW_TEST_SECRET='shell-s3cr3t'; export PW_TEST_SECRET\neval \"$4\"",
+                "PATH='{}:/usr/bin:/bin'; export PATH\nunset JAVA_HOME\nPW_TEST_SECRET='shell-s3cr3t'; export PW_TEST_SECRET\neval \"$4\"",
                 bin.display()
             ),
         );

@@ -107,7 +107,7 @@ pub struct EnvOptions {
     pub trusted: bool,
     pub follow: bool,
     pub manager: ManagerOptions,
-    /// 가짜 로그인 셸이 PATH · HOME 을 시험 폴더로 바꾸는가. 끄면 시험 프로세스의 환경을 그대로 넘긴다(실 서버 시험 — cargo · node).
+    /// 가짜 로그인 셸이 PATH · HOME 을 시험 폴더로 바꾸고 기기의 `JAVA_HOME`(CI 러너는 늘 있다)을 지우는가. 끄면 시험 프로세스의 환경을 그대로 넘긴다(실 서버 시험 — cargo · node).
     pub isolated_shell: bool,
     /// 파일 목록 인덱스와 실제 OS 감시(`pw_fs`)를 관리자에 붙인다(파일 감시 전달 — M4-05b). 감시는 [`Env::watch_project`] 로 건다.
     pub files: bool,
@@ -156,7 +156,7 @@ impl Env {
         let prelude = options.shell_prelude.as_deref().unwrap_or_default();
         let body = if options.isolated_shell {
             format!(
-                "PATH='{}:/usr/bin:/bin'; export PATH\nHOME='{}'; export HOME\nunset MISE_DATA_DIR XDG_DATA_HOME\n{prelude}\neval \"$4\"",
+                "PATH='{}:/usr/bin:/bin'; export PATH\nHOME='{}'; export HOME\nunset MISE_DATA_DIR XDG_DATA_HOME JAVA_HOME\n{prelude}\neval \"$4\"",
                 bin.display(),
                 home.display()
             )
