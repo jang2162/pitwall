@@ -146,7 +146,10 @@ pub fn target_text(k: usize) -> String {
 }
 
 fn file_uri(path: &Path) -> String {
-    format!("file://{}", path.display())
+    // 퍼센트 인코딩 · Windows 의 `file:///C:/…` 꼴은 url 이 만든다 — `file://` 에 경로를 그대로 붙이면 공백 · `\\` 가 URI 를 깬다.
+    url::Url::from_file_path(path)
+        .expect("the fixture paths are absolute")
+        .into()
 }
 
 /// 회 폴더의 프로젝트에 픽스처를 쓰고, 가짜 서버의 설정(`run_root/pw-perf-lsp.json`)과 전역 설정(`config_dir/settings.toml`)을 쓴다.
@@ -1533,7 +1536,8 @@ mod tests {
 
     #[test]
     fn the_fixture_has_what_the_app_scenario_looks_for() {
-        let dir = std::env::temp_dir().join(format!("pw-perf-lsp-fixture-{}", std::process::id()));
+        // 공백이 든 폴더 — 가짜가 답하는 URI 가 퍼센트 인코딩되는지 본다.
+        let dir = std::env::temp_dir().join(format!("pw-perf lsp-fixture-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let project = dir.join("project");
         std::fs::create_dir_all(&project).unwrap();
@@ -1565,7 +1569,13 @@ mod tests {
         let config: Config =
             serde_json::from_slice(&std::fs::read(dir.join(FAKE_CONFIG_FILE)).unwrap()).unwrap();
         assert_eq!(config.definition_line as usize, DEF_TARGET_LINE - 1);
-        assert!(config.definition_targets[0].ends_with("/project/src/t0.rs"));
+        let target = &config.definition_targets[0];
+        assert!(target.ends_with("/project/src/t0.rs"), "{target}");
+        assert!(!target.contains(' '), "{target}");
+        assert_eq!(
+            url::Url::parse(target).unwrap().to_file_path(),
+            Ok(project.join("src").join("t0.rs")),
+        );
         assert_eq!(config.problems.as_ref().unwrap().files.len(), PROBLEM_FILES);
         write_fixture(&project, &dir, &dir.join("config"), None).unwrap();
         let off = std::fs::read_to_string(dir.join("config/settings.toml")).unwrap();

@@ -5744,6 +5744,7 @@ dependencies = [
  "pw-mcp",
  "serde",
  "serde_json",
+ "url",
 ]
 
 [[package]]
