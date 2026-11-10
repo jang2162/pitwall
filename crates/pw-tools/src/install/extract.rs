@@ -3,7 +3,9 @@
 //! - 형식은 저장 이름으로 정한다(M4-03 [`ArchiveFormat`]): `.tar.gz` · `.zip` · `.gz`(단일 파일) · 그 밖(받은 그대로). 번들 패키지가
 //!   쓰지 않는 `.tar` · `.tar.xz` 는 「지원하지 않음」 이다(새로 필요해지면 그 행이 더한다).
 //! - 항목 경로가 설치 폴더 밖(`..` · 절대 경로 · 드라이브 · `\`)이거나, 앞서 푼 링크를 지나거나, 같은 이름이 두 번 나오면 **그 설치
-//!   전체를 실패**로 한다(부르는 쪽이 설치 폴더를 지운다). 파일은 `create_new` 로 만들어 이미 있는 것(링크 포함)을 덮지 않는다.
+//!   전체를 실패**로 한다(부르는 쪽이 설치 폴더를 지운다). 예외는 **폴더 항목끼리의 중복** 하나다 — 내용이 없어 덮을 것이
+//!   없다(kotlin-lsp 263.7084.0 의 리눅스 tar.gz 가 폴더 항목을 두 번 싣는다). 파일 · 링크가 끼는 중복(폴더 ↔ 파일 · 폴더 ↔ 링크
+//!   포함)은 그대로 실패다. 파일은 `create_new` 로 만들어 이미 있는 것(링크 포함)을 덮지 않는다.
 //! - 심볼릭 링크는 가리키는 곳이 설치 폴더 안일 때만 둔다(링크가 놓인 폴더 기준으로 글자 그대로 풀어 본다). 하드 링크 · 장치 ·
 //!   FIFO 항목은 실패다.
 //! - 권한(유닉스): 폴더 0755, 파일은 보관 파일이 실행 비트를 적은 일반 파일만 0755, 나머지 0644 — setuid · setgid · sticky ·
@@ -13,7 +15,7 @@
 //!   않는다(메인 판정 2026-11-02).
 //! - 풀린 바이트는 설치 하나에 상한이 있다([`Budget`] — 기본 2 GiB). 적힌 크기를 믿지 않고 실제로 쓴 바이트를 센다.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
@@ -88,8 +90,8 @@ impl Budget {
 pub struct Unpacker {
     root: PathBuf,
     budget: Budget,
-    /// 지금까지 만든 항목(설치 폴더 기준). 폴더는 명시한 것만.
-    seen: BTreeSet<PathBuf>,
+    /// 지금까지 만든 항목(설치 폴더 기준)과 그것이 폴더 항목인가. 폴더는 명시한 것만.
+    seen: BTreeMap<PathBuf, bool>,
     /// 지금까지 만든 심볼릭 링크.
     links: BTreeSet<PathBuf>,
 }
@@ -107,7 +109,7 @@ impl Unpacker {
         Unpacker {
             root,
             budget: Budget::new(unpacked_limit),
-            seen: BTreeSet::new(),
+            seen: BTreeMap::new(),
             links: BTreeSet::new(),
         }
     }
@@ -273,8 +275,15 @@ impl Unpacker {
         mut body: impl Read,
     ) -> Result<(), ExtractError> {
         let display = rel.to_string_lossy().into_owned();
-        if !self.seen.insert(rel.to_path_buf()) {
-            return Err(unsafe_entry(&display, "the same name appears twice"));
+        let dir = matches!(kind, Kind::Dir);
+        match self.seen.get(rel) {
+            // 폴더 항목끼리의 중복은 내용이 없어 아무것도 덮지 않는다 — 이미 만든 폴더를 그대로 둔다(kotlin-lsp 263.7084.0 의
+            // 리눅스 tar.gz 가 이 꼴이다).
+            Some(true) if dir => return Ok(()),
+            Some(_) => return Err(unsafe_entry(&display, "the same name appears twice")),
+            None => {
+                self.seen.insert(rel.to_path_buf(), dir);
+            }
         }
         if let Some(parent) = rel.parent() {
             self.ensure_dir(parent)?;

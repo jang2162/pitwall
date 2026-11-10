@@ -100,6 +100,21 @@ async fn unsafe_archives_fail_the_whole_install_and_leave_nothing_outside() {
                 Entry::File("demo/a", b"2".to_vec(), 0o644),
             ],
         ),
+        // 폴더 항목끼리의 중복만 받는다 — 파일이 끼면(어느 순서든) 같은 이름 두 번이다.
+        (
+            "dir-then-file",
+            vec![
+                Entry::Dir("demo/d/"),
+                Entry::File("demo/d", b"pwned".to_vec(), 0o644),
+            ],
+        ),
+        (
+            "file-then-dir",
+            vec![
+                Entry::File("demo/d", b"pwned".to_vec(), 0o644),
+                Entry::Dir("demo/d/"),
+            ],
+        ),
         (
             "file-over-link",
             vec![
@@ -150,6 +165,39 @@ async fn unsafe_archives_fail_the_whole_install_and_leave_nothing_outside() {
     }
 }
 
+/// 폴더 항목이 두 번 나와도(kotlin-lsp 263.7084.0 의 리눅스 tar.gz 꼴 — 폴더 항목들이 뒤에서 다시 나온다) 설치된다 — 폴더 항목은
+/// 내용이 없어 덮을 것이 없다. 파일이 끼는 중복은 위 표(`dir-then-file` · `file-then-dir` · `same-name-twice`)가 실패로 본다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_repeated_folder_entry_installs() {
+    let mut entries = ok_entries();
+    entries.push(Entry::Dir("demo/lib/"));
+    entries.push(Entry::File("demo/lib/a.txt", b"a".to_vec(), 0o644));
+    entries.push(Entry::Dir("demo/"));
+    entries.push(Entry::Dir("demo/lib/"));
+    entries.push(Entry::File("demo/lib/b.txt", b"b".to_vec(), 0o644));
+    for format in ["demo.tar.gz", "demo.zip"] {
+        let fx = Fx::new().await;
+        let body = if format == "demo.zip" {
+            zip(&entries)
+        } else {
+            targz(&entries)
+        };
+        install_archive(&fx, format, body).await.unwrap();
+        let dir = fx.layout().version_dir("demo", "1.0.0");
+        assert_eq!(
+            std::fs::read(dir.join("demo/lib/a.txt")).unwrap(),
+            b"a",
+            "{format}"
+        );
+        assert_eq!(
+            std::fs::read(dir.join("demo/lib/b.txt")).unwrap(),
+            b"b",
+            "{format}"
+        );
+        assert!(dir.join(BIN).is_file(), "{format}");
+    }
+}
+
 /// 같은 보관 파일의 안전한 판은 설치된다(위 표가 「무엇이든 실패」 로 통과하지 않게). 안쪽 링크는 남는다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_safe_archive_with_an_inside_link_installs() {
@@ -169,7 +217,15 @@ async fn a_safe_archive_with_an_inside_link_installs() {
         } else {
             targz(&entries)
         };
-        install_archive(&fx, format, body).await.unwrap();
+        let installed = install_archive(&fx, format, body).await;
+        // Windows 는 보관 파일의 링크를 만들지 않는다(install/extract.rs `make_symlink`) — 설치 대신 그 거절이어야 한다.
+        if cfg!(windows) {
+            let e = installed.unwrap_err();
+            assert!(e.message.contains("symbolic links"), "{format}: {e:?}");
+            assert_eq!(e.data.unwrap()["stage"], "unpack", "{format}");
+            continue;
+        }
+        installed.unwrap();
         let dir = fx.layout().version_dir("demo", "1.0.0");
         assert_eq!(
             std::fs::read(dir.join("demo/lib/b.txt")).unwrap(),
