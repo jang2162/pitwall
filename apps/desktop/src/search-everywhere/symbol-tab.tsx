@@ -210,6 +210,13 @@ function Note({ children, alert }: { children: ReactNode; alert?: boolean }) {
 const NO_ROWS: readonly SymbolRow[] = [];
 
 /**
+ * 빈 목록에 결과를 처음 그릴 때 먼저 올리는 줄 수 — 목록(높이 360 px · 줄 26 px)에 보이는 줄보다 조금 많다. 나머지는 그 프레임을
+ * 그린 뒤에 올린다. 창을 연 뒤 첫 키는 빈 목록에 50줄을 한꺼번에 올려 그 몫(웹뷰 4 – 5 ms)이 이어지는 키(1 – 2 ms)보다 컸다
+ * (15-m4-plan §3 ⌘⌥O 첫 키 행).
+ */
+export const FIRST_ROWS = 16;
+
+/**
  * 같은 질의의 결과가 다시 그려졌을 때(늦은 서버 결과가 위에 붙음 · 「바쁨」 뒤 다시 받음) 지금 고른 것을 그대로 둘지: 사용자가 첫
  * 줄(`firstBefore` — 지난 그림의 첫 줄)에서 옮겨 둔 줄이 새 목록에 남아 있으면 둔다 — 서버는 5 초까지 늦을 수 있어, 화살표로
  * 내려간 뒤 Enter 직전에 붙으면 다른 심볼이 열린다. 첫 줄에 그대로 있었으면 새 첫 줄을 고른다(팝업의 `onResults`).
@@ -243,7 +250,37 @@ function makeSymbolResults(deps: Deps, types: boolean) {
     const state = useSyncExternalStore(deps.search.subscribe, deps.search.get);
     const rows = text && state.types === types ? state.rows : NO_ROWS;
     const max = limit ?? SYMBOL_LIMIT;
-    const shown = rows.slice(0, max);
+    // 앞이 빈 목록이었으면(팝업을 열었거나 결과가 없었다) 보이는 줄만 먼저 — 「더 보기」 가 붙는 묶음(SE 전체 탭)에는 하지 않는다.
+    const [grown, setGrown] = useState<readonly SymbolRow[] | null>(null);
+    const wasEmpty = useRef(true);
+    // 한 결과를 부분으로 그리기로 정하면 다 올릴 때까지 지킨다 — 첫 줄 고르기(`onResults`)가 그 프레임 전에 다시 그려도 50줄을 한꺼번에
+    // 올리지 않게.
+    const partialFor = useRef<readonly SymbolRow[] | null>(null);
+    if (
+      heading === undefined &&
+      rows !== partialFor.current &&
+      rows !== grown &&
+      wasEmpty.current &&
+      rows.length > FIRST_ROWS
+    )
+      partialFor.current = rows;
+    const partial = rows === partialFor.current && rows !== grown;
+    const shown = rows.slice(0, partial ? FIRST_ROWS : max);
+    useLayoutEffect(() => {
+      wasEmpty.current = shown.length === 0;
+    });
+    useEffect(() => {
+      if (!partial) return;
+      // 그 프레임을 그린 뒤(rAF 콜백에서 건 작업은 그 프레임의 렌더 갱신 뒤에 돈다).
+      let task: ReturnType<typeof setTimeout> | undefined;
+      const frame = requestAnimationFrame(() => {
+        task = setTimeout(() => setGrown(rows), 0);
+      });
+      return () => {
+        cancelAnimationFrame(frame);
+        clearTimeout(task);
+      };
+    }, [partial, rows]);
     // 결과는 질의보다 늦게 온다(서버 결과는 더 늦게 앞에 더해진다) — 새 질의의 결과를 그리면 팝업이 첫 줄을 고른다. 같은 질의의
     // 결과를 다시 그린 것이면 사용자가 옮겨 둔 고르기를 둔다(`keepsSelection`).
     const firstItem = useRef<HTMLDivElement>(null);

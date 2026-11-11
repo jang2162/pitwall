@@ -39,6 +39,7 @@ import { projectOpenInbox } from "../project-open";
 import { createThemeStore } from "../theme/theme-store";
 import { ThemeStoreProvider } from "../theme/theme-switcher";
 import { parseTheme } from "../theme/tokens";
+import { FIRST_ROWS } from "./symbol-tab";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -826,6 +827,40 @@ it("keeps the results while the symbol index is busy and asks again", async () =
   await vi.waitFor(() =>
     expect(notes()).not.toContain("심볼 인덱스가 바쁘다 — 잠시 뒤 다시 찾는다"),
   );
+});
+
+it("draws only the visible rows first into an empty list and the rest after that frame", async () => {
+  host.symbols = Array.from({ length: 40 }, (_, i) =>
+    sym(`widget${String(i).padStart(2, "0")}`, "function", "src/lib.rs", i + 1),
+  );
+  await mount();
+  await gotoSymbol();
+  // 목록의 줄 수가 바뀔 때마다 적는다 — 처음 든 줄 수가 보이는 몫(FIRST_ROWS)이고, 나머지는 그 뒤에 든다.
+  const counts: number[] = [];
+  const observer = new MutationObserver(() => {
+    const n = rows().length;
+    if (n !== counts.at(-1)) counts.push(n);
+  });
+  observer.observe(popup()!, { childList: true, subtree: true });
+  try {
+    await type("widget");
+    await vi.waitFor(() => expect(rows()).toHaveLength(40));
+  } finally {
+    observer.disconnect();
+  }
+  expect(counts.filter((n) => n > 0)).toEqual([FIRST_ROWS, 40]);
+  expect(selectedRow()).toBe("index:widget00");
+  // 앞이 빈 목록이 아니면(이어 친 키) 한꺼번에 그린다.
+  counts.length = 0;
+  observer.observe(popup()!, { childList: true, subtree: true });
+  try {
+    // 가짜 Host 는 글자를 차례로 맞춘다 — widget00 – 09 · widget10 · 20 · 30.
+    await type("widget0");
+    await vi.waitFor(() => expect(rows()).toHaveLength(13));
+  } finally {
+    observer.disconnect();
+  }
+  expect(counts.filter((n) => n > 0 && n < 13)).toEqual([]);
 });
 
 it("lists symbols as a group of the all tab with a way to the symbols tab", async () => {
