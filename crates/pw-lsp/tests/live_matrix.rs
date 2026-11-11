@@ -13,92 +13,6 @@
 
 mod common;
 
-/// 리눅스 jdtls rename 의 알려진 서버 버그를 가린다 — 참이면 그 rename 실패를 통과로 친다.
-///
-/// jdtls 1.63.0 은 리눅스에서 비결정적으로(Docker 7회 중 5회 실패, CI ubuntu 는 매번) rename 의 사용처 검색이 타입 계층을 닫는
-/// 단계(`sealTypeHierarchy` → `connectPermittedTypes`)에서 JDT 컴파일러 안의 `NullPointerException: Cannot invoke
-/// "…IModule.isAutomatic()" because "module" is null`(`BinaryModuleBinding.create`)을 내고, 그 서버에서는 rename 이 시한 내내 같은
-/// NPE 다. Pitwall 의 요청은 같은 본문이
-/// macOS 에서 성공하므로 업스트림(eclipse.jdt.core / eclipse-jdtls) 버그다(15-m4-plan.md 이월 행).
-///
-/// 좁게 허용한다: 리눅스 · jdtls · 마지막 답이 오류이고 **그 오류 자체가** 그 NPE(jdtls 의 `-32603` — 예외 이름을 싣고 있으면
-/// `NullPointerException` 과 `IModule.isAutomatic()`) · 그 서버의 로그에 두 서명(첫 NPE 만 프레임을 싣는다 — 뒤 오류는 JIT 가
-/// 잘라 Pitwall 의 오류에는 `-32603` 만 남는다)이 다 있을 때만(리뷰 M2 — 로그에 한 번 남은 서명이 다른 마지막 실패(시한 초과 ·
-/// 다른 예외)를 삼키지 않게). 다른 오류 · 다른 플랫폼 · 다른 서버는 그대로 실패하고, rename 이 성공하면 성공 단언을 다 한다.
-/// **걷어낼 조건**: jdtls 판을 올린 뒤 리눅스(lsp-live ubuntu)에서 이 허용 없이 rename 이 통과하면 이 함수와 호출 자리를 지운다.
-fn known_jdtls_rename_npe(linux: bool, jdtls: bool, last_error: Option<&str>, log: &str) -> bool {
-    let Some(last) = last_error else {
-        return false;
-    };
-    let last_is_the_npe = last.contains("-32603")
-        && (!last.contains("Exception")
-            || (last.contains("NullPointerException") && last.contains("IModule.isAutomatic()")));
-    linux
-        && jdtls
-        && last_is_the_npe
-        && log.contains("BinaryModuleBinding.create")
-        && log.contains("IModule.isAutomatic()")
-}
-
-/// 그 NPE 가 처음 보인 뒤 몇 번 더 같은 답이면 허용으로 빠지는가 — 한 번 그 상태가 되면 그 서버는 시한(180 s) 내내 같은 NPE 라
-/// 시한을 다 쓰지 않는다(리뷰 L1).
-#[cfg(any(
-    pw_live_lsp_basedpyright,
-    pw_live_lsp_ruff,
-    pw_live_lsp_jdtls,
-    pw_live_lsp_kotlin_lsp
-))]
-const KNOWN_NPE_REPEATS: u32 = 3;
-
-#[test]
-fn known_jdtls_rename_npe_needs_the_last_error_and_both_signatures_on_linux_jdtls() {
-    let log = "Caused by: java.lang.NullPointerException: Cannot invoke \
-        \"org.eclipse.jdt.internal.compiler.env.IModule.isAutomatic()\" because \"module\" is null\n\
-        \tat org.eclipse.jdt.internal.compiler.lookup.BinaryModuleBinding.create(BinaryModuleBinding.java:101)";
-    // CI(lsp-live ubuntu, job 130235004104)의 마지막 오류 그대로 — 서버의 `data` 는 Pitwall 오류에 실리지 않는다.
-    let internal = "RpcError { code: 5002, message: \"Internal error.\", data: Some(Object {\"code\": Number(-32603), \
-        \"message\": String(\"Internal error.\"), \"server\": String(\"jdtls\")}) }";
-    let with_npe = format!("-32603 {log}");
-    assert!(known_jdtls_rename_npe(true, true, Some(internal), log));
-    assert!(known_jdtls_rename_npe(true, true, Some(&with_npe), log));
-    // 로그에는 서명이 있어도 마지막 오류가 그 NPE 가 아니면 실패: 시한 초과 · 다른 예외 · 오류 아닌 답.
-    assert!(!known_jdtls_rename_npe(
-        true,
-        true,
-        Some("RpcError { code: 5003, message: \"the server did not answer in time\", data: None }"),
-        log
-    ));
-    assert!(!known_jdtls_rename_npe(
-        true,
-        true,
-        Some("-32603 java.lang.IllegalStateException: workspace is closed"),
-        log
-    ));
-    assert!(!known_jdtls_rename_npe(true, true, None, log));
-    // 로그에 서명이 없거나 하나만 있으면 실패.
-    assert!(!known_jdtls_rename_npe(
-        true,
-        true,
-        Some(internal),
-        "Internal error. (-32603)"
-    ));
-    assert!(!known_jdtls_rename_npe(
-        true,
-        true,
-        Some(internal),
-        "at org.eclipse.jdt.internal.compiler.lookup.BinaryModuleBinding.create(BinaryModuleBinding.java:101)"
-    ));
-    assert!(!known_jdtls_rename_npe(
-        true,
-        true,
-        Some(internal),
-        "Cannot invoke \"IModule.isAutomatic()\""
-    ));
-    // 다른 플랫폼 · 다른 서버면 서명이 있어도 실패.
-    assert!(!known_jdtls_rename_npe(false, true, Some(internal), log));
-    assert!(!known_jdtls_rename_npe(true, false, Some(internal), log));
-}
-
 #[cfg(any(
     pw_live_lsp_basedpyright,
     pw_live_lsp_ruff,
@@ -778,14 +692,17 @@ mod live {
     /// rename: 정의 자리에서 `scale` → `resize`. 편집을 파일에 넣은 뒤 파일마다 새 이름이 나오는 수가 기대값이다(서버가 낱말을
     /// 통째로 바꾸든 글자 차이만 주든 — kotlin-lsp 는 차이만 준다).
     pub async fn rename(spec: &Spec) {
-        let mut o = open(spec, spec.shapes).await;
+        rename_in(spec, open(spec, spec.shapes).await).await;
+    }
+
+    /// [`rename`] 을 이미 연 `spec.shapes` 에서(jdtls 는 프로젝트 JDK 를 준 환경으로 연다 — `live_lsp_jdtls_rename`).
+    pub async fn rename_in(spec: &Spec, mut o: Opened) {
         require(&mut o, spec, "rename").await;
         let (offset, _, _) = o.anchor("rename.scale");
         let shapes = std::fs::canonicalize(o.env.root.join(spec.shapes)).unwrap();
         let calls = std::fs::canonicalize(o.env.root.join(spec.calls)).unwrap();
         let count = |text: &str| text.matches("resize").count();
         let deadline = Instant::now() + spec.deadline();
-        let mut npe_answers = 0;
         loop {
             let answer = o
                 .win
@@ -816,28 +733,6 @@ mod live {
             } else {
                 format!("{answer:?}")
             };
-            // 리눅스 jdtls 의 알려진 JDT NPE 만 통과로 친다 — 이유 · 걷어낼 조건은 `known_jdtls_rename_npe` 머리 주석. 그 NPE 가
-            // 처음 보인 뒤 `KNOWN_NPE_REPEATS` 번 더 같은 답이면 시한을 기다리지 않는다.
-            // 서버 로그 전체는 리눅스 jdtls 가 오류로 답했을 때만 읽는다.
-            let (linux, jdtls) = (cfg!(target_os = "linux"), spec.server == LiveServer::Jdtls);
-            let known = linux
-                && jdtls
-                && answer.is_err()
-                && super::known_jdtls_rename_npe(
-                    linux,
-                    jdtls,
-                    answer.as_ref().err().map(|_| last.as_str()),
-                    &o.env.server_log_tail(spec.server.server_id(), usize::MAX),
-                );
-            npe_answers = if known { npe_answers + 1 } else { 0 };
-            if known && (npe_answers > super::KNOWN_NPE_REPEATS || Instant::now() >= deadline) {
-                eprintln!(
-                    "KNOWN jdtls rename failure on linux (JDT NPE in BinaryModuleBinding.create, \
-                     15-m4-plan.md carry-over) — counted as a pass after {npe_answers} answers: {last}"
-                );
-                o.win.session.close();
-                return;
-            }
             if Instant::now() >= deadline {
                 panic!(
                     "{}: rename never gave {:?}: {last}\nserver log:\n{}",
@@ -1058,9 +953,18 @@ mod jdtls {
         live::signature(&S).await;
     }
 
+    /// rename 은 프로젝트 JDK 17 을 준 환경에서 돈다(15-m4-plan.md §3 「리눅스 jdtls rename 의 JDT NPE」 — 메인 판정 2026-11-12).
+    /// 수준 17 인 픽스처에 JavaSE-17 로 쓸 JDK(17 ~ 24)를 jdtls 가 하나도 모르면 서버 JDK(25)로 release 17 을 흉내 내는데, 그때
+    /// jdtls 1.62 ~ 1.64 의 rename 사용처 검색은 JDT 컴파일러 안에서 NPE 를 낸다(`BinaryModuleBinding.create` — 상류 버그). macOS 는
+    /// jdtls 가 기기의 JDK 를 스스로 찾아 나지 않고, 리눅스 CI 는 JDK 17 이 mise 폴더(jdtls 가 찾지 않는다)에만 있어 매번 났다. 제품이
+    /// 프로젝트 JDK 를 넘기는 길(`project_jdk_setting` → `java.configuration.runtimes`)을 타고, 그것이 실제로 넘어갔는지 먼저 본다 —
+    /// 넘기지 않으면 리눅스에서 그 NPE 로 실패한다.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn live_lsp_jdtls_rename() {
-        live::rename(&S).await;
+        let jdk17 = project_jdk17();
+        let o = open_with_project_jdk(&jdk17, S.shapes).await;
+        assert_project_jdk_sent(&o, &jdk17);
+        live::rename_in(&S, o).await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1210,21 +1114,8 @@ mod jdtls {
 
         use serde_json::json;
 
-        use super::common::env::EnvOptions;
-
-        let jdk17 = std::env::var_os("PW_TEST_JDK17")
-            .filter(|v| !v.is_empty())
-            .map(std::path::PathBuf::from)
-            .expect("PW_TEST_JDK17 is not set — give it a JDK 17 home (CI: mise where java@17)");
-        let jdk17 = std::fs::canonicalize(&jdk17).unwrap();
-        assert!(jdk17.join("bin/java").is_file(), "{}", jdk17.display());
-        let mut options = EnvOptions {
-            isolated_shell: false,
-            shell_prelude: Some(format!("JAVA_HOME='{}'; export JAVA_HOME", jdk17.display())),
-            ..EnvOptions::default()
-        };
-        options.manager.trace = true;
-        let env = live::env_for(&S, options);
+        let jdk17 = project_jdk17();
+        let env = project_jdk_env(&jdk17);
         // 이 시험 몫의 임시 파일(픽스처 규칙 — 복사본에만).
         let file = "src/main/java/fixture/M418Level.java";
         std::fs::write(
@@ -1302,7 +1193,38 @@ mod jdtls {
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
         assert!(major >= 25, "the server runs on {java}: {version}");
-        // initialize 에 JavaSE-17 이 그 JDK 로 갔다(프로토콜 기록).
+        assert_project_jdk_sent(&o, &jdk17);
+        o.win.session.close();
+    }
+
+    /// 프로젝트가 쓰는 JDK 17 의 폴더(`PW_TEST_JDK17` — CI 는 `mise where java@17`).
+    fn project_jdk17() -> std::path::PathBuf {
+        let jdk17 = std::env::var_os("PW_TEST_JDK17")
+            .filter(|v| !v.is_empty())
+            .map(std::path::PathBuf::from)
+            .expect("PW_TEST_JDK17 is not set — give it a JDK 17 home (CI: mise where java@17)");
+        let jdk17 = std::fs::canonicalize(&jdk17).unwrap();
+        assert!(jdk17.join("bin/java").is_file(), "{}", jdk17.display());
+        jdk17
+    }
+
+    /// 프로젝트 런타임 환경의 `JAVA_HOME` 이 `jdk` 인 시험 환경(서버 관리자가 그것을 프로젝트 JDK 로 찾는다 — 결정 M4-D6).
+    fn project_jdk_env(jdk: &std::path::Path) -> super::common::env::Env {
+        let mut options = super::common::env::EnvOptions {
+            isolated_shell: false,
+            shell_prelude: Some(format!("JAVA_HOME='{}'; export JAVA_HOME", jdk.display())),
+            ..super::common::env::EnvOptions::default()
+        };
+        options.manager.trace = true;
+        live::env_for(&S, options)
+    }
+
+    async fn open_with_project_jdk(jdk: &std::path::Path, file: &str) -> live::Opened {
+        live::open_in(&S, project_jdk_env(jdk), file).await
+    }
+
+    /// `initialize` 에 JavaSE-17 이 그 JDK 로 갔다(프로토콜 기록 — 정의의 `project_jdk_setting`).
+    fn assert_project_jdk_sent(o: &live::Opened, jdk: &std::path::Path) {
         let logs = o.env.paths.state.join("logs/lsp");
         let mut log = String::new();
         for entry in std::fs::read_dir(&logs).unwrap().flatten() {
@@ -1310,13 +1232,12 @@ mod jdtls {
         }
         let runtimes = format!(
             "\"runtimes\":[{{\"default\":true,\"name\":\"JavaSE-17\",\"path\":\"{}\"}}]",
-            jdk17.display()
+            jdk.display()
         );
         assert!(
             log.contains(&runtimes),
             "{runtimes} is not in the protocol log"
         );
-        o.win.session.close();
     }
 }
 
