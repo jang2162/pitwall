@@ -24,13 +24,16 @@
 //!
 //! **진행 중의 답**(`not_ready`, M4-13 재리뷰 N1): LSP 의 포맷 답에는 어느 글 기준인지가 없어 버전으로는 못 잡는 낡음이 있다 —
 //! rust-analyzer 는 작업 공간을 읽는 동안(`$/progress` 「Roots Scanned」) 받은 `didChange` 를 분석에 넣지 않은 채 옛 글로 포맷한다.
-//! 서버 정의의 `format_unreliable_while_progress`(진행 제목, 정확히 같은 글)가 그런 진행을 적고, 요청을 보내기 전이나 답을 받은 뒤에
-//! 그 인스턴스에 그 제목의 진행이 열려 있으면 답을 버린다(검사하지 않고 빈 편집 — 웹뷰는 「언어 서버가 아직 준비 중」). 보낼 때 열려
-//! 있다가 답 전에 닫힌 것은 앞쪽이, 보낸 뒤에 열린 것은 뒤쪽이 잡는다 — rust-analyzer 는 그 진행의 begin 을 읽기를 시작하는 처리에서
-//! 보내므로 그 사이에 받은 포맷의 답보다 늘 먼저 온다. 남는 틈: 진행 알림은 이벤트 채널을 거쳐 들어오므로(`open_progress_titles`)
-//! 답 바로 앞의 begin 이 아직 안 들어왔을 수 있고, 보낸 뒤 열렸다 답 전에 닫힌 진행은 못 본다. 다른 진행(Indexing · cargo check
-//! 등)은 포맷을 막지 않는다 — 그때의 답은 받은 편집을 반영한 글 기준이다.
+//! 서버 정의의 `format_unreliable_while_progress`(진행 제목, 정확히 같은 글)가 그런 진행을 적고, 요청을 보내기 전부터 답을 받기까지
+//! 그 서버에 그 제목의 진행이 한 번이라도 열려 있었으면 답을 버린다(검사하지 않고 빈 편집 — 웹뷰는 「언어 서버가 아직 준비 중」).
+//! 보낼 때 열려 있던 것, 그 사이에 열렸다 닫힌 것, 답할 때 열린 것 모두다 — rust-analyzer 는 작업 공간을 두 번 읽고 두 번째는 100 ms
+//! 남짓이라 요청 하나의 왕복 안에 begin · end 가 다 들어올 수 있다(15-m4-plan §3 「lsp-live 실 서버 시험의 한 번씩 난 실패」 ① —
+//! 보낼 때와 답할 때만 보던 판정이 CI 에서 옛 글의 답 하나를 넣었다). 진행은 서버의 읽기 태스크가 틀을 읽는 그 자리에서 세므로
+//! (`LanguageServer::progress_mark` — 이벤트 채널을 거치는 상태 표가 아니다) 서버가 답보다 먼저 보낸 begin 은 답을 받은 때 늘
+//! 들어 있다. rust-analyzer 는 그 진행의 begin 을 읽기를 시작하는 처리에서 보내므로, 옛 글로 포맷한 답이면 그 begin 이 답보다
+//! 먼저 온다. 다른 진행(Indexing · cargo check 등)은 포맷을 막지 않는다 — 그때의 답은 받은 편집을 반영한 글 기준이다.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use lsp_types::Position;
@@ -45,7 +48,8 @@ use crate::edit::{LspRange, LspTextEdit};
 use crate::manager::{
     FeatureAnswer, FeatureRequest, InstanceKey, LspManager, code as manager_code,
 };
-use crate::server::RequestError;
+use crate::progress::ProgressMark;
+use crate::server::{LanguageServer, RequestError};
 
 /// 이 행의 오류 코드(`pw-lsp` 5001~ 의 칸 — 행마다 겹치지 않게 513x 를 쓴다).
 pub mod code {
@@ -279,10 +283,12 @@ pub async fn format(
             .then(|| (key.server.clone(), range)),
         _ => None,
     };
-    // 보내기 전에 열린 진행(머리 주석 「진행 중의 답」).
-    let before = routed
-        .as_ref()
-        .map(|key| (key.clone(), m.open_progress_titles(key)));
+    // 보내기 전의 진행 표지(머리 주석 「진행 중의 답」).
+    let before = routed.as_ref().and_then(|key| {
+        let server = m.instance_server(key)?;
+        let mark = server.progress_mark();
+        Some((server, mark))
+    });
     let answer: FeatureAnswer = match &range_server {
         Some((server, range)) => {
             let range = *range;
@@ -319,12 +325,13 @@ pub async fn format(
     })
 }
 
-/// 답한 인스턴스 `key` 에 보내기 전(`before` — 그때 맡을 인스턴스와 그 열린 진행) 또는 지금 「포맷 답을 믿지 않을 진행」 이
-/// 열려 있는가. 제목은 정확히 같아야 한다.
+/// 답한 인스턴스 `key` 의 서버에 보내기 전(`before` — 그때 맡을 서버와 그 진행 표지)부터 지금까지 「포맷 답을 믿지 않을 진행」 이
+/// 열려 있었는가. 제목은 정확히 같아야 한다. 답한 서버가 표지를 잡은 서버가 아니면(그사이 다시 떴다) 지금 열린 것만 본다. 그 사이
+/// 진행을 다 기억하지 못했으면 믿지 않는다.
 fn unreliable_progress(
     m: &LspManager,
     key: &InstanceKey,
-    before: Option<(InstanceKey, Vec<String>)>,
+    before: Option<(Arc<LanguageServer>, ProgressMark)>,
 ) -> bool {
     let Some(config) = m.instance_config(key) else {
         return false;
@@ -333,14 +340,15 @@ fn unreliable_progress(
     if unreliable.is_empty() {
         return false;
     }
-    let before = before
-        .filter(|(at, _)| at.server == key.server && at.root == key.root)
-        .map(|(_, titles)| titles)
-        .unwrap_or_default();
-    before
-        .iter()
-        .chain(&m.open_progress_titles(key))
-        .any(|title| unreliable.contains(title))
+    let Some(server) = m.instance_server(key) else {
+        return false;
+    };
+    let mark = before
+        .filter(|(at, _)| Arc::ptr_eq(at, &server))
+        .map_or_else(|| server.progress_mark(), |(_, mark)| mark);
+    server
+        .progress_titles_since(&mark)
+        .is_none_or(|titles| titles.iter().any(|title| unreliable.contains(title)))
 }
 
 /// 핸들러를 붙인다(`crate::register` 가 부른다).

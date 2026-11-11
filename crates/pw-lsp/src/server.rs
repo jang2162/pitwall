@@ -17,7 +17,8 @@
 //! `window/showDocument` 같은 것은 그 기능 행이 처리기를 단다(15 「공유 부품의 주인」).
 //!
 //! **알림** — `window/logMessage` · `window/showMessage` · `$/logTrace` 는 서버 로그와 `tracing` 으로, 나머지(`$/progress` ·
-//! `textDocument/publishDiagnostics` 등)는 [`ServerEvent::Notification`] 으로 넘긴다.
+//! `textDocument/publishDiagnostics` 등)는 [`ServerEvent::Notification`] 으로 넘긴다. `$/progress` 는 넘기기 전에 읽은 그 자리에서도
+//! 센다([`LanguageServer::progress_mark`] — 포맷이 답 사이의 진행을 본다).
 //!
 //! **상한**(M4-01 리뷰 H1 · H2 — 서버 하나가 Host 메모리를 끝없이 먹지 않게): 보낼 틀이 [`MAX_QUEUED_BYTES`] 넘게 쌓이면(서버가
 //! stdin 을 읽지 않는다) 그 서버를 망가진 것으로 보고 트리째 끝낸다. 서버 → 클라이언트 요청은 동시에 [`MAX_SERVER_REQUESTS`] 개까지
@@ -31,7 +32,7 @@
 //! 끝나지 않으면 트리째 SIGKILL. 전체가 [`STOP_BUDGET`](2 s) 안이다. 서버가 끝나면(스스로든 우리가 끝냈든) 그룹에 남은 자손도
 //! 끝낸다. 손잡이를 버려도(`Drop`) 트리째 끝낸다.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -53,6 +54,7 @@ use crate::ledger::{Ledger, Record};
 use crate::log::{Line, ServerLog};
 use crate::message::{self, Incoming, RequestId, ResponseError};
 use crate::process::{self, LaunchSpec, ProcessTree};
+use crate::progress::{ProgressMark, WireProgress};
 use crate::transport::{FrameReader, write_frame};
 use crate::uri::file_uri;
 
@@ -284,6 +286,8 @@ struct Shared {
     serving: AtomicUsize,
     /// 버린 `$/progress` 알림 수(이벤트 채널이 꽉 찼다).
     dropped_progress: AtomicU64,
+    /// 읽은 그 자리에서 센 진행(`crate::progress` 머리 주석 — 응답과 같은 차례).
+    wire_progress: Mutex<WireProgress>,
     /// 허가의 루트(정규화).
     root: PathBuf,
     /// 기록부의 기록(서버 그룹이 끝나면 지운다).
@@ -468,7 +472,12 @@ impl Shared {
                 let text = params.get("message").and_then(Value::as_str).unwrap_or("");
                 self.note(&format!("trace {text}"));
             }
-            _ => self.emit(ServerEvent::Notification { method, params }),
+            _ => {
+                if method == "$/progress" {
+                    lock(&self.wire_progress).handle(&params);
+                }
+                self.emit(ServerEvent::Notification { method, params });
+            }
         }
     }
 
@@ -630,6 +639,7 @@ impl LanguageServer {
             queued: Arc::clone(&queued),
             serving: AtomicUsize::new(0),
             dropped_progress: AtomicU64::new(0),
+            wire_progress: Mutex::new(WireProgress::default()),
             root: grant.root().to_path_buf(),
             record: Mutex::new(record),
             pending: Mutex::new(HashMap::new()),
@@ -842,6 +852,17 @@ impl LanguageServer {
     /// 답이 오기 전에 버린 요청(취소 · 시한)에 늦게 온 응답 수 — 버렸다.
     pub fn late_responses(&self) -> u64 {
         self.shared.late.load(Ordering::SeqCst)
+    }
+
+    /// 지금의 진행 표지 — 요청을 보내기 전에 잡고 답을 받은 뒤 [`Self::progress_titles_since`] 에 준다(포맷 M4-13 「진행 중의 답」).
+    pub fn progress_mark(&self) -> ProgressMark {
+        lock(&self.shared.wire_progress).mark()
+    }
+
+    /// `mark` 부터 지금까지 열려 있던 진행의 제목(그 사이에 열렸다 닫힌 것까지). 읽기 태스크가 틀을 읽는 차례로 세므로, 서버가 어떤
+    /// 답보다 먼저 보낸 진행은 그 답을 받은 때 다 들어 있다. 그 사이 begin 을 다 기억하지 못했으면(`RECENT_BEGINS` 넘게) `None`.
+    pub fn progress_titles_since(&self, mark: &ProgressMark) -> Option<BTreeSet<String>> {
+        lock(&self.shared.wire_progress).titles_since(mark)
     }
 
     /// 이벤트 채널이 꽉 차 버린 `$/progress` 알림 수.

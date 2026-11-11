@@ -9,8 +9,12 @@
 //! 상태 이벤트(`lsp.status`)는 진행이 생기고 끝날 때와 진행률이 바뀔 때만 다시 낸다 — 문구만 바뀐 `report`(큰 작업 공간을 색인하는
 //! rust-analyzer 는 많이 낸다)는 `Task` 로만 나간다. 동시 진행은 서버마다 [`MAX_ACTIVE`] 개까지 — `end` 없는 `begin` 이 쌓이지
 //! 않게, 넘는 `begin` 은 버린다(M4-05 리뷰 L3).
+//!
+//! [`WireProgress`] 는 그와 따로 서버의 읽기 태스크가 틀을 읽는 그 자리에서 진행을 센다(이벤트 채널 앞 — 버려지지도 늦지도 않는다).
+//! 포맷(M4-13 「진행 중의 답」, `crate::format`)이 「요청을 보낸 뒤 답을 받기까지 어떤 진행이 열려 있었나」 를 묻는다 — 응답과 같은
+//! 차례로 읽으므로 서버가 답보다 먼저 보낸 begin 은 답을 받은 때 늘 들어와 있다.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Weak;
 
 use pw_core::bus::Scope;
@@ -132,14 +136,88 @@ impl Tracker {
             .map(|a| a.info.clone())
     }
 
-    /// 지금 열린 진행의 제목 모두(토큰 차례).
-    pub(crate) fn titles(&self) -> Vec<String> {
-        self.active.values().map(|a| a.info.title.clone()).collect()
-    }
-
     /// 모든 진행을 끝낸다(서버가 끝났다).
     pub(crate) fn end_all(&mut self) {
         self.active.clear();
+    }
+}
+
+/// [`WireProgress`] 가 기억하는 최근 begin 수. 표지 뒤로 이보다 많이 열렸으면 그 사이의 제목을 다 알지 못한다.
+pub(crate) const RECENT_BEGINS: usize = 256;
+
+/// 읽기 태스크가 센 진행(머리 주석). 열린 진행은 [`MAX_ACTIVE`] 개까지 — 넘는 begin 은 최근 begin 에만 남는다.
+#[derive(Default)]
+pub(crate) struct WireProgress {
+    /// 토큰 → 제목.
+    open: BTreeMap<String, String>,
+    /// 지금까지 받은 begin 수.
+    begun: u64,
+    /// 최근 begin 의 (차례 — 1 부터, 제목).
+    recent: VecDeque<(u64, String)>,
+}
+
+/// 진행 표지([`crate::server::LanguageServer::progress_mark`]): 그때 열린 진행의 제목과 그때까지 받은 begin 수.
+#[derive(Debug, Clone)]
+pub struct ProgressMark {
+    begun: u64,
+    open: BTreeSet<String>,
+}
+
+impl WireProgress {
+    /// 읽은 `$/progress` 하나.
+    pub(crate) fn handle(&mut self, params: &Value) {
+        let (Some(token), Some(value)) = (params.get("token"), params.get("value")) else {
+            return;
+        };
+        let Some(key) = token_key(token) else {
+            return;
+        };
+        match value.get("kind").and_then(Value::as_str) {
+            Some("begin") => {
+                let title = value
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                self.begun += 1;
+                if self.recent.len() == RECENT_BEGINS {
+                    self.recent.pop_front();
+                }
+                self.recent.push_back((self.begun, title.clone()));
+                if self.open.contains_key(&key) || self.open.len() < MAX_ACTIVE {
+                    self.open.insert(key, title);
+                }
+            }
+            Some("end") => {
+                self.open.remove(&key);
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn mark(&self) -> ProgressMark {
+        ProgressMark {
+            begun: self.begun,
+            open: self.open.values().cloned().collect(),
+        }
+    }
+
+    /// `mark` 부터 지금까지 열려 있던 진행의 제목: 표지 때 열려 있던 것, 그 뒤 begin 이 온 것, 지금 열린 것. 그 뒤의 begin 을
+    /// 다 기억하지 못하면(표지 뒤로 [`RECENT_BEGINS`] 개 넘게 열렸다) `None`.
+    pub(crate) fn titles_since(&self, mark: &ProgressMark) -> Option<BTreeSet<String>> {
+        let first_kept = self.recent.front().map_or(self.begun + 1, |(n, _)| *n);
+        if self.begun > mark.begun && first_kept > mark.begun + 1 {
+            return None;
+        }
+        let mut titles = mark.open.clone();
+        titles.extend(
+            self.recent
+                .iter()
+                .filter(|(n, _)| *n > mark.begun)
+                .map(|(_, t)| t.clone()),
+        );
+        titles.extend(self.open.values().cloned());
+        Some(titles)
     }
 }
 
@@ -231,30 +309,64 @@ mod tests {
     }
 
     /// M4-13: 열린 진행의 제목은 모두 보인다 — 나중에 바뀐 진행이 앞의 것을 가리지 않는다. 끝난 진행은 빠진다.
-    #[tokio::test]
-    async fn every_open_progress_title_is_listed_not_only_the_latest() {
-        let tasks = TaskSpawner::new(
-            EventBus::new(DEFAULT_CAPACITY),
-            Scope::Host,
-            CancellationToken::new(),
+    #[test]
+    fn every_open_progress_title_is_listed_not_only_the_latest() {
+        let mut wire = WireProgress::default();
+        wire.handle(&progress(
+            1,
+            json!({ "kind": "begin", "title": "Roots Scanned" }),
+        ));
+        wire.handle(&progress(
+            2,
+            json!({ "kind": "begin", "title": "Indexing" }),
+        ));
+        wire.handle(&progress(2, json!({ "kind": "report", "percentage": 50 })));
+        let both = wire.mark();
+        assert_eq!(
+            wire.titles_since(&both).unwrap(),
+            BTreeSet::from(["Roots Scanned".to_owned(), "Indexing".to_owned()])
         );
-        let mut tracker = Tracker::default();
-        let handle = |t: &mut Tracker, p: Value| t.handle(&p, &tasks, "p", Weak::new());
-        handle(
-            &mut tracker,
-            progress(1, json!({ "kind": "begin", "title": "Roots Scanned" })),
+        wire.handle(&progress(1, json!({ "kind": "end" })));
+        assert_eq!(
+            wire.titles_since(&wire.mark()).unwrap(),
+            BTreeSet::from(["Indexing".to_owned()])
         );
-        handle(
-            &mut tracker,
-            progress(2, json!({ "kind": "begin", "title": "Indexing" })),
+        // 표지 때 열려 있던 것은 그 뒤에 닫혀도 든다.
+        assert!(wire.titles_since(&both).unwrap().contains("Roots Scanned"));
+    }
+
+    /// 15-m4-plan §3 「lsp-live … 한 번씩 난 실패」 ①: 표지 뒤에 열렸다 닫힌 진행도 든다. 그 사이 begin 을 다 기억하지 못하면 `None`.
+    #[test]
+    fn a_progress_begun_and_ended_after_the_mark_is_listed() {
+        let mut wire = WireProgress::default();
+        let mark = wire.mark();
+        wire.handle(&progress(
+            1,
+            json!({ "kind": "begin", "title": "Roots Scanned" }),
+        ));
+        wire.handle(&progress(1, json!({ "kind": "end" })));
+        assert_eq!(
+            wire.titles_since(&mark).unwrap(),
+            BTreeSet::from(["Roots Scanned".to_owned()])
         );
-        handle(
-            &mut tracker,
-            progress(2, json!({ "kind": "report", "percentage": 50 })),
+        assert_eq!(wire.titles_since(&wire.mark()).unwrap(), BTreeSet::new());
+
+        let mark = wire.mark();
+        for n in 0..RECENT_BEGINS as u64 {
+            wire.handle(&progress(
+                n + 10,
+                json!({ "kind": "begin", "title": "Indexing" }),
+            ));
+            wire.handle(&progress(n + 10, json!({ "kind": "end" })));
+        }
+        assert_eq!(
+            wire.titles_since(&mark).unwrap(),
+            BTreeSet::from(["Indexing".to_owned()])
         );
-        assert_eq!(tracker.latest().unwrap().title, "Indexing");
-        assert_eq!(tracker.titles(), ["Roots Scanned", "Indexing"]);
-        handle(&mut tracker, progress(1, json!({ "kind": "end" })));
-        assert_eq!(tracker.titles(), ["Indexing"]);
+        wire.handle(&progress(
+            9,
+            json!({ "kind": "begin", "title": "Indexing" }),
+        ));
+        assert_eq!(wire.titles_since(&mark), None);
     }
 }

@@ -464,3 +464,34 @@ async fn another_servers_progress_does_not_hold_its_format_answer() {
     assert_eq!(answer["notReady"], false, "{answer}");
     assert_eq!(answer["edits"], json!([edit(1, 2, 1, 4, " ")]), "{answer}");
 }
+
+/// 보낸 뒤 열렸다 답 전에 닫힌 진행도 버린다(15-m4-plan §3 「lsp-live 실 서버 시험의 한 번씩 난 실패」 ① — rust-analyzer 는 작업
+/// 공간을 두 번 읽고 두 번째는 100 ms 남짓이라 포맷 요청 하나의 왕복 안에 begin · end 가 다 들어온다). 보낼 때도 답할 때도 열려
+/// 있지 않지만 서버는 그 사이에 옛 글로 포맷했을 수 있다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_format_answer_with_roots_scanned_begun_and_ended_in_between_is_not_ready() {
+    let answer = format_while(
+        "rust-analyzer",
+        &[],
+        vec![
+            progress("begin", "Roots Scanned"),
+            progress("end", "Roots Scanned"),
+        ],
+    )
+    .await;
+    assert_eq!(answer["notReady"], true, "{answer}");
+    assert_eq!(answer["edits"], json!([]), "{answer}");
+}
+
+/// 그 사이에 열렸다 닫힌 것이 다른 진행(`Indexing`)뿐이면 답은 그대로 들어간다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_format_answer_with_only_indexing_begun_and_ended_in_between_goes_in() {
+    let answer = format_while(
+        "rust-analyzer",
+        &[],
+        vec![progress("begin", "Indexing"), progress("end", "Indexing")],
+    )
+    .await;
+    assert_eq!(answer["notReady"], false, "{answer}");
+    assert_eq!(answer["edits"], json!([edit(1, 2, 1, 4, " ")]), "{answer}");
+}

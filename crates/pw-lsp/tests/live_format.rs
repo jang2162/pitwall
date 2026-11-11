@@ -4,8 +4,8 @@
 //! 실패한다**), TS 서버는 그 서버의 포맷 결과(다시 포맷하면 바꿀 것이 없다)가 되고 줄 하나를 견본으로 본다. 두 서버 모두 넣은 뒤
 //! 다시 포맷하면 편집이 없다. TS 서버는 2칸 들여쓰기 파일(앵커 `format.two-space`)을 2칸으로 포맷하면 글이 그대로다(웹뷰의
 //! 들여쓰기 판정이 그 파일에 2 를 낸다 — M4-13 리뷰 H1). rust-analyzer 를 띄운 직후부터 편집과 포맷을 잇달아 해도 웹뷰가 넣는 답
-//! (Host 가 `staleVersion` · `notReady` 를 달지 않은 답 — `notReady` 는 정의의 「포맷 답을 믿지 않을 진행」 `Roots Scanned` 중의
-//! 답, `crates/pw-lsp/src/format.rs` 「진행 중의 답」)은 늘 그 버전 글의 `rustfmt` 결과가 된다(M4-13 재리뷰 N1 — 작업 공간을 읽는
+//! (Host 가 `staleVersion` · `notReady` 를 달지 않은 답 — `notReady` 는 정의의 「포맷 답을 믿지 않을 진행」 `Roots Scanned` 이
+//! 요청 왕복 중에 한 번이라도 열려 있던 답, `crates/pw-lsp/src/format.rs` 「진행 중의 답」)은 늘 그 버전 글의 `rustfmt` 결과가 된다(M4-13 재리뷰 N1 — 작업 공간을 읽는
 //! 동안의 답은 옛 글 기준이다). 표지(`cfg(pw_live_lsp_<서버>)`)가 꺼져 있으면 시험이 목록에 없다
 //! (`src/live.rs` 머리 주석).
 
