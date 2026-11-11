@@ -603,8 +603,8 @@ mod live {
         .await;
         assert_eq!(list["staleVersion"], false);
         // JVM 서버는 첫 완성 목록을 색인이 끝나기 전에 준다 — kotlin-lsp 는 `Indexing` 진행의 끝물(77 % → 끝)에 요청을 10 s 넘게 잡아
-        // 두어 5003 이 났다(15-m4-plan.md §3 「lsp-live … 한 번씩 난 실패」, 느린 러너에서 그 끝물이 아래 열 번과 겹친다). 잴 것은
-        // 준비된 서버의 응답 시간이므로 그 서버의 진행이 다 닫힌 뒤에 잰다.
+        // 두어 5003 이 났다(15-m4-plan.md §3 「lsp-live … 한 번씩 난 실패」 — Docker ubuntu arm64 를 1.5 코어로 묶어 6회 중 1회 그
+        // 끝물이 아래 열 번과 겹쳤다). 잴 것은 준비된 서버의 응답 시간이므로 그 서버의 진행이 다 닫힌 뒤에 잰다.
         if spec.jvm() {
             idle(&mut o, spec).await;
         }
@@ -987,11 +987,14 @@ mod jdtls {
     }
 
     /// rename 은 프로젝트 JDK 17 을 준 환경에서 돈다(15-m4-plan.md §3 「리눅스 jdtls rename 의 JDT NPE」 — 메인 판정 2026-11-12).
-    /// 수준 17 인 픽스처에 JavaSE-17 로 쓸 JDK(17 ~ 24)를 jdtls 가 하나도 모르면 서버 JDK(25)로 release 17 을 흉내 내는데, 그때
-    /// jdtls 1.62 ~ 1.64 의 rename 사용처 검색은 JDT 컴파일러 안에서 NPE 를 낸다(`BinaryModuleBinding.create` — 상류 버그). macOS 는
-    /// jdtls 가 기기의 JDK 를 스스로 찾아 나지 않고, 리눅스 CI 는 JDK 17 이 mise 폴더(jdtls 가 찾지 않는다)에만 있어 매번 났다. 제품이
-    /// 프로젝트 JDK 를 넘기는 길(`project_jdk_setting` → `java.configuration.runtimes`)을 타고, 그것이 실제로 넘어갔는지 먼저 본다 —
-    /// 넘기지 않으면 리눅스에서 그 NPE 로 실패한다.
+    /// 실측(Docker ubuntu 24.04 arm64, 2026-11-12): 수준 17 픽스처에서 JavaSE-17 로 쓸 JDK(17 ~ 24)를 jdtls 가 하나도 모르면 rename 의
+    /// 사용처 검색이 JDT 컴파일러 안에서 NPE 를 낸다(`BinaryModuleBinding.create` — 상류 버그). jdtls 1.62.0 · 1.63.0 · 1.64.0 스냅숏 ×
+    /// 서버 JDK 25.0.1 · 25.0.5 · 26.0.2 에서 37/37 NPE, JDK 17 이나 21 을 jdtls 가 감지하면 13/13 통과, 픽스처 수준 25 면 3/3 통과.
+    /// CI ubuntu(x86_64)는 JDK 17 이 mise 폴더에만 있을 때 매번 이 NPE 였다(감지하지 않은 까닭은 미판정 — 같은 배치의 Docker 는
+    /// 감지했다). macOS 에서 나지 않은 것은 jdtls 가 기기의 다른 JDK 를 스스로 찾기 때문이라고 **추정**한다(macOS 로 재지 않았다).
+    /// 그래서 제품이 프로젝트 JDK 를 넘기는 길(`project_jdk_setting` → `java.configuration.runtimes`)을 타고, 그것을 보냈는지 먼저
+    /// 본다(`assert_project_jdk_sent`). 위 Docker 에서 JDK 17 을 jdtls 가 감지하지 않는 경로에 두고 보내기를 끄면 그 확인이 실패하고,
+    /// 확인까지 빼면 rename 이 그 NPE 로 실패했다(2/2 · 2/2).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn live_lsp_jdtls_rename() {
         let jdk17 = project_jdk17();
@@ -1256,7 +1259,9 @@ mod jdtls {
         live::open_in(&S, project_jdk_env(jdk), file).await
     }
 
-    /// `initialize` 에 JavaSE-17 이 그 JDK 로 갔다(프로토콜 기록 — 정의의 `project_jdk_setting`).
+    /// Pitwall 이 `initialize` 에 JavaSE-17 을 그 JDK 로 **보냈다** — 서버 관리자의 프로토콜 기록(`trace`, `logs/lsp`)에서 우리가 쓴
+    /// 메시지의 글자를 찾는다(정의의 `project_jdk_setting`). 서버가 그 값을 받아 JavaSE-17 에 묶었는지는 보지 않는다 — 그것은 rename 이
+    /// 통과하는 것으로만 드러난다(묶지 않으면 위 NPE).
     fn assert_project_jdk_sent(o: &live::Opened, jdk: &std::path::Path) {
         let logs = o.env.paths.state.join("logs/lsp");
         let mut log = String::new();
