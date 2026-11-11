@@ -30,6 +30,7 @@ mod live {
 
     use pw_lsp::edit::{LspFileChange, LspTextEdit, LspWorkspaceEdit};
     use pw_lsp::live::LiveServer;
+    use pw_lsp::manager::ManagerOptions;
     use pw_lsp::methods::LspInstanceState;
     use serde_json::{Value, json};
 
@@ -221,6 +222,11 @@ mod live {
             EnvOptions {
                 // 런타임(node · python · JDK)과 Gradle 을 찾도록 시험 프로세스의 환경을 넘긴다.
                 isolated_shell: false,
+                // 서버 로그에 주고받은 메시지를 남긴다 — 실패 메시지가 싣는 로그 끝에 요청과 답이 보인다.
+                manager: ManagerOptions {
+                    trace: true,
+                    ..EnvOptions::default().manager
+                },
                 ..EnvOptions::default()
             },
         );
@@ -728,7 +734,7 @@ mod live {
                 "{}: rename never gave {:?}: {last}\nserver log:\n{}",
                 spec.server.executable(),
                 spec.renamed,
-                o.env.server_log_tail(spec.server.server_id(), 80)
+                o.env.server_log_tail(spec.server.server_id(), 120)
             );
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
