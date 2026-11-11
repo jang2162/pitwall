@@ -9,7 +9,7 @@
 // - 요청은 LSP 요청 도우미(`doc.call` — 편집이 Host 에 닿은 뒤 묻고, 같은 종류 앞 요청을 취소하고, 지난 답을 버린다)로 한다. 트랜잭션
 //   안에서 부르면 문서 동기화가 아직 그 편집을 받지 않았을 수 있어 한 마이크로태스크 뒤에 묻는다(대기열 · 디바운스는 없다).
 // - 한글 조합 중에는 묻지 않는다(조합 중의 바뀜은 서버에 가지 않는다 — M4-07 ⓔ). 미신뢰 · 서버 없음이면 능력 칸이 비어 조용히 아무것도
-//   하지 않는다.
+//   하지 않는다. 칸이 빈 채 친 글자는 칸을 묻는 중이면 그 답을 기다려 판정한다(`askWhenSettled` — 자동완성과 같다, ./completion.ts).
 // - 서버가 준 글(시그니처 · 문서)은 글자(`textContent`)나 HTML 을 끈 Markdown(`renderPopupBody`)으로만 넣는다.
 
 import type { Extension } from "@codemirror/state";
@@ -65,6 +65,19 @@ class SignatureHelper {
       const next = this.pending;
       this.pending = undefined;
       if (next) void this.request(next);
+    });
+  }
+
+  /**
+   * 능력 칸이 빈 채 친 글자 `char`: 칸을 묻는 중이면(서버가 막 준비돼 `lsp.status` 로 다시 묻는 틈) 그 답을 기다려 트리거 문자면
+   * 묻는다. 그사이 글이 바뀌었으면 묻지 않는다 — 그 바뀜이 스스로 판정된다. 묻는 중이 아니면 곧바로 풀려 「서버 없음」 그대로다.
+   */
+  askWhenSettled(char: string) {
+    const text = this.view.state.doc;
+    void this.doc.capabilitiesSettled().then(() => {
+      if (this.destroyed || this.view.state.doc !== text) return;
+      if (signatureOptions(this.doc)?.triggerCharacters?.includes(char))
+        this.ask({ kind: "character", character: char });
     });
   }
 
@@ -221,9 +234,13 @@ const signaturePlugin = (doc: LspDocument) =>
     return {
       update(u: ViewUpdate) {
         if (!u.docChanged && !u.selectionSet) return;
+        if (u.view.compositionStarted) return;
         const options = signatureOptions(doc);
-        if (!options || u.view.compositionStarted) return;
         const char = typed(u);
+        if (!options) {
+          if (char !== undefined) helper.askWhenSettled(char);
+          return;
+        }
         const open = helper.open;
         if (!open && helper.help) helper.help = null;
         if (char !== undefined && options.triggerCharacters?.includes(char))

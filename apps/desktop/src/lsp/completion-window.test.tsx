@@ -934,6 +934,72 @@ it("asks on a trigger typed while the capabilities are being asked again right a
   }
 });
 
+it("asks for the signature on a `(` typed while the capabilities are being asked again right after the server became ready (repeated)", async () => {
+  // 위 시험과 같은 틈의 시그니처 도움말 쪽 — 짝수 회는 칸의 답이 오가는 동안, 홀수 회는 답이 든 뒤에 `(` 를 친다.
+  serveCompletion(() => ({ items: [] }));
+  const asked: { triggerKind: string; triggerCharacter?: string | null }[] = [];
+  host.lsp!.handle("lsp.signatureHelp", async (params) => {
+    const p = params as {
+      docId: string;
+      version: number;
+      offset: number;
+      triggerKind: string;
+      triggerCharacter?: string | null;
+    };
+    asked.push(p);
+    const inside = host.lsp!.docs.get(p.docId)!.text[p.offset - 1] === "(";
+    return {
+      server: "ra",
+      staleVersion: host.lsp!.stale(p),
+      help: inside
+        ? {
+            signatures: [
+              {
+                label: "scale(width: u32)",
+                documentation: null,
+                parameters: [{ from: 6, to: 16, documentation: null }],
+                activeParameter: 0,
+              },
+            ],
+            activeSignature: 0,
+            raw: {},
+          }
+        : null,
+    } satisfies LspSignatureHelpAnswer;
+  });
+  await openMain("scale\n", 5);
+  for (let round = 0; round < 4; round++) {
+    host.lsp!.setFeatures({});
+    await emit("lsp.status", { projectId: "p1", instances: [] });
+    expect(lspContext()?.capabilities, `round ${round}`).toEqual({});
+    const release = host.lsp!.holdCapabilities();
+    host.lsp!.setFeatures(features());
+    await emit("lsp.status", { projectId: "p1", instances: [] });
+    expect(lspContext()?.capabilities, `round ${round}`).toEqual({});
+    const before = asked.length;
+    if (round % 2 === 0) {
+      await type("(");
+      await act(async () => release());
+    } else {
+      await act(async () => release());
+      await settle();
+      await type("(");
+    }
+    await settle();
+    expect(asked.slice(before), `round ${round}`).toEqual([
+      expect.objectContaining({ triggerKind: "character", triggerCharacter: "(" }),
+    ]);
+    expect(currentPopup(view(), "signature"), `round ${round}`).not.toBeNull();
+    await act(async () => {
+      const v = view();
+      const at = v.state.selection.main.head;
+      v.dispatch({ changes: { from: at - 1, to: at }, userEvent: "delete" });
+    });
+    await settle();
+    expect(currentPopup(view(), "signature"), `round ${round}`).toBeNull();
+  }
+});
+
 it("does nothing and reports nothing when no server completes the document (untrusted · no server)", async () => {
   // 창 틀의 다른 Host 메서드가 없다는 로그는 이 시험과 무관하다 — LSP 의 것(`[lsp]`)만 본다.
   const errors = vi.spyOn(console, "error");
