@@ -850,17 +850,22 @@ it("draws only the visible rows first into an empty list and the rest after that
   }
   expect(counts.filter((n) => n > 0)).toEqual([FIRST_ROWS, 40]);
   expect(selectedRow()).toBe("index:widget00");
-  // 앞이 빈 목록이 아니면(이어 친 키) 한꺼번에 그린다.
-  counts.length = 0;
-  observer.observe(popup()!, { childList: true, subtree: true });
+  // 앞이 빈 목록이 아니면(이어 친 키) 결과가 FIRST_ROWS 보다 많아도 한꺼번에 그린다 — 새 질의의 줄 수가 0 과 40 사이에 머문 적이
+  // 없다. 가짜 Host 는 글자를 차례로 맞추므로 `widge` 는 40개 모두다.
+  const fresh = () => popup()!.querySelectorAll('[data-symbol-query="widge"]').length;
+  const freshCounts: number[] = [];
+  const again = new MutationObserver(() => {
+    const n = fresh();
+    if (n !== freshCounts.at(-1)) freshCounts.push(n);
+  });
+  again.observe(popup()!, { childList: true, subtree: true, attributes: true });
   try {
-    // 가짜 Host 는 글자를 차례로 맞춘다 — widget00 – 09 · widget10 · 20 · 30.
-    await type("widget0");
-    await vi.waitFor(() => expect(rows()).toHaveLength(13));
+    await type("widge");
+    await vi.waitFor(() => expect(fresh()).toBe(40));
   } finally {
-    observer.disconnect();
+    again.disconnect();
   }
-  expect(counts.filter((n) => n > 0 && n < 13)).toEqual([]);
+  expect(freshCounts.filter((n) => n > 0)).toEqual([40]);
 });
 
 it("lists symbols as a group of the all tab with a way to the symbols tab", async () => {
