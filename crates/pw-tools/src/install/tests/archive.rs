@@ -116,6 +116,14 @@ async fn unsafe_archives_fail_the_whole_install_and_leave_nothing_outside() {
             ],
         ),
         (
+            "dir-then-link",
+            vec![Entry::Dir("demo/d/"), Entry::Symlink("demo/d", "bin")],
+        ),
+        (
+            "link-then-dir",
+            vec![Entry::Symlink("demo/d", "bin"), Entry::Dir("demo/d/")],
+        ),
+        (
             "file-over-link",
             vec![
                 Entry::Symlink("demo/x", "y"),
@@ -165,37 +173,59 @@ async fn unsafe_archives_fail_the_whole_install_and_leave_nothing_outside() {
     }
 }
 
-/// 폴더 항목이 두 번 나와도(kotlin-lsp 263.7084.0 의 리눅스 tar.gz 꼴 — 폴더 항목들이 뒤에서 다시 나온다) 설치된다 — 폴더 항목은
-/// 내용이 없어 덮을 것이 없다. 파일이 끼는 중복은 위 표(`dir-then-file` · `file-then-dir` · `same-name-twice`)가 실패로 본다.
+/// tar.gz 에서 폴더 항목이 두 번 나와도(kotlin-lsp 263.7084.0 의 리눅스 tar.gz 꼴 — 폴더 항목들이 뒤에서 다시 나온다) 설치된다 —
+/// 폴더 항목은 내용이 없어 덮을 것이 없다. 파일 · 링크가 끼는 중복은 위 표(`dir-then-file` · `file-then-dir` · `dir-then-link` ·
+/// `link-then-dir` · `same-name-twice`)가 실패로 본다. zip 은 같은 이름 두 번을 폴더라도 받지 않는다 — `zip` 크레이트가 같은
+/// 이름을 하나로 접어 중앙 디렉터리의 항목 수 검사가 거절한다(알려진 zip 묶음에는 중복 이름이 없다 — 리뷰 M1).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_repeated_folder_entry_installs() {
+async fn a_repeated_folder_entry_installs_from_a_tar_gz_only() {
     let mut entries = ok_entries();
     entries.push(Entry::Dir("demo/lib/"));
     entries.push(Entry::File("demo/lib/a.txt", b"a".to_vec(), 0o644));
     entries.push(Entry::Dir("demo/"));
     entries.push(Entry::Dir("demo/lib/"));
     entries.push(Entry::File("demo/lib/b.txt", b"b".to_vec(), 0o644));
-    for format in ["demo.tar.gz", "demo.zip"] {
-        let fx = Fx::new().await;
-        let body = if format == "demo.zip" {
-            zip(&entries)
-        } else {
-            targz(&entries)
-        };
-        install_archive(&fx, format, body).await.unwrap();
-        let dir = fx.layout().version_dir("demo", "1.0.0");
-        assert_eq!(
-            std::fs::read(dir.join("demo/lib/a.txt")).unwrap(),
-            b"a",
-            "{format}"
-        );
-        assert_eq!(
-            std::fs::read(dir.join("demo/lib/b.txt")).unwrap(),
-            b"b",
-            "{format}"
-        );
-        assert!(dir.join(BIN).is_file(), "{format}");
-    }
+
+    let fx = Fx::new().await;
+    install_archive(&fx, "demo.tar.gz", targz(&entries))
+        .await
+        .unwrap();
+    let dir = fx.layout().version_dir("demo", "1.0.0");
+    assert_eq!(std::fs::read(dir.join("demo/lib/a.txt")).unwrap(), b"a");
+    assert_eq!(std::fs::read(dir.join("demo/lib/b.txt")).unwrap(), b"b");
+    assert!(dir.join(BIN).is_file());
+
+    // 시험 도우미가 정말 같은 이름 두 번을 쓰는지(임시 이름이 `…//` 로 남지 않는지) 먼저 본다.
+    let body = zip(&entries);
+    let names: Vec<String> = {
+        let archive = zip::ZipArchive::new(std::io::Cursor::new(body.clone())).unwrap();
+        archive
+            .file_names()
+            .map(|n| n.unwrap().into_owned())
+            .collect()
+    };
+    assert!(names.iter().all(|n| !n.contains("//")), "{names:?}");
+    let raw = |name: &str| {
+        body.windows(name.len())
+            .filter(|w| *w == name.as_bytes())
+            .count()
+    };
+    // 이름은 항목마다 로컬 헤더와 중앙 디렉터리에 한 번씩 — `demo/lib/` 로 시작하는 항목 넷(폴더 둘 · 파일 둘)이면 여덟이다.
+    assert_eq!((raw("demo/lib//"), raw("~")), (0, 0));
+    assert_eq!(raw("demo/lib/"), 8);
+    let fx = Fx::new().await;
+    let err = install_archive(&fx, "demo.zip", body).await.unwrap_err();
+    assert_eq!(
+        code_and_stage(&err),
+        (code::INSTALL_FAILED, Some("unpack".into())),
+        "{err:?}"
+    );
+    let text = format!("{err:?}");
+    assert!(
+        text.contains("the zip archive") && text.contains("the same name appears twice"),
+        "the entry count check refuses it: {text}"
+    );
+    assert!(!fx.layout().version_dir("demo", "1.0.0").exists());
 }
 
 /// 같은 보관 파일의 안전한 판은 설치된다(위 표가 「무엇이든 실패」 로 통과하지 않게). 안쪽 링크는 남는다.

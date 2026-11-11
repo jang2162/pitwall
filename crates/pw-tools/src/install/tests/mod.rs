@@ -349,7 +349,8 @@ pub fn targz(entries: &[Entry]) -> Vec<u8> {
     gz.finish().unwrap()
 }
 
-/// `.zip`. 같은 이름 두 번은 `ZipWriter` 가 거절하므로 같은 길이의 임시 이름으로 쓴 뒤 바이트를 바꿔 넣는다.
+/// `.zip`. 같은 이름 두 번은 `ZipWriter` 가 거절하므로 같은 길이의 임시 이름으로 쓴 뒤 바이트를 바꿔 넣는다. 폴더(`…/`)의 임시
+/// 이름도 `/` 로 끝나야 한다 — `add_directory` 가 `/` 를 붙이므로 끝의 `/` 를 바꾸면 패치 뒤 이름이 `…//` 가 된다(리뷰 M1).
 pub fn zip(entries: &[Entry]) -> Vec<u8> {
     use std::io::Write as _;
     let mut out = std::io::Cursor::new(Vec::new());
@@ -359,7 +360,10 @@ pub fn zip(entries: &[Entry]) -> Vec<u8> {
         if seen.insert(n.to_owned()) {
             return n.to_owned();
         }
-        let placeholder = format!("{}~", &n[..n.len() - 1]);
+        let placeholder = match n.strip_suffix('/') {
+            Some(dir) => format!("{}~/", &dir[..dir.len() - 1]),
+            None => format!("{}~", &n[..n.len() - 1]),
+        };
         patches.push((placeholder.clone(), n.to_owned()));
         placeholder
     };
