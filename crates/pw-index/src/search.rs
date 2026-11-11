@@ -32,6 +32,20 @@ struct At {
 struct Hit {
     at: At,
     score: u32,
+    /// 이름의 바이트 길이(순서의 두 번째 열쇠 — 비교마다 이름을 찾아가지 않게 미리 둔다).
+    len: u32,
+}
+
+/// 결과 순서: 점수 높은 것, 짧은 이름, 루트 차례, 경로, 파일 안 차례. 경로는 파일 번호로 견준다 — 루트의 파일은 경로순
+/// (`RootView` — `BTreeMap<Arc<str>, _>` 의 바이트 순서로 모은다)이라 같은 루트 안에서 번호 순서가 경로 문자열 순서와 같다. 첫 키처럼
+/// 맞은 것이 많고 점수 · 길이가 같은 것이 많으면 문자열 비교가 질의 시간의 큰 몫이었다(15-m4-plan §3 ⌘⌥O 첫 키 행).
+fn order(a: &Hit, b: &Hit) -> std::cmp::Ordering {
+    b.score
+        .cmp(&a.score)
+        .then_with(|| a.len.cmp(&b.len))
+        .then_with(|| a.at.view.cmp(&b.at.view))
+        .then_with(|| a.at.file.cmp(&b.at.file))
+        .then_with(|| a.at.sym.cmp(&b.at.sym))
 }
 
 fn config() -> Config {
@@ -52,9 +66,14 @@ pub(crate) fn search(
         Some(kinds) => kinds.contains(&k),
         None => k != IndexSymbolKind::Impl,
     };
-    // 후보(종류로 거른 것)와 그 이름.
-    let mut at: Vec<At> = Vec::new();
-    let mut names: Vec<&str> = Vec::new();
+    // 후보(종류로 거른 것)와 그 이름. 심볼 수만큼 미리 잡는다(50만 개를 늘려 가며 옮기지 않게).
+    let total: usize = views
+        .iter()
+        .flat_map(|v| v.files.iter())
+        .map(|(_, parsed)| parsed.symbols.symbols.len())
+        .sum();
+    let mut at: Vec<At> = Vec::with_capacity(total);
+    let mut names: Vec<&str> = Vec::with_capacity(total);
     for (vi, view) in views.iter().enumerate() {
         for (fi, (_, parsed)) in view.files.iter().enumerate() {
             for (si, sym) in parsed.symbols.symbols.iter().enumerate() {
@@ -72,25 +91,19 @@ pub(crate) fn search(
     let indexed = at.len() as u64;
     let terms: Vec<&str> = query.split_whitespace().collect();
     let mut hits: Vec<Hit> = if terms.is_empty() {
-        at.iter().map(|&at| Hit { at, score: 0 }).collect()
+        at.iter()
+            .zip(&names)
+            .map(|(&at, name)| Hit {
+                at,
+                score: 0,
+                len: name.len() as u32,
+            })
+            .collect()
     } else {
         score_all(&names, &at, &terms, threads)
     };
     drop(names);
     let matched = hits.len() as u64;
-    let name_of = |a: At| {
-        let parsed = &views[a.view as usize].files[a.file as usize].1;
-        parsed.symbols.name(&parsed.symbols.symbols[a.sym as usize])
-    };
-    let rel_of = |a: At| &*views[a.view as usize].files[a.file as usize].0;
-    let order = |a: &Hit, b: &Hit| {
-        b.score
-            .cmp(&a.score)
-            .then_with(|| name_of(a.at).len().cmp(&name_of(b.at).len()))
-            .then_with(|| a.at.view.cmp(&b.at.view))
-            .then_with(|| rel_of(a.at).cmp(rel_of(b.at)))
-            .then_with(|| a.at.sym.cmp(&b.at.sym))
-    };
     let end = offset.saturating_add(limit);
     if hits.len() > end {
         hits.select_nth_unstable_by(end, order);
@@ -177,7 +190,11 @@ fn score_all(names: &[&str], at: &[At], terms: &[&str], threads: usize) -> Vec<H
     found
         .unwrap_or_default()
         .into_iter()
-        .map(|(i, score)| Hit { at: at[i], score })
+        .map(|(i, score)| Hit {
+            at: at[i],
+            score,
+            len: names[i].len() as u32,
+        })
         .collect()
 }
 

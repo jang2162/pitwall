@@ -278,6 +278,41 @@ async fn watching_a_project_indexes_its_symbols() {
     );
 }
 
+/// 점수 · 이름 길이가 같으면 경로 바이트 순서, 같은 파일 안에서는 위치 순서다. 순서는 파일 번호로 견주므로(search.rs `order`) 파일을
+/// 쓴 차례 · 폴더 깊이와 무관하게 경로 문자열 순서와 같아야 한다 — 대문자(`C`)는 소문자보다 앞, `a/z` 는 `a_` 보다 앞(`/` < `_`).
+#[tokio::test(flavor = "multi_thread")]
+async fn ties_follow_the_path_byte_order_then_the_position() {
+    let f = Fixture::new();
+    let (id, root) = f.repo("proj");
+    let files = [
+        "src/b.rs",
+        "src/a_x.rs",
+        "src/a/z.rs",
+        "src/C.rs",
+        "src/a/b/c.rs",
+    ];
+    for rel in files {
+        write(
+            &root.join(rel),
+            "pub fn tied_one() {}
+pub fn tied_two() {}
+",
+        );
+    }
+    let _lease = f.open(&id);
+    f.ready(&id, &root).await;
+    let found = f.search(&id, "tied").await.unwrap();
+    let mut want: Vec<&str> = files.to_vec();
+    want.sort_unstable();
+    let got: Vec<(String, String)> = names(&found);
+    let expected: Vec<(String, String)> = want
+        .iter()
+        .flat_map(|rel| ["tied_one", "tied_two"].map(|n| (n.to_owned(), (*rel).to_owned())))
+        .collect();
+    // 이름 길이가 같고 점수가 같다 — 경로 순, 그 안에서 위치 순.
+    assert_eq!(got, expected);
+}
+
 /// 쪽 넘기기 · 종류 거르기 · 빈 질의 · impl 은 고르지 않으면 빠진다. 입력 상한.
 #[tokio::test(flavor = "multi_thread")]
 async fn search_pages_filters_kinds_and_checks_its_input() {
