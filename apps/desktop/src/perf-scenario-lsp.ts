@@ -25,7 +25,7 @@
 //    프레임까지(`problems_open` — 「프로젝트」 범위가 기본), 그 목록을 처음부터 끝까지 `PROBLEMS_FLING_FRAMES` 프레임에 스크롤한다.
 //
 // `lsp-typing` · `lsp-typing-off` 시나리오(06 「타이핑 지연」): `MAIN_PATH` 를 열고(켬이면 서버 준비까지) `TYPING_LINE` 끝에 `TYPING_TEXT`
-// 를 되풀이해 `TYPING_KEYS` 자를 `KEY_MS` 마다 넣는다. 키마다 「넣기 직전 → 다음 rAF」(`frame`)와 「→ 그 프레임 뒤 첫 작업」(`painted` —
+// 를 되풀이해 `TYPING_KEYS` 자를 평균 `KEY_MS` 마다 넣는다(쉼을 한 프레임 폭에 흩어 위상에서 뗀다 — `typingPause`). 키마다 「넣기 직전 → 다음 rAF」(`frame`)와 「→ 그 프레임 뒤 첫 작업」(`painted` —
 // 그 프레임의 그리기가 끝난 뒤)을 잰다. 키마다 켬이 더 하는 일의 몫도 적는다(`TypingKey` — dispatch 의 동기 시간, 그중
 // `didChange` 보내기, 뷰 갱신 · rAF 콜백의 시간, 프레임 대기, 그 프레임 뒤 팝업 줄 수). 끝나면 넣은 글자를 지운다. 켬 · 끔은 측정하는
 // 쪽이 설정으로 가른다 — 끔은 서버를 띄우지 않는다.
@@ -133,6 +133,16 @@ export const PHASE_JITTER_MS = 16.7;
 /** 시작을 rAF 위상에서 떼어 놓는다(앞 표본이 rAF · 그 뒤 작업에서 끝났으므로 곧바로 시작하면 늘 프레임 머리에서 시작한다). */
 export function offPhase(env: Pick<ScenarioEnv, "sleep">, random = Math.random): Promise<void> {
   return env.sleep(random() * PHASE_JITTER_MS);
+}
+
+/**
+ * 타이핑 키 사이의 쉼: 평균 `KEY_MS`(초당 20자)이고 한 프레임 폭(`PHASE_JITTER_MS`)에 고르게 흩는다. 고정 50 ms 는 60 Hz 의 정확히
+ * 3프레임이라 키를 넣는 때가 앞 키의 그린 프레임 위상에 묶였다 — 끔의 「키 → 다음 rAF」 p95 가 고른 위상의 약 16 ms 가 아니라
+ * 8 – 13 ms 였고(M4-19), 켬 − 끔이 켬이 더 하는 일보다 위상에 좌우됐다. 다른 시나리오의 `offPhase`(M4-19 리뷰 H1)와 같은 방식이다
+ * — 이 전의 타이핑 수치와 견주지 않는다.
+ */
+export function typingPause(random = Math.random): number {
+  return KEY_MS - PHASE_JITTER_MS / 2 + random() * PHASE_JITTER_MS;
 }
 
 /** 그 프레임의 그리기 뒤 첫 작업까지 — rAF 콜백에서 건 메시지는 그 프레임의 렌더 갱신 뒤에 돈다. */
@@ -622,7 +632,7 @@ async function typing(env: ScenarioEnv, view: EditorView, lsp: boolean) {
         popupRows: popupRows(view),
         completions: cost.count.get("lsp.completion") ?? 0,
       });
-      await env.sleep(KEY_MS);
+      await env.sleep(typingPause());
     }
   } finally {
     Element.prototype.getBoundingClientRect = rect;

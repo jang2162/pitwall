@@ -91,7 +91,7 @@ pub const DEFINITIONS: &[(&str, &str)] = &[
     ),
     (
         "typing",
-        "300 characters at 50 ms, each inserted with `view.dispatch` (`input.type`, keymap · IME not included); per key: insert → after the next frame's rendering (a message posted from the next animation frame); per-run value = p95. LSP on and off are separate runs (`lsp-typing` · `lsp-typing-off`, the latter with `[lsp.rust-analyzer] enabled = false`); 06 judges on − off ≤ 2 ms on the medians of the per-run p95",
+        "300 characters, 50 ms apart on average — each pause spread over one 16.7 ms frame so a key does not start at the same frame phase (as `offPhase`; typing figures before 2026-11-12 used a fixed 50 ms and are not comparable), each inserted with `view.dispatch` (`input.type`, keymap · IME not included); per key: insert → after the next frame's rendering (a message posted from the next animation frame); per-run value = p95. LSP on and off are separate runs (`lsp-typing` · `lsp-typing-off`, the latter with `[lsp.rust-analyzer] enabled = false`); 06 judges on − off ≤ 2 ms on the medians of the per-run p95",
     ),
     (
         "problems",

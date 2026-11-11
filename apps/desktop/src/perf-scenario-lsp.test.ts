@@ -18,6 +18,9 @@ import {
   type TypingKey,
   typingBreakdown,
   typingKeyRows,
+  typingPause,
+  KEY_MS,
+  PHASE_JITTER_MS,
   watchCallCost,
   watchSymbolCalls,
 } from "./perf-scenario-lsp";
@@ -165,6 +168,19 @@ it("keeps the per-key typing mark under the app's size limit for a mark", () => 
   expect(rows.rows).toHaveLength(TYPING_KEYS);
   expect(rows.rows[0]![rows.columns.indexOf("paintedMs")]).toBe(17.9);
   expect(JSON.stringify(rows).length).toBeLessThan(16 * 1024);
+});
+
+it("spreads the pause between typing keys over one frame around the key interval", () => {
+  // 고정 쉼(60 Hz 의 정확히 3프레임)이면 키가 앞 키의 프레임 위상에 묶인다 — 쉼이 한 프레임 폭에 고르게 흩어진다.
+  const pauses = Array.from({ length: 1000 }, (_, i) => typingPause(() => (i + 0.5) / 1000));
+  const mean = pauses.reduce((a, b) => a + b, 0) / pauses.length;
+  expect(mean).toBeCloseTo(KEY_MS, 5);
+  expect(Math.min(...pauses)).toBeLessThan(KEY_MS - PHASE_JITTER_MS / 2 + 0.1);
+  expect(Math.max(...pauses)).toBeGreaterThan(KEY_MS + PHASE_JITTER_MS / 2 - 0.1);
+  // 60 Hz 프레임 안의 위상(50 ms 뒤 시작이 프레임 머리에서 얼마나 떨어졌나)이 한 곳에 몰리지 않는다.
+  const FRAME = 1000 / 60;
+  const bins = new Set(pauses.map((p) => Math.floor(((p % FRAME) / FRAME) * 8)));
+  expect(bins.size).toBe(8);
 });
 
 it("finds the visible editor by its first line", () => {
@@ -316,4 +332,7 @@ it("ends every frame row of the lsp and symbol scenarios through shownThenPainte
   expect(body("afterPaint")).toMatch(/\.frame\(/);
   for (const name of ["completion", "diagnostics", "definition", "problems", "symbolKeys"])
     expect(body(name), name).toContain("shownThenPainted(");
+  // 타이핑 키 사이의 쉼은 위상에서 뗀 것이다(고정 `KEY_MS` 로 되돌리면 키가 프레임 위상에 묶인다).
+  expect(body("typing")).toContain("env.sleep(typingPause())");
+  expect(body("typing")).not.toMatch(/sleep\(KEY_MS\)/);
 });

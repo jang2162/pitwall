@@ -544,7 +544,7 @@ function writeTyping(out, rounds) {
   const result = {
     schema: "pitwall-perf-m4-typing/1",
     definition:
-      "LSP on and off alternate run by run (on, off, on, off …), each a pw-perf `lsp-typing` / `lsp-typing-off` run with `--runs 1` (the first pair adds one warm-up); per run: insert → after the next frame's rendering, p95 over 300 keys; 06 judges median(on p95) − median(off p95) ≤ 2 ms",
+      "LSP on and off alternate run by run (on, off, on, off …), each a pw-perf `lsp-typing` / `lsp-typing-off` run with `--runs 1` (the first pair adds one warm-up); per run: insert → after the next frame's rendering, p95 over 300 keys 50 ms apart on average (each pause spread over one frame — not comparable with the fixed-50 ms runs before 2026-11-12); 06 judges median(on p95) − median(off p95) ≤ 2 ms",
     rounds,
     summary,
   };
