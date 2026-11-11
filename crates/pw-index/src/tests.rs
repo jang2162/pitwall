@@ -278,6 +278,29 @@ async fn watching_a_project_indexes_its_symbols() {
     );
 }
 
+/// 색인이 준비되면 후보 버퍼가 이미 심볼 수만큼 잡혀 있다 — 창을 연 뒤 첫 질의가 그 페이지를 처음 만지는 비용을 내지 않는다
+/// (search.rs 머리 주석). 질의 뒤에도 그 버퍼가 쉬는 자리로 돌아온다.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_candidate_buffer_is_warm_when_the_index_is_ready() {
+    let f = Fixture::new();
+    let (id, root) = f.repo("proj");
+    let mut text = String::new();
+    for i in 0..40 {
+        text.push_str(&format!("pub fn warm_{i:02}() {{}}\n"));
+    }
+    write(&root.join("src/lib.rs"), &text);
+    let _lease = f.open(&id);
+    f.ready(&id, &root).await;
+    let scratches = &f.symbols.inner.scratches;
+    assert!(
+        scratches.resting_capacity() >= 40,
+        "ready before the buffer was filled: {}",
+        scratches.resting_capacity()
+    );
+    assert_eq!(f.search(&id, "warm").await.unwrap().matched, 40);
+    assert!(scratches.resting_capacity() >= 40);
+}
+
 /// 점수 · 이름 길이가 같으면 경로 바이트 순서, 같은 파일 안에서는 위치 순서다. 순서는 파일 번호로 견주므로(search.rs `order`) 파일을
 /// 쓴 차례 · 폴더 깊이와 무관하게 경로 문자열 순서와 같아야 한다 — 대문자(`C`)는 소문자보다 앞, `a/z` 는 `a_` 보다 앞(`/` < `_`).
 #[tokio::test(flavor = "multi_thread")]

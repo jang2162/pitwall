@@ -159,6 +159,8 @@ struct Inner {
     threads: usize,
     /// 매칭 · 텍스트 파싱의 차례([`MAX_REQUESTS`]).
     turns: tokio::sync::Semaphore,
+    /// 질의 사이에 다시 쓰는 후보 버퍼(search.rs 머리 주석).
+    scratches: search::Scratches,
 }
 
 impl Inner {
@@ -205,6 +207,7 @@ impl SymbolIndex {
                 tasks: OnceLock::new(),
                 threads,
                 turns: tokio::sync::Semaphore::new(MAX_REQUESTS),
+                scratches: search::Scratches::default(),
             }),
         }
     }
@@ -290,6 +293,7 @@ impl SymbolIndex {
         }
         let _turn = self.inner.turn().await?;
         let threads = self.inner.threads;
+        let inner = Arc::clone(&self.inner);
         blocking(move || {
             Ok(search::search(
                 threads,
@@ -299,6 +303,7 @@ impl SymbolIndex {
                 offset as usize,
                 limit as usize,
                 unindexed,
+                &inner.scratches,
             ))
         })
         .await
@@ -939,6 +944,8 @@ fn run(inner: &Inner, entry: &Root, stop: &Stop) {
                     if st.is(&st.build, stop) {
                         st.build = None;
                         drop(st);
+                        // 준비를 알리기 전에 후보 버퍼를 데운다 — 창을 연 뒤 첫 질의가 그 비용을 내지 않게(search.rs).
+                        search::warm(&[view(entry)], &inner.scratches);
                         entry.phase.send_replace(Phase::Ready);
                     }
                     return;
