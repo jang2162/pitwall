@@ -1380,8 +1380,9 @@ async fn the_first_list_of_each_opening_is_listed_and_later_ones_are_rebuilt() {
     let (id, root) = f.repo("proj");
     write(&root.join("src/lib.rs"), "");
     let index = FileIndex::new(Arc::clone(&f.fs));
+    // Windows 만 늦은 변경 알림을 거른다 — 유닉스에서는 군더더기 `changed` 도 아래 「다시 걷지 않는다」 단언이 잡는다(리뷰 L4).
     let kinds = Arc::new(Kinds {
-        no_changes: true,
+        no_changes: cfg!(windows),
         ..Kinds::default()
     });
     index.observe_queued(Arc::clone(&kinds) as Arc<dyn FileListObserver>);

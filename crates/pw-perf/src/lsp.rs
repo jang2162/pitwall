@@ -1536,8 +1536,9 @@ mod tests {
 
     #[test]
     fn the_fixture_has_what_the_app_scenario_looks_for() {
-        // 공백이 든 폴더 — 가짜가 답하는 URI 가 퍼센트 인코딩되는지 본다.
-        let dir = std::env::temp_dir().join(format!("pw-perf lsp-fixture-{}", std::process::id()));
+        // 공백 · 비 ASCII 가 든 폴더 — 가짜가 답하는 URI 가 퍼센트 인코딩되는지 본다.
+        let dir =
+            std::env::temp_dir().join(format!("pw-perf 한글 lsp-fixture-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let project = dir.join("project");
         std::fs::create_dir_all(&project).unwrap();
@@ -1571,7 +1572,11 @@ mod tests {
         assert_eq!(config.definition_line as usize, DEF_TARGET_LINE - 1);
         let target = &config.definition_targets[0];
         assert!(target.ends_with("/project/src/t0.rs"), "{target}");
-        assert!(!target.contains(' '), "{target}");
+        assert!(!target.contains(' ') && target.is_ascii(), "{target}");
+        assert!(
+            target.contains("/pw-perf%20%ED%95%9C%EA%B8%80%20lsp-fixture-"),
+            "{target}"
+        );
         assert_eq!(
             url::Url::parse(target).unwrap().to_file_path(),
             Ok(project.join("src").join("t0.rs")),
