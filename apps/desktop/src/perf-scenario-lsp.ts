@@ -26,14 +26,16 @@
 //
 // `lsp-typing` · `lsp-typing-off` 시나리오(06 「타이핑 지연」): `MAIN_PATH` 를 열고(켬이면 서버 준비까지) `TYPING_LINE` 끝에 `TYPING_TEXT`
 // 를 되풀이해 `TYPING_KEYS` 자를 `KEY_MS` 마다 넣는다. 키마다 「넣기 직전 → 다음 rAF」(`frame`)와 「→ 그 프레임 뒤 첫 작업」(`painted` —
-// 그 프레임의 그리기가 끝난 뒤)을 잰다. 끝나면 넣은 글자를 지운다. 켬 · 끔은 측정하는 쪽이 설정으로 가른다 — 끔은 서버를 띄우지 않는다.
+// 그 프레임의 그리기가 끝난 뒤)을 잰다. 키마다 켬이 더 하는 일의 몫도 적는다(`TypingKey` — dispatch 의 동기 시간, 그중
+// `didChange` 보내기, 뷰 갱신 · rAF 콜백의 시간, 프레임 대기, 그 프레임 뒤 팝업 줄 수). 끝나면 넣은 글자를 지운다. 켬 · 끔은 측정하는
+// 쪽이 설정으로 가른다 — 끔은 서버를 띄우지 않는다.
 //
 // `symbols` · `classes` 시나리오(06 「심볼 인덱스」, M4-16): 합성 저장소(파일 2만 · 심볼 50만)를 연 창에서 `index.status`(이 창과 같은
 // 프로젝트의 Host 연결)가 준비(`ready` · 다시 읽을 파일 0)가 될 때까지 기다려 `index_ready` 를 적는다. 그 뒤 기다림 없이 첫 팝업 —
 // `symbols` 는 ⌘⌥O, `classes` 는 ⌘O — 을 열어 질의를 한 글자씩 친다: 키마다 「입력 이벤트 → 그 질의의 결과 줄이 그려진 프레임」
-// (`totalMs`), 그중 결과 줄이 DOM 에 든 때(`seenMs`)와 `index.symbols.search` 왕복(`rpcMs` — Host + IPC, `RpcClient.call` 을
-// 감싸 잰다). 첫 키가 「창을 연 뒤 첫 검색의 첫 키」 다. 팝업을 닫고 다른 쪽 팝업도 같은 질의로 잰다(`symbol_keys_second` — 첫 사용이
-// 아니다).
+// (`totalMs`), 그중 결과 줄이 DOM 에 든 때(`seenMs`) · 그 뒤 첫 rAF(`frameMs`)와 `index.symbols.search` · `lsp.workspaceSymbol`
+// 왕복(`rpcMs` · `lspMs` — Host + IPC, `RpcClient.call` 을 감싸 잰다). 첫 키가 「창을 연 뒤 첫 검색의 첫 키」 다. 팝업을 닫고
+// 다른 쪽 팝업도 같은 질의로 잰다(`symbol_keys_second` — 첫 사용이 아니다).
 //
 // `lsp-idle` 시나리오(이 저장소 + rust-analyzer): `IDLE_PATH` 를 열고 서버가 준비 상태로 `IDLE_READY_HOLD_MS` 동안 머물면 `server_ready`
 // 를 적고 끝난다(측정하는 쪽이 그때부터 유휴 시간을 기다려 메모리를 잰다).
@@ -424,25 +426,208 @@ async function problems(env: ScenarioEnv) {
   });
 }
 
+/** 타이핑 한 키의 몫(켬 − 끔을 키별로 가른다 — 15-m4-plan §3 「타이핑 지연 LSP 켬 − 끔」). 시각은 키를 넣기 직전부터. */
+export interface TypingKey {
+  /** 넣은 글자. */
+  ch: string;
+  /** `view.dispatch` 한 번의 동기 시간 — 상태 갱신(자동완성 다시 거르기) · 뷰 갱신(팝업 목록 다시 그리기) · 문서 동기화(`didChange`
+   *  보내기)가 모두 든다. */
+  dispatchMs: number;
+  /** 그중 상태 계산(`tr.state` — 자동완성 다시 거르기가 든다). 나머지는 뷰 갱신(팝업 목록 그리기 · 문서 동기화)이다. */
+  stateMs: number;
+  /** 그중 배치를 읽어 강제한 동기 배치(`getBoundingClientRect` 안의 시간 — 자동완성 목록을 새로 만든 뒤 고른 줄을 보이게 할 때). */
+  layoutMs: number;
+  /** 그중 `lsp.document.change` 를 보내는 동기 몫(`RpcClient.call` 안 — 직렬화 · IPC 넘기기). 보내지 않았으면 0. */
+  changeMs: number;
+  /** 넣기 직전 → 그 프레임 뒤 첫 작업 사이에 든 뷰 갱신(`EditorView.update`)의 시간 합과 수 — 이 키의 것과 그사이 비동기로 든 것
+   *  (늦게 온 완성 답 · 진단)이 함께다. */
+  updateMs: number;
+  updates: number;
+  /** 그사이 앱이 건 rAF 콜백(CodeMirror 의 측정 — 팝업 자리 잡기 등)의 시간 합. */
+  rafMs: number;
+  /** 넣기 직전 → 다음 rAF(`frame`), → 그 프레임 뒤 첫 작업(`painted`). */
+  frameMs: number;
+  paintedMs: number;
+  /** 그 프레임 뒤 자동완성 팝업의 줄 수(없으면 0). */
+  popupRows: number;
+  /** 이 키에서 보낸 `lsp.completion` 수. */
+  completions: number;
+}
+
+/** 측정하는 동안 `RpcClient.call` 의 동기 몫을 메서드별로 모은다. `take` 는 모은 것을 돌려주고 비운다. */
+export function watchCallCost(now: () => number, methods: readonly string[]) {
+  const proto = RpcClient.prototype as unknown as {
+    call: (method: string, ...rest: unknown[]) => Promise<unknown>;
+  };
+  const call = proto.call;
+  let ms = new Map<string, number>();
+  let count = new Map<string, number>();
+  proto.call = function (this: unknown, method: string, ...rest: unknown[]) {
+    if (!methods.includes(method)) return call.call(this, method, ...rest);
+    const started = now();
+    try {
+      return call.call(this, method, ...rest);
+    } finally {
+      ms.set(method, (ms.get(method) ?? 0) + now() - started);
+      count.set(method, (count.get(method) ?? 0) + 1);
+    }
+  };
+  return {
+    take: () => {
+      const out = { ms, count };
+      ms = new Map();
+      count = new Map();
+      return out;
+    },
+    restore: () => void (proto.call = call),
+  };
+}
+
+/** 뷰 갱신(`EditorView.update`)의 시간을 모은다 — 인스턴스의 메서드를 감싼다. */
+function watchUpdates(view: EditorView, now: () => number) {
+  const target = view as unknown as { update: (trs: unknown) => void };
+  const own = Object.prototype.hasOwnProperty.call(target, "update");
+  const update = target.update;
+  let ms = 0;
+  let n = 0;
+  target.update = function (this: unknown, trs: unknown) {
+    const started = now();
+    try {
+      update.call(this, trs);
+    } finally {
+      ms += now() - started;
+      n += 1;
+    }
+  };
+  return {
+    take: () => {
+      const out = { ms, n };
+      ms = 0;
+      n = 0;
+      return out;
+    },
+    restore: () => {
+      if (own) target.update = update;
+      else delete (target as { update?: unknown }).update;
+    },
+  };
+}
+
+const popupRows = (view: EditorView) =>
+  view.dom.querySelectorAll(".cm-tooltip-autocomplete > ul > li").length;
+
+/** 타이핑 키들을 묶음별로 줄인다: 모든 키, 팝업이 그려진 키, 팝업이 없는 키. */
+export function typingBreakdown(keys: readonly TypingKey[]) {
+  const sum = (group: readonly TypingKey[]) => ({
+    keys: group.length,
+    painted: frameStats(group.map((k) => k.paintedMs)),
+    dispatch: frameStats(group.map((k) => k.dispatchMs)),
+    state: frameStats(group.map((k) => k.stateMs)),
+    layout: frameStats(group.map((k) => k.layoutMs)),
+    change: frameStats(group.map((k) => k.changeMs)),
+    update: frameStats(group.map((k) => k.updateMs)),
+    raf: frameStats(group.map((k) => k.rafMs)),
+    wait: frameStats(group.map((k) => k.frameMs - k.dispatchMs)),
+    render: frameStats(group.map((k) => k.paintedMs - k.frameMs)),
+  });
+  return {
+    all: sum(keys),
+    popup: sum(keys.filter((k) => k.popupRows > 0)),
+    noPopup: sum(keys.filter((k) => k.popupRows === 0)),
+  };
+}
+
+const TYPING_KEY_COLUMNS = [
+  "ch",
+  "dispatchMs",
+  "stateMs",
+  "layoutMs",
+  "changeMs",
+  "updateMs",
+  "updates",
+  "rafMs",
+  "frameMs",
+  "paintedMs",
+  "popupRows",
+  "completions",
+] as const satisfies readonly (keyof TypingKey)[];
+
+/** 키마다의 몫을 열 이름 + 줄로(표지 크기를 줄인다). */
+export function typingKeyRows(keys: readonly TypingKey[]) {
+  return {
+    columns: [...TYPING_KEY_COLUMNS],
+    rows: keys.map((k) => TYPING_KEY_COLUMNS.map((c) => k[c])),
+  };
+}
+
 async function typing(env: ScenarioEnv, view: EditorView, lsp: boolean) {
   const start = view.state.doc.line(TYPING_LINE).to;
   view.dispatch({ selection: { anchor: start } });
   await env.sleep(500);
   const frame: number[] = [];
   const painted: number[] = [];
-  for (let key = 0; key < TYPING_KEYS; key++) {
-    const at = start + key;
-    const ch = TYPING_TEXT[key % TYPING_TEXT.length]!;
-    const t = env.now();
-    view.dispatch({
-      changes: { from: at, insert: ch },
-      selection: { anchor: at + 1 },
-      userEvent: "input.type",
-    });
-    const seen = await afterPaint(env);
-    frame.push(seen.frame - t);
-    painted.push(seen.painted - t);
-    await env.sleep(KEY_MS);
+  const keys: TypingKey[] = [];
+  const calls = watchCallCost(env.now, ["lsp.document.change", "lsp.completion"]);
+  const updates = watchUpdates(view, env.now);
+  // dispatch 안에서 배치를 읽어(`getBoundingClientRect`) 강제한 동기 배치의 시간 — 자동완성 목록을 새로 만든 뒤 고른 줄을 보이게 할
+  // 때 든다. 다른 읽기(`offsetHeight` 등)는 세지 않는다.
+  const rect = Element.prototype.getBoundingClientRect;
+  let layoutMs = 0;
+  Element.prototype.getBoundingClientRect = function (this: Element) {
+    const started = env.now();
+    try {
+      return rect.call(this);
+    } finally {
+      layoutMs += env.now() - started;
+    }
+  };
+  try {
+    for (let key = 0; key < TYPING_KEYS; key++) {
+      const at = start + key;
+      const ch = TYPING_TEXT[key % TYPING_TEXT.length]!;
+      calls.take();
+      updates.take();
+      env.work.start();
+      const t = env.now();
+      // 상태 계산(자동완성 다시 거르기가 여기 든다 — 상태 필드는 `tr.state` 에서 계산된다)과 뷰 갱신(팝업 목록 그리기 · 문서
+      // 동기화)을 나눠 잰다. 둘을 합치면 `view.dispatch(spec)` 한 번과 같다.
+      const tr = view.state.update({
+        changes: { from: at, insert: ch },
+        selection: { anchor: at + 1 },
+        userEvent: "input.type",
+      });
+      void tr.state;
+      const stated = env.now();
+      layoutMs = 0;
+      view.dispatch(tr);
+      const dispatched = env.now();
+      const layout = layoutMs;
+      const seen = await afterPaint(env);
+      const raf = env.work.take();
+      const cost = calls.take();
+      const upd = updates.take();
+      frame.push(seen.frame - t);
+      painted.push(seen.painted - t);
+      keys.push({
+        ch,
+        dispatchMs: ms(dispatched - t),
+        stateMs: ms(stated - t),
+        changeMs: ms(cost.ms.get("lsp.document.change") ?? 0),
+        layoutMs: ms(layout),
+        updateMs: ms(upd.ms),
+        updates: upd.n,
+        rafMs: ms(raf.reduce((a, b) => a + b, 0)),
+        frameMs: ms(seen.frame - t),
+        paintedMs: ms(seen.painted - t),
+        popupRows: popupRows(view),
+        completions: cost.count.get("lsp.completion") ?? 0,
+      });
+      await env.sleep(KEY_MS);
+    }
+  } finally {
+    Element.prototype.getBoundingClientRect = rect;
+    updates.restore();
+    calls.restore();
   }
   closeCompletion(view);
   view.dispatch({ changes: { from: start, to: start + TYPING_KEYS }, userEvent: "delete" });
@@ -451,7 +636,10 @@ async function typing(env: ScenarioEnv, view: EditorView, lsp: boolean) {
     keys: TYPING_KEYS,
     frame: frameStats(frame),
     painted: frameStats(painted),
+    breakdown: typingBreakdown(keys),
   });
+  // 키마다의 몫은 따로 — 표지 하나의 크기 상한(16 KB, src-tauri perf.rs `SCENARIO_DATA_MAX`) 안에 들게 열 이름 + 줄로 싣는다.
+  await env.report("typing_keys", typingKeyRows(keys));
 }
 
 /** `index.symbols.search` 의 왕복(Host + IPC)을 질의별로 적는다 — `RpcClient.call` 을 감싼다. `restore` 로 걷는다. */
@@ -461,19 +649,27 @@ export function watchSymbolCalls(now: () => number) {
   };
   const call = proto.call;
   const times = new Map<string, number>();
+  const lspTimes = new Map<string, number>();
   proto.call = function (this: unknown, method: string, ...rest: unknown[]) {
     const result = call.call(this, method, ...rest);
-    if (method !== "index.symbols.search") return result;
+    const into =
+      method === "index.symbols.search"
+        ? times
+        : method === "lsp.workspaceSymbol"
+          ? lspTimes
+          : undefined;
+    if (!into) return result;
     const query = (rest[0] as { query?: string } | undefined)?.query ?? "";
     const started = now();
-    void result.then(
-      () => times.set(query, now() - started),
-      () => undefined,
-    );
+    // 실패(미신뢰 · 서버 없음의 거절 포함)도 답이 온 때다 — 첫 키는 그 답까지 기다린다(symbol-search.ts 「200 ms 규칙」).
+    const settle = () => void into.set(query, now() - started);
+    void result.then(settle, settle);
     return result;
   };
   return {
     rpc: (query: string) => times.get(query),
+    /** `lsp.workspaceSymbol` 의 왕복(묻지 않았으면 `undefined`). */
+    lsp: (query: string) => lspTimes.get(query),
     restore: () => void (proto.call = call),
   };
 }
@@ -520,7 +716,8 @@ function typeInto(input: HTMLInputElement, value: string) {
 export async function symbolKeys(
   env: Pick<ScenarioEnv, "doc" | "work" | "now" | "epochNow" | "sleep">,
   popup: "symbols" | "classes",
-  calls: Pick<ReturnType<typeof watchSymbolCalls>, "rpc">,
+  calls: Pick<ReturnType<typeof watchSymbolCalls>, "rpc"> &
+    Partial<Pick<ReturnType<typeof watchSymbolCalls>, "lsp">>,
   random = Math.random,
 ) {
   const { doc } = env;
@@ -529,7 +726,16 @@ export async function symbolKeys(
   doc.body.dispatchEvent(keydown("KeyO", "o", { alt: popup === "symbols" }));
   const input = await until(env, `the ${popup} popup`, () => seInput(doc), 10_000);
   const openMs = env.now() - opened;
-  const keys: { query: string; totalMs: number; seenMs: number; rpcMs: number | null }[] = [];
+  const keys: {
+    query: string;
+    totalMs: number;
+    seenMs: number;
+    /** 입력 이벤트 → 결과 줄 DOM 뒤 첫 rAF(프레임 대기는 `frameMs − seenMs`, 그 뒤 그리기는 `totalMs − frameMs`). */
+    frameMs: number;
+    rpcMs: number | null;
+    /** `lsp.workspaceSymbol` 왕복(묻지 않았으면 `null`). */
+    lspMs: number | null;
+  }[] = [];
   for (let n = 1; n <= query.length; n++) {
     const q = query.slice(0, n);
     // 첫 키는 팝업이 뜬 폴링 rAF 바로 뒤라 위상이 묶여 있다 — 모든 키 앞에서 뗀다.
@@ -543,11 +749,14 @@ export async function symbolKeys(
       30_000,
     );
     const rpc = calls.rpc(q);
+    const lsp = calls.lsp?.(q);
     keys.push({
       query: q,
       totalMs: ms(shown.painted - started),
       seenMs: ms(shown.seen - started),
+      frameMs: ms(shown.frame - started),
       rpcMs: rpc === undefined ? null : ms(rpc),
+      lspMs: lsp === undefined ? null : ms(lsp),
     });
   }
   // 닫는다(Esc — 팝업이 받는다).

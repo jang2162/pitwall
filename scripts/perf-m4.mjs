@@ -232,13 +232,32 @@ export function stepSpawn(step, args, out, base = process.env) {
 export function typingRun(result) {
   const run = (result?.runs ?? []).find((r) => !r.warmup && !r.excluded && r.measure?.typing);
   if (!run) return null;
-  const { painted, frame } = run.measure.typing;
+  const { painted, frame, breakdown } = run.measure.typing;
   return {
     p95: painted.p95,
     p50: painted.p50,
     max: painted.max,
     within16_7: painted.within16_7,
     frameP95: frame.p95,
+    ...(breakdown && { breakdown: typingBreakdownRow(breakdown) }),
+  };
+}
+
+/** 키별 몫(`breakdown` — perf-scenario-lsp.ts `typingBreakdown`)의 p95 몇 개. 묶음에 키가 없으면 null. */
+export function typingBreakdownRow(b) {
+  const p95 = (g, field) => (g.keys > 0 ? g[field].p95 : null);
+  return {
+    dispatchP95: p95(b.all, "dispatch"),
+    stateP95: b.all.keys > 0 && b.all.state ? b.all.state.p95 : null,
+    popupLayoutP95: b.popup.keys > 0 && b.popup.layout ? b.popup.layout.p95 : null,
+    changeP95: p95(b.all, "change"),
+    waitP95: p95(b.all, "wait"),
+    renderP95: p95(b.all, "render"),
+    popupKeys: b.popup.keys,
+    popupP95: p95(b.popup, "painted"),
+    popupDispatchP95: p95(b.popup, "dispatch"),
+    popupRenderP95: p95(b.popup, "render"),
+    noPopupP95: p95(b.noPopup, "painted"),
   };
 }
 
@@ -549,6 +568,15 @@ function writeTyping(out, rounds) {
       "| Round | LSP | p95 ms | p50 ms | frame p95 ms | ≤16.7 share | 1/5/15-min load at start | exit |",
       "|---|---|---|---|---|---|---|---|",
       ...lines,
+      "",
+      "Per-key split (reference, p95 ms per run): `view.dispatch` (sync — state · view update, didChange send), of which the state update (autocomplete re-filtering) and sending didChange, forced layout during a popup key's update, dispatch → next frame, frame → after its rendering; keys with the autocomplete popup drawn after the frame vs without.",
+      "",
+      "| Round | LSP | dispatch | of which state | didChange | wait | render | popup keys | popup p95 | popup dispatch | popup forced layout | popup render | no-popup p95 |",
+      "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+      ...rounds.map((r) => {
+        const b = r.typing?.breakdown;
+        return `| ${r.round} | ${r.lsp ? "on" : "off"} | ${f(b?.dispatchP95)} | ${f(b?.stateP95)} | ${f(b?.changeP95)} | ${f(b?.waitP95)} | ${f(b?.renderP95)} | ${f(b?.popupKeys)} | ${f(b?.popupP95)} | ${f(b?.popupDispatchP95)} | ${f(b?.popupLayoutP95)} | ${f(b?.popupRenderP95)} | ${f(b?.noPopupP95)} |`;
+      }),
       "",
     ].join("\n"),
   );

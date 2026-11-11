@@ -21,6 +21,7 @@ import {
   parseIndexPerf,
   reportCopies,
   stepSpawn,
+  typingBreakdownRow,
   typingRun,
   typingSummary,
 } from "./perf-m4.mjs";
@@ -180,6 +181,37 @@ test("the typing verdict compares the medians of the per-run p95 and lists each 
   };
   assert.deepEqual(typingRun(result), { ...painted, frameP95: 14 });
   assert.equal(typingRun({ runs: [{ warmup: false, excluded: "hidden", measure: {} }] }), null);
+  // 키별 몫이 있으면 그 p95 를 싣는다 — 키가 없는 묶음(끔의 팝업 키)은 null.
+  const g = (keys, base) => ({
+    keys,
+    painted: { p95: base },
+    dispatch: { p95: base / 4 },
+    state: { p95: base / 8 },
+    layout: { p95: base / 16 },
+    change: { p95: 0.5 },
+    update: { p95: 1 },
+    raf: { p95: 0.2 },
+    wait: { p95: base / 2 },
+    render: { p95: 2 },
+  });
+  const breakdown = { all: g(300, 16), popup: g(120, 18), noPopup: g(180, 14) };
+  const withSplit = {
+    runs: [{ warmup: false, measure: { typing: { painted, frame: { p95: 14 }, breakdown } } }],
+  };
+  assert.deepEqual(typingRun(withSplit).breakdown, {
+    dispatchP95: 4,
+    stateP95: 2,
+    popupLayoutP95: 1.125,
+    changeP95: 0.5,
+    waitP95: 8,
+    renderP95: 2,
+    popupKeys: 120,
+    popupP95: 18,
+    popupDispatchP95: 4.5,
+    popupRenderP95: 2,
+    noPopupP95: 14,
+  });
+  assert.equal(typingBreakdownRow({ ...breakdown, popup: g(0, 0) }).popupP95, null);
 });
 
 test("a step starts only on the baseline displays: one built-in display, no external monitor", () => {

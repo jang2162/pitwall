@@ -83,6 +83,8 @@ pub const SCENARIO_EVENTS: &[&str] = &[
     "symbol_keys",
     "symbol_keys_second",
     "server_ready",
+    // 타이핑 키마다의 몫(15-m4-plan §3 「타이핑 지연 LSP 켬 − 끔」).
+    "typing_keys",
 ];
 
 /// 시나리오 표시 하나의 `data` 상한(JSON 바이트). 가장 큰 것(스크롤 통계)이 1 KiB 남짓이다.

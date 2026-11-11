@@ -283,11 +283,52 @@ pub struct Paired {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Typing {
     pub lsp: bool,
     pub keys: u64,
     pub frame: FrameStats,
     pub painted: FrameStats,
+    /// 키별 몫을 묶음별로 줄인 것(`perf-scenario-lsp.ts` 의 `typingBreakdown` — 이 칸을 싣기 전의 앱은 없다).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub breakdown: Option<TypingBreakdown>,
+}
+
+/// 타이핑 키마다의 몫(`typing_keys` 표지 — 표지 하나의 크기 상한 16 KB 안에 들게 열 이름 + 줄로 싣는다). 결과 파일에 남겨 키별로
+/// 다시 본다.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypingKeys {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<Value>>,
+}
+
+/// 타이핑 키의 묶음: 모든 키, 그 프레임 뒤 자동완성 팝업이 있던 키, 없던 키.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TypingBreakdown {
+    pub all: TypingGroup,
+    pub popup: TypingGroup,
+    pub no_popup: TypingGroup,
+}
+
+/// 한 묶음의 분포(ms): 키 → 그 프레임 뒤(`painted`), `view.dispatch` 동기 시간(`dispatch`), 그중 `didChange` 보내기(`change`),
+/// 뷰 갱신 합(`update`), rAF 콜백 합(`raf`), dispatch 뒤 → 다음 rAF(`wait`), rAF → 그 프레임 뒤(`render`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypingGroup {
+    pub keys: u64,
+    pub painted: FrameStats,
+    pub dispatch: FrameStats,
+    /// 그중 상태 계산(`tr.state` — 자동완성 다시 거르기). 이 칸을 싣기 전의 앱은 없다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<FrameStats>,
+    /// 그중 배치를 읽어 강제한 동기 배치(`getBoundingClientRect`). 이 칸을 싣기 전의 앱은 없다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<FrameStats>,
+    pub change: FrameStats,
+    pub update: FrameStats,
+    pub raf: FrameStats,
+    pub wait: FrameStats,
+    pub render: FrameStats,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -323,7 +364,13 @@ pub struct KeyTime {
     /// 입력 이벤트 → 결과 줄이 DOM 에 든 때(M4-19 리뷰 뒤의 시나리오만 적는다).
     #[serde(default)]
     pub seen_ms: Option<f64>,
+    /// 입력 이벤트 → 결과 줄 DOM 뒤 첫 rAF(15-m4-plan §3 의 ⌘⌥O 첫 키 행 뒤의 시나리오만 적는다).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_ms: Option<f64>,
     pub rpc_ms: Option<f64>,
+    /// `lsp.workspaceSymbol` 왕복(묻지 않았으면 없다).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lsp_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -358,6 +405,8 @@ pub struct LspMeasure {
     pub symbol_keys: Option<SymbolKeys>,
     pub symbol_keys_second: Option<SymbolKeys>,
     pub server_ready: Option<ServerReady>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub typing_keys: Option<TypingKeys>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -416,6 +465,7 @@ fn read(marks: &[Mark], stamps: &[Stamp], pid: u32, scenario: &str) -> Result<Ls
     let mut m = LspMeasure {
         ready_ms: data::<Value>(marks, pid, "lsp_ready")?.and_then(|v| v["ms"].as_f64()),
         typing: data(marks, pid, "typing")?,
+        typing_keys: data(marks, pid, "typing_keys")?,
         problems_loaded_ms: data::<Value>(marks, pid, "problems_loaded")?
             .and_then(|v| v["ms"].as_f64()),
         problems_open: data(marks, pid, "problems_open")?,
@@ -638,6 +688,13 @@ pub struct LspRun {
     pub killed: bool,
 }
 
+/// 타이핑 키별 몫의 요약 줄 하나: 열쇠, 설명, 회의 묶음에서 값을 고르는 함수.
+type BreakdownRow<'a> = (
+    &'static str,
+    &'static str,
+    &'a dyn Fn(&TypingBreakdown) -> Option<f64>,
+);
+
 /// 요약 표의 한 줄.
 #[derive(Debug, Clone, Serialize)]
 pub struct Row {
@@ -803,6 +860,116 @@ pub fn summarize_lsp(runs: &[LspRun]) -> Vec<Row> {
         None,
         None,
     );
+    // 켬 − 끔을 키별로 가른 몫(참고 — 판정은 위의 p95 다). 회마다 그 묶음의 p95.
+    let group = |r: &LspRun, pick: &dyn Fn(&TypingBreakdown) -> Option<f64>| {
+        r.measure
+            .typing
+            .as_ref()
+            .and_then(|t| t.breakdown.as_ref())
+            .and_then(pick)
+    };
+    let p95 =
+        |g: &TypingGroup, f: &dyn Fn(&TypingGroup) -> &FrameStats| (g.keys > 0).then(|| f(g).p95);
+    let breakdown: [BreakdownRow<'_>; 13] = [
+        (
+            "typing_dispatch_p95_ms",
+            "  of which `view.dispatch` (sync: state · view update, didChange send), per-run p95 (reference)",
+            &|b| p95(&b.all, &|g| &g.dispatch),
+        ),
+        (
+            "typing_state_p95_ms",
+            "  of which the state update (autocomplete re-filtering), per-run p95 (reference)",
+            &|b| {
+                b.all
+                    .state
+                    .as_ref()
+                    .map(|s| s.p95)
+                    .filter(|_| b.all.keys > 0)
+            },
+        ),
+        (
+            "typing_layout_p95_ms",
+            "  of which forced layout (`getBoundingClientRect` during the update), per-run p95 (reference)",
+            &|b| {
+                b.all
+                    .layout
+                    .as_ref()
+                    .map(|s| s.p95)
+                    .filter(|_| b.all.keys > 0)
+            },
+        ),
+        (
+            "typing_change_p95_ms",
+            "  of which sending didChange (`lsp.document.change`, sync part), per-run p95 (reference)",
+            &|b| p95(&b.all, &|g| &g.change),
+        ),
+        (
+            "typing_wait_p95_ms",
+            "  after dispatch → next animation frame, per-run p95 (reference)",
+            &|b| p95(&b.all, &|g| &g.wait),
+        ),
+        (
+            "typing_render_p95_ms",
+            "  animation frame → after its rendering, per-run p95 (reference)",
+            &|b| p95(&b.all, &|g| &g.render),
+        ),
+        (
+            "typing_popup_keys",
+            "typing: keys with the autocomplete popup drawn after the frame (reference)",
+            &|b| Some(b.popup.keys as f64),
+        ),
+        (
+            "typing_popup_p95_ms",
+            "typing, keys with the popup: key → after the frame, per-run p95 (reference)",
+            &|b| p95(&b.popup, &|g| &g.painted),
+        ),
+        (
+            "typing_popup_dispatch_p95_ms",
+            "  of which `view.dispatch`, per-run p95 (reference)",
+            &|b| p95(&b.popup, &|g| &g.dispatch),
+        ),
+        (
+            "typing_popup_state_p95_ms",
+            "  of which the state update (re-filtering), per-run p95 (reference)",
+            &|b| {
+                b.popup
+                    .state
+                    .as_ref()
+                    .map(|s| s.p95)
+                    .filter(|_| b.popup.keys > 0)
+            },
+        ),
+        (
+            "typing_popup_layout_p95_ms",
+            "  of which forced layout, per-run p95 (reference)",
+            &|b| {
+                b.popup
+                    .layout
+                    .as_ref()
+                    .map(|s| s.p95)
+                    .filter(|_| b.popup.keys > 0)
+            },
+        ),
+        (
+            "typing_popup_render_p95_ms",
+            "  animation frame → after its rendering, per-run p95 (reference)",
+            &|b| p95(&b.popup, &|g| &g.render),
+        ),
+        (
+            "typing_no_popup_p95_ms",
+            "typing, keys without the popup: key → after the frame, per-run p95 (reference)",
+            &|b| p95(&b.no_popup, &|g| &g.painted),
+        ),
+    ];
+    for (key, item, pick) in breakdown {
+        let s = per(&|r| group(r, pick));
+        let unit = if key == "typing_popup_keys" {
+            ""
+        } else {
+            " ms"
+        };
+        push(key, item, s, unit, None, None);
+    }
     let s = per(&|r| r.measure.problems_loaded_ms);
     push(
         "problems_loaded_ms",
@@ -908,6 +1075,38 @@ pub fn summarize_lsp(runs: &[LspRun]) -> Vec<Row> {
     push(
         "first_key_rpc_ms",
         "  of which index.symbols.search round trip (Host + IPC)",
+        s,
+        " ms",
+        None,
+        None,
+    );
+    let s = per(&|r| r.measure.symbol_keys.as_ref().and_then(|k| k.first.seen_ms));
+    push(
+        "first_key_seen_ms",
+        "  of which input → the rows in the DOM (reference)",
+        s,
+        " ms",
+        None,
+        None,
+    );
+    let s = per(&|r| {
+        r.measure
+            .symbol_keys
+            .as_ref()
+            .and_then(|k| Some(k.first.frame_ms? - k.first.seen_ms?))
+    });
+    push(
+        "first_key_wait_ms",
+        "  of which the rows in the DOM → next animation frame (reference)",
+        s,
+        " ms",
+        None,
+        None,
+    );
+    let s = per(&|r| r.measure.symbol_keys.as_ref().and_then(|k| k.first.lsp_ms));
+    push(
+        "first_key_lsp_ms",
+        "  lsp.workspaceSymbol round trip of the first key (reference — the rows wait for it when a server may answer)",
         s,
         " ms",
         None,
@@ -1408,9 +1607,14 @@ mod tests {
 
     fn keys(popup: &str, first: f64, rest: &[f64]) -> Value {
         let key = |q: &str, t: f64| json!({ "query": q, "totalMs": t, "rpcMs": t / 2.0 });
-        let mut keys = vec![key("h", first)];
+        // 첫 키만 DOM · 그 뒤 rAF · 서버 왕복까지 적는다(옛 결과처럼 없는 칸도 읽혀야 한다 — 나머지 키).
+        let first_key = json!({
+            "query": "h", "totalMs": first, "seenMs": first - 12.0, "frameMs": first - 2.0,
+            "rpcMs": first / 2.0, "lspMs": first / 4.0,
+        });
+        let mut keys = vec![first_key.clone()];
         keys.extend(rest.iter().map(|&t| key("ha", t)));
-        json!({ "popup": popup, "openMs": 5.0, "first": key("h", first), "keys": keys })
+        json!({ "popup": popup, "openMs": 5.0, "first": first_key, "keys": keys })
     }
 
     fn symbol_run(index: usize, first: f64, rest: &[f64]) -> LspRun {
@@ -1461,6 +1665,10 @@ mod tests {
         // 나머지 키(첫 키 제외): 가장 느린 키 29 ms — 안.
         assert_eq!(row("keys_max_ms").summary.unwrap().max, 29.0);
         assert_eq!(row("keys_max_ms").met, Some(true));
+        // 첫 키의 갈래: DOM 까지 · DOM → 다음 rAF(프레임 대기) · 서버 왕복.
+        assert_eq!(row("first_key_seen_ms").summary.unwrap().max, 28.0);
+        assert_eq!(row("first_key_wait_ms").summary.unwrap().max, 10.0);
+        assert_eq!(row("first_key_lsp_ms").summary.unwrap().max, 10.0);
         assert_eq!(row("index_first_ms").summary.unwrap().median, 1500.0);
         assert_eq!(row("index_first_ms").met, Some(true));
         // 다른 시나리오의 칸은 줄을 만들지 않는다.
@@ -1480,6 +1688,80 @@ mod tests {
                 .n,
             3
         );
+    }
+
+    #[test]
+    fn typing_keys_are_split_into_popup_and_no_popup_rows() {
+        let group = |keys: u64, painted: f64| {
+            json!({
+                "keys": keys, "painted": stats(painted), "dispatch": stats(painted / 4.0),
+                "state": stats(painted / 8.0), "layout": stats(painted / 16.0),
+                "change": stats(0.5), "update": stats(1.0), "raf": stats(0.3),
+                "wait": stats(painted / 2.0), "render": stats(2.0),
+            })
+        };
+        let marks = |breakdown: Option<Value>| {
+            let mut typing =
+                json!({ "lsp": false, "keys": 300, "frame": stats(9.0), "painted": stats(14.0) });
+            let keys = breakdown.is_some().then(|| {
+                mark(
+                    "typing_keys",
+                    7,
+                    json!({ "columns": ["ch", "paintedMs"], "rows": [["i", 12.0]] }),
+                )
+            });
+            if let Some(b) = breakdown {
+                typing["breakdown"] = b;
+            }
+            let mut out = vec![mark("typing", 7, typing)];
+            out.extend(keys);
+            out.push(mark("scenario_done", 7, json!({})));
+            out
+        };
+        let split =
+            json!({ "all": group(300, 16.0), "popup": group(0, 0.0), "noPopup": group(300, 14.0) });
+        let LspProgress::Done(measure) = progress(&marks(Some(split)), &[], 7, "lsp-typing-off")
+        else {
+            panic!("not done");
+        };
+        assert_eq!(measure.typing_keys.as_ref().unwrap().rows.len(), 1);
+        let run = LspRun {
+            index: 0,
+            warmup: false,
+            excluded: None,
+            app_pid: 7,
+            group: 7,
+            cold_start_ms: 400.0,
+            launch_epoch_ms: 1000.0,
+            measure: *measure,
+            memory: Memory {
+                footprint_bytes: 0,
+                rss_bytes: 0,
+                processes: Vec::new(),
+            },
+            split: MemorySplit::default(),
+            killed: false,
+        };
+        let rows = summarize_lsp(std::slice::from_ref(&run));
+        let row = |k: &str| {
+            rows.iter()
+                .find(|r| r.key == k)
+                .map(|r| r.summary.unwrap().max)
+        };
+        assert_eq!(row("typing_dispatch_p95_ms"), Some(4.0));
+        assert_eq!(row("typing_change_p95_ms"), Some(0.5));
+        assert_eq!(row("typing_state_p95_ms"), Some(2.0));
+        assert_eq!(row("typing_layout_p95_ms"), Some(1.0));
+        assert_eq!(row("typing_wait_p95_ms"), Some(8.0));
+        assert_eq!(row("typing_popup_keys"), Some(0.0));
+        assert_eq!(row("typing_no_popup_p95_ms"), Some(14.0));
+        // 팝업 키가 없는 회(끔)는 팝업 묶음의 줄을 만들지 않는다.
+        assert_eq!(row("typing_popup_p95_ms"), None);
+        // 키별 몫을 싣기 전의 결과도 읽힌다 — 그 줄들이 없을 뿐이다.
+        let LspProgress::Done(old) = progress(&marks(None), &[], 7, "lsp-typing-off") else {
+            panic!("not done");
+        };
+        assert!(old.typing.unwrap().breakdown.is_none());
     }
 
     #[test]

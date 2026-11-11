@@ -14,6 +14,11 @@ import {
   shownThenPainted,
   SYMBOL_QUERY,
   symbolKeys,
+  TYPING_KEYS,
+  type TypingKey,
+  typingBreakdown,
+  typingKeyRows,
+  watchCallCost,
   watchSymbolCalls,
 } from "./perf-scenario-lsp";
 
@@ -50,6 +55,116 @@ it("times index.symbols.search round trips by query and leaves other calls alone
   } finally {
     proto.call = original;
   }
+});
+
+it("times lsp.workspaceSymbol round trips by query, a refusal included", async () => {
+  const proto = RpcClient.prototype as unknown as {
+    call: (method: string, params?: unknown) => Promise<unknown>;
+  };
+  const original = proto.call;
+  // 미신뢰 프로젝트의 서버 쪽은 거절로 답한다 — 그것도 첫 키가 기다리는 답이다.
+  proto.call = function (method: string) {
+    return method === "lsp.workspaceSymbol"
+      ? Promise.reject(new Error("no language servers"))
+      : Promise.resolve({});
+  };
+  try {
+    let clock = 0;
+    const calls = watchSymbolCalls(() => clock);
+    const client = Object.create(RpcClient.prototype) as RpcClient;
+    const asked = client.call("lsp.workspaceSymbol", { projectId: "p", query: "h" } as never);
+    clock = 7;
+    await asked.catch(() => undefined);
+    await client.call("index.symbols.search", { projectId: "p", query: "h" } as never);
+    expect(calls.lsp("h")).toBe(7);
+    expect(calls.rpc("h")).toBe(0);
+    expect(calls.lsp("x")).toBeUndefined();
+    calls.restore();
+  } finally {
+    proto.call = original;
+  }
+});
+
+it("adds up the synchronous cost of the watched calls only, and empties on take", () => {
+  const proto = RpcClient.prototype as unknown as {
+    call: (method: string, params?: unknown) => Promise<unknown>;
+  };
+  const original = proto.call;
+  let clock = 0;
+  // 이 시험의 「Host」: 보내는 데 메서드마다 정해 둔 시간이 든다.
+  const cost: Record<string, number> = { "lsp.document.change": 0.4, "fs.read": 3 };
+  proto.call = function (method: string) {
+    clock += cost[method] ?? 0;
+    return Promise.resolve({});
+  };
+  try {
+    const watch = watchCallCost(() => clock, ["lsp.document.change", "lsp.completion"]);
+    const client = Object.create(RpcClient.prototype) as RpcClient;
+    void client.call("lsp.document.change", {} as never);
+    void client.call("lsp.document.change", {} as never);
+    void client.call("fs.read", {} as never);
+    void client.call("lsp.completion", {} as never);
+    const taken = watch.take();
+    expect(taken.ms.get("lsp.document.change")).toBeCloseTo(0.8, 5);
+    expect(taken.count.get("lsp.document.change")).toBe(2);
+    expect(taken.count.get("lsp.completion")).toBe(1);
+    expect(taken.ms.has("fs.read")).toBe(false);
+    expect(watch.take().count.size).toBe(0);
+    watch.restore();
+    expect(proto.call).not.toBe(original);
+  } finally {
+    proto.call = original;
+  }
+});
+
+it("splits typing keys into those with the popup drawn and those without", () => {
+  const key = (paintedMs: number, popupRows: number, dispatchMs = 1): TypingKey => ({
+    ch: "a",
+    dispatchMs,
+    stateMs: dispatchMs / 2,
+    layoutMs: 0,
+    changeMs: 0.2,
+    updateMs: dispatchMs,
+    updates: 1,
+    rafMs: 0.1,
+    frameMs: paintedMs - 2,
+    paintedMs,
+    popupRows,
+    completions: 0,
+  });
+  const keys = [key(10, 0), key(12, 0), key(17, 50, 4), key(16, 11, 3)];
+  const b = typingBreakdown(keys);
+  expect(b.all.keys).toBe(4);
+  expect(b.popup.keys).toBe(2);
+  expect(b.noPopup.keys).toBe(2);
+  expect(b.popup.painted.max).toBe(17);
+  expect(b.noPopup.painted.max).toBe(12);
+  expect(b.popup.dispatch.max).toBe(4);
+  // 프레임 대기는 dispatch 가 끝난 뒤부터, 그리기는 rAF 뒤부터다.
+  expect(b.all.wait.max).toBe(14 - 3);
+  expect(b.all.render.max).toBe(2);
+});
+
+it("keeps the per-key typing mark under the app's size limit for a mark", () => {
+  // 앱은 16 KB 를 넘는 표지 하나를 버린다(src-tauri perf.rs `SCENARIO_DATA_MAX`) — 키마다 몇 자리 소수가 든 값으로 채운다.
+  const key: TypingKey = {
+    ch: "i",
+    dispatchMs: 12.3,
+    stateMs: 3.1,
+    layoutMs: 2.4,
+    changeMs: 0.4,
+    updateMs: 11.8,
+    updates: 2,
+    rafMs: 1.2,
+    frameMs: 15.6,
+    paintedMs: 17.9,
+    popupRows: 50,
+    completions: 1,
+  };
+  const rows = typingKeyRows(Array.from({ length: TYPING_KEYS }, () => key));
+  expect(rows.rows).toHaveLength(TYPING_KEYS);
+  expect(rows.rows[0]![rows.columns.indexOf("paintedMs")]).toBe(17.9);
+  expect(JSON.stringify(rows).length).toBeLessThan(16 * 1024);
 });
 
 it("finds the visible editor by its first line", () => {
