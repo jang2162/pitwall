@@ -861,13 +861,21 @@ async fn only_the_project_window_starts_a_shell_in_it() {
     assert_eq!(fs::read_to_string(&ran).unwrap(), "started\n");
 }
 
+/// 크기를 바꾸면 셸이 새 크기를 본다. 바꾸는 것은 셸이 앞 명령 뒤의 프롬프트를 띄운 뒤다: readline(macOS 의 sh = bash 3.2)은 줄을
+/// 읽을 준비를 할 때마다 크기를 읽어(TIOCGWINSZ) 그대로 다시 쓰는데(TIOCSWINSZ, readline `rltty.c` 의 `set_winsize`), 그 두 호출
+/// 사이에 바꾸면 옛 크기로 덮인다. 제품의 TIOCSWINSZ 는 답하기 전에 끝나므로 셸 쪽의 경합이다(덮인 크기는 다음 resize 가 바로잡는다).
+/// 표지 없이 앞 명령의 출력만 기다리고 바꾸던 판은 `resize` 직후 `MasterPty::get_size()` 가 이미 `24 80` 이었다 — 이 시험
+/// 하나를 8 개 병렬로 3000 회(`yes` 8 개로 부하) 돌려 26 회, 같은 조건에서 readline 을 끈 셸(`sh --noediting`)은 1500 회 중 0 회.
 #[tokio::test(flavor = "multi_thread")]
 async fn resize_changes_the_size_the_shell_sees() {
     let f = Fixture::new("schema = 1\n");
     let mut c = f.client();
     let t = c.open(f.create_params(80, 24)).await;
-    c.input(t.terminal, "stty size\n").await;
-    c.read_until(t.stream, "24 80").await;
+    let pty = f.terminals.pty(t.terminal).unwrap();
+    // 표지 프롬프트는 이 줄이 끝난 뒤에야 나온다 — 나오면 `stty` 도 끝났고 readline 은 다음 줄을 기다린다.
+    c.input(t.terminal, "PS1='PROMPT''> '; stty size\n").await;
+    let first = read_command(&mut c, t.stream, "stty size\r\n").await;
+    assert!(prints_line(&first, "24 80"), "{first:?}");
     c.call(
         "terminal.resize",
         json!({"terminalId": t.terminal, "cols": 100, "rows": 40}),
@@ -875,8 +883,14 @@ async fn resize_changes_the_size_the_shell_sees() {
     .await
     .outcome
     .unwrap();
+    let resized = pty.size();
     c.input(t.terminal, "stty size\n").await;
-    c.read_until(t.stream, "40 100").await;
+    let second = read_command(&mut c, t.stream, "stty size\r\n").await;
+    assert!(
+        prints_line(&second, "40 100"),
+        "{second:?} (pty size after resize {resized:?}, now {:?}; before the resize {first:?})",
+        pty.size()
+    );
     let response = c
         .call(
             "terminal.resize",
@@ -884,6 +898,26 @@ async fn resize_changes_the_size_the_shell_sees() {
         )
         .await;
     assert_eq!(response.outcome.unwrap_err().code, code::INVALID_PARAMS);
+}
+
+/// 입력의 echo(`echo`) 뒤로 표지 프롬프트 `PROMPT> ` 가 나올 때까지 읽어 echo 뒤의 글자를 준다. readline 은 크기가 바뀌면(SIGWINCH)
+/// 프롬프트를 echo 앞에 다시 그리므로 echo 뒤의 것만 센다. 표지가 출력과 한 청크로 올 수 있어 `read_until` 을 이어 붙인다.
+async fn read_command(c: &mut Client, stream: u64, echo: &str) -> String {
+    let mut text = String::new();
+    loop {
+        if let Some((_, after)) = text.split_once(echo)
+            && let Some((output, _)) = after.split_once("PROMPT> ")
+        {
+            return output.to_owned();
+        }
+        text.push_str(&c.read_until(stream, "PROMPT> ").await);
+    }
+}
+
+/// `output` 의 한 줄이 `line` 인가. bash 3.2 는 잡 제어의 경합을 `sh: child setpgid (…): Operation not permitted` 로 알리는데
+/// 그 줄이 명령의 출력 사이에 끼기도 한다.
+fn prints_line(output: &str, line: &str) -> bool {
+    output.lines().any(|l| l.trim_end_matches('\r') == line)
 }
 
 #[tokio::test(flavor = "multi_thread")]

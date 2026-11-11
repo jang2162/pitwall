@@ -185,6 +185,13 @@ impl Pty {
             .map_err(|e| format!("cannot resize the pty: {e:#}"))
     }
 
+    /// 커널이 지금 가진 크기 `(rows, cols)` — 시험의 실패 메시지에 싣는다.
+    #[cfg(test)]
+    pub fn size(&self) -> (u16, u16) {
+        let s = lock(&self.master).get_size().unwrap();
+        (s.rows, s.cols)
+    }
+
     /// 버퍼 앞의 출력을 최대 `max` 바이트 복사한다(버퍼에서 빼지 않는다 — 보낸 뒤 [`Self::consume`]). 버퍼가 비었으면 출력이
     /// 오기를 기다리고, 읽기가 끝났으면(EOF) `None`. 취소해도 잃는 것이 없다.
     pub async fn peek(&self, max: usize) -> Option<Vec<u8>> {
