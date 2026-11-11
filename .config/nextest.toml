@@ -12,3 +12,9 @@ lsp-jvm = { max-threads = 2 }
 [[profile.default.overrides]]
 filter = 'test(/(^|::)live_lsp_(jdtls|kotlin_lsp)_/)'
 test-group = 'lsp-jvm'
+
+# 리눅스 jdtls rename 은 알려진 JDT NPE 를 통과로 칠 때 `KNOWN …` 줄을 stderr 에 찍는다(`crates/pw-lsp/tests/live_matrix.rs` 의
+# `known_jdtls_rename_npe`). nextest 는 통과한 시험의 출력을 버리므로 그 줄이 잡 로그에 남게 통과해도 출력을 보인다.
+[[profile.default.overrides]]
+filter = 'test(/(^|::)live_lsp_jdtls_rename$/)'
+success-output = 'final'

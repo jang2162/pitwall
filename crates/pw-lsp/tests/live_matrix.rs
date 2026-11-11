@@ -21,46 +21,82 @@ mod common;
 /// NPE 다. Pitwall 의 요청은 같은 본문이
 /// macOS 에서 성공하므로 업스트림(eclipse.jdt.core / eclipse-jdtls) 버그다(15-m4-plan.md 이월 행).
 ///
-/// 좁게 허용한다: 리눅스 · jdtls · 마지막 답이 오류 · 그 오류나 서버 로그에 두 서명이 다 있을 때만. 다른 오류 · 다른 플랫폼 ·
-/// 다른 서버는 그대로 실패하고, rename 이 성공하면 성공 단언을 다 한다. **걷어낼 조건**: jdtls 판을 올린 뒤 리눅스(lsp-live
-/// ubuntu)에서 이 허용 없이 rename 이 통과하면 이 함수와 호출 자리를 지운다.
-fn known_jdtls_rename_npe(linux: bool, jdtls: bool, failed: bool, evidence: &str) -> bool {
+/// 좁게 허용한다: 리눅스 · jdtls · 마지막 답이 오류이고 **그 오류 자체가** 그 NPE(jdtls 의 `-32603` — 예외 이름을 싣고 있으면
+/// `NullPointerException` 과 `IModule.isAutomatic()`) · 그 서버의 로그에 두 서명(첫 NPE 만 프레임을 싣는다 — 뒤 오류는 JIT 가
+/// 잘라 Pitwall 의 오류에는 `-32603` 만 남는다)이 다 있을 때만(리뷰 M2 — 로그에 한 번 남은 서명이 다른 마지막 실패(시한 초과 ·
+/// 다른 예외)를 삼키지 않게). 다른 오류 · 다른 플랫폼 · 다른 서버는 그대로 실패하고, rename 이 성공하면 성공 단언을 다 한다.
+/// **걷어낼 조건**: jdtls 판을 올린 뒤 리눅스(lsp-live ubuntu)에서 이 허용 없이 rename 이 통과하면 이 함수와 호출 자리를 지운다.
+fn known_jdtls_rename_npe(linux: bool, jdtls: bool, last_error: Option<&str>, log: &str) -> bool {
+    let Some(last) = last_error else {
+        return false;
+    };
+    let last_is_the_npe = last.contains("-32603")
+        && (!last.contains("Exception")
+            || (last.contains("NullPointerException") && last.contains("IModule.isAutomatic()")));
     linux
         && jdtls
-        && failed
-        && evidence.contains("BinaryModuleBinding.create")
-        && evidence.contains("IModule.isAutomatic()")
+        && last_is_the_npe
+        && log.contains("BinaryModuleBinding.create")
+        && log.contains("IModule.isAutomatic()")
 }
 
+/// 그 NPE 가 처음 보인 뒤 몇 번 더 같은 답이면 허용으로 빠지는가 — 한 번 그 상태가 되면 그 서버는 시한(180 s) 내내 같은 NPE 라
+/// 시한을 다 쓰지 않는다(리뷰 L1).
+#[cfg(any(
+    pw_live_lsp_basedpyright,
+    pw_live_lsp_ruff,
+    pw_live_lsp_jdtls,
+    pw_live_lsp_kotlin_lsp
+))]
+const KNOWN_NPE_REPEATS: u32 = 3;
+
 #[test]
-fn known_jdtls_rename_npe_needs_both_signatures_on_linux_jdtls() {
-    let npe = "Caused by: java.lang.NullPointerException: Cannot invoke \
+fn known_jdtls_rename_npe_needs_the_last_error_and_both_signatures_on_linux_jdtls() {
+    let log = "Caused by: java.lang.NullPointerException: Cannot invoke \
         \"org.eclipse.jdt.internal.compiler.env.IModule.isAutomatic()\" because \"module\" is null\n\
         \tat org.eclipse.jdt.internal.compiler.lookup.BinaryModuleBinding.create(BinaryModuleBinding.java:101)";
-    assert!(known_jdtls_rename_npe(true, true, true, npe));
-    // 서명이 없는 가짜 오류, 서명 하나만 있는 오류는 실패.
+    // CI(lsp-live ubuntu, job 130235004104)의 마지막 오류 그대로 — 서버의 `data` 는 Pitwall 오류에 실리지 않는다.
+    let internal = "RpcError { code: 5002, message: \"Internal error.\", data: Some(Object {\"code\": Number(-32603), \
+        \"message\": String(\"Internal error.\"), \"server\": String(\"jdtls\")}) }";
+    let with_npe = format!("-32603 {log}");
+    assert!(known_jdtls_rename_npe(true, true, Some(internal), log));
+    assert!(known_jdtls_rename_npe(true, true, Some(&with_npe), log));
+    // 로그에는 서명이 있어도 마지막 오류가 그 NPE 가 아니면 실패: 시한 초과 · 다른 예외 · 오류 아닌 답.
     assert!(!known_jdtls_rename_npe(
         true,
         true,
+        Some("RpcError { code: 5003, message: \"the server did not answer in time\", data: None }"),
+        log
+    ));
+    assert!(!known_jdtls_rename_npe(
         true,
+        true,
+        Some("-32603 java.lang.IllegalStateException: workspace is closed"),
+        log
+    ));
+    assert!(!known_jdtls_rename_npe(true, true, None, log));
+    // 로그에 서명이 없거나 하나만 있으면 실패.
+    assert!(!known_jdtls_rename_npe(
+        true,
+        true,
+        Some(internal),
         "Internal error. (-32603)"
     ));
     assert!(!known_jdtls_rename_npe(
         true,
         true,
-        true,
+        Some(internal),
         "at org.eclipse.jdt.internal.compiler.lookup.BinaryModuleBinding.create(BinaryModuleBinding.java:101)"
     ));
     assert!(!known_jdtls_rename_npe(
         true,
         true,
-        true,
+        Some(internal),
         "Cannot invoke \"IModule.isAutomatic()\""
     ));
-    // 다른 플랫폼 · 다른 서버 · 오류 아닌 답이면 서명이 있어도 실패.
-    assert!(!known_jdtls_rename_npe(false, true, true, npe));
-    assert!(!known_jdtls_rename_npe(true, false, true, npe));
-    assert!(!known_jdtls_rename_npe(true, true, false, npe));
+    // 다른 플랫폼 · 다른 서버면 서명이 있어도 실패.
+    assert!(!known_jdtls_rename_npe(false, true, Some(internal), log));
+    assert!(!known_jdtls_rename_npe(true, false, Some(internal), log));
 }
 
 #[cfg(any(
@@ -749,6 +785,7 @@ mod live {
         let calls = std::fs::canonicalize(o.env.root.join(spec.calls)).unwrap();
         let count = |text: &str| text.matches("resize").count();
         let deadline = Instant::now() + spec.deadline();
+        let mut npe_answers = 0;
         loop {
             let answer = o
                 .win
@@ -779,25 +816,29 @@ mod live {
             } else {
                 format!("{answer:?}")
             };
-            if Instant::now() >= deadline {
-                // 리눅스 jdtls 의 알려진 JDT NPE 만 통과로 친다 — 이유 · 걷어낼 조건은 `known_jdtls_rename_npe` 머리 주석.
-                let evidence = format!(
-                    "{last}\n{}",
-                    o.env.server_log_tail(spec.server.server_id(), usize::MAX)
+            // 리눅스 jdtls 의 알려진 JDT NPE 만 통과로 친다 — 이유 · 걷어낼 조건은 `known_jdtls_rename_npe` 머리 주석. 그 NPE 가
+            // 처음 보인 뒤 `KNOWN_NPE_REPEATS` 번 더 같은 답이면 시한을 기다리지 않는다.
+            // 서버 로그 전체는 리눅스 jdtls 가 오류로 답했을 때만 읽는다.
+            let (linux, jdtls) = (cfg!(target_os = "linux"), spec.server == LiveServer::Jdtls);
+            let known = linux
+                && jdtls
+                && answer.is_err()
+                && super::known_jdtls_rename_npe(
+                    linux,
+                    jdtls,
+                    answer.as_ref().err().map(|_| last.as_str()),
+                    &o.env.server_log_tail(spec.server.server_id(), usize::MAX),
                 );
-                if super::known_jdtls_rename_npe(
-                    cfg!(target_os = "linux"),
-                    spec.server == LiveServer::Jdtls,
-                    answer.is_err(),
-                    &evidence,
-                ) {
-                    eprintln!(
-                        "KNOWN jdtls rename failure on linux (JDT NPE in BinaryModuleBinding.create, \
-                         15-m4-plan.md carry-over) — counted as a pass: {last}"
-                    );
-                    o.win.session.close();
-                    return;
-                }
+            npe_answers = if known { npe_answers + 1 } else { 0 };
+            if known && (npe_answers > super::KNOWN_NPE_REPEATS || Instant::now() >= deadline) {
+                eprintln!(
+                    "KNOWN jdtls rename failure on linux (JDT NPE in BinaryModuleBinding.create, \
+                     15-m4-plan.md carry-over) — counted as a pass after {npe_answers} answers: {last}"
+                );
+                o.win.session.close();
+                return;
+            }
+            if Instant::now() >= deadline {
                 panic!(
                     "{}: rename never gave {:?}: {last}\nserver log:\n{}",
                     spec.server.executable(),
