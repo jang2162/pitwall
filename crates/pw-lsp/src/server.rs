@@ -185,6 +185,10 @@ impl Handlers {
     }
 
     /// `method` 의 처리기를 단다(같은 이름이면 바꾼다).
+    ///
+    /// 처리기 클로저 본문은 서버의 읽기 루프에서 회선 순서로 동기 호출된다(`dispatch`) — 막히는 일(잠금 대기 · 블로킹 I/O ·
+    /// await 할 일)은 반환하는 future 안에 둔다. 본문에서 막히면 그 서버의 모든 메시지가 멈춘다. 본문에는 도착 순서가 필요한
+    /// 짧은 일만 둔다(`workspace/applyEdit` 의 자리 잡기 — `crate::edit`).
     pub fn on<F, Fut>(&mut self, method: impl Into<String>, handler: F) -> &mut Self
     where
         F: Fn(Value) -> Fut + Send + Sync + 'static,
