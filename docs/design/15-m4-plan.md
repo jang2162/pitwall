@@ -145,6 +145,7 @@ M3 에서는 계획에 없던 공유 부품 셋이 진행 중에 생겨 워커�
 | ⌘⌥O(심볼로 이동) 창을 연 뒤 첫 키의 프레임 대기를 줄인다 | M5 착수 전 | M4-19 측정에서 첫 키 최댓값 32 ms(5회 중 2회 31 · 32 ms)로 M4-16 행의 30 ms 를 넘었다. 메인 판정(2026-11-11): 예산은 30 ms 그대로이고 Host · 웹뷰로 나누지 않는다. 넘은 회는 입력 → 결과 줄 DOM 17 – 18 ms 뒤 그려진 프레임까지 13 – 15 ms 를 기다렸다(60 Hz 대기 0 – 16.7 ms). 완료 기준: `perf-m4 --only symbols` 의 첫 키 최댓값 30 ms 안(`docs/superpowers/reports/2026-11-10-m4-perf-report.md` §5 ①) |
 | 타이핑 지연 LSP 켬 − 끔을 키별로 가르고 큰 쪽을 줄인다 | M5 착수 전 | M4-19 측정에서 켬 17 · 끔 14 ms(p95, 번갈아 5짝 — 짝 차 3 · 2 · 3 · 3 · 3)로 06 의 +2 ms 를 넘었다. 켬이 키마다 더 하는 일 — 자동완성 팝업 다시 거르기 · 그리기와 `didChange` — 의 몫을 키별로 적는 계측을 하네스에 더하고 큰 쪽을 줄인다. 완료 기준: 번갈아 잰 짝 차이 ≤ +2 ms(같은 보고서 §5 ②) |
 | (조사, 판정 아님) 에디터를 연 창의 WebKit GPU · WebContent 메모리 | M5 착수 전 | 유휴 메모리는 06 의 정의대로 빈 프로젝트(내장 화면 하나)로 판정한다 — 226.7 MB, 목표 안(메인 판정 2026-11-11). 이 저장소 + rust-analyzer + 파일 하나를 연 상태의 Pitwall 몫은 414 MB(WebKit 332 MB)로 기록만 했다. 같은 내장 화면에서 빈 프로젝트 창만 GPU 21 – 25 MB 이고 그 밖의 창(에디터를 열지 않는 symbols · classes 포함)은 100 MB 대였다 — 원인을 가른다(같은 보고서 §5 ③) |
+| 리눅스 jdtls 1.63.0 rename 의 JDT NPE | M5 착수 전 | rename 의 사용처 검색이 타입 계층을 닫는 단계(`CompilationUnitScope.sealTypeHierarchy` → `ClassScope.connectPermittedTypes` — 픽스처에 `sealed` 는 없다)에서 JDT 컴파일러 안의 `NullPointerException`(`BinaryModuleBinding.create` — `IModule.isAutomatic()` 의 `module` 이 null)을 낸다. 리눅스에서만 비결정적이다(Docker ubuntu 24.04 에서 7회 중 5회 실패, CI ubuntu 는 매번 실패 · macOS 는 통과) — 서버 버그다. 메인 판정(2026-11-11): `live_lsp_jdtls_rename` 은 끄지 않고, 리눅스에서 rename 이 실패했고 오류 · jdtls 로그에 그 서명이 있을 때만 통과로 치고 남긴다(`crates/pw-lsp/tests/live_matrix.rs` 의 `known_jdtls_rename_npe`). 다음 수: jdtls · JDK 판을 바꿔 재현하고, 업스트림(eclipse.jdt.core / eclipse-jdtls)에 이슈를 낸다(재현: `crates/pw-lsp/tests/fixtures/java` 의 `Shapes.scale` rename, 외부 게시는 사람 확인 뒤). 완료 기준: 허용 없이 lsp-live ubuntu 에서 rename 이 통과하고 그 허용을 걷어낸다 |
 
 ## 4. 착수 전 준비물 · 결정
 
@@ -188,6 +189,7 @@ M4-D1 ~ D5 · D8 · D13 · D14 · D19 · D20 은 사용자 결정이다(2026-11-
 | M4-D23 | 포맷 시점 | 메인 판정 | **`⌘⌥L` 로만** 포맷한다. 저장할 때 포맷 · 입력 중 포맷은 M4 에 없다 | 저장은 쓰기만 한다는 D34 의 단순함을 지킨다. 저장 포맷은 서버 시간에 따라 저장이 늦어지고 실패 처리가 붙는다 | ① 설정으로 저장 시 포맷(기본 끔) — 다음 판에 사람이 원하면 | M4-13 | — |
 
 - **멀티 커서 상한의 CI 한도**(메인 판정 2026-11-11): 상한 300(`MAX_OCCURRENCES`)에서 한 글자 넣기 < 16 ms 를 재는 시험(`multi-cursor.test.ts`)은 CI 에서만 한도가 32 ms 다 — 공유 ubuntu 러너가 20.3 · 16.96 ms 로 개발 기기의 한 프레임 근거를 잴 수 없어, CI 는 회귀가 2배를 넘는지만 잡는다. 로컬 16 ms 와 상한 300 은 그대로다.
+- **첫 색인 시험의 CI 한도**(메인 판정 2026-11-11): 한 줄짜리 1 MiB 파일이 첫 색인을 붙잡지 않는지 재는 시험(`pw-index` `a_one_line_megabyte_file_does_not_hold_the_first_index`)은 CI 에서만 한도가 `PARSE_BUDGET` × 4(8 s)다 — 공유 Windows 러너가 1.75 · 3.10 · 4.21 s 로 × 2(4 s) 근처에서 흔들려, CI 는 회귀가 2배를 넘는지만 잡는다. 로컬 × 2 와 `PARSE_BUDGET` 은 그대로다.
 
 **사람에게 물을 것**: 없다(2026-11-02 — 아홉 결정과 `⌃Space` 의 두 번째 키를 모두 사람이 정했다).
 
