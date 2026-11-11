@@ -1077,11 +1077,11 @@ async fn a_second_edit_while_the_first_waits_is_refused() {
                 "workspace/executeCommand",
                 vec![apply_edit_request(&main), apply_edit_request(&main)],
             )
-            // 명령의 답이 오면 흐름이 끝나 기다리던 편집도 버려진다 — 창이 첫 편집에 답할 때까지(두 번째 거절 확인 + 300 ms)
-            // 충분히 늦게 답한다. 1.5 s 로는 느린 CI 러너에서 그 전에 끝났다(run 42910504824).
+            // 명령의 답이 오면 흐름이 끝나 기다리던 편집도 버려진다 — 두 편집 모두에 답이 간 뒤(창이 받은 편집에 답한 뒤)에야
+            // 답한다. 고정 지연(1.5 s · 6 s)은 느린 러너 · 부하 아래에서 창의 답보다 먼저 와 깨졌다(run 42910504824, 리뷰 H1).
             .reply(
                 "workspace/executeCommand",
-                Reply::result(json!(null)).delayed(6000),
+                Reply::result(json!(null)).after_responses(&["fake-1", "fake-2"]),
             ),
             &fix,
         ),
@@ -1102,19 +1102,38 @@ async fn a_second_edit_while_the_first_waits_is_refused() {
     let event = next_event(&mut win, "lsp.applyEdit", Duration::from_secs(10))
         .await
         .unwrap();
-    assert_eq!(answer_to(&record, "fake-2").await["applied"], false);
+    // 두 요청은 Host 에서 동시에 처리돼 어느 쪽이 자리를 잡을지는 정해지지 않는다(부하 아래에서 `fake-2` 가 먼저 잡은 적이
+    // 있다) — 곧바로 답을 받은 쪽이 거절된 편집이고, 다른 쪽은 창이 답할 때까지 답이 없다.
+    let answered = |id: &str| {
+        received(&record)
+            .into_iter()
+            .find(|m| m["id"] == id && m.get("method").is_none())
+            .map(|m| m["result"].clone())
+    };
+    assert!(
+        eventually(Duration::from_secs(10), || answered("fake-1").is_some()
+            || answered("fake-2").is_some())
+        .await
+    );
+    let (refused, waiting) = if answered("fake-1").is_some() {
+        ("fake-1", "fake-2")
+    } else {
+        ("fake-2", "fake-1")
+    };
+    assert_eq!(answered(refused).unwrap()["applied"], false);
     assert!(
         next_event(&mut win, "lsp.applyEdit", Duration::from_millis(300))
             .await
             .is_none()
     );
+    assert_eq!(answered(waiting), None);
     win.call(
         "lsp.applyEdit.answer",
         json!({ "flowId": "f1", "requestId": event["requestId"], "applied": true }),
     )
     .await
     .unwrap();
-    assert_eq!(answer_to(&record, "fake-1").await["applied"], true);
+    assert_eq!(answer_to(&record, waiting).await["applied"], true);
     win.response(call).await.unwrap();
 }
 

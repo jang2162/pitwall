@@ -25,6 +25,8 @@ struct Fake {
     hung: std::sync::atomic::AtomicBool,
     /// 메서드마다 받은 요청 수(`sequence` 의 차례).
     asked: std::sync::Mutex<std::collections::HashMap<String, usize>>,
+    /// 클라이언트가 응답한 서버 요청의 id(`afterResponses` 가 기다린다).
+    responded: tokio::sync::watch::Sender<std::collections::HashSet<String>>,
 }
 
 impl Fake {
@@ -160,16 +162,27 @@ impl Fake {
             },
         };
         let delay = reply.as_ref().map_or(0, |r| r.delay_ms);
+        let after = reply
+            .as_ref()
+            .map(|r| r.after_responses.clone())
+            .unwrap_or_default();
         let then = reply.map(|r| r.then).unwrap_or_default();
         let fake = Arc::clone(self);
+        let wait = !after.is_empty();
         let send = async move {
+            if wait {
+                let mut responded = fake.responded.subscribe();
+                let _ = responded
+                    .wait_for(|ids| after.iter().all(|id| ids.contains(id)))
+                    .await;
+            }
             if delay > 0 {
                 tokio::time::sleep(Duration::from_millis(delay)).await;
             }
             fake.frame(&message::response(&id, &result)).await;
             fake.act(&then).await;
         };
-        if delay > 0 {
+        if delay > 0 || wait {
             tokio::spawn(send);
         } else {
             send.await;
@@ -212,6 +225,7 @@ async fn main() -> ExitCode {
         next_id: AtomicU64::new(1),
         hung: std::sync::atomic::AtomicBool::new(false),
         asked: std::sync::Mutex::default(),
+        responded: tokio::sync::watch::Sender::default(),
     });
     fake.act(&fake.scenario.start.clone()).await;
     let mut reader = FrameReader::new(tokio::io::stdin());
@@ -241,7 +255,20 @@ async fn main() -> ExitCode {
                 }
                 method
             }
-            Incoming::Response { .. } => continue,
+            Incoming::Response { id, .. } => {
+                // 글 id 그대로(`Display` 는 따옴표를 붙인다) — 숫자 id 는 그 숫자의 글.
+                let id = match id {
+                    Some(RequestId::String(s)) => Some(s),
+                    Some(RequestId::Number(n)) => Some(n.to_string()),
+                    None => None,
+                };
+                if let Some(id) = id {
+                    fake.responded.send_modify(|ids| {
+                        ids.insert(id);
+                    });
+                }
+                continue;
+            }
         };
         if let Some(actions) = fake.scenario.on.get(&method).cloned() {
             fake.act(&actions).await;

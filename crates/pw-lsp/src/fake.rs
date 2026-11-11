@@ -6,6 +6,7 @@
 //!   "capabilities": { "hoverProvider": true },
 //!   "replies": {
 //!     "textDocument/hover": { "result": { "contents": "x" }, "delayMs": 50 },
+//!     "workspace/executeCommand": { "afterResponses": ["fake-1", "fake-2"] },
 //!     "shutdown": { "noReply": true }
 //!   },
 //!   "on": { "initialized": [{ "do": "notify", "method": "$/progress", "params": {} }] },
@@ -16,7 +17,8 @@
 //! ```
 //!
 //! - **답**(`replies`, 메서드 이름별): `result`(없으면 `null`) 또는 `error`(`{code, message}`), `delayMs`(그만큼 뒤에 답 — 그사이
-//!   다른 메시지도 읽는다), `noReply`(답하지 않는다), `then`(답한 뒤 할 일). `replies` 에 없는 요청의 기본 답: `initialize` →
+//!   다른 메시지도 읽는다), `afterResponses`(그 id 의 서버 요청 모두에 클라이언트가 응답한 뒤에 답 — 그사이 다른 메시지도
+//!   읽는다. `delayMs` 는 그 뒤부터 센다), `noReply`(답하지 않는다), `then`(답한 뒤 할 일). `replies` 에 없는 요청의 기본 답: `initialize` →
 //!   `{capabilities, serverInfo}`, `shutdown` → `null`, 그 밖 → `MethodNotFound`.
 //! - **차례 답**(`sequence`, 메서드 이름별 답 목록): 그 메서드의 n 번째 요청(0 부터)은 목록의 n 번째 답, 다 쓰면 `replies` 를 따른다
 //!   (같은 요청에 처음과 나중의 답이 달라야 할 때 — M4-06 의 pull `unchanged`).
@@ -71,6 +73,9 @@ pub struct Reply {
     pub error: Option<Value>,
     #[serde(default)]
     pub delay_ms: u64,
+    /// 이 id(예: `"fake-1"`)의 서버 요청 모두에 클라이언트가 응답한 뒤에 답한다 — 시간이 아니라 사건으로 순서를 잡는다.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub after_responses: Vec<String>,
     #[serde(default)]
     pub no_reply: bool,
     #[serde(default)]
@@ -169,6 +174,12 @@ impl Reply {
         self.delay_ms = ms;
         self
     }
+
+    /// 서버 요청 `ids` 모두에 클라이언트가 응답한 뒤에 답한다.
+    pub fn after_responses(mut self, ids: &[&str]) -> Self {
+        self.after_responses = ids.iter().map(|&id| id.to_owned()).collect();
+        self
+    }
 }
 
 #[cfg(test)]
@@ -183,6 +194,7 @@ mod tests {
           "capabilities": { "hoverProvider": true },
           "replies": {
             "textDocument/hover": { "result": { "contents": "x" }, "delayMs": 50 },
+            "workspace/executeCommand": { "afterResponses": ["fake-1", "fake-2"] },
             "shutdown": { "noReply": true }
           },
           "on": { "initialized": [{ "do": "notify", "method": "$/progress", "params": {} }] },
@@ -193,6 +205,10 @@ mod tests {
         let s: Scenario = serde_json::from_str(text).unwrap();
         assert_eq!(s.replies["textDocument/hover"].delay_ms, 50);
         assert!(s.replies["shutdown"].no_reply);
+        assert_eq!(
+            s.replies["workspace/executeCommand"].after_responses,
+            ["fake-1", "fake-2"]
+        );
         assert_eq!(
             s.on["initialized"],
             vec![Action::Notify {
