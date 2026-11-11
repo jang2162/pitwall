@@ -664,54 +664,97 @@ pub(crate) fn apply_edit(handlers: &mut Handlers, cx: &HandlerContext) {
         root: cx.root.clone(),
     };
     handlers.on("workspace/applyEdit", move |params: Value| {
+        // 이 본문은 서버의 읽기 루프가 회선 순서로 동기 호출한다(`crate::server` 의 `dispatch`) — 여기서 자리를 잡아야 같은 명령에
+        // 잇달아 온 두 편집 중 앞 것이 자리를 잡는다(「도착 순서」 = 읽기 루프가 요청을 읽은 순서). 흐름 표의 잠금만 잠깐 쥔다.
+        let seat = reserve(&key);
         let key = key.clone();
-        async move { Ok::<_, ResponseError>(forward(&key, &params).await) }
+        async move {
+            Ok::<_, ResponseError>(match seat {
+                Ok(seat) => forward(&key, seat, &params).await,
+                Err(refused) => refused,
+            })
+        }
     });
 }
 
-/// 인스턴스 `key` 의 명령이 돌고 있으면 그 창에 넘기고 답을 기다린다.
-async fn forward(key: &InstanceKey, params: &Value) -> Value {
+/// 흐름에 잡은 편집 자리(`waiting` 에 넣은 송신자의 받는 쪽).
+struct Seat {
+    id: String,
+    session: SessionId,
+    manager: LspManager,
+    request_id: u32,
+    rx: oneshot::Receiver<Answer>,
+}
+
+/// 인스턴스 `key` 의 도는 명령에 편집 자리를 잡는다 — 검사와 자리 표시(`waiting` 에 넣기)를 한 잠금 안에서 한다.
+fn reserve(key: &InstanceKey) -> Result<Seat, Value> {
+    let mut flows = flows();
+    // 같은 인스턴스의 명령이 둘 돌면 나중 것(창은 한 번에 하나만 돌린다).
+    let Some(flow) = flows.iter_mut().rev().find(|f| f.key == *key) else {
+        return Err(not_applied(
+            "Pitwall applies a server's edit only while running a command the person chose",
+        ));
+    };
+    // 한 명령의 편집은 한 번에 하나 — 앞 편집에 창이 답하기 전에 온 것은 받지 않는다(쏟아붓기에 창의 미리보기가 줄줄이 뜨지 않게).
+    if !flow.waiting.is_empty() {
+        return Err(not_applied(
+            "an earlier edit of this command is still waiting for the window",
+        ));
+    }
+    flow.next += 1;
+    let request_id = flow.next;
+    let (tx, rx) = oneshot::channel();
+    flow.waiting.insert(request_id, tx);
+    Ok(Seat {
+        id: flow.id.clone(),
+        session: flow.session,
+        manager: flow.manager.clone(),
+        request_id,
+        rx,
+    })
+}
+
+/// 자리를 비운다(남겨 두면 같은 명령의 다음 편집이 「앞 편집이 기다리는 중」 으로 거절된다).
+fn release(id: &str, session: SessionId, request_id: u32) {
+    if let Some(flow) = flows()
+        .iter_mut()
+        .find(|f| f.id == id && f.session == session)
+    {
+        flow.waiting.remove(&request_id);
+    }
+}
+
+/// 잡은 자리로 편집을 창에 넘기고 답을 기다린다.
+async fn forward(key: &InstanceKey, seat: Seat, params: &Value) -> Value {
+    let Seat {
+        id,
+        session,
+        manager,
+        request_id,
+        rx,
+    } = seat;
     let mut edit = match normalize_edit(params.get("edit").unwrap_or(&Value::Null)) {
         Ok(edit) => edit,
-        Err(e) => return not_applied(&e.message),
+        Err(e) => {
+            release(&id, session, request_id);
+            return not_applied(&e.message);
+        }
     };
     let label = params
         .get("label")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    let (id, session, manager) = {
-        let flows = flows();
-        // 같은 인스턴스의 명령이 둘 돌면 나중 것(창은 한 번에 하나만 돌린다).
-        let Some(at) = flows.iter().rposition(|f| f.key == *key) else {
-            return not_applied(
-                "Pitwall applies a server's edit only while running a command the person chose",
-            );
-        };
-        let flow = &flows[at];
-        // 한 명령의 편집은 한 번에 하나 — 앞 편집에 창이 답하기 전에 온 것은 받지 않는다(쏟아붓기에 창의 미리보기가 줄줄이 뜨지 않게).
-        if !flow.waiting.is_empty() {
-            return not_applied("an earlier edit of this command is still waiting for the window");
-        }
-        (flow.id.clone(), flow.session, flow.manager.clone())
-    };
-    // 판정은 흐름 표의 잠금 밖에서(관리자의 잠금을 겹쳐 쥐지 않는다).
+    // 판정은 흐름 표의 잠금 밖에서(관리자의 잠금을 겹쳐 쥐지 않는다). 자리는 이미 잡았으므로 그사이 온 편집은 `reserve` 에서 거절된다.
     mark_foreign(&manager, key, session, &mut edit);
-    let (rx, closed, request_id) = {
+    let closed = {
         let mut flows = flows();
+        // 판정하는 사이 명령이 끝났다 — 흐름과 함께 자리도 빠졌다.
         let Some(flow) = flows
             .iter_mut()
             .find(|f| f.id == id && f.session == session && f.key == *key)
         else {
             return not_applied("the command ended before the window answered");
         };
-        // 판정하는 사이 같은 명령의 다른 편집이 먼저 자리를 잡았다.
-        if !flow.waiting.is_empty() {
-            return not_applied("an earlier edit of this command is still waiting for the window");
-        }
-        flow.next += 1;
-        let request_id = flow.next;
-        let (tx, rx) = oneshot::channel();
-        flow.waiting.insert(request_id, tx);
         let event = LspApplyEditEvent {
             flow_id: flow.id.clone(),
             request_id,
@@ -728,7 +771,7 @@ async fn forward(key: &InstanceKey, params: &Value) -> Value {
             flow.waiting.remove(&request_id);
             return not_applied("the window that ran the command is not listening");
         }
-        (rx, flow.closed.clone(), request_id)
+        flow.closed.clone()
     };
     let answer = tokio::select! {
         answer = rx => return match answer {
@@ -738,13 +781,8 @@ async fn forward(key: &InstanceKey, params: &Value) -> Value {
         () = closed.cancelled() => not_applied("the window closed"),
         () = tokio::time::sleep(ANSWER_TIMEOUT) => not_applied("the window did not answer in time"),
     };
-    // 답 없이 끝났다 — 자리를 비운다(남겨 두면 같은 명령의 다음 편집이 「앞 편집이 기다리는 중」 으로 거절된다).
-    if let Some(flow) = flows()
-        .iter_mut()
-        .find(|f| f.id == id && f.session == session)
-    {
-        flow.waiting.remove(&request_id);
-    }
+    // 답 없이 끝났다 — 자리를 비운다.
+    release(&id, session, request_id);
     answer
 }
 

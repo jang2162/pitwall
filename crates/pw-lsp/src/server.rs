@@ -428,9 +428,20 @@ impl Shared {
                     let _ = self.send(message::response(&id, &Err(busy)));
                     return;
                 }
+                // 단 처리기는 여기(읽기 루프)에서 회선 순서로 동기 호출해 future 만 만들고, 그 future 를 태스크에서 기다린다 — 처리기는
+                // 클로저 본문에서 도착 순서가 필요한 일을 한다(`workspace/applyEdit` 의 자리 잡기 — `crate::edit`). 불변식: 처리기 클로저
+                // 본문은 회선 순서로 읽기 루프에서 불리므로 막히는 일(오래 쥐는 잠금 대기 · 블로킹 I/O · 무거운 계산)을 넣지 않는다 —
+                // 넣으면 이 서버의 모든 메시지가 멈춘다. 그런 일은 돌려주는 future 안에서 한다.
+                let (custom, params) = match self.handlers.get(&method) {
+                    Some(handler) => (Some(handler(params)), Value::Null),
+                    None => (None, params),
+                };
                 let shared = Arc::clone(self);
                 tokio::spawn(async move {
-                    let result = shared.handle(&method, params).await;
+                    let result = match custom {
+                        Some(handled) => handled.await,
+                        None => shared.handle(&method, params).await,
+                    };
                     if let Err(e) = &result {
                         tracing::debug!(target: "pw_lsp", server = %shared.server_id, %method, %e, "answered a server request with an error");
                     }
@@ -457,10 +468,8 @@ impl Shared {
         }
     }
 
+    /// 처리기를 달지 않은 서버 → 클라이언트 요청의 기본 답(단 처리기는 `dispatch` 가 먼저 부른다).
     async fn handle(&self, method: &str, params: Value) -> Result<Value, ResponseError> {
-        if let Some(handler) = self.handlers.get(method) {
-            return handler(params).await;
-        }
         match method {
             "window/workDoneProgress/create" => Ok(Value::Null),
             // 클라이언트 능력으로 알리므로 처리기가 달리기 전(M4-05)에는 항목마다 `null`(「설정 없음」)로 답한다 — 오류보다 서버가

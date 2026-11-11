@@ -1102,38 +1102,27 @@ async fn a_second_edit_while_the_first_waits_is_refused() {
     let event = next_event(&mut win, "lsp.applyEdit", Duration::from_secs(10))
         .await
         .unwrap();
-    // 두 요청은 Host 에서 동시에 처리돼 어느 쪽이 자리를 잡을지는 정해지지 않는다(부하 아래에서 `fake-2` 가 먼저 잡은 적이
-    // 있다) — 곧바로 답을 받은 쪽이 거절된 편집이고, 다른 쪽은 창이 답할 때까지 답이 없다.
+    // 앞 편집(`fake-1`)이 자리를 잡고, 뒤 편집(`fake-2`)은 곧바로 거절된다 — 앞 편집은 창이 답할 때까지 답이 없다.
     let answered = |id: &str| {
         received(&record)
             .into_iter()
             .find(|m| m["id"] == id && m.get("method").is_none())
             .map(|m| m["result"].clone())
     };
-    assert!(
-        eventually(Duration::from_secs(10), || answered("fake-1").is_some()
-            || answered("fake-2").is_some())
-        .await
-    );
-    let (refused, waiting) = if answered("fake-1").is_some() {
-        ("fake-1", "fake-2")
-    } else {
-        ("fake-2", "fake-1")
-    };
-    assert_eq!(answered(refused).unwrap()["applied"], false);
+    assert_eq!(answer_to(&record, "fake-2").await["applied"], false);
     assert!(
         next_event(&mut win, "lsp.applyEdit", Duration::from_millis(300))
             .await
             .is_none()
     );
-    assert_eq!(answered(waiting), None);
+    assert_eq!(answered("fake-1"), None);
     win.call(
         "lsp.applyEdit.answer",
         json!({ "flowId": "f1", "requestId": event["requestId"], "applied": true }),
     )
     .await
     .unwrap();
-    assert_eq!(answer_to(&record, waiting).await["applied"], true);
+    assert_eq!(answer_to(&record, "fake-1").await["applied"], true);
     win.response(call).await.unwrap();
 }
 
