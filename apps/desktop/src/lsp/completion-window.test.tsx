@@ -896,6 +896,44 @@ it("runs the accepted item's command on the Host, and a parameter-hint command o
   expect(executed).toHaveLength(1);
 });
 
+it("asks on a trigger typed while the capabilities are being asked again right after the server became ready (repeated)", async () => {
+  // 15-m4-plan §3 「준비 직후 트리거 글자」: 서버가 준비되면 Host 가 `lsp.status` 를 내고, 상태바와 능력 칸이 그 이벤트에서 따로
+  // 묻는다. 상태바가 먼저 「준비」 를 그리고 능력 칸의 답이 아직 오가는 동안 친 `.` 도 묻는다 — 회마다 서버가 내려갔다(칸이 빔)
+  // 다시 준비되고, 짝수 회는 칸의 답이 오가는 동안, 홀수 회는 답이 든 뒤에 친다.
+  const asked = serveCompletion(() => ({ items: [item("area")] }));
+  await openMain("r\n", 1);
+  for (let round = 0; round < 4; round++) {
+    host.lsp!.setFeatures({});
+    await emit("lsp.status", { projectId: "p1", instances: [] });
+    expect(lspContext()?.capabilities, `round ${round}`).toEqual({});
+    const release = host.lsp!.holdCapabilities();
+    host.lsp!.setFeatures(features());
+    await emit("lsp.status", { projectId: "p1", instances: [] });
+    expect(lspContext()?.capabilities, `round ${round}`).toEqual({});
+    const before = asked.length;
+    if (round % 2 === 0) {
+      await type(".");
+      await act(async () => release());
+    } else {
+      await act(async () => release());
+      await settle();
+      await type(".");
+    }
+    await settle();
+    expect(asked.slice(before), `round ${round}`).toEqual([
+      expect.objectContaining({ trigger: { kind: "character", character: "." } }),
+    ]);
+    expect(listLabels(), `round ${round}`).toEqual(["area"]);
+    await press("Escape");
+    await act(async () => {
+      const v = view();
+      const at = v.state.selection.main.head;
+      v.dispatch({ changes: { from: at - 1, to: at }, userEvent: "delete" });
+    });
+    await settle();
+  }
+});
+
 it("does nothing and reports nothing when no server completes the document (untrusted · no server)", async () => {
   // 창 틀의 다른 Host 메서드가 없다는 로그는 이 시험과 무관하다 — LSP 의 것(`[lsp]`)만 본다.
   const errors = vi.spyOn(console, "error");

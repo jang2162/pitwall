@@ -125,6 +125,11 @@ export interface LspDocument {
   /** 능력 칸이 바뀌면 부른다. 해제 함수를 돌려준다. */
   onCapabilities(listener: () => void): () => void;
   /**
+   * 능력 칸을 묻는 중이면 그 답(묻는 중에 온 다시 묻기까지)이 칸에 든 뒤, 아니면 곧바로 풀린다. 칸이 빈 채 친 트리거 글자가
+   * `lsp.status`(준비) 직후의 묻는 틈에 걸렸는지 가른다 — 상태바는 같은 이벤트에서 따로 물어 칸보다 먼저 「준비」 를 그릴 수 있다.
+   */
+  capabilitiesSettled(): Promise<void>;
+  /**
    * 같은 종류(`kind`)의 앞 요청을 취소하고, 그 버전의 편집이 Host 에 닿은 뒤 `call` 을 부른다. 답이 `staleVersion: true` 를
    * 실었거나 그사이 문서가 바뀌었거나 취소됐거나 맡을 서버가 없으면(`5001`) `undefined`. 그 밖의 실패는 그대로 던진다(문서를
    * 잃었으면 — not found — 다시 연다). 물러서 있는 동안은 다시 열 때까지(최대 30 s) 기다린다 — 답을 받아 팝업을 열기 전에 커서 ·
@@ -239,6 +244,8 @@ export function createLspSessions(deps: LspSessionsDeps): LspSessions {
     private readonly inflight = new Map<string, AbortController>();
     private asking = false;
     private askAgain = false;
+    /** 묻기가 끝나기를 기다리는 것(`settled`). */
+    private settledWaiters: (() => void)[] = [];
 
     constructor(
       readonly path: string,
@@ -289,6 +296,12 @@ export function createLspSessions(deps: LspSessionsDeps): LspSessions {
       return () => void this.listeners.delete(listener);
     }
 
+    /** 묻는 중이면 묻기(이어 묻는 것까지)가 끝난 뒤, 아니면 곧바로 풀린다. */
+    settled(): Promise<void> {
+      if (!this.asking) return Promise.resolve();
+      return new Promise((resolve) => this.settledWaiters.push(resolve));
+    }
+
     /** 능력 칸을 다시 묻는다. 묻는 중이면 끝난 뒤 한 번 더. */
     refresh() {
       if (this.asking) {
@@ -314,6 +327,11 @@ export function createLspSessions(deps: LspSessionsDeps): LspSessions {
           if (this.askAgain) {
             this.askAgain = false;
             this.refresh();
+          }
+          if (!this.asking) {
+            const waiters = this.settledWaiters;
+            this.settledWaiters = [];
+            for (const resolve of waiters) resolve();
           }
         });
     }
@@ -420,6 +438,7 @@ export function createLspSessions(deps: LspSessionsDeps): LspSessions {
           return entry.capabilities;
         },
         onCapabilities: (listener) => entry.onCapabilities(listener),
+        capabilitiesSettled: () => entry.settled(),
         request: (kind, call) => entry.request(kind, call),
         call: (kind, method, params) =>
           entry.request(kind, (at, signal) => services.call(method, params(at), { signal })),

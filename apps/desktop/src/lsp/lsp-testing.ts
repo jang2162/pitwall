@@ -46,6 +46,8 @@ export function fakeLspServer(options: FakeLspOptions = {}) {
   const docs = new Map<string, Doc>();
   let seq = 0;
   let features: LspDocumentCapabilities["features"] = {};
+  /** 있으면 `capabilities` 가 이것이 풀릴 때까지 답하지 않는다(`holdCapabilities`). */
+  let capabilitiesGate: Promise<unknown> | undefined;
   const notFound = (docId: string) =>
     new RpcCallError({ code: ERROR_CODE.NOT_FOUND, message: `no open document ${docId}` });
   const source: LspSource = {
@@ -109,6 +111,7 @@ export function fakeLspServer(options: FakeLspOptions = {}) {
     },
     async capabilities(params) {
       calls.push({ method: "capabilities", params });
+      await capabilitiesGate;
       if (!docs.has(params.docId)) throw notFound(params.docId);
       return { features };
     },
@@ -150,6 +153,15 @@ export function fakeLspServer(options: FakeLspOptions = {}) {
     called: (method: string) => calls.filter((c) => c.method === method).map((c) => c.params),
     setFeatures(next: LspDocumentCapabilities["features"]) {
       features = next;
+    },
+    /** 이제부터 `capabilities` 의 답을 붙잡는다(Host 왕복이 늦음). 돌려준 함수로 놓는다 — 붙잡힌 답은 그때의 칸으로 답한다. */
+    holdCapabilities() {
+      let release!: () => void;
+      capabilitiesGate = new Promise<void>((r) => (release = r));
+      return () => {
+        capabilitiesGate = undefined;
+        release();
+      };
     },
   };
 }

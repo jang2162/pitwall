@@ -221,6 +221,7 @@ function outsideDocument(spec: OutsideSpec, services: LspServices, projectId: st
     version: 0,
     capabilities: {},
     onCapabilities: () => () => {},
+    capabilitiesSettled: async () => {},
     request: async () => undefined,
     call: async () => undefined,
     hold: () => () => {},

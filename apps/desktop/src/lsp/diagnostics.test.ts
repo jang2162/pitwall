@@ -84,6 +84,7 @@ function setup(text: string, options: { worktree?: string; list?: LspDiagnostic[
     },
     capabilities: {},
     onCapabilities: () => () => {},
+    capabilitiesSettled: async () => {},
     request: async () => undefined,
     call: async () => undefined,
     hold: () => () => {},

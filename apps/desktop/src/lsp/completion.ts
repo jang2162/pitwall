@@ -24,7 +24,9 @@
 //   클라이언트 쪽 명령(`editor.action.triggerParameterHints` · `triggerSuggest`)은 여기서 한다.
 // - 한글 조합 중에는 목록을 열지 않고(소스가 묻지 않는다) `↩` 는 조합에 쓴다(항목을 고르지 않는다 — 10-ui 「한글 조합 중의 Enter」).
 //   `Esc` 는 목록을 먼저 닫고 `preventDefault` 한다(팝업 바탕 · 멀티 커서의 Esc 보다 앞 — M4-14).
-// - 미신뢰 프로젝트 · 서버 없음이면 능력 칸이 비어 소스가 조용히 아무것도 열지 않는다(결정 M4-D8).
+// - 미신뢰 프로젝트 · 서버 없음이면 능력 칸이 비어 소스가 조용히 아무것도 열지 않는다(결정 M4-D8). 칸이 빈 채 친 글자는 칸을
+//   묻는 중이면(서버가 막 준비돼 `lsp.status` 로 다시 묻는 틈 — 상태바는 이미 「준비」 일 수 있다) 그 답을 기다려 판정한다
+//   (`capabilitiesSettled`).
 
 import {
   acceptCompletion,
@@ -315,8 +317,12 @@ export function filterLabel(
 function lspSource(doc: LspDocument) {
   return async (context: CompletionContext): Promise<CompletionResult | null> => {
     const view = context.view;
+    if (!view || view.compositionStarted) return null;
+    // 칸이 비었으면 묻는 중인 칸의 답을 기다려 다시 본다 — 서버가 막 준비된 때 친 트리거 글자를 놓치지 않는다(15-m4-plan §3
+    // 「준비 직후 트리거 글자」). 묻는 중이 아니면 곧바로 풀려 「서버 없음」 그대로다.
+    if (!completionOptions(doc)) await doc.capabilitiesSettled();
     const options = completionOptions(doc);
-    if (!view || !options || view.compositionStarted) return null;
+    if (!options || context.aborted || view.compositionStarted) return null;
     const vs = viewState(view);
     const explicit = context.explicit || vs.explicit;
     vs.explicit = false;
