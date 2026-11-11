@@ -82,7 +82,7 @@ export const DEFINITION_SAMPLES = DEF_TARGETS;
 /** 표본 사이 쉼 — 앞 표본의 뒤처리(진단 다시 보내기 · 팝업 닫기)가 끝나도록. */
 export const SETTLE_MS = 150;
 
-/** 타이핑: 초당 20자 15초. 글은 낱말 · `.`(완성 트리거) · 공백이 섞인 것을 되풀이한다. */
+/** 타이핑: 300자, 키를 그린 뒤 평균 `KEY_MS` 쉬고 다음 키(초당 약 15자 — 쉼은 앞 키의 그린 프레임 뒤에 시작한다). 글은 낱말 · `.`(완성 트리거) · 공백이 섞인 것을 되풀이한다. */
 export const TYPING_KEYS = 300;
 export const KEY_MS = 50;
 export const TYPING_TEXT = "item.perfItem3 + value ";
@@ -136,7 +136,7 @@ export function offPhase(env: Pick<ScenarioEnv, "sleep">, random = Math.random):
 }
 
 /**
- * 타이핑 키 사이의 쉼: 평균 `KEY_MS`(초당 20자)이고 한 프레임 폭(`PHASE_JITTER_MS`)에 고르게 흩는다. 고정 50 ms 는 60 Hz 의 정확히
+ * 타이핑 키 사이의 쉼: 평균 `KEY_MS`(앞 키의 그린 프레임 뒤부터라 키 간격은 그만큼 더 길다 — 초당 약 15자)이고 한 프레임 폭(`PHASE_JITTER_MS`)에 고르게 흩는다. 고정 50 ms 는 60 Hz 의 정확히
  * 3프레임이라 키를 넣는 때가 앞 키의 그린 프레임 위상에 묶였다 — 끔의 「키 → 다음 rAF」 p95 가 고른 위상의 약 16 ms 가 아니라
  * 8 – 13 ms 였고(M4-19), 켬 − 끔이 켬이 더 하는 일보다 위상에 좌우됐다. 다른 시나리오의 `offPhase`(M4-19 리뷰 H1)와 같은 방식이다
  * — 이 전의 타이핑 수치와 견주지 않는다.
