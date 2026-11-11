@@ -900,8 +900,10 @@ async fn resize_changes_the_size_the_shell_sees() {
     assert_eq!(response.outcome.unwrap_err().code, code::INVALID_PARAMS);
 }
 
-/// 입력의 echo(`echo`) 뒤로 표지 프롬프트 `PROMPT> ` 가 나올 때까지 읽어 echo 뒤의 글자를 준다. readline 은 크기가 바뀌면(SIGWINCH)
-/// 프롬프트를 echo 앞에 다시 그리므로 echo 뒤의 것만 센다. 표지가 출력과 한 청크로 올 수 있어 `read_until` 을 이어 붙인다.
+/// 입력의 echo(`echo`)가 처음 나온 곳부터 표지 프롬프트 `PROMPT> ` 가 처음 나올 때까지 읽어 그 사이의 글자를 준다. readline 은
+/// 크기가 바뀌면(SIGWINCH) 프롬프트를 echo 앞에 다시 그리므로 echo 뒤부터 센다. 셸이 줄을 읽을 준비 전에 친 입력(첫 명령)은 커널이
+/// 먼저 echo 하고 readline 이 다시 echo 하므로, 그때 돌려주는 글자에는 명령의 출력 앞에 기본 프롬프트와 두 번째 echo 가 든다 —
+/// 판정은 줄 단위(`prints_line`)로 한다. 표지가 출력과 한 청크로 올 수 있어 `read_until` 을 이어 붙인다.
 async fn read_command(c: &mut Client, stream: u64, echo: &str) -> String {
     let mut text = String::new();
     loop {
