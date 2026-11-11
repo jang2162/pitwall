@@ -602,6 +602,12 @@ mod live {
         })
         .await;
         assert_eq!(list["staleVersion"], false);
+        // JVM 서버는 첫 완성 목록을 색인이 끝나기 전에 준다 — kotlin-lsp 는 `Indexing` 진행의 끝물(77 % → 끝)에 요청을 10 s 넘게 잡아
+        // 두어 5003 이 났다(15-m4-plan.md §3 「lsp-live … 한 번씩 난 실패」, 느린 러너에서 그 끝물이 아래 열 번과 겹친다). 잴 것은
+        // 준비된 서버의 응답 시간이므로 그 서버의 진행이 다 닫힌 뒤에 잰다.
+        if spec.jvm() {
+            idle(&mut o, spec).await;
+        }
         // 응답 시간(서버가 준비된 뒤 같은 자리 열 번 — Pitwall 왕복 포함).
         let mut times = Vec::new();
         for _ in 0..10 {
@@ -618,6 +624,33 @@ mod live {
             rss_kib(&o.env, spec)
         );
         o.win.session.close();
+    }
+
+    /// 그 서버의 진행(`$/progress` — `lsp.status.get` 의 `progress`)이 하나도 열려 있지 않을 때까지 기다린다. 시한은 [`Spec::deadline`].
+    async fn idle(o: &mut Opened, spec: &Spec) {
+        let deadline = Instant::now() + spec.deadline();
+        loop {
+            let status = o
+                .win
+                .call("lsp.status.get", json!({ "projectId": o.env.id }))
+                .await
+                .unwrap();
+            let busy: Vec<&Value> = status["instances"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|i| i["server"] == spec.server.server_id() && !i["progress"].is_null())
+                .collect();
+            if busy.is_empty() {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{}: progress never closed: {busy:?}",
+                spec.server.executable()
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
     }
 
     pub async fn signature(spec: &Spec) {
