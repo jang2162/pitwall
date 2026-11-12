@@ -31,6 +31,9 @@ root_markers = [
 requires = { java = ">=25" }
 # 프로젝트가 쓰는 JDK(서버를 돌리는 JDK 와 따로다 — 결정 M4-D6)를 서버 관리자가 이 설정 경로로 넘긴다(15-m4-plan.md M4-18).
 project_jdk_setting = "java.configuration.runtimes"
+# `initialize` 를 60 s 기다린다(기본 10 s) — JVM 이 뜨는 동안 서버가 아무것도 보내지 않아 첫 답이 느리다. CI 러너(4 vCPU, JVM 서버
+# 둘 동시)의 jdtls 시험은 5 – 14 s 였다(15-m4-plan.md 「jdtls 첫 기동의 `initialize`」 행).
+initialize_timeout = 60
 
 # jdtls 는 시그니처 도움말이 기본으로 꺼져 있다(`java.signatureHelp.enabled` 기본 false — 꺼져 있으면 늘 `signatures: []`, M4-18
 # 실측). jdtls 는 `workspace/configuration` 을 묻지 않고 `initializationOptions.settings` 와 `workspace/didChangeConfiguration` 으로만

@@ -526,8 +526,11 @@ mod live {
         .await
         .unwrap();
         let pid = lsp.pid().unwrap();
+        // 시한은 서버 관리자와 같이 정의의 `initialize_timeout`(jdtls · kotlin-lsp 60 s, 나머지 10 s).
+        let mut init = InitializeOptions::new(&p.root);
+        init.timeout = def.initialize_timeout;
         let result = lsp
-            .initialize(InitializeOptions::new(&p.root))
+            .initialize(init)
             .await
             .unwrap_or_else(|e| panic!("{} initialize: {e}", server.executable()));
         let info = result

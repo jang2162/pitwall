@@ -26,3 +26,7 @@ root_markers = [
   "build.gradle.kts",
   "pom.xml",
 ]
+# `initialize` 를 60 s 기다린다(기본 10 s) — JVM 이 뜨는 동안 서버가 아무것도 보내지 않아 첫 답이 느리다. CI 러너(4 vCPU, JVM 서버
+# 둘 동시)에서 kotlin-lsp 의 `initialize` 시험은 5.6 – 7.8 s 로 10 s 에 가깝다(jdtls 와 같은 까닭 — 15-m4-plan.md 「jdtls 첫 기동의
+# `initialize`」 행).
+initialize_timeout = 60

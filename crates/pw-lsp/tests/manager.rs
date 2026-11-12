@@ -1053,6 +1053,63 @@ async fn progress_becomes_a_task_and_configuration_is_answered() {
     );
 }
 
+/// `initialize` 의 시한은 정의의 `initialize_timeout` 이다(15-m4-plan.md 「jdtls 첫 기동의 `initialize`」 행): 둘 다 11 s 뒤에
+/// 답하는 가짜 서버인데, 칸이 없는 rust-analyzer(기본 10 s)는 시한을 넘겨 끝나고 `initialize_timeout = 60` 인 jdtls 는 뜬다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_initialize_deadline_comes_from_the_definition() {
+    let env = Env::new(EnvOptions::default());
+    // jdtls 의 서버 런타임(`requires java >= 25`) — mise 설치 폴더의 가짜 25(가짜 셸의 HOME 아래).
+    executable(
+        &env.base
+            .join("home/.local/share/mise/installs/java/25.0.1/bin/java"),
+        "echo 'openjdk version \"25.0.1\"' >&2",
+    );
+    let slow = || {
+        incremental().reply(
+            "initialize",
+            Reply::result(
+                json!({ "capabilities": { "textDocumentSync": 2, "hoverProvider": true } }),
+            )
+            .delayed(11_000),
+        )
+    };
+    env.fake("rust-analyzer", slow());
+    env.fake("jdtls", slow());
+    let mut win = env.window();
+    win.open(&env, &env.file("src/main.rs", ""), "Rust", "")
+        .await;
+    win.open(&env, &env.file("src/Main.java", ""), "Java", "")
+        .await;
+    let ready = eventually(Duration::from_secs(20), || {
+        env.state_of("jdtls") == Some(LspInstanceState::Ready)
+    })
+    .await;
+    assert!(ready, "jdtls never became ready: {:?}", env.states());
+    let timed_out = eventually(Duration::from_secs(5), || {
+        env.server_log_tail("rust-analyzer", 200)
+            .contains("initialize failed: the language server did not answer in time")
+    })
+    .await;
+    assert!(
+        timed_out,
+        "rust-analyzer did not time out: {:?}\n{}",
+        env.states(),
+        env.server_log_tail("rust-analyzer", 40)
+    );
+    assert_ne!(
+        env.state_of("rust-analyzer"),
+        Some(LspInstanceState::Ready),
+        "{:?}",
+        env.states()
+    );
+    assert!(
+        !env.server_log_tail("jdtls", 200)
+            .contains("initialize failed: the language server did not answer in time"),
+        "{}",
+        env.server_log_tail("jdtls", 40)
+    );
+}
+
 /// 프로젝트가 쓰는 JDK(그 디렉터리 런타임 환경의 PATH 의 java — 링크를 푼 설치 폴더)가 jdtls 의 `java.configuration.runtimes` 로
 /// 간다: `initializationOptions.settings` 와 `workspace/configuration` 의 답이 같은 값이다(15-m4-plan.md M4-18, 결정 M4-D6).
 /// 서버는 설치해 둔 JDK(mise 의 25)로 돈다 — 프로젝트의 17 은 서버 런타임 범위 밖이다.

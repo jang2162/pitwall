@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::Range;
+use std::time::Duration;
 
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
@@ -208,7 +209,16 @@ pub struct LanguageServerDecl {
     /// 경로에 넣는다 — 못 찾으면 빈 목록(서버를 돌리는 JDK 를 프로젝트 JDK 로 내세우지 않는다). 사람이 설정에 그 경로를 적었으면
     /// 그 값을 지킨다. 없으면(기본) 넣지 않는다.
     pub project_jdk_setting: Option<String>,
+    /// `initialize` 를 기다리는 시한(`initialize_timeout`, 정수 초 [`INITIALIZE_TIMEOUT_RANGE`]). 넘으면 서버 관리자가 서버를 끝내고
+    /// 시작 실패로 둔다. 없으면 [`DEFAULT_INITIALIZE_TIMEOUT`] — JVM 서버(jdtls · kotlin-lsp)처럼 첫 답까지 JVM 기동을 기다리는
+    /// 서버만 늘린다(CI 러너에서 jdtls 5 – 14 s, 15-m4-plan.md 「jdtls 첫 기동의 `initialize`」 행).
+    pub initialize_timeout: Duration,
 }
+
+/// 언어 서버 정의의 `initialize_timeout` 이 없을 때의 시한.
+pub const DEFAULT_INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
+/// `initialize_timeout` 이 받는 값(정수 초).
+pub const INITIALIZE_TIMEOUT_RANGE: std::ops::RangeInclusive<i64> = 1..=600;
 
 /// 서버에 맡기는 기능의 이름(`features.disable` 의 값). 서버 관리자의 기능 라우팅(결정 M4-D12)이 쓴다.
 #[derive(
@@ -749,6 +759,25 @@ impl Parser<'_> {
                     Some(raw)
                 }
             });
+        let initialize_timeout = f.item(self, "initialize_timeout", false).map_or(
+            Some(DEFAULT_INITIALIZE_TIMEOUT),
+            |item| match item.as_integer() {
+                Some(secs) if INITIALIZE_TIMEOUT_RANGE.contains(&secs) => {
+                    Some(Duration::from_secs(secs.unsigned_abs()))
+                }
+                _ => {
+                    self.error(
+                        item.span(),
+                        format!(
+                            "{what}: `initialize_timeout` must be a whole number of seconds from {} to {}",
+                            INITIALIZE_TIMEOUT_RANGE.start(),
+                            INITIALIZE_TIMEOUT_RANGE.end()
+                        ),
+                    );
+                    None
+                }
+            },
+        );
         f.finish(self);
         Some(LanguageServerDecl {
             pos: self.pos(&at),
@@ -768,6 +797,7 @@ impl Parser<'_> {
             project_local_options,
             format_unreliable_while_progress,
             project_jdk_setting,
+            initialize_timeout: initialize_timeout?,
         })
     }
 
@@ -1518,6 +1548,7 @@ project_local = "node_modules/.bin/typescript-language-server"
 project_local_options = { "tsserver.path" = "node_modules/typescript/lib" }
 format_unreliable_while_progress = ["Roots Scanned", "Loading"]
 project_jdk_setting = "java.configuration.runtimes"
+initialize_timeout = 60
 
 [contributes.language_servers.ts.settings]
 typescript = { inlayHints = { enabled = true }, ratio = 0.5, when = 1979-05-27 }
@@ -1605,6 +1636,7 @@ list = [1, "two", [false]]
             s.project_jdk_setting.as_deref(),
             Some("java.configuration.runtimes")
         );
+        assert_eq!(s.initialize_timeout, Duration::from_secs(60));
     }
 
     #[test]
@@ -1621,12 +1653,49 @@ list = [1, "two", [false]]
         assert!(s.requires.is_empty() && s.disabled_features.is_empty());
         assert!(s.format_unreliable_while_progress.is_empty());
         assert_eq!(s.project_jdk_setting, None);
+        assert_eq!(s.initialize_timeout, DEFAULT_INITIALIZE_TIMEOUT);
+        assert_eq!(DEFAULT_INITIALIZE_TIMEOUT, Duration::from_secs(10));
+    }
+
+    /// `initialize_timeout` 은 1 – 600 의 정수 초다 — 끝값은 받는다.
+    #[test]
+    fn initialize_timeout_takes_whole_seconds_from_1_to_600() {
+        for secs in [1, 600] {
+            let (manifest, diagnostics) = parse(&format!(
+                "{MINIMAL}\n[contributes.language_servers.s]\nlanguages = [\"rust\"]\ncommand = \"x\"\ninitialize_timeout = {secs}\n"
+            ));
+            assert_eq!(diagnostics, vec![], "{secs}");
+            assert_eq!(
+                manifest.unwrap().contributes.language_servers[0].initialize_timeout,
+                Duration::from_secs(secs)
+            );
+        }
     }
 
     /// 키마다의 형식 오류. 오류가 하나라도 있으면 매니페스트가 없고, 진단은 그 값의 줄 · 열을 가리킨다.
     #[test]
     fn language_server_format_errors_point_at_the_value() {
-        let cases: [(&str, &str); 25] = [
+        let cases: [(&str, &str); 30] = [
+            (
+                "languages = [\"rust\"]\ncommand = \"x\"\ninitialize_timeout = 0",
+                "10:22: error: language server `s`: `initialize_timeout` must be a whole number of seconds from 1 to 600",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"x\"\ninitialize_timeout = 601",
+                "10:22: error: language server `s`: `initialize_timeout` must be a whole number of seconds from 1 to 600",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"x\"\ninitialize_timeout = -5",
+                "10:22: error: language server `s`: `initialize_timeout` must be a whole number of seconds from 1 to 600",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"x\"\ninitialize_timeout = 1.5",
+                "10:22: error: language server `s`: `initialize_timeout` must be a whole number of seconds from 1 to 600",
+            ),
+            (
+                "languages = [\"rust\"]\ncommand = \"x\"\ninitialize_timeout = \"60s\"",
+                "10:22: error: language server `s`: `initialize_timeout` must be a whole number of seconds from 1 to 600",
+            ),
             (
                 "languages = [\"rust\"]\ncommand = \"x\"\nmason = \"../evil\"",
                 "10:9: error: language server `s`: `mason` `../evil` must be a registry package name (lowercase letters, digits, `.`, `_`, `-`)",

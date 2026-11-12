@@ -60,8 +60,8 @@ use crate::uri::file_uri;
 
 /// 요청 하나의 기본 시한. 기능 행이 [`RequestOptions::timeout`] 으로 바꾼다.
 pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-/// `initialize` 의 시한. 넘으면 서버를 끝낸다.
-pub const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
+/// `initialize` 의 기본 시한. 넘으면 서버를 끝낸다. 서버 관리자는 정의의 `initialize_timeout`(없으면 이 값)을 쓴다.
+pub const INITIALIZE_TIMEOUT: Duration = pw_ext::DEFAULT_INITIALIZE_TIMEOUT;
 /// `shutdown` 요청의 시한.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 /// `exit` 뒤 서버가 스스로 끝나기를 기다리는 시간. 넘으면 트리째 SIGKILL.

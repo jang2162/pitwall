@@ -1393,6 +1393,7 @@ impl LspManager {
         self.watch_events(&key, generation, &server, events_rx);
         let mut init = InitializeOptions::new(&key.root);
         init.initialization_options = Some(prepared.initialization_options);
+        init.timeout = prepared.initialize_timeout;
         match server.initialize(init).await {
             Ok(_) => {}
             Err(e) => {
@@ -2913,6 +2914,8 @@ struct Prepared {
     /// 값 때문에 늘 「다름」 이 되지 않게(M4-18).
     merged: ServerConfig,
     initialization_options: Value,
+    /// 정의의 `initialize_timeout`(없으면 기본 10 s — JVM 서버는 60 s).
+    initialize_timeout: Duration,
     /// 설치본에서 찾았으면 그 Mason 패키지.
     installed: Option<String>,
 }
@@ -3010,6 +3013,7 @@ fn prepare(servers: &LspServers, key: &InstanceKey) -> Result<Prepared, LspInsta
             extra_env: BTreeMap::new(),
         },
         initialization_options: setup.initialization_options.clone(),
+        initialize_timeout: setup.definition.initialize_timeout,
         config: setup.config,
         merged,
         installed,

@@ -19,8 +19,8 @@ pub mod source;
 pub mod template;
 
 pub use manifest::{
-    Diagnostic, KeymapKind, LanguageServerDecl, LspFeature, LspServerRuntime, Manifest, Pos,
-    ResolveHint, RuntimeRequirement, Severity,
+    DEFAULT_INITIALIZE_TIMEOUT, Diagnostic, KeymapKind, LanguageServerDecl, LspFeature,
+    LspServerRuntime, Manifest, Pos, ResolveHint, RuntimeRequirement, Severity,
 };
 pub use registry::{
     Appearance, Extension, LoadOptions, LoadedTheme, LoadedTranslation, Registry, ResolvedFile,
@@ -113,6 +113,13 @@ mod tests {
         assert_eq!(jdtls.requires[0].runtime, LspServerRuntime::Java);
         assert!(jdtls.requires[0].version.matches(&Version::new(25, 0, 0)));
         assert!(!jdtls.requires[0].version.matches(&Version::new(21, 0, 0)));
+        // JVM 서버만 `initialize` 를 60 s 기다린다(15-m4-plan.md 「jdtls 첫 기동의 `initialize`」 행) — 나머지는 기본 10 s.
+        let timeouts: Vec<(&str, u64)> = registry
+            .language_servers()
+            .map(|(_, s)| (s.id.as_str(), s.initialize_timeout.as_secs()))
+            .filter(|(_, secs)| *secs != 10)
+            .collect();
+        assert_eq!(timeouts, [("jdtls", 60), ("kotlin-lsp", 60)]);
     }
 
     #[test]
