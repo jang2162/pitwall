@@ -18,7 +18,9 @@ import {
   type TypingKey,
   typingBreakdown,
   typingKeyRows,
+  typingKeySpec,
   typingPause,
+  typingStartSpec,
   KEY_MS,
   PHASE_JITTER_MS,
   watchCallCost,
@@ -335,4 +337,18 @@ it("ends every frame row of the lsp and symbol scenarios through shownThenPainte
   // 타이핑 키 사이의 쉼은 위상에서 뗀 것이다(고정 `KEY_MS` 로 되돌리면 키가 프레임 위상에 묶인다).
   expect(body("typing")).toContain("env.sleep(typingPause())");
   expect(body("typing")).not.toMatch(/sleep\(KEY_MS\)/);
+});
+
+it("types where the editor shows it: the line is centred first and every key keeps the cursor in view", () => {
+  // 하네스가 커서를 따라가지 않으면 줄 50 · 300자 줄의 끝이 보이는 영역 밖이라 자동완성 팝업이 키마다 「에디터 밖」 으로 숨겨진다.
+  const state = EditorState.create({ doc: "x\n".repeat(60) });
+  const start = state.doc.line(50).to;
+  const first = state.update(typingStartSpec(start));
+  expect(first.selection?.main.head).toBe(start);
+  expect(first.effects).toHaveLength(1);
+  const key = first.state.update(typingKeySpec(start, "a"));
+  expect(key.scrollIntoView).toBe(true);
+  expect(key.isUserEvent("input.type")).toBe(true);
+  expect(key.state.doc.line(50).text).toBe("xa");
+  expect(key.state.selection.main.head).toBe(start + 1);
 });

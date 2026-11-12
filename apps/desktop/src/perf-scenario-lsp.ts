@@ -25,7 +25,8 @@
 //    프레임까지(`problems_open` — 「프로젝트」 범위가 기본), 그 목록을 처음부터 끝까지 `PROBLEMS_FLING_FRAMES` 프레임에 스크롤한다.
 //
 // `lsp-typing` · `lsp-typing-off` 시나리오(06 「타이핑 지연」): `MAIN_PATH` 를 열고(켬이면 서버 준비까지) `TYPING_LINE` 끝에 `TYPING_TEXT`
-// 를 되풀이해 `TYPING_KEYS` 자를 평균 `KEY_MS` 마다 넣는다(쉼을 한 프레임 폭에 흩어 위상에서 뗀다 — `typingPause`). 키마다 「넣기 직전 → 다음 rAF」(`frame`)와 「→ 그 프레임 뒤 첫 작업」(`painted` —
+// 를 되풀이해 `TYPING_KEYS` 자를 평균 `KEY_MS` 마다 넣는다(쉼을 한 프레임 폭에 흩어 위상에서 뗀다 — `typingPause`). 시작할 때 그 줄을
+// 에디터 가운데로 스크롤하고 키마다 커서를 보이게 한다(실제 입력과 같다 — `typingStartSpec` · `typingKeySpec`). 키마다 「넣기 직전 → 다음 rAF」(`frame`)와 「→ 그 프레임 뒤 첫 작업」(`painted` —
 // 그 프레임의 그리기가 끝난 뒤)을 잰다. 키마다 켬이 더 하는 일의 몫도 적는다(`TypingKey` — dispatch 의 동기 시간, 그중
 // `didChange` 보내기, 뷰 갱신 · rAF 콜백의 시간, 프레임 대기, 그 프레임 뒤 팝업 줄 수). 끝나면 넣은 글자를 지운다. 켬 · 끔은 측정하는
 // 쪽이 설정으로 가른다 — 끔은 서버를 띄우지 않는다.
@@ -43,6 +44,7 @@
 // 끝나면 `scenario_done`, 단계가 실패하면 `scenario_error { step, message }` 하나를 남기고 멈춘다.
 
 import { closeCompletion } from "@codemirror/autocomplete";
+import type { TransactionSpec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { RpcClient } from "@pitwall/rpc-client";
 
@@ -526,6 +528,32 @@ function watchUpdates(view: EditorView, now: () => number) {
 const popupRows = (view: EditorView) =>
   view.dom.querySelectorAll(".cm-tooltip-autocomplete > ul > li").length;
 
+/**
+ * 타이핑을 시작할 때: 커서를 `TYPING_LINE` 끝에 두고 그 줄을 에디터 가운데로 스크롤한다. 줄 50 은 창을 연 자리(맨 위)에서 보이는
+ * 영역 아래에 있다 — 스크롤하지 않으면 보이지 않는 곳에 친다(2026-11-13).
+ */
+export function typingStartSpec(start: number): TransactionSpec {
+  return {
+    selection: { anchor: start },
+    effects: EditorView.scrollIntoView(start, { y: "center" }),
+  };
+}
+
+/**
+ * 타이핑 한 키: CodeMirror 가 실제 입력(DOM 입력)을 넣을 때처럼 커서를 보이게 스크롤한다(`scrollIntoView`). 줄이 300자로 자라면
+ * 에디터 오른쪽 끝을 넘는다 — 따라가지 않으면 글자 · 자동완성 팝업이 보이지 않는 곳에 그려지고, 툴팁 플러그인이 팝업을 키마다
+ * 「에디터 밖」 으로 숨기며 50 ms 뒤 다시 재는 그리기를 건다(15-m4-plan §3 「켬 창의 프레임 대기」, 2026-11-13). 이 전의 타이핑
+ * 수치와 견주지 않는다.
+ */
+export function typingKeySpec(at: number, ch: string): TransactionSpec {
+  return {
+    changes: { from: at, insert: ch },
+    selection: { anchor: at + 1 },
+    userEvent: "input.type",
+    scrollIntoView: true,
+  };
+}
+
 /** 타이핑 키들을 묶음별로 줄인다: 모든 키, 팝업이 그려진 키, 팝업이 없는 키. */
 export function typingBreakdown(keys: readonly TypingKey[]) {
   const sum = (group: readonly TypingKey[]) => ({
@@ -572,7 +600,7 @@ export function typingKeyRows(keys: readonly TypingKey[]) {
 
 async function typing(env: ScenarioEnv, view: EditorView, lsp: boolean) {
   const start = view.state.doc.line(TYPING_LINE).to;
-  view.dispatch({ selection: { anchor: start } });
+  view.dispatch(typingStartSpec(start));
   await env.sleep(500);
   const frame: number[] = [];
   const painted: number[] = [];
@@ -601,11 +629,7 @@ async function typing(env: ScenarioEnv, view: EditorView, lsp: boolean) {
       const t = env.now();
       // 상태 계산(자동완성 다시 거르기가 여기 든다 — 상태 필드는 `tr.state` 에서 계산된다)과 뷰 갱신(팝업 목록 그리기 · 문서
       // 동기화)을 나눠 잰다. 둘을 합치면 `view.dispatch(spec)` 한 번과 같다.
-      const tr = view.state.update({
-        changes: { from: at, insert: ch },
-        selection: { anchor: at + 1 },
-        userEvent: "input.type",
-      });
+      const tr = view.state.update(typingKeySpec(at, ch));
       void tr.state;
       const stated = env.now();
       layoutMs = 0;
