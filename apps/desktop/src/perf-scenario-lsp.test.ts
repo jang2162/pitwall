@@ -9,6 +9,8 @@ import { RpcClient } from "@pitwall/rpc-client";
 import { afterEach, expect, it } from "vitest";
 
 import {
+  countSources,
+  domSource,
   editorStartingWith,
   MAIN_FIRST_LINE,
   shownThenPainted,
@@ -24,6 +26,7 @@ import {
   KEY_MS,
   PHASE_JITTER_MS,
   watchCallCost,
+  watchFrameSources,
   watchSymbolCalls,
 } from "./perf-scenario-lsp";
 
@@ -351,4 +354,47 @@ it("types where the editor shows it: the line is centred first and every key kee
   expect(key.isUserEvent("input.type")).toBe(true);
   expect(key.state.doc.line(50).text).toBe("xa");
   expect(key.state.selection.main.head).toBe(start + 1);
+});
+
+it("names the screen part a change happened in and counts frame sources by kind and part", () => {
+  document.body.innerHTML =
+    '<div data-testid="status-lsp"><span>x</span></div><div class="cm-editor"><div class="cm-tooltip cm-tooltip-autocomplete"><ul><li>a</li></ul></div><div class="cm-content">t</div></div><p>o</p>';
+  expect(domSource(document.querySelector("[data-testid=status-lsp] span")!.firstChild!)).toBe(
+    "status-lsp",
+  );
+  expect(domSource(document.querySelector("li")!)).toBe("cm-tooltip-autocomplete");
+  expect(domSource(document.querySelector(".cm-content")!)).toBe("cm-content");
+  expect(domSource(document.querySelector("p")!)).toBe("other");
+  expect(
+    countSources([
+      { kind: "dom", src: "a" },
+      { kind: "raf", src: "b" },
+      { kind: "dom", src: "a" },
+    ]),
+  ).toEqual({ "dom:a": 2, "raf:b": 1 });
+  expect(
+    Object.keys(
+      countSources(
+        [
+          { kind: "dom", src: "a" },
+          { kind: "dom", src: "b" },
+        ],
+        1,
+      ),
+    ),
+  ).toHaveLength(1);
+});
+
+it("records DOM changes and rAF requests between keys and gives the window back", async () => {
+  const raf = window.requestAnimationFrame;
+  const sources = watchFrameSources(window, document, () => performance.now());
+  document.body.innerHTML = '<div data-testid="status-lsp"></div>';
+  window.requestAnimationFrame(() => {});
+  await Promise.resolve();
+  await new Promise((r) => setTimeout(r, 0));
+  sources.restore();
+  expect(window.requestAnimationFrame).toBe(raf);
+  const kinds = sources.events.map((e) => e.kind);
+  expect(kinds).toContain("dom");
+  expect(kinds).toContain("raf");
 });

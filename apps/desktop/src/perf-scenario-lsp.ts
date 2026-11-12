@@ -103,6 +103,8 @@ export const INDEX_TIMEOUT_MS = 180_000;
 export const IDLE_PATH = "crates/pw-core/src/lib.rs";
 export const IDLE_READY_HOLD_MS = 15_000;
 export const IDLE_TIMEOUT_MS = 20 * 60_000;
+/** `server_ready` 뒤 그리기 갱신의 출처를 세는 시간(측정하는 쪽의 유휴 대기 10 s 보다 짧게). */
+export const IDLE_WATCH_SECS = 8;
 
 const ms = (x: number) => Math.round(x * 10) / 10;
 
@@ -525,6 +527,152 @@ function watchUpdates(view: EditorView, now: () => number) {
   };
 }
 
+/** 바뀐 DOM · 관찰 대상이 화면의 어느 부분인지(가까운 조상의 표지 — `data-testid`, 툴 윈도우, CodeMirror 의 부분). */
+export function domSource(node: Node): string {
+  for (let el = node instanceof Element ? node : node.parentElement; el; el = el.parentElement) {
+    const testid = el.getAttribute("data-testid");
+    if (testid) return testid;
+    const tw = el.getAttribute("data-tool-window");
+    if (tw) return `tool-window:${tw}`;
+    for (const c of SOURCE_CLASSES) if (el.classList.contains(c)) return c;
+  }
+  return "other";
+}
+
+const SOURCE_CLASSES = [
+  "cm-tooltip-autocomplete",
+  "cm-tooltip",
+  "cm-gutters",
+  "cm-cursorLayer",
+  "cm-selectionLayer",
+  "cm-content",
+  "cm-editor",
+] as const;
+
+export interface FrameSourceEvent {
+  t: number;
+  /** `dom`(DOM 변경), `raf`(앱이 건 rAF), `measure`(CodeMirror 측정 요청), `observer`(ResizeObserver · IntersectionObserver 콜백). */
+  kind: "dom" | "raf" | "measure" | "observer";
+  src: string;
+}
+
+/** 스택의 앞 몇 줄(부른 자리 — release 번들이면 `파일:줄:열`). */
+const caller = (skip: number) =>
+  (new Error().stack ?? "")
+    .split("\n")
+    .slice(skip, skip + 2)
+    .join(" < ")
+    .replace(/\s+/g, " ")
+    .slice(0, 160);
+
+let observerSink: FrameSourceEvent[] | undefined;
+
+/**
+ * 이 뒤에 만들어지는 ResizeObserver · IntersectionObserver 의 콜백을 대상의 표지와 함께 `watchFrameSources` 의 사건에 넣는다
+ * (CodeMirror 의 툴팁 플러그인은 둘의 콜백에서 50 ms 뒤 다시 재기를 건다). 에디터가 생기기 전에 — 시나리오 시작에 — 부른다.
+ */
+export function watchObservers(win: Window, now: () => number) {
+  const w = win as unknown as Record<string, unknown>;
+  for (const name of ["ResizeObserver", "IntersectionObserver"] as const) {
+    type Entry = { target: Element; intersectionRatio?: number };
+    type Ctor = new (cb: (entries: Entry[], o: unknown) => void, opts?: unknown) => object;
+    const Orig = w[name] as Ctor | undefined;
+    if (!Orig) continue;
+    w[name] = class extends Orig {
+      constructor(cb: (entries: Entry[], o: unknown) => void, opts?: unknown) {
+        super((entries, o) => {
+          if (observerSink) {
+            const t = now();
+            for (const e of entries) {
+              const ratio =
+                e.intersectionRatio === undefined ? "" : ` ratio<1:${e.intersectionRatio < 1}`;
+              observerSink.push({
+                t,
+                kind: "observer",
+                src: `${name}:${domSource(e.target)}${ratio}`,
+              });
+            }
+          }
+          cb(entries, o);
+        }, opts);
+      }
+    };
+  }
+}
+
+/**
+ * 키 사이 · 유휴 중에 그리기 갱신을 거는 것을 출처별로 모은다(15-m4-plan §3 「켬 창의 프레임 대기」 · 「rust-analyzer 창이 유휴에도
+ * 다시 그리는 까닭」): DOM 변경(바뀐 곳의 표지), 앱이 건 rAF · CodeMirror 의 측정 요청(부른 자리), 관찰자 콜백(`watchObservers`).
+ */
+export function watchFrameSources(
+  win: Window,
+  doc: Document,
+  now: () => number,
+  view?: EditorView,
+) {
+  const events: FrameSourceEvent[] = [];
+  observerSink = events;
+  const observer = new MutationObserver((records) => {
+    const t = now();
+    for (const r of records)
+      events.push({
+        t,
+        kind: "dom",
+        src: `${domSource(r.target)}${r.type === "attributes" ? `@${r.attributeName}` : ""}`,
+      });
+  });
+  observer.observe(doc, { subtree: true, childList: true, attributes: true, characterData: true });
+  const raf = win.requestAnimationFrame;
+  const wrapped: typeof raf = (cb) => {
+    events.push({ t: now(), kind: "raf", src: caller(2) });
+    return raf.call(win, cb);
+  };
+  win.requestAnimationFrame = wrapped;
+  const target = view as unknown as { requestMeasure: (r?: unknown) => void } | undefined;
+  const own = target ? Object.prototype.hasOwnProperty.call(target, "requestMeasure") : false;
+  const measure = target?.requestMeasure;
+  if (target && measure)
+    target.requestMeasure = function (this: unknown, r?: unknown) {
+      events.push({ t: now(), kind: "measure", src: caller(2) });
+      return measure.call(this, r);
+    };
+  return {
+    events,
+    /** 돌고 있는 CSS 애니메이션 · 트랜지션(이름:자리). */
+    animations: () =>
+      doc
+        .getAnimations()
+        .filter((a) => a.playState === "running")
+        .map((a) => {
+          const el = (a.effect as KeyframeEffect | null)?.target;
+          return `${(a as CSSAnimation).animationName ?? "transition"}:${el ? domSource(el) : "?"}`;
+        }),
+    restore: () => {
+      observer.disconnect();
+      if (observerSink === events) observerSink = undefined;
+      // 그사이 다른 쪽(`installFrameWork` 의 restore)이 걷었으면 그대로 둔다.
+      if (win.requestAnimationFrame === wrapped) win.requestAnimationFrame = raf;
+      if (target && measure) {
+        if (own) target.requestMeasure = measure;
+        else delete (target as { requestMeasure?: unknown }).requestMeasure;
+      }
+    },
+  };
+}
+
+/** 사건을 `종류:출처` 별 수로(많은 차례, 앞 `limit` 개 — 표지 하나의 크기 상한 안에 들게). */
+export function countSources(
+  events: readonly Pick<FrameSourceEvent, "kind" | "src">[],
+  limit = 30,
+) {
+  const counts = new Map<string, number>();
+  for (const e of events) {
+    const k = `${e.kind}:${e.src}`;
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  return Object.fromEntries([...counts].sort((a, b) => b[1] - a[1]).slice(0, limit));
+}
+
 const popupRows = (view: EditorView) =>
   view.dom.querySelectorAll(".cm-tooltip-autocomplete > ul > li").length;
 
@@ -607,6 +755,13 @@ async function typing(env: ScenarioEnv, view: EditorView, lsp: boolean) {
   const keys: TypingKey[] = [];
   const calls = watchCallCost(env.now, ["lsp.document.change", "lsp.completion"]);
   const updates = watchUpdates(view, env.now);
+  // 키 사이(앞 키의 그린 프레임 뒤 → 다음 키)에 든 사건과, 키 직전 마지막 사건까지의 간격(그 사건이 그리기를 걸었으면 그 키의
+  // rAF 는 다음 화면 갱신까지 밀린다).
+  const sources = watchFrameSources(env.doc.defaultView ?? window, env.doc, env.now, view);
+  const between: FrameSourceEvent[] = [];
+  const gaps: (number | null)[] = [];
+  const animations = new Map<string, number>();
+  let pauseFrom = 0;
   // dispatch 안에서 배치를 읽어(`getBoundingClientRect`) 강제한 동기 배치의 시간 — 자동완성 목록을 새로 만든 뒤 고른 줄을 보이게 할
   // 때 든다. 다른 읽기(`offsetHeight` 등)는 세지 않는다.
   const rect = Element.prototype.getBoundingClientRect;
@@ -625,6 +780,10 @@ async function typing(env: ScenarioEnv, view: EditorView, lsp: boolean) {
       const ch = TYPING_TEXT[key % TYPING_TEXT.length]!;
       calls.take();
       updates.take();
+      between.push(...sources.events.slice(pauseFrom));
+      const last = sources.events.at(-1);
+      gaps.push(last ? ms(env.now() - last.t) : null);
+      for (const a of sources.animations()) animations.set(a, (animations.get(a) ?? 0) + 1);
       env.work.start();
       const t = env.now();
       // 상태 계산(자동완성 다시 거르기가 여기 든다 — 상태 필드는 `tr.state` 에서 계산된다)과 뷰 갱신(팝업 목록 그리기 · 문서
@@ -656,9 +815,11 @@ async function typing(env: ScenarioEnv, view: EditorView, lsp: boolean) {
         popupRows: popupRows(view),
         completions: cost.count.get("lsp.completion") ?? 0,
       });
+      pauseFrom = sources.events.length;
       await env.sleep(typingPause());
     }
   } finally {
+    sources.restore();
     Element.prototype.getBoundingClientRect = rect;
     updates.restore();
     calls.restore();
@@ -674,6 +835,11 @@ async function typing(env: ScenarioEnv, view: EditorView, lsp: boolean) {
   });
   // 키마다의 몫은 따로 — 표지 하나의 크기 상한(16 KB, src-tauri perf.rs `SCENARIO_DATA_MAX`) 안에 들게 열 이름 + 줄로 싣는다.
   await env.report("typing_keys", typingKeyRows(keys));
+  await env.report("typing_sources", {
+    between: countSources(between),
+    animations: Object.fromEntries(animations),
+    gapMs: gaps,
+  });
 }
 
 /** `index.symbols.search` 의 왕복(Host + IPC)을 질의별로 적는다 — `RpcClient.call` 을 감싼다. `restore` 로 걷는다. */
@@ -836,6 +1002,29 @@ async function serverIdle(env: ScenarioEnv, frameEpochMs: number) {
   );
   const epochMs = env.epochNow();
   await env.report("server_ready", { epochMs, fromFrameMs: ms(epochMs - frameEpochMs) });
+  // 기다리지 않는다 — 측정하는 쪽은 `scenario_done` 뒤 유휴 시간을 센다. 그 시간이 늘지 않게 표지는 그사이에 남긴다.
+  void idleSources(env);
+}
+
+/** 유휴 중에 그리기 갱신을 거는 것을 `IDLE_WATCH_SECS` 동안 센다(측정하는 쪽의 유휴 대기보다 짧게). */
+async function idleSources(env: ScenarioEnv) {
+  const dom = [...env.doc.querySelectorAll<HTMLElement>(".cm-editor")].find(visible);
+  const view = dom ? (EditorView.findFromDOM(dom) ?? undefined) : undefined;
+  const sources = watchFrameSources(env.doc.defaultView ?? window, env.doc, env.now, view);
+  const started = env.now();
+  const animations = new Map<string, number>();
+  for (let s = 0; s < IDLE_WATCH_SECS; s++) {
+    await env.sleep(1000);
+    for (const a of sources.animations()) animations.set(a, (animations.get(a) ?? 0) + 1);
+  }
+  sources.restore();
+  await env.report("idle_sources", {
+    ms: ms(env.now() - started),
+    sources: countSources(sources.events),
+    animations: Object.fromEntries(animations),
+    // 사건 시각(시작부터, 앞 400개) — 몰려 오는지 고르게 오는지.
+    atMs: sources.events.slice(0, 400).map((e) => Math.round(e.t - started)),
+  });
 }
 
 export type LspScenario =
@@ -848,6 +1037,7 @@ export type LspScenario =
 
 export async function runLspScenario(env: ScenarioEnv, scenario: LspScenario): Promise<void> {
   const frameEpochMs = env.epochNow();
+  watchObservers(env.doc.defaultView ?? window, env.now);
   let step = "start";
   try {
     step = "project window";
