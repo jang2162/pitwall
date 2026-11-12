@@ -1,0 +1,2158 @@
+{
+  "schema": 1,
+  "scenario": "symbols",
+  "definitions": {
+    "completion": "in the webview: from inserting `.` (the server's trigger character, `view.dispatch` with `input.type`) to the frame that painted the autocomplete popup with the server's first item (the end mark of every \"frame\" row: the DOM change that made it true, seen by a MutationObserver → the next animation frame → the first task after that frame, as typing's `painted`; each sample starts after a 0 – 16.7 ms pause so the start is not locked to the frame phase); 20 per run; per-run value = median",
+    "definition": "answer → frame: from the fake server's stamp just before it wrote the `textDocument/definition` answer (a different file each time, so opening it is included) to the wall clock of the frame that painted that file's editor with the cursor on the target line; `gotoDeclaration` (⌘B's function) is called directly — keymap handling is not included; 10 per run; per-run value = median",
+    "diagnostics": "publish → frame: from the fake server's stamp just before it wrote the `publishDiagnostics` that marks the edited line to the wall clock of the frame that painted that line's underline (`.pw-diagnostic`); 20 per run; per-run value = median. edit → frame (reference) also holds the client's `didChange`",
+    "idle": "`lsp-idle`: this repository's copy registered trusted with the real server at `--lsp-server`; after the file opened and the server stayed ready for 15 s, wait idle_secs and sample phys_footprint; Pitwall's processes (`pitwall`, WebKit and the instance's helpers) and the server's (the descendants of the app process — the server is not in the app's responsible-pid group) are reported apart",
+    "memory": "phys_footprint by the responsible-pid group plus the descendants of the app process (the language server and its children), sampled after the scenario (symbols: after the popups — the Rust index lives in the `pitwall` process)",
+    "problems": "opening `src/problems.rs` makes the fake server publish 5 diagnostics to each of 2,000 files (10,000); after the status bar counts are complete: ⌘6 keydown → the frame that painted the first problem row; then fling top to bottom in 1500 frames, judged as 06 「스크롤 60fps」 (share within one refresh ≥ 0.95 and median interval ≤ 17 ms)",
+    "server": "a fake language server (`pw-perf-lsp`) plugged into the bundled `rust-analyzer` definition by the global setting `[lsp.rust-analyzer] path`; it answers at once and stamps the wall clock of what it sent (the targets are Pitwall's side only, M4-D19)",
+    "symbols": "a synthetic repository of 20,000 files and 500,000 symbols registered untrusted (no language server); first index = launch → `index.status` ready with nothing pending (polled every 50 ms on a connection of the same project); then, with no wait, the first popup (⌘⌥O for `symbols`, ⌘O for `classes`) and the query typed a character at a time: input event → the frame that painted that query's rows (`totalMs`), of which input event → the rows in the DOM (`seenMs`) and the `index.symbols.search` round trip (`rpcMs`, Host + IPC); the second popup is measured the same way afterwards (not a first use)",
+    "typing": "300 characters, each after a pause of 50 ms on average from the previous key's painted frame (about 15 keys a second) — each pause spread over one 16.7 ms frame so a key does not start at the same frame phase (as `offPhase`; typing figures before 2026-11-12 used a fixed 50 ms and are not comparable), each inserted with `view.dispatch` (`input.type`, keymap · IME not included); per key: insert → after the next frame's rendering (a message posted from the next animation frame); per-run value = p95. LSP on and off are separate runs (`lsp-typing` · `lsp-typing-off`, the latter with `[lsp.rust-analyzer] enabled = false`); 06 judges on − off ≤ 2 ms on the medians of the per-run p95"
+  },
+  "build": {
+    "profile": "release",
+    "app": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/m4-carry-perf/target/release/perf-m4/Pitwall.app",
+    "binary": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/m4-carry-perf/target/release/perf-m4/Pitwall.app/Contents/MacOS/pitwall"
+  },
+  "commit": {
+    "sha": "950428698c76efa404bb04a878e32b30bf86d419",
+    "dirty": false
+  },
+  "os": {
+    "name": "macOS",
+    "version": "27.2.1",
+    "build": "26B131"
+  },
+  "hardware": {
+    "model": "Mac17,9",
+    "cpu": "Apple M5 Pro",
+    "cpus": 15,
+    "memory_bytes": 51539607552
+  },
+  "settings": {
+    "scenario": "symbols",
+    "runs": 5,
+    "warmup": 1,
+    "idle_secs": 10,
+    "project": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/m4-carry-perf/target/perf-m4/symbols-repo",
+    "server": null,
+    "label": "synthetic 20k files / 500k symbols, ⌘⌥O first"
+  },
+  "runs": [
+    {
+      "index": 0,
+      "warmup": true,
+      "excluded": null,
+      "app_pid": 72416,
+      "group": 72416,
+      "cold_start_ms": 425.371826171875,
+      "launch_epoch_ms": 1794486022416.695,
+      "measure": {
+        "ready_ms": null,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": null,
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": {
+          "epochMs": 1794486024830.0,
+          "fromFrameMs": 1985.0,
+          "files": 20000,
+          "symbols": 500000
+        },
+        "symbol_keys": {
+          "popup": "symbols",
+          "openMs": 8.0,
+          "first": {
+            "query": "h",
+            "totalMs": 15.0,
+            "seenMs": 7.0,
+            "frameMs": 14.0,
+            "rpcMs": 4.0,
+            "lspMs": 1.0
+          },
+          "keys": [
+            {
+              "query": "h",
+              "totalMs": 15.0,
+              "seenMs": 7.0,
+              "frameMs": 14.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "ha",
+              "totalMs": 21.0,
+              "seenMs": 6.0,
+              "frameMs": 20.0,
+              "rpcMs": 5.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "han",
+              "totalMs": 20.0,
+              "seenMs": 5.0,
+              "frameMs": 20.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "hand",
+              "totalMs": 23.0,
+              "seenMs": 6.0,
+              "frameMs": 22.0,
+              "rpcMs": 5.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handl",
+              "totalMs": 19.0,
+              "seenMs": 6.0,
+              "frameMs": 18.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handle",
+              "totalMs": 16.0,
+              "seenMs": 5.0,
+              "frameMs": 14.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleI",
+              "totalMs": 11.0,
+              "seenMs": 6.0,
+              "frameMs": 9.0,
+              "rpcMs": 5.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleIt",
+              "totalMs": 13.0,
+              "seenMs": 6.0,
+              "frameMs": 11.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleIte",
+              "totalMs": 12.0,
+              "seenMs": 5.0,
+              "frameMs": 11.0,
+              "rpcMs": 4.0,
+              "lspMs": 0.0
+            },
+            {
+              "query": "handleItem",
+              "totalMs": 14.0,
+              "seenMs": 5.0,
+              "frameMs": 13.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem1",
+              "totalMs": 11.0,
+              "seenMs": 7.0,
+              "frameMs": 9.0,
+              "rpcMs": 5.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem12",
+              "totalMs": 11.0,
+              "seenMs": 7.0,
+              "frameMs": 9.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem123",
+              "totalMs": 15.0,
+              "seenMs": 6.0,
+              "frameMs": 13.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem1234",
+              "totalMs": 13.0,
+              "seenMs": 6.0,
+              "frameMs": 11.0,
+              "rpcMs": 3.0,
+              "lspMs": 0.0
+            },
+            {
+              "query": "handleItem1234x",
+              "totalMs": 9.0,
+              "seenMs": 5.0,
+              "frameMs": 7.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem1234x6",
+              "totalMs": 15.0,
+              "seenMs": 5.0,
+              "frameMs": 14.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            }
+          ]
+        },
+        "symbol_keys_second": {
+          "popup": "classes",
+          "openMs": 14.0,
+          "first": {
+            "query": "W",
+            "totalMs": 13.0,
+            "seenMs": 9.0,
+            "frameMs": 11.0,
+            "rpcMs": 6.0,
+            "lspMs": 2.0
+          },
+          "keys": [
+            {
+              "query": "W",
+              "totalMs": 13.0,
+              "seenMs": 9.0,
+              "frameMs": 11.0,
+              "rpcMs": 6.0,
+              "lspMs": 2.0
+            },
+            {
+              "query": "Wi",
+              "totalMs": 21.0,
+              "seenMs": 7.0,
+              "frameMs": 20.0,
+              "rpcMs": 6.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Wid",
+              "totalMs": 19.0,
+              "seenMs": 5.0,
+              "frameMs": 18.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widg",
+              "totalMs": 22.0,
+              "seenMs": 5.0,
+              "frameMs": 21.0,
+              "rpcMs": 3.0,
+              "lspMs": 0.0
+            },
+            {
+              "query": "Widge",
+              "totalMs": 19.0,
+              "seenMs": 5.0,
+              "frameMs": 17.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget",
+              "totalMs": 14.0,
+              "seenMs": 4.0,
+              "frameMs": 13.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget1",
+              "totalMs": 10.0,
+              "seenMs": 6.0,
+              "frameMs": 8.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget12",
+              "totalMs": 14.0,
+              "seenMs": 5.0,
+              "frameMs": 12.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget123",
+              "totalMs": 21.0,
+              "seenMs": 5.0,
+              "frameMs": 19.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget1234",
+              "totalMs": 7.0,
+              "seenMs": 5.0,
+              "frameMs": 6.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            }
+          ]
+        },
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 519443088,
+        "rss_bytes": 561971200,
+        "processes": [
+          {
+            "pid": 72419,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 254985272,
+            "rss_bytes": 243793920
+          },
+          {
+            "pid": 72416,
+            "name": "pitwall",
+            "footprint_bytes": 145606096,
+            "rss_bytes": 254623744
+          },
+          {
+            "pid": 72418,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 106021704,
+            "rss_bytes": 33505280
+          },
+          {
+            "pid": 72423,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5554680,
+            "rss_bytes": 11583488
+          },
+          {
+            "pid": 72420,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 5014008,
+            "rss_bytes": 9191424
+          },
+          {
+            "pid": 72417,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2261328,
+            "rss_bytes": 9273344
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 153422104,
+        "webkit_footprint_bytes": 366020984,
+        "server_footprint_bytes": 0,
+        "server_rss_bytes": 0
+      },
+      "killed": false
+    },
+    {
+      "index": 1,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 72717,
+      "group": 72717,
+      "cold_start_ms": 443.907958984375,
+      "launch_epoch_ms": 1794486032304.436,
+      "measure": {
+        "ready_ms": null,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": null,
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": {
+          "epochMs": 1794486034697.0,
+          "fromFrameMs": 1942.0,
+          "files": 20000,
+          "symbols": 500000
+        },
+        "symbol_keys": {
+          "popup": "symbols",
+          "openMs": 7.0,
+          "first": {
+            "query": "h",
+            "totalMs": 16.0,
+            "seenMs": 7.0,
+            "frameMs": 14.0,
+            "rpcMs": 4.0,
+            "lspMs": 2.0
+          },
+          "keys": [
+            {
+              "query": "h",
+              "totalMs": 16.0,
+              "seenMs": 7.0,
+              "frameMs": 14.0,
+              "rpcMs": 4.0,
+              "lspMs": 2.0
+            },
+            {
+              "query": "ha",
+              "totalMs": 15.0,
+              "seenMs": 5.0,
+              "frameMs": 13.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "han",
+              "totalMs": 10.0,
+              "seenMs": 5.0,
+              "frameMs": 9.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "hand",
+              "totalMs": 7.0,
+              "seenMs": 5.0,
+              "frameMs": 6.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handl",
+              "totalMs": 17.0,
+              "seenMs": 5.0,
+              "frameMs": 16.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handle",
+              "totalMs": 22.0,
+              "seenMs": 5.0,
+              "frameMs": 21.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleI",
+              "totalMs": 7.0,
+              "seenMs": 5.0,
+              "frameMs": 6.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleIt",
+              "totalMs": 8.0,
+              "seenMs": 6.0,
+              "frameMs": 6.0,
+              "rpcMs": 4.0,
+              "lspMs": 0.0
+            },
+            {
+              "query": "handleIte",
+              "totalMs": 20.0,
+              "seenMs": 5.0,
+              "frameMs": 19.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem",
+              "totalMs": 22.0,
+              "seenMs": 6.0,
+              "frameMs": 21.0,
+              "rpcMs": 4.0,
+              "lspMs": 0.0
+            },
+            {
+              "query": "handleItem1",
+              "totalMs": 17.0,
+              "seenMs": 7.0,
+              "frameMs": 16.0,
+              "rpcMs": 4.0,
+              "lspMs": 0.0
+            },
+            {
+              "query": "handleItem12",
+              "totalMs": 10.0,
+              "seenMs": 6.0,
+              "frameMs": 8.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem123",
+              "totalMs": 22.0,
+              "seenMs": 7.0,
+              "frameMs": 20.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem1234",
+              "totalMs": 17.0,
+              "seenMs": 6.0,
+              "frameMs": 15.0,
+              "rpcMs": 3.0,
+              "lspMs": 0.0
+            },
+            {
+              "query": "handleItem1234x",
+              "totalMs": 9.0,
+              "seenMs": 5.0,
+              "frameMs": 7.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem1234x6",
+              "totalMs": 15.0,
+              "seenMs": 5.0,
+              "frameMs": 14.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            }
+          ]
+        },
+        "symbol_keys_second": {
+          "popup": "classes",
+          "openMs": 8.0,
+          "first": {
+            "query": "W",
+            "totalMs": 10.0,
+            "seenMs": 7.0,
+            "frameMs": 8.0,
+            "rpcMs": 4.0,
+            "lspMs": 1.0
+          },
+          "keys": [
+            {
+              "query": "W",
+              "totalMs": 10.0,
+              "seenMs": 7.0,
+              "frameMs": 8.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Wi",
+              "totalMs": 19.0,
+              "seenMs": 6.0,
+              "frameMs": 18.0,
+              "rpcMs": 5.0,
+              "lspMs": 4.0
+            },
+            {
+              "query": "Wid",
+              "totalMs": 11.0,
+              "seenMs": 5.0,
+              "frameMs": 10.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widg",
+              "totalMs": 18.0,
+              "seenMs": 5.0,
+              "frameMs": 17.0,
+              "rpcMs": 4.0,
+              "lspMs": 2.0
+            },
+            {
+              "query": "Widge",
+              "totalMs": 21.0,
+              "seenMs": 5.0,
+              "frameMs": 21.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget",
+              "totalMs": 14.0,
+              "seenMs": 4.0,
+              "frameMs": 13.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget1",
+              "totalMs": 18.0,
+              "seenMs": 7.0,
+              "frameMs": 16.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget12",
+              "totalMs": 15.0,
+              "seenMs": 7.0,
+              "frameMs": 14.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget123",
+              "totalMs": 12.0,
+              "seenMs": 5.0,
+              "frameMs": 10.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget1234",
+              "totalMs": 8.0,
+              "seenMs": 6.0,
+              "frameMs": 7.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            }
+          ]
+        },
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 548901568,
+        "rss_bytes": 577437696,
+        "processes": [
+          {
+            "pid": 72720,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 287327288,
+            "rss_bytes": 261079040
+          },
+          {
+            "pid": 72717,
+            "name": "pitwall",
+            "footprint_bytes": 142575032,
+            "rss_bytes": 252641280
+          },
+          {
+            "pid": 72719,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 106202024,
+            "rss_bytes": 33701888
+          },
+          {
+            "pid": 72737,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5554680,
+            "rss_bytes": 11583488
+          },
+          {
+            "pid": 72721,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4948448,
+            "rss_bytes": 9125888
+          },
+          {
+            "pid": 72718,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2294096,
+            "rss_bytes": 9306112
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 150423808,
+        "webkit_footprint_bytes": 398477760,
+        "server_footprint_bytes": 0,
+        "server_rss_bytes": 0
+      },
+      "killed": false
+    },
+    {
+      "index": 2,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 73155,
+      "group": 73155,
+      "cold_start_ms": 439.60791015625,
+      "launch_epoch_ms": 1794486042131.303,
+      "measure": {
+        "ready_ms": null,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": null,
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": {
+          "epochMs": 1794486044627.0,
+          "fromFrameMs": 2050.0,
+          "files": 20000,
+          "symbols": 500000
+        },
+        "symbol_keys": {
+          "popup": "symbols",
+          "openMs": 7.0,
+          "first": {
+            "query": "h",
+            "totalMs": 10.0,
+            "seenMs": 7.0,
+            "frameMs": 9.0,
+            "rpcMs": 4.0,
+            "lspMs": 1.0
+          },
+          "keys": [
+            {
+              "query": "h",
+              "totalMs": 10.0,
+              "seenMs": 7.0,
+              "frameMs": 9.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "ha",
+              "totalMs": 17.0,
+              "seenMs": 5.0,
+              "frameMs": 14.0,
+              "rpcMs": 4.0,
+              "lspMs": 3.0
+            },
+            {
+              "query": "han",
+              "totalMs": 12.0,
+              "seenMs": 5.0,
+              "frameMs": 11.0,
+              "rpcMs": 3.0,
+              "lspMs": 0.0
+            },
+            {
+              "query": "hand",
+              "totalMs": 14.0,
+              "seenMs": 5.0,
+              "frameMs": 12.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handl",
+              "totalMs": 10.0,
+              "seenMs": 6.0,
+              "frameMs": 9.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handle",
+              "totalMs": 23.0,
+              "seenMs": 6.0,
+              "frameMs": 22.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleI",
+              "totalMs": 21.0,
+              "seenMs": 6.0,
+              "frameMs": 20.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleIt",
+              "totalMs": 9.0,
+              "seenMs": 6.0,
+              "frameMs": 8.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleIte",
+              "totalMs": 18.0,
+              "seenMs": 5.0,
+              "frameMs": 17.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem",
+              "totalMs": 8.0,
+              "seenMs": 5.0,
+              "frameMs": 6.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem1",
+              "totalMs": 17.0,
+              "seenMs": 7.0,
+              "frameMs": 16.0,
+              "rpcMs": 5.0,
+              "lspMs": 2.0
+            },
+            {
+              "query": "handleItem12",
+              "totalMs": 14.0,
+              "seenMs": 7.0,
+              "frameMs": 13.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem123",
+              "totalMs": 13.0,
+              "seenMs": 6.0,
+              "frameMs": 11.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem1234",
+              "totalMs": 11.0,
+              "seenMs": 5.0,
+              "frameMs": 9.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem1234x",
+              "totalMs": 15.0,
+              "seenMs": 5.0,
+              "frameMs": 13.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem1234x6",
+              "totalMs": 8.0,
+              "seenMs": 5.0,
+              "frameMs": 6.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            }
+          ]
+        },
+        "symbol_keys_second": {
+          "popup": "classes",
+          "openMs": 5.0,
+          "first": {
+            "query": "W",
+            "totalMs": 15.0,
+            "seenMs": 5.0,
+            "frameMs": 13.0,
+            "rpcMs": 4.0,
+            "lspMs": 1.0
+          },
+          "keys": [
+            {
+              "query": "W",
+              "totalMs": 15.0,
+              "seenMs": 5.0,
+              "frameMs": 13.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Wi",
+              "totalMs": 9.0,
+              "seenMs": 5.0,
+              "frameMs": 7.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Wid",
+              "totalMs": 8.0,
+              "seenMs": 4.0,
+              "frameMs": 7.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widg",
+              "totalMs": 18.0,
+              "seenMs": 4.0,
+              "frameMs": 17.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widge",
+              "totalMs": 20.0,
+              "seenMs": 4.0,
+              "frameMs": 19.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget",
+              "totalMs": 7.0,
+              "seenMs": 5.0,
+              "frameMs": 6.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget1",
+              "totalMs": 12.0,
+              "seenMs": 6.0,
+              "frameMs": 11.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget12",
+              "totalMs": 9.0,
+              "seenMs": 6.0,
+              "frameMs": 8.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget123",
+              "totalMs": 18.0,
+              "seenMs": 6.0,
+              "frameMs": 17.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget1234",
+              "totalMs": 16.0,
+              "seenMs": 5.0,
+              "frameMs": 14.0,
+              "rpcMs": 3.0,
+              "lspMs": 0.0
+            }
+          ]
+        },
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 551031368,
+        "rss_bytes": 576323584,
+        "processes": [
+          {
+            "pid": 73160,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 286999584,
+            "rss_bytes": 258785280
+          },
+          {
+            "pid": 73155,
+            "name": "pitwall",
+            "footprint_bytes": 145147320,
+            "rss_bytes": 254214144
+          },
+          {
+            "pid": 73159,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 106087216,
+            "rss_bytes": 33390592
+          },
+          {
+            "pid": 73162,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5554680,
+            "rss_bytes": 11583488
+          },
+          {
+            "pid": 73161,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4948472,
+            "rss_bytes": 9043968
+          },
+          {
+            "pid": 73157,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2294096,
+            "rss_bytes": 9306112
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 152996096,
+        "webkit_footprint_bytes": 398035272,
+        "server_footprint_bytes": 0,
+        "server_rss_bytes": 0
+      },
+      "killed": false
+    },
+    {
+      "index": 3,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 73414,
+      "group": 73414,
+      "cold_start_ms": 440.56494140625,
+      "launch_epoch_ms": 1794486052036.283,
+      "measure": {
+        "ready_ms": null,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": null,
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": {
+          "epochMs": 1794486054628.0,
+          "fromFrameMs": 2144.0,
+          "files": 20000,
+          "symbols": 500000
+        },
+        "symbol_keys": {
+          "popup": "symbols",
+          "openMs": 8.0,
+          "first": {
+            "query": "h",
+            "totalMs": 10.0,
+            "seenMs": 7.0,
+            "frameMs": 8.0,
+            "rpcMs": 4.0,
+            "lspMs": 1.0
+          },
+          "keys": [
+            {
+              "query": "h",
+              "totalMs": 10.0,
+              "seenMs": 7.0,
+              "frameMs": 8.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "ha",
+              "totalMs": 21.0,
+              "seenMs": 7.0,
+              "frameMs": 20.0,
+              "rpcMs": 5.0,
+              "lspMs": 0.0
+            },
+            {
+              "query": "han",
+              "totalMs": 19.0,
+              "seenMs": 6.0,
+              "frameMs": 17.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "hand",
+              "totalMs": 19.0,
+              "seenMs": 6.0,
+              "frameMs": 18.0,
+              "rpcMs": 5.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handl",
+              "totalMs": 15.0,
+              "seenMs": 6.0,
+              "frameMs": 14.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handle",
+              "totalMs": 8.0,
+              "seenMs": 5.0,
+              "frameMs": 7.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleI",
+              "totalMs": 12.0,
+              "seenMs": 5.0,
+              "frameMs": 11.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleIt",
+              "totalMs": 19.0,
+              "seenMs": 6.0,
+              "frameMs": 18.0,
+              "rpcMs": 5.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleIte",
+              "totalMs": 18.0,
+              "seenMs": 5.0,
+              "frameMs": 16.0,
+              "rpcMs": 5.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem",
+              "totalMs": 20.0,
+              "seenMs": 7.0,
+              "frameMs": 19.0,
+              "rpcMs": 5.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem1",
+              "totalMs": 14.0,
+              "seenMs": 7.0,
+              "frameMs": 13.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem12",
+              "totalMs": 11.0,
+              "seenMs": 7.0,
+              "frameMs": 10.0,
+              "rpcMs": 3.0,
+              "lspMs": 0.0
+            },
+            {
+              "query": "handleItem123",
+              "totalMs": 10.0,
+              "seenMs": 7.0,
+              "frameMs": 9.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem1234",
+              "totalMs": 20.0,
+              "seenMs": 6.0,
+              "frameMs": 18.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem1234x",
+              "totalMs": 9.0,
+              "seenMs": 5.0,
+              "frameMs": 7.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem1234x6",
+              "totalMs": 13.0,
+              "seenMs": 5.0,
+              "frameMs": 12.0,
+              "rpcMs": 2.0,
+              "lspMs": 0.0
+            }
+          ]
+        },
+        "symbol_keys_second": {
+          "popup": "classes",
+          "openMs": 11.0,
+          "first": {
+            "query": "W",
+            "totalMs": 16.0,
+            "seenMs": 7.0,
+            "frameMs": 15.0,
+            "rpcMs": 4.0,
+            "lspMs": 1.0
+          },
+          "keys": [
+            {
+              "query": "W",
+              "totalMs": 16.0,
+              "seenMs": 7.0,
+              "frameMs": 15.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Wi",
+              "totalMs": 11.0,
+              "seenMs": 4.0,
+              "frameMs": 8.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Wid",
+              "totalMs": 10.0,
+              "seenMs": 4.0,
+              "frameMs": 9.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widg",
+              "totalMs": 6.0,
+              "seenMs": 5.0,
+              "frameMs": 5.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widge",
+              "totalMs": 7.0,
+              "seenMs": 4.0,
+              "frameMs": 6.0,
+              "rpcMs": 3.0,
+              "lspMs": 0.0
+            },
+            {
+              "query": "Widget",
+              "totalMs": 8.0,
+              "seenMs": 4.0,
+              "frameMs": 7.0,
+              "rpcMs": 2.0,
+              "lspMs": 0.0
+            },
+            {
+              "query": "Widget1",
+              "totalMs": 16.0,
+              "seenMs": 5.0,
+              "frameMs": 14.0,
+              "rpcMs": 3.0,
+              "lspMs": 0.0
+            },
+            {
+              "query": "Widget12",
+              "totalMs": 18.0,
+              "seenMs": 6.0,
+              "frameMs": 16.0,
+              "rpcMs": 4.0,
+              "lspMs": 2.0
+            },
+            {
+              "query": "Widget123",
+              "totalMs": 8.0,
+              "seenMs": 5.0,
+              "frameMs": 7.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget1234",
+              "totalMs": 16.0,
+              "seenMs": 5.0,
+              "frameMs": 14.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            }
+          ]
+        },
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 550818376,
+        "rss_bytes": 562003968,
+        "processes": [
+          {
+            "pid": 73417,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 286753824,
+            "rss_bytes": 243810304
+          },
+          {
+            "pid": 73414,
+            "name": "pitwall",
+            "footprint_bytes": 145278320,
+            "rss_bytes": 254394368
+          },
+          {
+            "pid": 73416,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 105989008,
+            "rss_bytes": 33718272
+          },
+          {
+            "pid": 73419,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5554680,
+            "rss_bytes": 11583488
+          },
+          {
+            "pid": 73418,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4948448,
+            "rss_bytes": 9191424
+          },
+          {
+            "pid": 73415,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2294096,
+            "rss_bytes": 9306112
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 153127096,
+        "webkit_footprint_bytes": 397691280,
+        "server_footprint_bytes": 0,
+        "server_rss_bytes": 0
+      },
+      "killed": false
+    },
+    {
+      "index": 4,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 73809,
+      "group": 73809,
+      "cold_start_ms": 455.51806640625,
+      "launch_epoch_ms": 1794486062077.822,
+      "measure": {
+        "ready_ms": null,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": null,
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": {
+          "epochMs": 1794486064516.0,
+          "fromFrameMs": 1975.0,
+          "files": 20000,
+          "symbols": 500000
+        },
+        "symbol_keys": {
+          "popup": "symbols",
+          "openMs": 7.0,
+          "first": {
+            "query": "h",
+            "totalMs": 9.0,
+            "seenMs": 7.0,
+            "frameMs": 8.0,
+            "rpcMs": 4.0,
+            "lspMs": 2.0
+          },
+          "keys": [
+            {
+              "query": "h",
+              "totalMs": 9.0,
+              "seenMs": 7.0,
+              "frameMs": 8.0,
+              "rpcMs": 4.0,
+              "lspMs": 2.0
+            },
+            {
+              "query": "ha",
+              "totalMs": 21.0,
+              "seenMs": 7.0,
+              "frameMs": 20.0,
+              "rpcMs": 6.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "han",
+              "totalMs": 18.0,
+              "seenMs": 5.0,
+              "frameMs": 17.0,
+              "rpcMs": 4.0,
+              "lspMs": 2.0
+            },
+            {
+              "query": "hand",
+              "totalMs": 13.0,
+              "seenMs": 6.0,
+              "frameMs": 12.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handl",
+              "totalMs": 23.0,
+              "seenMs": 6.0,
+              "frameMs": 22.0,
+              "rpcMs": 5.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handle",
+              "totalMs": 12.0,
+              "seenMs": 6.0,
+              "frameMs": 11.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleI",
+              "totalMs": 12.0,
+              "seenMs": 6.0,
+              "frameMs": 10.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleIt",
+              "totalMs": 17.0,
+              "seenMs": 5.0,
+              "frameMs": 16.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleIte",
+              "totalMs": 18.0,
+              "seenMs": 6.0,
+              "frameMs": 17.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem",
+              "totalMs": 9.0,
+              "seenMs": 5.0,
+              "frameMs": 8.0,
+              "rpcMs": 5.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem1",
+              "totalMs": 17.0,
+              "seenMs": 8.0,
+              "frameMs": 16.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem12",
+              "totalMs": 22.0,
+              "seenMs": 7.0,
+              "frameMs": 21.0,
+              "rpcMs": 5.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem123",
+              "totalMs": 20.0,
+              "seenMs": 7.0,
+              "frameMs": 18.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem1234",
+              "totalMs": 10.0,
+              "seenMs": 6.0,
+              "frameMs": 8.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem1234x",
+              "totalMs": 18.0,
+              "seenMs": 5.0,
+              "frameMs": 16.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem1234x6",
+              "totalMs": 10.0,
+              "seenMs": 5.0,
+              "frameMs": 8.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            }
+          ]
+        },
+        "symbol_keys_second": {
+          "popup": "classes",
+          "openMs": 13.0,
+          "first": {
+            "query": "W",
+            "totalMs": 18.0,
+            "seenMs": 9.0,
+            "frameMs": 16.0,
+            "rpcMs": 6.0,
+            "lspMs": 2.0
+          },
+          "keys": [
+            {
+              "query": "W",
+              "totalMs": 18.0,
+              "seenMs": 9.0,
+              "frameMs": 16.0,
+              "rpcMs": 6.0,
+              "lspMs": 2.0
+            },
+            {
+              "query": "Wi",
+              "totalMs": 12.0,
+              "seenMs": 5.0,
+              "frameMs": 9.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Wid",
+              "totalMs": 14.0,
+              "seenMs": 4.0,
+              "frameMs": 13.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widg",
+              "totalMs": 10.0,
+              "seenMs": 4.0,
+              "frameMs": 9.0,
+              "rpcMs": 4.0,
+              "lspMs": 0.0
+            },
+            {
+              "query": "Widge",
+              "totalMs": 18.0,
+              "seenMs": 5.0,
+              "frameMs": 17.0,
+              "rpcMs": 3.0,
+              "lspMs": 0.0
+            },
+            {
+              "query": "Widget",
+              "totalMs": 9.0,
+              "seenMs": 5.0,
+              "frameMs": 8.0,
+              "rpcMs": 3.0,
+              "lspMs": 0.0
+            },
+            {
+              "query": "Widget1",
+              "totalMs": 15.0,
+              "seenMs": 6.0,
+              "frameMs": 8.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget12",
+              "totalMs": 10.0,
+              "seenMs": 6.0,
+              "frameMs": 8.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget123",
+              "totalMs": 17.0,
+              "seenMs": 5.0,
+              "frameMs": 15.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget1234",
+              "totalMs": 14.0,
+              "seenMs": 5.0,
+              "frameMs": 12.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            }
+          ]
+        },
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 559583840,
+        "rss_bytes": 580435968,
+        "processes": [
+          {
+            "pid": 73813,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 295093304,
+            "rss_bytes": 262307840
+          },
+          {
+            "pid": 73809,
+            "name": "pitwall",
+            "footprint_bytes": 145474928,
+            "rss_bytes": 254361600
+          },
+          {
+            "pid": 73811,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 106234768,
+            "rss_bytes": 33800192
+          },
+          {
+            "pid": 73816,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5554680,
+            "rss_bytes": 11583488
+          },
+          {
+            "pid": 73815,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4915680,
+            "rss_bytes": 9043968
+          },
+          {
+            "pid": 73810,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2310480,
+            "rss_bytes": 9338880
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 153340088,
+        "webkit_footprint_bytes": 406243752,
+        "server_footprint_bytes": 0,
+        "server_rss_bytes": 0
+      },
+      "killed": false
+    },
+    {
+      "index": 5,
+      "warmup": false,
+      "excluded": null,
+      "app_pid": 74122,
+      "group": 74122,
+      "cold_start_ms": 440.054931640625,
+      "launch_epoch_ms": 1794486071960.746,
+      "measure": {
+        "ready_ms": null,
+        "completion_ms": [],
+        "diagnostics": [],
+        "definition": [],
+        "typing": null,
+        "problems_loaded_ms": null,
+        "problems_open": null,
+        "problems_scroll": null,
+        "problems_published": null,
+        "index": {
+          "epochMs": 1794486074591.0,
+          "fromFrameMs": 2188.0,
+          "files": 20000,
+          "symbols": 500000
+        },
+        "symbol_keys": {
+          "popup": "symbols",
+          "openMs": 7.0,
+          "first": {
+            "query": "h",
+            "totalMs": 10.0,
+            "seenMs": 7.0,
+            "frameMs": 9.0,
+            "rpcMs": 4.0,
+            "lspMs": 1.0
+          },
+          "keys": [
+            {
+              "query": "h",
+              "totalMs": 10.0,
+              "seenMs": 7.0,
+              "frameMs": 9.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "ha",
+              "totalMs": 21.0,
+              "seenMs": 7.0,
+              "frameMs": 21.0,
+              "rpcMs": 5.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "han",
+              "totalMs": 21.0,
+              "seenMs": 6.0,
+              "frameMs": 20.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "hand",
+              "totalMs": 18.0,
+              "seenMs": 6.0,
+              "frameMs": 17.0,
+              "rpcMs": 5.0,
+              "lspMs": 2.0
+            },
+            {
+              "query": "handl",
+              "totalMs": 12.0,
+              "seenMs": 5.0,
+              "frameMs": 11.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handle",
+              "totalMs": 21.0,
+              "seenMs": 6.0,
+              "frameMs": 20.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleI",
+              "totalMs": 9.0,
+              "seenMs": 5.0,
+              "frameMs": 8.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleIt",
+              "totalMs": 19.0,
+              "seenMs": 6.0,
+              "frameMs": 18.0,
+              "rpcMs": 4.0,
+              "lspMs": 2.0
+            },
+            {
+              "query": "handleIte",
+              "totalMs": 8.0,
+              "seenMs": 6.0,
+              "frameMs": 7.0,
+              "rpcMs": 5.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem",
+              "totalMs": 17.0,
+              "seenMs": 5.0,
+              "frameMs": 16.0,
+              "rpcMs": 5.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem1",
+              "totalMs": 15.0,
+              "seenMs": 6.0,
+              "frameMs": 13.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem12",
+              "totalMs": 13.0,
+              "seenMs": 7.0,
+              "frameMs": 11.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem123",
+              "totalMs": 11.0,
+              "seenMs": 5.0,
+              "frameMs": 9.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem1234",
+              "totalMs": 9.0,
+              "seenMs": 5.0,
+              "frameMs": 7.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem1234x",
+              "totalMs": 11.0,
+              "seenMs": 5.0,
+              "frameMs": 9.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "handleItem1234x6",
+              "totalMs": 17.0,
+              "seenMs": 5.0,
+              "frameMs": 16.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            }
+          ]
+        },
+        "symbol_keys_second": {
+          "popup": "classes",
+          "openMs": 9.0,
+          "first": {
+            "query": "W",
+            "totalMs": 20.0,
+            "seenMs": 8.0,
+            "frameMs": 19.0,
+            "rpcMs": 6.0,
+            "lspMs": 3.0
+          },
+          "keys": [
+            {
+              "query": "W",
+              "totalMs": 20.0,
+              "seenMs": 8.0,
+              "frameMs": 19.0,
+              "rpcMs": 6.0,
+              "lspMs": 3.0
+            },
+            {
+              "query": "Wi",
+              "totalMs": 18.0,
+              "seenMs": 6.0,
+              "frameMs": 17.0,
+              "rpcMs": 4.0,
+              "lspMs": 5.0
+            },
+            {
+              "query": "Wid",
+              "totalMs": 20.0,
+              "seenMs": 5.0,
+              "frameMs": 19.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widg",
+              "totalMs": 9.0,
+              "seenMs": 5.0,
+              "frameMs": 7.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widge",
+              "totalMs": 19.0,
+              "seenMs": 5.0,
+              "frameMs": 18.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget",
+              "totalMs": 8.0,
+              "seenMs": 5.0,
+              "frameMs": 6.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget1",
+              "totalMs": 19.0,
+              "seenMs": 6.0,
+              "frameMs": 17.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget12",
+              "totalMs": 10.0,
+              "seenMs": 6.0,
+              "frameMs": 8.0,
+              "rpcMs": 3.0,
+              "lspMs": 0.0
+            },
+            {
+              "query": "Widget123",
+              "totalMs": 18.0,
+              "seenMs": 6.0,
+              "frameMs": 16.0,
+              "rpcMs": 4.0,
+              "lspMs": 1.0
+            },
+            {
+              "query": "Widget1234",
+              "totalMs": 18.0,
+              "seenMs": 6.0,
+              "frameMs": 16.0,
+              "rpcMs": 3.0,
+              "lspMs": 1.0
+            }
+          ]
+        },
+        "server_ready": null
+      },
+      "memory": {
+        "footprint_bytes": 552210968,
+        "rss_bytes": 572014592,
+        "processes": [
+          {
+            "pid": 74125,
+            "name": "com.apple.WebKit.WebContent",
+            "footprint_bytes": 288277512,
+            "rss_bytes": 253083648
+          },
+          {
+            "pid": 74122,
+            "name": "pitwall",
+            "footprint_bytes": 144885152,
+            "rss_bytes": 255164416
+          },
+          {
+            "pid": 74124,
+            "name": "com.apple.WebKit.GPU",
+            "footprint_bytes": 106152800,
+            "rss_bytes": 33685504
+          },
+          {
+            "pid": 74127,
+            "name": "com.apple.audio.SandboxHelper",
+            "footprint_bytes": 5554680,
+            "rss_bytes": 11583488
+          },
+          {
+            "pid": 74126,
+            "name": "com.apple.WebKit.Networking",
+            "footprint_bytes": 4981192,
+            "rss_bytes": 9125888
+          },
+          {
+            "pid": 74123,
+            "name": "SetStoreUpdateService",
+            "footprint_bytes": 2359632,
+            "rss_bytes": 9371648
+          }
+        ]
+      },
+      "split": {
+        "app_footprint_bytes": 152799464,
+        "webkit_footprint_bytes": 399411504,
+        "server_footprint_bytes": 0,
+        "server_rss_bytes": 0
+      },
+      "killed": false
+    }
+  ],
+  "failures": [],
+  "valid_runs": 5,
+  "rows": [
+    {
+      "key": "index_first_ms",
+      "item": "symbol index: launch → ready (first index, 20,000 files · 500,000 symbols)",
+      "summary": {
+        "median": 2495.697021484375,
+        "min": 2392.56396484375,
+        "max": 2630.25390625,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": "< 15000 ms (8 cores)",
+      "met": true
+    },
+    {
+      "key": "index_from_frame_ms",
+      "item": "symbol index: first frame → ready (reference)",
+      "summary": {
+        "median": 2050.0,
+        "min": 1942.0,
+        "max": 2188.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "index_symbols",
+      "item": "symbol index: symbols",
+      "summary": {
+        "median": 500000.0,
+        "min": 500000.0,
+        "max": 500000.0,
+        "n": 5
+      },
+      "unit": "",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "first_key_ms",
+      "item": "first popup after the window opened: first key → results frame",
+      "summary": {
+        "median": 10.0,
+        "min": 9.0,
+        "max": 16.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": "< 30 ms",
+      "met": true
+    },
+    {
+      "key": "first_key_rpc_ms",
+      "item": "  of which index.symbols.search round trip (Host + IPC)",
+      "summary": {
+        "median": 4.0,
+        "min": 4.0,
+        "max": 4.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "first_key_seen_ms",
+      "item": "  of which input → the rows in the DOM (reference)",
+      "summary": {
+        "median": 7.0,
+        "min": 7.0,
+        "max": 7.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "first_key_wait_ms",
+      "item": "  of which the rows in the DOM → next animation frame (reference)",
+      "summary": {
+        "median": 2.0,
+        "min": 1.0,
+        "max": 7.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "first_key_lsp_ms",
+      "item": "  lsp.workspaceSymbol round trip of the first key (reference — the rows wait for it when a server may answer)",
+      "summary": {
+        "median": 1.0,
+        "min": 1.0,
+        "max": 2.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "first_open_ms",
+      "item": "first popup: key → input shown (reference)",
+      "summary": {
+        "median": 7.0,
+        "min": 7.0,
+        "max": 8.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "keys_max_ms",
+      "item": "first popup, keys after the first: slowest key → results frame (per run)",
+      "summary": {
+        "median": 22.0,
+        "min": 21.0,
+        "max": 23.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": "< 30 ms",
+      "met": true
+    },
+    {
+      "key": "keys_median_ms",
+      "item": "first popup, keys after the first: median key (per run)",
+      "summary": {
+        "median": 15.0,
+        "min": 14.0,
+        "max": 17.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "keys_rpc_max_ms",
+      "item": "  of which the slowest index.symbols.search round trip (per run)",
+      "summary": {
+        "median": 5.0,
+        "min": 4.0,
+        "max": 6.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "second_first_key_ms",
+      "item": "second popup (not a first use): first key → results frame",
+      "summary": {
+        "median": 16.0,
+        "min": 10.0,
+        "max": 20.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "second_keys_max_ms",
+      "item": "second popup: slowest of the other keys (per run)",
+      "summary": {
+        "median": 20.0,
+        "min": 18.0,
+        "max": 21.0,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": "< 30 ms",
+      "met": true
+    },
+    {
+      "key": "cold_start_ms",
+      "item": "cold start → first frame (reference)",
+      "summary": {
+        "median": 440.56494140625,
+        "min": 439.60791015625,
+        "max": 455.51806640625,
+        "n": 5
+      },
+      "unit": " ms",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "footprint_mb",
+      "item": "footprint after the scenario, every process of the instance",
+      "summary": {
+        "median": 551.031368,
+        "min": 548.901568,
+        "max": 559.58384,
+        "n": 5
+      },
+      "unit": " MB",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "app_footprint_mb",
+      "item": "  of which the app process (`pitwall` — Host, LSP client, symbol index — and the instance's helpers)",
+      "summary": {
+        "median": 152.996096,
+        "min": 150.423808,
+        "max": 153.340088,
+        "n": 5
+      },
+      "unit": " MB",
+      "target": null,
+      "met": null
+    },
+    {
+      "key": "webkit_footprint_mb",
+      "item": "  of which WebKit",
+      "summary": {
+        "median": 398.47776,
+        "min": 397.69128,
+        "max": 406.243752,
+        "n": 5
+      },
+      "unit": " MB",
+      "target": null,
+      "met": null
+    }
+  ],
+  "warning": null,
+  "stopped": null
+}

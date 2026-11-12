@@ -1,0 +1,480 @@
+{
+  "schema": "pitwall-perf-m4-typing/1",
+  "definition": "LSP on and off alternate run by run (on, off, on, off …), each a pw-perf `lsp-typing` / `lsp-typing-off` run with `--runs 1` (the first pair adds one warm-up); per run: insert → after the next frame's rendering, p95 over 300 keys, each after a 50 ms average pause from the previous painted frame (each pause spread over one frame — not comparable with the fixed-50 ms runs before 2026-11-12); 06 judges median(on p95) − median(off p95) ≤ 2 ms",
+  "rounds": [
+    {
+      "round": 0,
+      "kind": "typing-on",
+      "lsp": true,
+      "exit": 0,
+      "loadAtStart": [
+        10.16,
+        10.17,
+        10.86
+      ],
+      "loadAtEnd": [
+        5.94,
+        9.07,
+        10.41
+      ],
+      "displaysKept": true,
+      "typing": {
+        "p95": 15,
+        "p50": 7,
+        "max": 20,
+        "within16_7": 0.98,
+        "frameP95": 14,
+        "breakdown": {
+          "dispatchP95": 4,
+          "stateP95": 1,
+          "popupLayoutP95": 2,
+          "changeP95": 0,
+          "waitP95": 11,
+          "renderP95": 3,
+          "popupKeys": 154,
+          "popupP95": 16,
+          "popupDispatchP95": 5,
+          "popupRenderP95": 3,
+          "noPopupP95": 11
+        }
+      },
+      "coldStartMs": 446.41015625,
+      "os": {
+        "name": "macOS",
+        "version": "27.2.1",
+        "build": "26B131"
+      },
+      "commit": {
+        "sha": "950428698c76efa404bb04a878e32b30bf86d419",
+        "dirty": false
+      }
+    },
+    {
+      "round": 0,
+      "kind": "typing-off",
+      "lsp": false,
+      "exit": 0,
+      "loadAtStart": [
+        5.94,
+        9.07,
+        10.41
+      ],
+      "loadAtEnd": [
+        6.33,
+        8.51,
+        10.11
+      ],
+      "displaysKept": true,
+      "typing": {
+        "p95": 10,
+        "p50": 4,
+        "max": 16,
+        "within16_7": 1,
+        "frameP95": 7,
+        "breakdown": {
+          "dispatchP95": 4,
+          "stateP95": 1,
+          "popupLayoutP95": null,
+          "changeP95": 0,
+          "waitP95": 4,
+          "renderP95": 2,
+          "popupKeys": 0,
+          "popupP95": null,
+          "popupDispatchP95": null,
+          "popupRenderP95": null,
+          "noPopupP95": 10
+        }
+      },
+      "coldStartMs": 463.97802734375,
+      "os": {
+        "name": "macOS",
+        "version": "27.2.1",
+        "build": "26B131"
+      },
+      "commit": {
+        "sha": "950428698c76efa404bb04a878e32b30bf86d419",
+        "dirty": false
+      }
+    },
+    {
+      "round": 1,
+      "kind": "typing-on",
+      "lsp": true,
+      "exit": 0,
+      "loadAtStart": [
+        6.33,
+        8.51,
+        10.11
+      ],
+      "loadAtEnd": [
+        5.82,
+        8.21,
+        9.96
+      ],
+      "displaysKept": true,
+      "typing": {
+        "p95": 14,
+        "p50": 6,
+        "max": 19,
+        "within16_7": 0.98,
+        "frameP95": 13,
+        "breakdown": {
+          "dispatchP95": 4,
+          "stateP95": 1,
+          "popupLayoutP95": 2,
+          "changeP95": 0,
+          "waitP95": 10,
+          "renderP95": 3,
+          "popupKeys": 150,
+          "popupP95": 15,
+          "popupDispatchP95": 6,
+          "popupRenderP95": 3,
+          "noPopupP95": 13
+        }
+      },
+      "coldStartMs": 443.0771484375,
+      "os": {
+        "name": "macOS",
+        "version": "27.2.1",
+        "build": "26B131"
+      },
+      "commit": {
+        "sha": "950428698c76efa404bb04a878e32b30bf86d419",
+        "dirty": false
+      }
+    },
+    {
+      "round": 1,
+      "kind": "typing-off",
+      "lsp": false,
+      "exit": 0,
+      "loadAtStart": [
+        5.82,
+        8.21,
+        9.96
+      ],
+      "loadAtEnd": [
+        5.24,
+        7.87,
+        9.78
+      ],
+      "displaysKept": true,
+      "typing": {
+        "p95": 11,
+        "p50": 4,
+        "max": 17,
+        "within16_7": 0.99,
+        "frameP95": 10,
+        "breakdown": {
+          "dispatchP95": 4,
+          "stateP95": 1,
+          "popupLayoutP95": null,
+          "changeP95": 0,
+          "waitP95": 8,
+          "renderP95": 3,
+          "popupKeys": 0,
+          "popupP95": null,
+          "popupDispatchP95": null,
+          "popupRenderP95": null,
+          "noPopupP95": 11
+        }
+      },
+      "coldStartMs": 574.753173828125,
+      "os": {
+        "name": "macOS",
+        "version": "27.2.1",
+        "build": "26B131"
+      },
+      "commit": {
+        "sha": "950428698c76efa404bb04a878e32b30bf86d419",
+        "dirty": false
+      }
+    },
+    {
+      "round": 2,
+      "kind": "typing-on",
+      "lsp": true,
+      "exit": 0,
+      "loadAtStart": [
+        5.24,
+        7.87,
+        9.78
+      ],
+      "loadAtEnd": [
+        5.52,
+        7.72,
+        9.67
+      ],
+      "displaysKept": true,
+      "typing": {
+        "p95": 15,
+        "p50": 6,
+        "max": 18,
+        "within16_7": 0.97,
+        "frameP95": 14,
+        "breakdown": {
+          "dispatchP95": 3,
+          "stateP95": 1,
+          "popupLayoutP95": 2,
+          "changeP95": 0,
+          "waitP95": 11,
+          "renderP95": 2,
+          "popupKeys": 153,
+          "popupP95": 16,
+          "popupDispatchP95": 4,
+          "popupRenderP95": 2,
+          "noPopupP95": 14
+        }
+      },
+      "coldStartMs": 474.8818359375,
+      "os": {
+        "name": "macOS",
+        "version": "27.2.1",
+        "build": "26B131"
+      },
+      "commit": {
+        "sha": "950428698c76efa404bb04a878e32b30bf86d419",
+        "dirty": false
+      }
+    },
+    {
+      "round": 2,
+      "kind": "typing-off",
+      "lsp": false,
+      "exit": 0,
+      "loadAtStart": [
+        5.52,
+        7.72,
+        9.67
+      ],
+      "loadAtEnd": [
+        5.06,
+        7.4,
+        9.49
+      ],
+      "displaysKept": true,
+      "typing": {
+        "p95": 12,
+        "p50": 5,
+        "max": 20,
+        "within16_7": 0.98,
+        "frameP95": 8,
+        "breakdown": {
+          "dispatchP95": 4,
+          "stateP95": 1,
+          "popupLayoutP95": null,
+          "changeP95": 0,
+          "waitP95": 4,
+          "renderP95": 3,
+          "popupKeys": 0,
+          "popupP95": null,
+          "popupDispatchP95": null,
+          "popupRenderP95": null,
+          "noPopupP95": 12
+        }
+      },
+      "coldStartMs": 451.824951171875,
+      "os": {
+        "name": "macOS",
+        "version": "27.2.1",
+        "build": "26B131"
+      },
+      "commit": {
+        "sha": "950428698c76efa404bb04a878e32b30bf86d419",
+        "dirty": false
+      }
+    },
+    {
+      "round": 3,
+      "kind": "typing-on",
+      "lsp": true,
+      "exit": 0,
+      "loadAtStart": [
+        5.06,
+        7.4,
+        9.49
+      ],
+      "loadAtEnd": [
+        5.22,
+        7.25,
+        9.37
+      ],
+      "displaysKept": true,
+      "typing": {
+        "p95": 14,
+        "p50": 6,
+        "max": 21,
+        "within16_7": 0.98,
+        "frameP95": 13,
+        "breakdown": {
+          "dispatchP95": 4,
+          "stateP95": 1,
+          "popupLayoutP95": 2,
+          "changeP95": 0,
+          "waitP95": 10,
+          "renderP95": 3,
+          "popupKeys": 155,
+          "popupP95": 14,
+          "popupDispatchP95": 4,
+          "popupRenderP95": 3,
+          "noPopupP95": 15
+        }
+      },
+      "coldStartMs": 557.0908203125,
+      "os": {
+        "name": "macOS",
+        "version": "27.2.1",
+        "build": "26B131"
+      },
+      "commit": {
+        "sha": "950428698c76efa404bb04a878e32b30bf86d419",
+        "dirty": false
+      }
+    },
+    {
+      "round": 3,
+      "kind": "typing-off",
+      "lsp": false,
+      "exit": 3,
+      "loadAtStart": [
+        5.22,
+        7.25,
+        9.37
+      ],
+      "loadAtEnd": [
+        3.32,
+        6.29,
+        8.85
+      ],
+      "displaysKept": true,
+      "typing": null,
+      "coldStartMs": null,
+      "os": {
+        "name": "macOS",
+        "version": "27.2.1",
+        "build": "26B131"
+      },
+      "commit": {
+        "sha": "950428698c76efa404bb04a878e32b30bf86d419",
+        "dirty": false
+      }
+    },
+    {
+      "round": 4,
+      "kind": "typing-on",
+      "lsp": true,
+      "exit": 0,
+      "loadAtStart": [
+        3.32,
+        6.29,
+        8.85
+      ],
+      "loadAtEnd": [
+        4.05,
+        6.26,
+        8.77
+      ],
+      "displaysKept": true,
+      "typing": {
+        "p95": 15,
+        "p50": 8,
+        "max": 20,
+        "within16_7": 0.98,
+        "frameP95": 13,
+        "breakdown": {
+          "dispatchP95": 5,
+          "stateP95": 1,
+          "popupLayoutP95": 3,
+          "changeP95": 0,
+          "waitP95": 10,
+          "renderP95": 3,
+          "popupKeys": 154,
+          "popupP95": 15,
+          "popupDispatchP95": 6,
+          "popupRenderP95": 3,
+          "noPopupP95": 15
+        }
+      },
+      "coldStartMs": 477.1650390625,
+      "os": {
+        "name": "macOS",
+        "version": "27.2.1",
+        "build": "26B131"
+      },
+      "commit": {
+        "sha": "950428698c76efa404bb04a878e32b30bf86d419",
+        "dirty": false
+      }
+    },
+    {
+      "round": 4,
+      "kind": "typing-off",
+      "lsp": false,
+      "exit": 0,
+      "loadAtStart": [
+        4.05,
+        6.26,
+        8.77
+      ],
+      "loadAtEnd": [
+        3.85,
+        5.98,
+        8.58
+      ],
+      "displaysKept": true,
+      "typing": {
+        "p95": 11,
+        "p50": 5,
+        "max": 21,
+        "within16_7": 0.99,
+        "frameP95": 8,
+        "breakdown": {
+          "dispatchP95": 4,
+          "stateP95": 1,
+          "popupLayoutP95": null,
+          "changeP95": 0,
+          "waitP95": 4,
+          "renderP95": 3,
+          "popupKeys": 0,
+          "popupP95": null,
+          "popupDispatchP95": null,
+          "popupRenderP95": null,
+          "noPopupP95": 11
+        }
+      },
+      "coldStartMs": 437.2919921875,
+      "os": {
+        "name": "macOS",
+        "version": "27.2.1",
+        "build": "26B131"
+      },
+      "commit": {
+        "sha": "950428698c76efa404bb04a878e32b30bf86d419",
+        "dirty": false
+      }
+    }
+  ],
+  "summary": {
+    "on": {
+      "n": 5,
+      "median": 15,
+      "min": 14,
+      "max": 15
+    },
+    "off": {
+      "n": 4,
+      "median": 11,
+      "min": 10,
+      "max": 12
+    },
+    "deltaMs": 4,
+    "pairDeltasMs": [
+      5,
+      3,
+      3,
+      4
+    ],
+    "targetMs": 2,
+    "met": false
+  }
+}
