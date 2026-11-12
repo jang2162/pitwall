@@ -873,9 +873,10 @@ async fn resize_changes_the_size_the_shell_sees() {
     let t = c.open(f.create_params(80, 24)).await;
     let pty = f.terminals.pty(t.terminal).unwrap();
     // 표지 프롬프트는 이 줄이 끝난 뒤에야 나온다 — 나오면 `stty` 도 끝났고 readline 은 다음 줄을 기다린다.
-    c.input(t.terminal, "PS1='PROMPT''> '; stty size\n").await;
-    let first = read_command(&mut c, t.stream, "stty size\r\n").await;
-    assert!(prints_line(&first, "24 80"), "{first:?}");
+    c.input(t.terminal, "PS1='PROMPT''> '; echo SZ:$(stty size):\n")
+        .await;
+    let first = read_command(&mut c, t.stream).await;
+    assert!(first.contains("SZ:24 80:"), "{first:?}");
     c.call(
         "terminal.resize",
         json!({"terminalId": t.terminal, "cols": 100, "rows": 40}),
@@ -884,10 +885,10 @@ async fn resize_changes_the_size_the_shell_sees() {
     .outcome
     .unwrap();
     let resized = pty.size();
-    c.input(t.terminal, "stty size\n").await;
-    let second = read_command(&mut c, t.stream, "stty size\r\n").await;
+    c.input(t.terminal, "echo SZ:$(stty size):\n").await;
+    let second = read_command(&mut c, t.stream).await;
     assert!(
-        prints_line(&second, "40 100"),
+        second.contains("SZ:40 100:"),
         "{second:?} (pty size after resize {resized:?}, now {:?}; before the resize {first:?})",
         pty.size()
     );
@@ -900,26 +901,25 @@ async fn resize_changes_the_size_the_shell_sees() {
     assert_eq!(response.outcome.unwrap_err().code, code::INVALID_PARAMS);
 }
 
-/// 입력의 echo(`echo`)가 처음 나온 곳부터 표지 프롬프트 `PROMPT> ` 가 처음 나올 때까지 읽어 그 사이의 글자를 준다. readline 은
-/// 크기가 바뀌면(SIGWINCH) 프롬프트를 echo 앞에 다시 그리므로 echo 뒤부터 센다. 셸이 줄을 읽을 준비 전에 친 입력(첫 명령)은 커널이
-/// 먼저 echo 하고 readline 이 다시 echo 하므로, 그때 돌려주는 글자에는 명령의 출력 앞에 기본 프롬프트와 두 번째 echo 가 든다 —
-/// 판정은 줄 단위(`prints_line`)로 한다. 표지가 출력과 한 청크로 올 수 있어 `read_until` 을 이어 붙인다.
-async fn read_command(c: &mut Client, stream: u64, echo: &str) -> String {
+/// `echo SZ:$(stty size):` 의 출력(`SZ:` 뒤에 숫자) 뒤로 표지 프롬프트 `PROMPT> ` 가 나올 때까지 읽어 읽은 글자를 모두 준다. 판정은
+/// 줄이나 echo 가 아니라 이 표지로 한다 — 입력의 echo 에는 `SZ:$(` 만 있고, echo 의 모양은 셸마다 다르다: 셸이 줄을 읽기 전에 친
+/// 입력(첫 명령)은 커널이 먼저 echo 하고 그 뒤 셸이 기본 프롬프트를 띄우는데, readline(bash 3.2)은 그 뒤에 줄을 한 번 더 echo
+/// 하고(긴 기본 프롬프트면 80 칸에서 꺾어서) dash(리눅스의 sh)는 하지 않아 출력이 프롬프트와 한 줄에 붙는다(`$ SZ:24 80:`).
+/// readline 은 크기가 바뀌면(SIGWINCH) 프롬프트를 다시 그리고, bash 3.2 의 잡 제어 경합 줄(`sh: child setpgid (…): Operation
+/// not permitted`)이 끼기도 한다. 표지가 출력과 한 청크로 올 수 있어 `read_until` 을 이어 붙인다.
+async fn read_command(c: &mut Client, stream: u64) -> String {
     let mut text = String::new();
     loop {
-        if let Some((_, after)) = text.split_once(echo)
-            && let Some((output, _)) = after.split_once("PROMPT> ")
+        let printed = text
+            .match_indices("SZ:")
+            .find(|&(i, _)| text[i + 3..].starts_with(|ch: char| ch.is_ascii_digit()));
+        if let Some((i, _)) = printed
+            && text[i..].contains("PROMPT> ")
         {
-            return output.to_owned();
+            return text;
         }
         text.push_str(&c.read_until(stream, "PROMPT> ").await);
     }
-}
-
-/// `output` 의 한 줄이 `line` 인가. bash 3.2 는 잡 제어의 경합을 `sh: child setpgid (…): Operation not permitted` 로 알리는데
-/// 그 줄이 명령의 출력 사이에 끼기도 한다.
-fn prints_line(output: &str, line: &str) -> bool {
-    output.lines().any(|l| l.trim_end_matches('\r') == line)
 }
 
 #[tokio::test(flavor = "multi_thread")]
