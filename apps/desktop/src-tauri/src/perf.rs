@@ -85,8 +85,7 @@ pub const SCENARIO_EVENTS: &[&str] = &[
     "server_ready",
     // 타이핑 키마다의 몫(15-m4-plan §3 「타이핑 지연 LSP 켬 − 끔」).
     "typing_keys",
-    // 키 사이 · 유휴 중에 그리기 갱신을 거는 출처(15-m4-plan §3 「켬 창의 프레임 대기」 · 「rust-analyzer 창이 유휴에도 다시 그리는 까닭」).
-    "typing_sources",
+    // 유휴 중에 그리기 갱신을 거는 출처(15-m4-plan §3 「rust-analyzer 창이 유휴에도 다시 그리는 까닭」).
     "idle_sources",
 ];
 

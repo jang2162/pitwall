@@ -605,8 +605,8 @@ export function watchObservers(win: Window, now: () => number) {
 }
 
 /**
- * 키 사이 · 유휴 중에 그리기 갱신을 거는 것을 출처별로 모은다(15-m4-plan §3 「켬 창의 프레임 대기」 · 「rust-analyzer 창이 유휴에도
- * 다시 그리는 까닭」): DOM 변경(바뀐 곳의 표지), 앱이 건 rAF · CodeMirror 의 측정 요청(부른 자리), 관찰자 콜백(`watchObservers`).
+ * 그리기 갱신을 거는 것을 출처별로 모은다(15-m4-plan §3 「rust-analyzer 창이 유휴에도 다시 그리는 까닭」 — `lsp-idle` 의 유휴 중.
+ * 타이핑의 키 사이는 탐색 회에서 이것으로 셌다 — 판정 회에는 켜지 않는다, 켬 쪽에만 비용이 얹힌다): DOM 변경(바뀐 곳의 표지), 앱이 건 rAF · CodeMirror 의 측정 요청(부른 자리), 관찰자 콜백(`watchObservers`).
  */
 export function watchFrameSources(
   win: Window,
@@ -759,13 +759,6 @@ async function typing(env: ScenarioEnv, view: EditorView, lsp: boolean) {
   const keys: TypingKey[] = [];
   const calls = watchCallCost(env.now, ["lsp.document.change", "lsp.completion"]);
   const updates = watchUpdates(view, env.now);
-  // 키 사이(앞 키의 그린 프레임 뒤 → 다음 키)에 든 사건과, 키 직전 마지막 사건까지의 간격(그 사건이 그리기를 걸었으면 그 키의
-  // rAF 는 다음 화면 갱신까지 밀린다).
-  const sources = watchFrameSources(env.doc.defaultView ?? window, env.doc, env.now, view);
-  const between: FrameSourceEvent[] = [];
-  const gaps: (number | null)[] = [];
-  const animations = new Map<string, number>();
-  let pauseFrom = 0;
   // dispatch 안에서 배치를 읽어(`getBoundingClientRect`) 강제한 동기 배치의 시간 — 자동완성 목록을 새로 만든 뒤 고른 줄을 보이게 할
   // 때 든다. 다른 읽기(`offsetHeight` 등)는 세지 않는다.
   const rect = Element.prototype.getBoundingClientRect;
@@ -784,10 +777,6 @@ async function typing(env: ScenarioEnv, view: EditorView, lsp: boolean) {
       const ch = TYPING_TEXT[key % TYPING_TEXT.length]!;
       calls.take();
       updates.take();
-      between.push(...sources.events.slice(pauseFrom));
-      const last = sources.events.at(-1);
-      gaps.push(last ? ms(env.now() - last.t) : null);
-      for (const a of sources.animations()) animations.set(a, (animations.get(a) ?? 0) + 1);
       env.work.start();
       const t = env.now();
       // 상태 계산(자동완성 다시 거르기가 여기 든다 — 상태 필드는 `tr.state` 에서 계산된다)과 뷰 갱신(팝업 목록 그리기 · 문서
@@ -819,11 +808,9 @@ async function typing(env: ScenarioEnv, view: EditorView, lsp: boolean) {
         popupRows: popupRows(view),
         completions: cost.count.get("lsp.completion") ?? 0,
       });
-      pauseFrom = sources.events.length;
       await env.sleep(typingPause());
     }
   } finally {
-    sources.restore();
     Element.prototype.getBoundingClientRect = rect;
     updates.restore();
     calls.restore();
@@ -839,11 +826,6 @@ async function typing(env: ScenarioEnv, view: EditorView, lsp: boolean) {
   });
   // 키마다의 몫은 따로 — 표지 하나의 크기 상한(16 KB, src-tauri perf.rs `SCENARIO_DATA_MAX`) 안에 들게 열 이름 + 줄로 싣는다.
   await env.report("typing_keys", typingKeyRows(keys));
-  await env.report("typing_sources", {
-    between: countSources(between),
-    animations: Object.fromEntries(animations),
-    gapMs: gaps,
-  });
 }
 
 /** `index.symbols.search` 의 왕복(Host + IPC)을 질의별로 적는다 — `RpcClient.call` 을 감싼다. `restore` 로 걷는다. */
@@ -1041,7 +1023,9 @@ export type LspScenario =
 
 export async function runLspScenario(env: ScenarioEnv, scenario: LspScenario): Promise<void> {
   const frameEpochMs = env.epochNow();
-  watchObservers(env.doc.defaultView ?? window, env.now);
+  // 출처 계측(관찰자 콜백)은 유휴 시나리오에만 — 판정하는 타이핑 · LSP 측정에 비용을 얹지 않는다. 키 사이의 출처는 탐색 회에서
+  // 셌다(15-m4-plan §3 「켬 창의 프레임 대기」, 2026-11-13).
+  if (scenario === "lsp-idle") watchObservers(env.doc.defaultView ?? window, env.now);
   let step = "start";
   try {
     step = "project window";
