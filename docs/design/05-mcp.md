@@ -73,10 +73,10 @@
 ### DB
 | 툴 | 설명 | 권한 |
 |---|---|---|
-| `db_connection_list` | 연결 목록 (비밀 제외) | read |
+| `db_connection_list` | 연결 목록 (비밀 제외) — 대상(호스트 · 포트 · DB · SQLite 경로), 에이전트에게 적용하는 read-only · 프로덕션 표지, 상태, 에이전트가 지금 쓸 수 있는가(`usable` · `unusableReason`). 미신뢰 프로젝트에서도 준다 | read |
 | `db_connection_upsert` | 연결 추가/수정 — 비밀번호는 툴 인자로 받지 않고 UI 입력 요청 또는 env 참조 | write |
 | `db_connection_test` | 연결 테스트 — 입력은 연결 id 뿐이다(저장 전 초안 · 비밀은 받지 않는다). 연 적 없는 연결이면 「이 연결 열기」 승인을 청한다 | write |
-| `db_schema` | 스키마/테이블/컬럼/인덱스 조회 | read |
+| `db_schema` | 스키마/테이블/컬럼/인덱스 조회 — `object` 가 없으면 한 단계의 목록 한 쪽(`kind`: `database` · `schema` · `table`(기본) · `view` 등, `filter` · `cursor` · `limit`), 있으면 그 객체의 열(기본 키 표시) · 인덱스 · FK, `detail: "ddl"` 이면 DDL. 창의 탐색기와 같은 메타데이터용 연결 · 캐시를 쓴다 | read |
 | `db_query` | 조회 SQL 실행 — 입력은 `sql`(글) 또는 `file`(SQL 파일 경로) 중 하나. **읽기 전용 트랜잭션 + 행 제한**. 조회가 아닌 문장이 하나라도 있으면 거절한다 | read |
 | `db_execute` | 쓰기를 포함한 SQL 실행 — 입력은 `db_query` 와 같다. SQL 위험도 분류(04 F6-9)의 문장과 등급을 보이고 **매번 승인**받는다 | dangerous |
 | `db_kv_scan` | Redis 키를 쪽 단위로 찾는다(패턴 — 키 · 타입 · TTL · 크기) | read |
@@ -92,7 +92,7 @@
 - 프로덕션 태그 연결은 `[mcp.policy] production` 을 따른다 — `block`(기본)이면 조회도 쓰기도 막고, `ask` 면 **사람이 연** 프로덕션 연결에 한해 조회까지 매번 승인받는다. 연 적 없는 프로덕션 연결은 승인으로도 열리지 않는다. `ask` 는 사람의 설정에서만 켠다 — 커밋되는 공유 설정의 `[mcp.policy]` 는 읽지 않는다(「권한 모델」)
 - **표지는 조여지기만 하고 대상에만 묶인다**(16-m5-plan 결정 M5-D37): Host 가 그 프로젝트의 연결 설정을 읽을 때마다(목록 · 열기 · 툴 호출 — 어느 워크트리의 것이든) 그 연결의 프로덕션 · read-only 표지를 푼 대상에 묶어 기억에 더한다 — 연결 id 와 무관하고 사람이 그 연결을 열었는지와도 무관하다(「사람이 연 연결」 은 그대로 연결 id 와 대상 둘에 묶인다). 에이전트의 DB 툴 호출 때는 그 프로젝트 메인 체크아웃의 연결 설정도 함께 읽어 더한다. 에이전트에게 적용하는 표지는 이번 앱 실행 중 그 대상에서 본 것 가운데 가장 엄한 것이다. 설정에서 `production` 이나 `read_only` 를 지워도, 자기 워크트리에서 표지 있는 연결을 지우고 표지 없는 새 연결 설정(다른 id)으로 같은 대상을 가리켜도, 메인 체크아웃의 설정이 그 대상을 프로덕션이라고 적고 있으면 에이전트에게는 프로덕션이다 — 조회 길과 「이 연결 열기」 승인 길 둘 다, 사람이 그 연결을 연 적이 없어도. 비밀과 확인이 대상에 묶이는 것과 같다(같은 대상은 같은 데이터다). 표지를 더하는 쪽은 곧바로 따른다. 그 프로젝트의 어느 연결 설정도 표지를 단 적 없는 대상은 기억한 표지가 없어 지금 설정의 표지를 따른다(같은 서버의 다른 DB 이름 · 다른 사용자는 다른 대상이다) — 「이 연결 열기」 승인 다이얼로그가 대상(호스트 · DB)을 보인다는 것이 그 자리의 방어다
 - 미신뢰 프로젝트 · read-only 연결 · 비밀과 확인의 규칙은 창과 같다(04 F6-9). 비밀이나 확인이 필요하면 툴 오류로 끝난다 — 에이전트는 답할 수 없다
-- 아직 없다(16-m5-plan M5-06 · M5-17 · M5-18) — 지금 DB RPC 는 그 프로젝트 창의 연결만 받는다
+- **지금 구현**(16-m5-plan M5-06): 툴 메서드는 `agent_grant` 를 지난 뒤 `pw_db::gate::db_grant_for_agent` 를 지난다 — 신뢰 게이트 → 연결 설정 읽기(메인 체크아웃과 그 워크트리 — 둘 다 표지를 기억에 더한다) → 프로덕션 표지 → 「사람이 연 연결」. 거절은 `PERMISSION_DENIED` 이고 `data.reason` 이 `untrusted` · `productionBlocked` · `notOpenedByUser` 다(결과 표지 `denied` — 「툴 레지스트리」, CLI 종료 3). 「사람이 연 연결」 은 그 프로젝트 창의 증거로 저장한 연결을 드라이버까지 연 (프로젝트, 연결 id, 푼 대상)이다 — 세션 · 탐색기 · 쪽 읽기 · 연결 테스트가 모두 그 자리를 지나고, 저장 전 초안의 테스트는 세지 않는다. 메모리에만 있다. 「푼 대상」 의 호스트는 소문자로 맞추고 포트는 적지 않았으면 드라이버 기본이며, SQLite 면 파일의 실제 경로다(워크트리마다 상대 경로가 다른 파일이다). TLS 설정은 대상에 넣지 않는다 — `sslmode` 만 바꿔 표지를 비껴가지 못하게. 표지의 기억은 대상만 열쇠다(프로젝트를 가리지 않는다). 받은 증거는 그 연결 id · 워크트리 · 대상에 묶여, 연결을 여는 자리(드라이버 연결 직전 · 스키마 캐시 앞)가 그때 다시 읽은 설정의 대상이 다르면 열지 않고 `notOpenedByUser` 로 거절한다. 툴이 연 메타데이터용 연결은 쉬는 시간(`pw_db::schema::IDLE_CLOSE`)으로만 닫힌다 — 세션이 닫혀도 둔다. 지금 연결을 여는 툴은 `db_schema` 하나다. 「이 연결 열기」 승인(M5-17)과 `production = "ask"`(M5-18)는 아직 없다 — 연 적 없는 연결 · 프로덕션 연결은 거절만 한다
 
 **`db_query` · `db_execute` 의 `file`**(04 F6-14, 06-roadmap.md 결정 D55) — 한 번 돌리고 결과를 행으로 받는 길이다. 되풀이하는 스크립트는 「실행 구성」 표의 `sql` 종류로 저장한다.
 
@@ -181,11 +181,15 @@
   | `headless_write` | `denied` | 헤드리스에서 `write` 이상을 불렀다(승인 경로가 없다) | 헤드리스 세션의 `write` 이상 |
   | `cancelled` | `error` | 호출이 취소됐다(취소 알림 · 세션 끊김 · Host 가 그 RPC 를 거둠) | 「호출 취소」 |
   | `too_large` | `error` | 응답이 한 건 상한(256 KiB)을 넘었다 — 범위를 좁혀 다시 부른다 | 「응답 크기」 |
+  | `permission_denied` | `denied` | 툴의 Host RPC 가 `PERMISSION_DENIED` 로 답했고 그 `data.reason` 이 아래 코드가 아니다(없음 포함) | 툴의 관문 |
+  | `not_opened_by_user` | `denied` | 사람이 이번 앱 실행에서 Pitwall 의 DB 탐색기로 그 연결(같은 대상)을 연 적이 없다(`data.reason = "notOpenedByUser"`) | DB 툴의 관문(16-m5-plan M5-06 — 「DB」 의 「에이전트의 DB 연결」) |
+  | `untrusted` | `denied` | 프로젝트를 신뢰하지 않았다(`data.reason = "untrusted"`) | DB 툴의 관문 |
+  | `production_blocked` | `denied` | 프로덕션 표지가 있는 DB 대상이다(`data.reason = "productionBlocked"`) | DB 툴의 관문 |
 
-  까닭이 없는 `error` 는 툴(Host RPC)이 실패한 것이다
+  **툴의 Host RPC 가 `PERMISSION_DENIED` 로 답하면 결과는 `denied` 다**(메인 판정 — 16-m5-plan M5-06): 까닭은 `data.reason`(camelCase)을 위 표의 코드로 옮긴 것이고(대응은 `pw_mcp::marker::Reason::of_permission_denied` 한 곳), 모르거나 없으면 `permission_denied` 다. 거절 까닭을 더하는 행은 `Reason` 과 그 대응에 한 줄씩 더하고 이 표에 한 줄을 더한다. `PERMISSION_DENIED` 가 아닌 오류(비밀 · 확인이 필요하다는 DB 의 3101 · 3102 등)는 `error` 다. 까닭이 없는 `error` 는 툴(Host RPC)이 실패한 것이다
 - **응답 크기**: 툴 응답 한 건은 직렬화한 결과 JSON 256 KiB 까지(`pw_mcp::server::MAX_RESPONSE_BYTES`), 목록 툴의 `limit` 기본은 100(`DEFAULT_LIST_LIMIT` — `git_log` · `symbol_search` 50, `git_status` 200. 16-m5-plan 결정 M5-D34, 수는 출발값). 툴 메서드는 넘지 않게 자르고(`truncated` 와 다음 `cursor`), 그래도 넘은 응답은 세션이 결과 대신 「범위를 좁혀라」 오류(까닭 `too_large`)로 바꾼다. 재는 것은 Host RPC 의 결과 값이다 — object 결과는 `structuredContent` 와 `content` 의 텍스트로 두 번 실려 나가므로 클라이언트가 받는 글은 그 두 배를 넘을 수 있다. 감사 행은 결과 `error` 이고 크기 열에 넘은 크기를 남긴다
 - **프로젝트 지정**: 입력에 `projectId` 가 있으면 프로젝트 툴이다. 세션에 프로젝트가 있으면(`--project` · cwd) `projectId` 를 필수에서 빼고 빠지면 서버가 채운다. 입력에 `worktree` 가 있고 비었으면(없음 · `null` · 빈 글자열) 세션의 활성 워크트리 꼭대기(`project.resolve` 의 `worktree.top`)로 채운다(세션을 연 경로가 미등록 워크트리 안일 때 — Orca 워크트리 안의 에이전트가 메인 체크아웃이 아니라 자기 워크트리를 본다). 준 값은 덮지 않고, 호출이 세션 프로젝트가 아닌 `projectId` 를 겨누면 채우지 않는다 — 세션의 워크트리는 세션 프로젝트의 것이다
-- **지금 툴**: `project_list`(← `project.list`), `project_info`(← `project.info`: 프로젝트 · 루트 폴더 유무 · 빌드 파일 · 빌드 파일에서 짐작한 언어 · 설정 폴더와 그 안의 설정 파일 id. 설정 내용은 읽지 않는다 — 읽으면 구버전 파일의 마이그레이션이 따라와 조회 툴이 저장소를 고친다), `git_status` · `git_log` · `git_diff` · `git_blame` · `git_branch_list`(← `git.tool.*` 툴 메서드, 앱 Host 만 — 「Git」 절)
+- **지금 툴**: `project_list`(← `project.list`), `project_info`(← `project.info`: 프로젝트 · 루트 폴더 유무 · 빌드 파일 · 빌드 파일에서 짐작한 언어 · 설정 폴더와 그 안의 설정 파일 id. 설정 내용은 읽지 않는다 — 읽으면 구버전 파일의 마이그레이션이 따라와 조회 툴이 저장소를 고친다), `git_status` · `git_log` · `git_diff` · `git_blame` · `git_branch_list`(← `git.tool.*` 툴 메서드, 앱 Host 만 — 「Git」 절), `db_connection_list`(← 툴 메서드 `db.tool.connectionList`) · `db_schema`(← 툴 메서드 `db.tool.schema` — 둘 다 앱 Host 만, 「DB」)
 - MCP 메시지(툴 설명 · 오류)는 번역하지 않는다
 
 ## 3. 권한 모델
