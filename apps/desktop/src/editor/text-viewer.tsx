@@ -35,6 +35,7 @@ import { FindBar, findPanel } from "./find-bar";
 import { useDocLanguage } from "./language";
 import type { LiveText } from "./live-text";
 import type { ViewerProps } from "./viewers";
+import { setTooltipsShown } from "./tooltip-layer";
 
 /**
  * 이 탭이 언어 서버에 연 문서(M4-07). 탭이 보이는 동안 잡고(같은 파일의 다른 탭과 세션 하나를 함께 쓴다) 사라지면 놓는다. 파일 탭의
@@ -152,6 +153,9 @@ export function TextViewer({ panel, params, doc }: ViewerProps) {
     if (!diskRead) setComparing(false);
   }, [diskRead]);
   const compare = comparing && live && diskRead?.content.kind === "text" ? diskRead : undefined;
+  // 비교하는 동안 뷰는 가려진다 — 그 툴팁도 숨긴다(툴팁 층, tooltip-layer.ts).
+  const comparingRef = useRef(false);
+  comparingRef.current = compare !== undefined;
   // 고칠 수 없는 까닭(결정 M1-D9 · M1-D12). UTF-8 이 아닌 텍스트는 Host 가 짐작한 인코딩으로 푼 것이다.
   const encoding = text?.judgment.binary === false ? text.judgment.encoding : null;
   const readOnlyNotice = text?.judgment.lossy
@@ -194,7 +198,10 @@ export function TextViewer({ panel, params, doc }: ViewerProps) {
       if (panel.isVisible && view.dom.isConnected) scroll = view.scrollSnapshot();
     };
     view.scrollDOM.addEventListener("scroll", remember);
+    // 툴팁은 툴팁 층에 있어 숨은 탭과 함께 떨어지지 않는다 — 탭이 숨으면 함께 숨긴다(tooltip-layer.ts).
+    setTooltipsShown(view, panel.isVisible && !comparingRef.current);
     const shown = panel.onDidVisibilityChange(({ isVisible }) => {
+      setTooltipsShown(view, isVisible && !comparingRef.current);
       if (isVisible && scroll) view.dispatch({ effects: scroll });
     });
     return () => {
@@ -206,6 +213,11 @@ export function TextViewer({ panel, params, doc }: ViewerProps) {
       view.destroy();
     };
   }, [workspace, panel, path, live]);
+
+  useEffect(() => {
+    const view = current.current?.view;
+    if (view) setTooltipsShown(view, panel.isVisible && compare === undefined);
+  }, [compare, panel]);
 
   // 같은 뷰를 새 context 로 다시 구성한다. 뷰를 방금 만든 렌더면 이미 그 context 라 할 것이 없다.
   useEffect(() => {

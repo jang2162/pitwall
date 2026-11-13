@@ -102,7 +102,7 @@ export function useTabSwitcher(workspace: EditorWorkspace): {
 
   const api = workspace.api();
   const element = state ? (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]">
+    <div className="fixed inset-0 z-[2100] flex items-start justify-center pt-[15vh]">
       <div
         role="listbox"
         aria-label={T.switcher}

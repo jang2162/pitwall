@@ -32,6 +32,7 @@ import {
   REVEAL_ACTION,
 } from "./gutter-host";
 import type { BlameState, LineBlame } from "./gutter-model";
+import { OVERLAY_Z } from "../../editor/tooltip-layer";
 
 /** 주석 칸 · 인라인 blame 이 읽는 것. 편집 문서는 `GutterDoc`, 리비전 문서는 `RevisionBlame` 이다. */
 export interface BlameProvider {
@@ -287,6 +288,8 @@ function openMenu(view: EditorView, event: MouseEvent, blame: LineBlame | undefi
   menu.className = "pw-blame-menu";
   menu.setAttribute("role", "menu");
   menu.style.position = "fixed";
+  // 에디터 툴팁 층(editor/tooltip-layer.ts) 위에.
+  menu.style.zIndex = String(OVERLAY_Z);
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
   const done = () => {

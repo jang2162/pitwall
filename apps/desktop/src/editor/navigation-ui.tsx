@@ -142,7 +142,7 @@ function RecentLocations({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
+      className="fixed inset-0 z-[2100] flex items-start justify-center pt-[15vh]"
       onPointerDown={(e) => {
         if (e.target === e.currentTarget) onClose(true);
       }}

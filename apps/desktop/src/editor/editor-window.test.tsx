@@ -3,7 +3,8 @@
 // 커서 자리가 되고, 같은 파일은 그 탭을 다시 쓰고, ⌘⌥E 가 활성 탭의 파일 · 줄 · 열을 openWith.run 에 넘기고, ⌘\ 로 나눈 두 그룹이
 // 스크롤을 따로 갖고, 탭 단축키(⌘W · ⌘⌥W · ⌃Tab)가 돈다. 편집 · 저장 · 외부 변경(M1-13 완료 기준 ①~⑤)도 여기서 본다.
 
-import { EditorView } from "@codemirror/view";
+import { StateEffect } from "@codemirror/state";
+import { EditorView, showTooltip, type Tooltip } from "@codemirror/view";
 import type {
   ConfigView,
   FsRead,
@@ -37,6 +38,7 @@ import { act, endTest, it } from "../test-support/ended-test";
 import { type DbDocumentSpec, dbDocumentKey } from "../db/documents/spec";
 import { EDITOR_PANEL, openTab, tabParams } from "./editor-tabs";
 import { cursorOf } from "./editor-workspace";
+import { tooltipHostOf } from "./tooltip-layer";
 import { editorContext } from "./extensions";
 
 declare global {
@@ -542,6 +544,33 @@ it("splits the active tab to the right, and the two views of one file scroll on 
   a!.dispatch({ selection: { anchor: a!.state.doc.line(200).from } });
   expect(b!.scrollDOM.scrollTop).toBe(0);
   expect(cursorOf(b!).line).toBe(1);
+});
+
+it("hides an editor's tooltips while another tab covers it and shows them again when it comes back", async () => {
+  // 툴팁은 툴팁 층에 있어(tooltip-layer.ts) dockview 가 숨은 탭의 DOM 을 떼어 내도 함께 떨어지지 않는다.
+  await mount();
+  await openRequest(LIB, 1, 1);
+  const lib = views()[0]!;
+  const tip: Tooltip = {
+    pos: 0,
+    create: () => {
+      const dom = document.createElement("div");
+      dom.className = "pw-test-tip";
+      return { dom };
+    },
+  };
+  await act(async () =>
+    lib.dispatch({ effects: StateEffect.appendConfig.of(showTooltip.of(tip)) }),
+  );
+  const host = () => tooltipHostOf(lib)!;
+  expect(host().querySelector(".pw-test-tip")).not.toBeNull();
+  expect(host().hidden).toBe(false);
+  await openRequest(MAIN, 1, 1);
+  expect(activeTabTitle()).toBe("main.rs");
+  expect(host().hidden).toBe(true);
+  await openRequest(LIB, 1, 1);
+  expect(activeTabTitle()).toBe("lib.rs");
+  expect(host().hidden).toBe(false);
 });
 
 it("closes the active tab on ⌘W, the other unpinned tabs on ⌘⌥W, and shows the empty area at the end", async () => {

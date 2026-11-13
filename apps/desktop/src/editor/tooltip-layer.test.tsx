@@ -16,6 +16,8 @@ import type { EditorWorkspace } from "./editor-workspace";
 import {
   editorOfElement,
   editorTooltips,
+  OVERLAY_Z,
+  setTooltipsShown,
   TOOLTIP_HOST_CLASS,
   TOOLTIP_LAYER_ID,
   TOOLTIP_LAYER_Z,
@@ -63,7 +65,17 @@ function mountEditor(tips = new Compartment()) {
   return { view, root, tips };
 }
 
-it("draws editor tooltips in a layer right after the app root, under the z-50 in-window modals", () => {
+/** styles.css 의 툴팁 층 규칙만 문서에 넣는다(나머지는 Tailwind 가 처리하는 글이라 happy-dom 에 넣지 않는다). */
+function layerRules() {
+  const rules = source("../styles.css").match(/#pw-editor-tooltips[^{]*\{[^}]*\}/g) ?? [];
+  expect(rules.length).toBeGreaterThanOrEqual(2);
+  const style = document.createElement("style");
+  style.textContent = rules.join("\n");
+  document.head.append(style);
+  return () => style.remove();
+}
+
+it("draws editor tooltips in a layer right after the app root, over floating groups and under the window overlays", () => {
   const { view, root } = mountEditor();
   const layer = document.getElementById(TOOLTIP_LAYER_ID)!;
   expect(root.nextElementSibling).toBe(layer);
@@ -71,22 +83,34 @@ it("draws editor tooltips in a layer right after the app root, under the z-50 in
   expect(view.dom.contains(tip)).toBe(false);
   expect(layer.contains(tip)).toBe(true);
   expect(tooltipHostOf(view)!.contains(tip)).toBe(true);
-  // 패널 안 겹침(z-10 · z-20) 위, 창 안 모달(탭 전환기 · 탐색 팝업 z-50) 아래.
   expect(Number(layer.style.zIndex)).toBe(TOOLTIP_LAYER_Z);
-  expect(TOOLTIP_LAYER_Z).toBeGreaterThan(20);
-  expect(TOOLTIP_LAYER_Z).toBeLessThan(50);
+  // dockview 의 플로팅 그룹은 `999 + 2i`(dockview-core 8.5.1) — 그룹 백 개까지 그 위.
+  expect(TOOLTIP_LAYER_Z).toBeGreaterThan(999 + 2 * 100);
+  // 창 안 모달(탭 전환기 · 탐색 팝업)과 blame 메뉴는 층 위.
+  expect(OVERLAY_Z).toBeGreaterThan(TOOLTIP_LAYER_Z);
   for (const modal of ["./tab-switcher.tsx", "./navigation-ui.tsx"])
-    expect(source(modal)).toMatch(/fixed inset-0 z-50/);
+    expect(source(modal)).toContain(`fixed inset-0 z-[${OVERLAY_Z}]`);
+  expect(source("../git/gutter/blame-extension.ts")).toMatch(
+    /menu\.style\.zIndex = String\(OVERLAY_Z\)/,
+  );
   view.destroy();
 });
 
+it("lets the tooltip text be selected under the body's user-select: none", () => {
+  const drop = layerRules();
+  document.body.style.userSelect = "none";
+  const { view } = mountEditor();
+  const layer = document.getElementById(TOOLTIP_LAYER_ID)!;
+  expect(getComputedStyle(layer).userSelect).toBe("text");
+  view.destroy();
+  drop();
+});
+
 it("hides the layer while a modal Radix dialog marks the rest aria-hidden, and shows it again after", async () => {
+  const drop = layerRules();
   const { view, root } = mountEditor();
   const layer = document.getElementById(TOOLTIP_LAYER_ID)!;
-  // Radix 의 포털은 z-index 없이 body 끝에 붙는다 — 층(z 40)이 그 위로 오지 않게 숨기는 규칙.
-  expect(source("../styles.css")).toMatch(
-    /#pw-editor-tooltips\[aria-hidden="true"\]\s*\{\s*display: none;/,
-  );
+  expect(getComputedStyle(layer).display).not.toBe("none");
   const host = document.createElement("div");
   root.append(host);
   const app = createRoot(host);
@@ -105,9 +129,23 @@ it("hides the layer while a modal Radix dialog marks the rest aria-hidden, and s
     );
   await render(true);
   expect(layer.getAttribute("aria-hidden")).toBe("true");
+  expect(getComputedStyle(layer).display).toBe("none");
   await render(false);
   expect(layer.getAttribute("aria-hidden")).toBeNull();
+  expect(getComputedStyle(layer).display).not.toBe("none");
   await act(async () => app.unmount());
+  view.destroy();
+  drop();
+});
+
+it("hides an editor's tooltips while the editor is hidden, also across a reconfiguration", () => {
+  const { view, tips } = mountEditor();
+  setTooltipsShown(view, false);
+  expect(tooltipHostOf(view)!.hidden).toBe(true);
+  view.dispatch({ effects: tips.reconfigure(editorTooltips()) });
+  expect(tooltipHostOf(view)!.hidden).toBe(true);
+  setTooltipsShown(view, true);
+  expect(tooltipHostOf(view)!.hidden).toBe(false);
   view.destroy();
 });
 
