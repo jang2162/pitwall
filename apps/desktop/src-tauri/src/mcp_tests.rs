@@ -7,8 +7,10 @@
 //! - [`ToolHost`] 로 앱과 같은 Host 에 진짜 MCP 세션을 열고 `tools/list` · `tools/call` 로 이름 · 그룹 · 등급 · 스키마 · 감사 행을 본다.
 //!   도우미는 세션을 여는 공개 길(`pw_mcp::serve` · `mcp::services`)만 쓴다 — 세션의 안쪽 꼴(연결 범위 · 호출 길)에 기대지 않는다.
 //!
-//! 보지 못하는 것: 앱 전용 툴이 하나도 없는 동안(`APP_TOOLS == HEADLESS_TOOLS`)은 헤드리스 목록 단언이 `mcp::services` 의
-//! `routed_by` 를 구분하지 못한다 — 빼도 통과한다. 첫 앱 전용 툴을 더하는 행이 그것을 빼 보고 이 시험이 실패하는지 본다.
+//! 헤드리스 목록 단언은 앱 전용 툴(git — M5-05)이 생긴 뒤로 `mcp::services` 의 `routed_by` 를 가른다 — 빼면 헤드리스 목록에
+//! git 툴이 섞여 [`mcp_tools_are_exactly_these`] 가 실패한다(M5-05 가 빼 보고 확인했다).
+//!
+//! 툴 행의 왕복 시험은 하위 모듈에 둔다(`git` — 이 파일의 병합 충돌을 줄이려고).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,8 +28,18 @@ use tokio_util::sync::CancellationToken;
 
 use crate::mcp;
 
+mod git;
+
 /// 앱 Host 가 내는 툴 전부. 이름순.
-const APP_TOOLS: &[&str] = &["project_info", "project_list"];
+const APP_TOOLS: &[&str] = &[
+    "git_blame",
+    "git_branch_list",
+    "git_diff",
+    "git_log",
+    "git_status",
+    "project_info",
+    "project_list",
+];
 
 /// 헤드리스 Host(앱 없이 뜬 `pitwall mcp` · `pitwall tool`)가 내는 툴 — 코어 툴만(결정 M5-D3). [`APP_TOOLS`] 의 부분집합. 이름순.
 const HEADLESS_TOOLS: &[&str] = &["project_info", "project_list"];
@@ -361,7 +373,18 @@ async fn a_group_turned_off_in_the_app_hides_its_tools() {
     let host = ToolHost::app();
     host.global_settings("[mcp.groups]\nproject = false\n");
     let session = host.session(SessionRequest::default()).await;
-    assert!(session.list().await.is_empty());
+    let listed: Vec<String> = session
+        .list()
+        .await
+        .iter()
+        .map(|t| t.name.to_string())
+        .collect();
+    let others: Vec<&str> = APP_TOOLS
+        .iter()
+        .copied()
+        .filter(|t| host.tool(t).group != "project")
+        .collect();
+    assert_eq!(listed, others, "다른 그룹의 툴만 남는다");
     assert!(session.try_call("project_list", Value::Null).await.is_err());
     let rows = host.audit_rows(1);
     assert_eq!(
