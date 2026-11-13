@@ -31,7 +31,7 @@
 - **이미 있는 소켓**: 붙어 보고 받으면 다른 앱이 쓰는 중이라 열지 않는다. 받지 않으면(앱이 죽고 남은 파일) 지우고 연다. 소켓이 아닌 파일 · 심링크는 지우지 않는다. 앱이 끝날 때 소켓 파일이 남을 수 있는데, 다음 시작이 이 규칙으로 바꾼다
 - **핸드셰이크**: 연결 직후 클라이언트가 JSON 한 줄(`protocol: "pitwall-mcp/1"`, `project`, `cwd`), 서버가 한 줄(`ok`, `error`)로 답한다. 그 뒤는 MCP 바이트다. 프로젝트 해석(`project.resolve`)은 앱이 한다
 - **끊김**: 앱이 도중에 닫히면 프록시는 응답을 기다리던 요청마다 JSON-RPC 오류(`-32001`)를 stdout 에 쓰고 stderr 에 이유를 남긴 뒤 **종료 코드 1** 로 끝난다. 클라이언트가 stdin 을 닫으면 소켓의 쓰기 쪽을 닫아 앱 쪽 세션을 끝내고(남은 응답은 5초까지 옮긴다) 0 으로 끝난다. 앱 쪽 세션이 끝나면 그 세션의 Host 연결 · 설정 감시 · 버스 구독도 걷힌다
-- **호출 취소**: 클라이언트가 호출을 취소하거나 세션이 끊기면 그 호출의 Host RPC 를 취소한다(`request.cancel`). 아직 없다(16-m5-plan M5-03) — 지금은 취소해도 Host 의 RPC 가 끝까지 돈다
+- **호출 취소**: 클라이언트가 호출을 취소하거나 세션이 끊기면 그 호출의 Host RPC 를 취소한다(`request.cancel`). 취소된 호출은 감사 로그에 결과 `error` · 까닭 `cancelled` 로 남는다. 아직 없다(16-m5-plan M5-03) — 지금은 취소해도 Host 의 RPC 가 끝까지 돈다
 - **세션은 프로젝트 설정을 쓰지 않는다**: 노출 판정용으로 세션 프로젝트의 설정을 읽을 때 구버전 파일은 메모리에서만 올린다(`ConfigSource::without_writes`). 커밋된 `.pitwall/project.toml` 에 `schema` 가 써지거나 저장소에 `.backup/` 이 생기지 않는다. 그 설정의 이벤트는 세션 전용 버스로 내 앱의 버스에 같은 프로젝트의 `config.*` 가 한 번 더 나가지 않는다
 - **stdout 에는 MCP 바이트만**: 로그는 `$STATE/logs/mcp.<날짜>.log`, 경고 이상은 stderr 에도 쓴다. `pitwall mcp` 는 확장을 읽지 않는다
 - 사용법 오류는 종료 코드 2
@@ -58,7 +58,7 @@
 | `run_status` | 실행 중 프로세스, 포트, 종료 코드 | read |
 | `run_logs` | 로그 조회 (tail, since, grep 필터) | read |
 
-**`sql` 종류 실행 구성**(04 F7-1, 06-roadmap.md 결정 D55): DB 연결과 SQL 파일 목록을 저장한 구성도 위 툴로 만들고 돌리고 로그를 본다. 프로세스를 띄우지 않고 `db_query` 와 같은 DB 실행 경로를 지난다.
+**`sql` 종류 실행 구성**(04 F7-1, 06-roadmap.md 결정 D55): DB 연결과 SQL 파일 목록을 저장한 구성도 위 툴로 만들고 돌리고 로그를 본다. 프로세스를 띄우지 않고 `db_query` · `db_execute` 와 같은 DB 실행 경로를 지난다.
 
 - **등급은 `exec` 규칙이 아니라 실행하는 그때의 분류가 정한다.** `run_start` 가 부를 때마다 파일들을 읽어 분류하고, 조회만이면 `read`, 그 밖은 `dangerous`(매번 승인 · 프로덕션 기본 차단)다. 「이미 존재하는 구성은 자동」 은 `sql` 종류에 적용하지 않는다 — 구성이 그대로여도 파일 내용은 바뀔 수 있다
 - 연결의 read-only · 프로덕션 태그 · 미신뢰 프로젝트의 연결 금지는 SQL 콘솔과 같이 적용된다
@@ -82,14 +82,15 @@
 | `db_kv_scan` | Redis 키를 쪽 단위로 찾는다(패턴 — 키 · 타입 · TTL · 크기) | read |
 | `db_kv_get` | Redis 값 한 쪽(타입별) | read |
 
-**툴의 등급은 툴 메서드의 선언이다.** UI 가 쓰는 RPC(`db.schema.*` · `db.query.page` · `db.connection.test`)는 연결을 열어 `exec` 로 선언돼 있고 툴이 아니다(「툴 레지스트리」 의 「툴 메서드」). DB 쓰기는 조회와 다른 툴이다 — `db_execute` 만 따로 끄고 켤 수 있다(06-roadmap.md 결정 D60). `db_schema` · `db_query` · `db_execute` 는 SQL 드라이버(PG · MySQL/MariaDB · SQLite)만 받고 Redis 연결이면 `unsupported` 다. Redis 는 조회 둘(`db_kv_scan` · `db_kv_get`)뿐이고 명령 실행 툴은 없다. Redis 툴의 이름은 16-m5-plan M5-19 가 확정한다.
+**툴의 등급은 툴 메서드의 선언이다.** UI 가 쓰는 RPC(`db.schema.*` · `db.query.page` · `db.connection.test`)는 연결을 열어 `exec` 로 선언돼 있고 툴이 아니다(「툴 레지스트리」 의 「툴 메서드」). DB 쓰기는 조회와 다른 툴이다 — `db_execute` 만 따로 끄고 켤 수 있다(06-roadmap.md 결정 D60). `db_schema` · `db_query` · `db_execute` 는 SQL 드라이버(PG · MySQL/MariaDB · SQLite)만 받고 Redis 연결이면 `unsupported` 다. Redis 는 조회 둘(`db_kv_scan` · `db_kv_get`)뿐이고 명령 실행 툴은 없다.
 
 **에이전트의 DB 연결**(06-roadmap.md 결정 D60 — D48 「연결은 사람이 누를 때만」 의 에이전트 쪽):
 
 - 연결을 여는 툴(`db_schema` · `db_query` · `db_execute` · Redis 조회 · `db_connection_test`)은 **사람이 그 프로젝트 창에서 이번 앱 실행 중에 같은 대상으로 연 연결**만 쓴다. 「같은 대상」 은 푼 대상(드라이버 · 호스트 · 포트 · DB · 사용자 · 터널 목적지)이 같다는 뜻이다 — 연결 설정은 워크트리마다 다른 파일에서 읽히므로, 워크트리의 같은 id 가 다른 대상을 가리키면 연 적 없는 연결이다
 - 툴은 사람의 연결을 빌리지 않는다 — 호출마다 자기 연결을 새로 연다(스키마는 메타데이터용 연결). 사람이 DB 탭을 닫은 뒤에도 앱을 끌 때까지 된다
 - 연 적 없는 연결은 `db_schema` · `db_query` · `db_execute` · Redis 조회가 거절한다. **`db_connection_test` 만 「이 연결 열기」 승인을 청한다** — 그 세션 동안 그 연결(같은 대상)에 한하고 `auto_approve` 를 적용하지 않는다. 승인받은 연결은 그 세션의 다른 DB 툴도 쓴다
-- 프로덕션 태그 연결은 `[mcp.policy] production` 을 따른다 — `block`(기본)이면 조회도 쓰기도 막고, `ask` 면 **사람이 연** 프로덕션 연결에 한해 조회까지 매번 승인받는다. 연 적 없는 프로덕션 연결은 승인으로도 열리지 않는다
+- 프로덕션 태그 연결은 `[mcp.policy] production` 을 따른다 — `block`(기본)이면 조회도 쓰기도 막고, `ask` 면 **사람이 연** 프로덕션 연결에 한해 조회까지 매번 승인받는다. 연 적 없는 프로덕션 연결은 승인으로도 열리지 않는다. `ask` 는 사람의 설정에서만 켠다 — 커밋되는 공유 설정의 `[mcp.policy]` 는 읽지 않는다(「권한 모델」)
+- **표지는 조여지기만 한다**(16-m5-plan 결정 M5-D37): 사람이 연결을 열 때의 프로덕션 · read-only 표지를 대상과 함께 기억하고, 에이전트에게 적용하는 표지는 이번 앱 실행 중 그 연결(같은 대상)에서 본 것 가운데 가장 엄한 것이다. 설정에서 `production` 이나 `read_only` 를 지워도 앱을 끌 때까지 에이전트에게는 프로덕션 · read-only 그대로다 — 조회 길과 「이 연결 열기」 승인 길 둘 다. 표지를 더하는 쪽은 곧바로 따른다. 사람이 이번 실행에서 한 번도 열지 않은 연결은 기억한 표지가 없어 지금 설정의 표지를 따른다 — 「이 연결 열기」 승인 다이얼로그가 대상(호스트 · DB)을 보인다는 것이 그 자리의 방어다
 - 미신뢰 프로젝트 · read-only 연결 · 비밀과 확인의 규칙은 창과 같다(04 F6-9). 비밀이나 확인이 필요하면 툴 오류로 끝난다 — 에이전트는 답할 수 없다
 - 아직 없다(16-m5-plan M5-06 · M5-17 · M5-18) — 지금 DB RPC 는 그 프로젝트 창의 연결만 받는다
 
@@ -168,7 +169,7 @@
 | `exec` | 프로세스 실행 | 신뢰된 프로젝트 + 이미 존재하는 구성: 자동 / 방금 생성·수정된 구성: 승인 (`sql` 종류 구성은 이 줄이 아니라 실행 시점의 SQL 분류를 따른다 — 「실행 구성」 표 아래) |
 | `dangerous` | DB 쓰기 쿼리, 프로덕션 태그 연결 접근 | 매번 승인, 프로덕션은 기본 차단 |
 
-- 정책은 전역/프로젝트 설정에서 조정한다. `[mcp.policy]` 의 키는 둘이다 — `approval_timeout_secs`(승인 시한, 기본 300), `production`(프로덕션 태그 연결 — `block` 기본 · `ask`. 「DB」 표 아래 「에이전트의 DB 연결」)
+- 정책은 **사람의 설정(전역 · `.pitwall/*.local.toml` · 개인 전용 `project.toml`)** 에서 조정한다. `[mcp.policy]` 의 키는 둘이다 — `approval_timeout_secs`(승인 시한, 기본 300), `production`(프로덕션 태그 연결 — `block` 기본 · `ask`. 「DB」 표 아래 「에이전트의 DB 연결」). **커밋되는 공유 설정(`.pitwall/project.toml`)의 `[mcp.policy]` 는 읽지 않는다** — 효과가 없고 경고를 남긴다. 저장소를 클론해 연 것만으로 프로덕션 차단이 「매번 승인」 으로 풀리거나, 승인 시한이 줄어 모든 승인이 거절되는 일이 없게 한다. 그래서 `production = "ask"` 는 사람의 설정에서만 켠다(16-m5-plan 결정 M5-D31)
 - **「이 세션 동안 허용」** 은 그 세션 · 그 프로젝트 · 그 툴에 한한다. `open_with_upsert` 에는 없다 — 명령을 정의하는 쓰기라 정의마다 사람이 본다. CLI 호출의 승인에서는 그 자리가 「이 프로젝트 창이 열려 있는 동안 CLI 허용」 이다(「CLI」)
 - **승인은 계획의 해시에 묶는다**: 승인을 청하는 툴 메서드는 실행 전에 계획(등급 · 요약 · 바뀔 것 — 파일 diff 나 SQL 문장들)을 만들고, 승인은 그 해시에 묶인다. 해시는 툴 이름 · 서버가 채운 뒤의 입력 전체 · 툴이 더하는 대상 값(DB 는 연결의 푼 대상 · 방언 · 프로덕션 · read-only 표지, 파일을 고치는 툴은 고치기 전 파일 내용)을 덮는다. 실행 때 계획을 다시 만들어 해시가 다르면 돌리지 않는다. 해시를 싣는 자리는 툴 입력 스키마에 없다 — 에이전트가 승인을 스스로 실을 수 없다
 - **다른 머신을 겨누는 호출**(「체크아웃」 의 `checkout` 입력 — M7): 등급 규칙은 같고 `exec` 의 「신뢰된 프로젝트」 는 대상 머신의 신뢰를 본다. **`auto_approve` 는 다른 머신을 겨누는 호출에 적용하지 않는다.** 그 세션에서 어느 머신을 처음 겨누는 `write` · `exec` 호출은 승인을 묻고, 사람이 「이 세션 동안 이 머신 허용」 을 고르면 그 세션의 그 머신에 한해 다시 묻지 않는다(CLI 호출에서는 「CLI」 의 창 단위 허용과 같은 꼴이다 — 06-roadmap.md 결정 D61). 대상이 미신뢰 체크아웃이면 세션 허용과 상관없이 매번 묻는다. `dangerous` 는 매번이다
@@ -196,7 +197,7 @@ JetBrains IDE 내장 MCP 서버의 "Exposed Tools" 방식을 따른다. 권한 �
 | 단위 | 툴 단위 on/off (꺼진 툴은 `tools/list`에 나오지 않음 → 에이전트 컨텍스트 토큰도 절약) |
 | 그룹 | 모듈 그룹(project / run / debug / db / git / code / open_with / 확장별) 일괄 on/off — `[mcp.groups]`(그룹 이름 = 켬 · 끔). 그룹은 툴의 선언이 싣는다(「툴 레지스트리」) |
 | 프리셋 | `read-only`(조회 툴만) · `standard`(기본: 조회 + 설정) · `full`(실행 · DB 쓰기 포함) |
-| 범위 | 전역 기본값 → 프로젝트별 덮어쓰기 (`.pitwall/project.toml` 또는 `.local.toml`, 개인 전용 프로젝트는 `$CONFIG/projects/<slug>/project.toml`). **커밋되는 공유 설정(`.pitwall/project.toml`)은 노출을 좁히기만 한다** — 프리셋을 넓히거나 꺼진 툴을 켜는 것은 전역 · `.pitwall/*.local.toml` · 개인 전용 설정만 한다. 저장소를 클론한 것만으로 에이전트에게 열리는 툴이 늘지 않게 한다. `auto_approve` 와 그룹 키도 같다 — 공유 설정은 자동 승인을 더하거나 그룹을 켜지 못한다 |
+| 범위 | 전역 기본값 → 프로젝트별 덮어쓰기 (`.pitwall/project.toml` 또는 `.local.toml`, 개인 전용 프로젝트는 `$CONFIG/projects/<slug>/project.toml`). **커밋되는 공유 설정(`.pitwall/project.toml`)은 노출을 좁히기만 한다** — 프리셋을 넓히거나 꺼진 툴을 켜는 것은 전역 · `.pitwall/*.local.toml` · 개인 전용 설정만 한다. 저장소를 클론한 것만으로 에이전트에게 열리는 툴이 늘지 않게 한다. `auto_approve` 와 그룹 키도 같다 — 공유 설정은 자동 승인을 더하거나 그룹을 켜지 못한다. `[mcp.policy]` 는 공유 설정에서 아예 읽지 않는다(「권한 모델」) |
 | 자동 승인 | 등급별 "확인 없이 실행" 토글 (JetBrains의 brave mode에 해당). `dangerous` 등급은 자동 승인 불가. `open_with_upsert` 와 「이 연결 열기」 승인(「DB」)에도 적용하지 않는다 |
 | 변경 반영 | 설정 변경 시 MCP `notifications/tools/list_changed` 전송 → 연결된 에이전트가 즉시 갱신 |
 | 확장 툴 | 확장이 추가한 툴은 **기본 꺼짐**, 사용자가 켜야 노출 |
@@ -214,7 +215,7 @@ JetBrains IDE 내장 MCP 서버의 "Exposed Tools" 방식을 따른다. 권한 �
 - `auto_approve` · 확장 툴 기본 꺼짐 · 설정 > MCP 화면은 아직 없다
 
 ```toml
-# ~/.config/pitwall/settings.toml (전역) — 프로젝트에서 같은 키로 덮어쓰기
+# ~/.config/pitwall/settings.toml (전역) — 프로젝트에서 같은 키로 덮어쓰기 ([mcp.policy] 는 아래 주석)
 [mcp]
 preset = "standard"
 auto_approve = ["read", "write"]      # "exec" 추가 가능, "dangerous"는 불가
@@ -227,6 +228,8 @@ run_start = false                      # 개별 툴 끄기
 [mcp.groups]
 db = false                             # 그룹 끄기 (project / run / debug / db / git / code / open_with)
 
+# [mcp.policy] 는 전역 · .pitwall/*.local.toml · 개인 전용 project.toml 에서만 읽는다
+# (커밋되는 .pitwall/project.toml 의 [mcp.policy] 는 효과가 없고 경고를 남긴다)
 [mcp.policy]
 approval_timeout_secs = 300            # 승인 시한
 production = "block"                   # "ask" 면 사람이 연 프로덕션 연결을 매번 승인으로
