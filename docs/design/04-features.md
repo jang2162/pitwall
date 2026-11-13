@@ -45,6 +45,7 @@ pitwall <path>[:line[:col]]
 **명령줄 규칙** (구현: `apps/desktop/src-tauri/src/cli.rs` · `detach.rs` · `launch.rs` · `shell_command.rs`)
 - `pitwall [<path>[:line[:col]]]...`. 상대 경로는 **실행한 프로세스의 cwd** 로 절대화한다(두 번째 실행이면 그 cwd 가 기존 앱에 함께 간다). 경로가 없으면 웰컴 창을 열거나 앞으로 가져온다. `-` 로 시작하는 인자는 무시한다(macOS 의 `-psn_…` 등) — 그런 이름의 파일은 `--` 뒤에 둔다
 - 첫 인자 `mcp` 는 언제나 서브커맨드다(F10-1). 앱을 띄우지 않고 단일 인스턴스로 전달하지도 않으며 stdout 에 아무것도 쓰지 않는다. 이름이 `mcp` 인 폴더는 `pitwall ./mcp`
+- 첫 인자 `tool` 도 언제나 서브커맨드다(F10-7 — MCP 툴을 명령줄에서 부른다, 05-mcp.md 「CLI (`pitwall tool`)」 절). 앱을 띄우지 않고 단일 인스턴스로 전달하지도 않으며 stdout 에는 결과만 쓴다. 이름이 `tool` 인 폴더는 `pitwall ./tool`
 - `:숫자` 가 경로 이름에 실제로 들어 있을 수 있다(`foo:12` 라는 파일). 가르는 법은 셋(통째로 · 끝 `:줄` · 끝 `:줄:열`)이고 **덜 가른 것부터 보아 디스크에 있는 첫 해석**을 고른다. 어느 것도 없으면 가장 많이 가른 것. 줄 · 열은 1 이상이고 `:0` 은 이름의 일부다
 - 찾은 프로젝트가 있으면 그 프로젝트 창(프로젝트마다 하나, label `project-<id>`)을 열거나 앞으로 가져오고 `markOpened` 를 기록한다. 등록 안 된 워크트리로 왔으면 `ActiveWorktree.top` 을, 파일이면 파일 · 줄 · 열을 넘긴다(창별 보류 큐에 쌓고 `project://open` 으로 알린다. 창은 리스너를 건 뒤 마운트할 때와 알림마다 `take_pending_project_opens` 로 꺼낸다 — 막 만든 창도 요청을 잃지 않고, 새 창의 첫 요청도 같은 큐로 간다). 디렉터리는 파일로 넘기지 않는다(웰컴 창이 `open_project_window` 에 디렉터리를 `file` 로 넘겨도 버린다)
 - 못 찾았는데 그 파일(정규화한 실제 경로)의 단일 파일 창(10-ui S4f, M1-24)이 열려 있으면 그 창을 앞으로 가져오고 줄 · 열을 넘긴다(같은 창별 큐 · `project://open`). 단일 파일 창의 label 은 `file-<번호>`(다시 쓰지 않는다)이고 쿼리는 `?window=file&path=<실제 경로>` 다
@@ -147,6 +148,7 @@ pitwall <path>[:line[:col]]
 | F6-11 | 결과 내보내기 (CSV/JSON/XLSX) | P1 |
 | F6-12 | ER 다이어그램 | P2 |
 | F6-13 | 코드 내 SQL 문자열에서 실행/자동완성 (언어 주입) | P2 |
+| F6-14 | **SQL 파일 실행**: ① 한 번 실행 — MCP · CLI `db_query` 의 `file` 입력(결과는 행 데이터, M5) ② 되풀이 실행 — 실행 구성 `sql` 종류(F7-1, M6). 둘 다 실행하는 그때 파일을 읽어 F6-9 의 분류 · 확인 · read-only 를 지난다 (05-mcp.md 「DB」 · 「실행 구성」 표 아래) | P0 |
 
 ## F7. 실행 환경 & 디버깅
 
@@ -155,11 +157,11 @@ pitwall <path>[:line[:col]]
 
 | ID | 기능 | 우선 |
 |---|---|---|
-| F7-1 | 실행 구성 CRUD (`.pitwall/run/*.toml`) — shell, npm/pnpm 스크립트, gradle/maven 태스크, cargo, go, python, docker-compose, **`mise-task`** | P0 |
+| F7-1 | 실행 구성 CRUD (`.pitwall/run/*.toml`) — shell, npm/pnpm 스크립트, gradle/maven 태스크, cargo, go, python, docker-compose, **`mise-task`**, **`sql`**(DB 연결 + SQL 파일 목록 + 트랜잭션 방식 — 프로세스를 띄우지 않고 DB 실행 경로로 돌며 결과 요약은 실행 콘솔에, F6-14) | P0 |
 | F7-2 | 태스크 자동 감지 (package.json scripts, Makefile, gradle tasks, justfile, compose 서비스, **mise tasks**(`mise tasks ls --json`)) → 원클릭 실행 | P0 |
 | F7-3 | 실행 콘솔: PTY, ANSI 색상, 검색, 파일:라인 링크 클릭 이동, 로그 레벨 하이라이트 | P0 |
 | F7-4 | 프로세스 관리: 동시 실행, 재시작, 중지(트리 kill), 포트 표시 | P0 |
-| F7-5 | 복합 구성 (여러 구성을 순서/병렬 실행, before-launch 태스크) | P1 |
+| F7-5 | 복합 구성 (여러 구성을 순서/병렬 실행, before-launch 태스크 — `sql` 구성도 낄 수 있다: 시드 · 마이그레이션 뒤 서버 실행) | P1 |
 | F7-6 | env / `.env` 파일 / 프로필 지원 | P0 |
 | F7-7 | 디버그 (DAP): launch/attach, 브레이크포인트(조건/로그포인트/hit count), 스텝, 콜스택, 변수/워치, 디버그 콘솔(evaluate) | P0 (범용 DAP + 기본 번들 어댑터는 주력 언어 결정 후 선정) |
 | F7-8 | 예외 브레이크포인트, 핫 리로드/Hot code replace(가능한 어댑터) | P1 |
@@ -288,6 +290,7 @@ Orca는 작업마다 별도 `git worktree` 디렉터리를 만들기 때문에, 
 | F10-4 | 승인 UI + 감사 로그 | P0 |
 | F10-5 | 에이전트 클라이언트 설정 자동 등록 (전역/프로젝트, Claude Code `.mcp.json` 등) | P1 |
 | F10-6 | **툴별 노출 on/off**, 그룹 · 프리셋, 등급별 자동 승인, 프로젝트별 덮어쓰기 (05 §3-1) | P0 |
+| F10-7 | **CLI `pitwall tool`** — MCP 툴 전부를 같은 이름 · 입력 · 노출 · 권한 · 감사 로그로 명령줄에서 호출 (05-mcp.md 「CLI (`pitwall tool`)」 절) | P0 |
 
 ## F11. 공통 UX
 

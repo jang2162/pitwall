@@ -9,7 +9,7 @@
 | [02-tech-stack.md](02-tech-stack.md) | 기술 스택 선정과 근거, 대안 비교 |
 | [03-architecture.md](03-architecture.md) | 프로세스 구조, 모듈 구성, 데이터 저장, 원격 구조 |
 | [04-features.md](04-features.md) | 기능 정의 (기능별 요구사항 · 범위 · 우선순위) |
-| [05-mcp.md](05-mcp.md) | 에이전트용 MCP 서버 설계 (툴 목록, 권한 모델) |
+| [05-mcp.md](05-mcp.md) | 에이전트용 MCP 서버 설계 (툴 목록, 권한 모델, 같은 툴의 CLI) |
 | [06-roadmap.md](06-roadmap.md) | 마일스톤, MVP 범위, 리스크, **결정 기록** |
 | [07-extensibility.md](07-extensibility.md) | 테마 · UI 언어 · 코드 언어 · 플러그인 확장 구조 |
 | [08-remote-mobile.md](08-remote-mobile.md) | Relay 기반 원격 연결 (Zed 방식 설치 · 재연결), 모바일(보류) |
@@ -31,7 +31,7 @@
 - 확장: 선언형 확장(테마 · 언어 · 키맵) + WASM 플러그인, 내장 기능도 확장 API 위에서 구현
 - 원격: 원격 머신에 **Pitwall Relay** 설치 → 직접 연결(LAN · Tailscale), SSH 대체. 중계 서버 없음
 - 모바일: **보류** (MVP · 로드맵 제외)
-- MCP: 툴별 on/off · 프리셋 · 등급별 자동 승인
+- MCP: 툴별 on/off · 프리셋 · 등급별 자동 승인. 같은 툴을 CLI(`pitwall tool`)로도 부른다
 - DB 계층은 DBX(Apache-2.0) 구조 참고 + SQL 위험도 분류 · Redis 명령 분류 코드 차용(고지)
 - MVP: 탐색 · Git · DB(PG/MySQL/SQLite/Redis). 실행 · 디버그는 후순위
 - 라이선스: MIT
