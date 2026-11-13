@@ -20,7 +20,7 @@
 
 use std::path::PathBuf;
 
-use pw_rpc::{JsonValue, Router, RpcError, code, rpc_method};
+use pw_rpc::{ConnectionScope, JsonValue, Router, RpcError, code, rpc_method};
 use serde::{Deserialize, Serialize};
 
 use super::consoles::{ConsoleFile, ConsoleText};
@@ -306,6 +306,20 @@ pub fn rpc_error(e: RegistryError) -> RpcError {
     }
 }
 
+/// 신뢰를 바꾸는 RPC(`project.setTrust` · `project.claimTrustPrompt`)는 MCP 세션(`ConnectionScope::Agent`)을 거절한다 — 「신뢰는
+/// 툴로 바꿀 수 없다」(16-m5-plan.md 결정 M5-D18)를 툴 목록이 아니라 핸들러가 지킨다. 다른 범위는 role 만 본다(웰컴 · 프로젝트 창이
+/// 신뢰를 정한다).
+fn refuse_agent(ctx: &pw_rpc::Ctx, project_id: &str) -> Result<(), RpcError> {
+    match ctx.scope() {
+        ConnectionScope::Agent => Err(RpcError::new(
+            code::PERMISSION_DENIED,
+            "an mcp session cannot change project trust",
+        )
+        .with_data(serde_json::json!({ "reason": "agentSession", "projectId": project_id }))),
+        ConnectionScope::Host | ConnectionScope::Project(_) | ConnectionScope::File(_) => Ok(()),
+    }
+}
+
 /// `project.*` 핸들러를 붙인다. 레지스트리는 디스크를 동기로 읽고 쓰므로 블로킹 스레드에서 돌린다.
 pub fn register(router: &mut Router, registry: &Registry) {
     async fn blocking<T: Send + 'static>(
@@ -368,12 +382,20 @@ pub fn register(router: &mut Router, registry: &Registry) {
         blocking(r.clone(), move |r| r.trust(&params.id))
     });
     let r = registry.clone();
-    router.unary(ProjectSetTrust, move |_ctx, params| {
-        blocking(r.clone(), move |r| r.set_trust(&params.id, params.trusted))
+    router.unary(ProjectSetTrust, move |ctx, params| {
+        let r = r.clone();
+        async move {
+            refuse_agent(&ctx, &params.id)?;
+            blocking(r, move |r| r.set_trust(&params.id, params.trusted)).await
+        }
     });
     let r = registry.clone();
-    router.unary(ProjectClaimTrustPrompt, move |_ctx, params| {
-        blocking(r.clone(), move |r| r.claim_trust_prompt(&params.id))
+    router.unary(ProjectClaimTrustPrompt, move |ctx, params| {
+        let r = r.clone();
+        async move {
+            refuse_agent(&ctx, &params.id)?;
+            blocking(r, move |r| r.claim_trust_prompt(&params.id)).await
+        }
     });
     let r = registry.clone();
     router.unary(ProjectStateGet, move |_ctx, params| {

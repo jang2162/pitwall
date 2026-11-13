@@ -272,6 +272,8 @@ async fn only_the_projects_own_window_hears_and_answers_its_prompts() {
         ),
         ("the welcome or settings window", Caller::new(Role::Owner)),
         ("a file window", Caller::file(Role::Owner, file)),
+        // MCP 세션(결정 M5-D27) — askpass 질문을 듣지도 답하지도 못한다.
+        ("an mcp session", Caller::agent(Role::Owner)),
     ];
     let mut clients = Vec::new();
     for (who, caller) in outsiders {

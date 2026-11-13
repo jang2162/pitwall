@@ -294,6 +294,44 @@ async fn trust_round_trips_and_only_the_owner_changes_it() {
     );
 }
 
+/// MCP 세션(`Caller::agent`, 결정 M5-D27)은 owner 여도 신뢰를 바꾸거나 묻기 차례를 잡지 못한다 — 결정 M5-D18 「신뢰는 툴로 바꿀 수
+/// 없다」 를 핸들러가 지킨다. 읽기(`project.trust`)는 된다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_mcp_session_cannot_change_trust() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = real(tmp.path());
+    let root = base.join("proj");
+    std::fs::create_dir_all(&root).unwrap();
+    let host = LocalHost::with_config("local", AppPaths::under(&base.join("app")));
+    let mut c = Client::connect(&host, Role::Owner).await;
+    let created: Project = c.ok("project.create", json!({"root": root})).await;
+    let id = created.id;
+
+    let mut agent = Client {
+        conn: host.connect(Caller::agent(Role::Owner)).await.unwrap(),
+        next_id: 0,
+    };
+    for (method, params) in [
+        ("project.setTrust", json!({"id": id, "trusted": true})),
+        ("project.claimTrustPrompt", json!({"id": id})),
+    ] {
+        let frame = agent.call(method, params).await;
+        assert_eq!(
+            frame["error"]["code"],
+            json!(code::PERMISSION_DENIED),
+            "{method}: {frame}"
+        );
+        assert_eq!(frame["error"]["data"]["reason"], "agentSession", "{method}");
+    }
+    let trust: ProjectTrust = agent.ok("project.trust", json!({"id": id})).await;
+    assert_eq!(trust.state, TrustState::Unknown, "nothing changed");
+    // 묻기 차례도 잡히지 않았다 — 창이 처음으로 잡는다.
+    assert!(
+        c.ok::<bool>("project.claimTrustPrompt", json!({"id": id}))
+            .await
+    );
+}
+
 /// 레지스트리가 잠겨 메모리로 떴으면 신뢰 쓰기는 「없는 프로젝트」 가 아니라 `STORAGE_UNAVAILABLE` 로 거절된다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn trust_writes_to_a_memory_registry_get_the_storage_code() {
