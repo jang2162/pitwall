@@ -140,7 +140,8 @@ async fn stream(
         .map_err(|e| RpcError::internal(e.to_string()))?
 }
 
-fn page(git: &Git, params: &GitLogPageParams) -> Result<GitLogPage, RpcError> {
+/// `git.logPage`. 블로킹(디스크 IO). 툴 `git_log`(`crate::tools::log`)도 이것을 부른다.
+pub(crate) fn page(git: &Git, params: &GitLogPageParams) -> Result<GitLogPage, RpcError> {
     if !(1..=MAX_PAGE).contains(&params.limit) {
         return Err(RpcError::invalid_params(format!(
             "`limit` must be 1 to {MAX_PAGE}"

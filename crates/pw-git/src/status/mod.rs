@@ -288,6 +288,11 @@ impl Status {
         }
     }
 
+    /// 이 서비스가 쓰는 `Git`.
+    pub fn git(&self) -> &Arc<Git> {
+        &self.git
+    }
+
     /// 두 번째부터는 무시한다.
     pub fn attach(&self, tasks: TaskSpawner) {
         let _ = self.tasks.set(tasks);
@@ -444,8 +449,10 @@ pub(crate) fn display(path: &std::path::Path) -> String {
         .to_string()
 }
 
-/// 핸들러를 붙인다.
+/// 핸들러를 붙인다. git 조회 툴 메서드(`crate::tools`)도 여기서 붙는다 — 툴은 `git.status` 의 서비스와 그것이 쓰는 `Git` 을 함께
+/// 부르므로, 둘을 다 가진 이 자리가 앱의 Host 에 `git.status` 와 함께 툴을 붙인다(헤드리스 Host 는 git 을 붙이지 않는다).
 pub fn register(router: &mut Router, status: Arc<Status>) {
+    crate::tools::register(router, Arc::clone(&status));
     let for_status = Arc::clone(&status);
     router.unary(GitStatusMethod, move |_ctx, params: GitStatusParams| {
         let status = Arc::clone(&for_status);

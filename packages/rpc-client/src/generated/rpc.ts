@@ -516,6 +516,30 @@ export type UnaryMethods = {
 	 */
 	"git.tag.create": { params: GitTagCreateParams; result: GitTagResult };
 	/**
+	 * 파일 한 리비전(없으면 HEAD)의 줄 범위(`startLine` ~ `endLine`, 한 번에 500줄까지)를 마지막으로 바꾼 커밋 · 작성자 · 시각 ·
+	 * 제목. 범위가 파일 밖이거나 그 리비전에 파일이 없으면 invalid params.
+	 */
+	"git.tool.blame": { params: GitBlameToolParams; result: GitBlameToolResult };
+	/**
+	 * 프로젝트 git 저장소의 로컬 · 원격 브랜치(이름 · 해시 · upstream 과 ahead/behind · HEAD 여부). 태그는 `includeTags`.
+	 */
+	"git.tool.branchList": { params: GitBranchListToolParams; result: GitBranchListToolResult };
+	/**
+	 * 두 쪽(커밋 · index · 작업 트리)의 diff. 기본은 바뀐 파일 목록(상태 · 경로 · 더한 · 뺀 줄 수), `detail` 이나 `path` 를
+	 * 주면 hunk 를 unified diff 로 싣는다. 응답 크기 상한에 닿으면 `truncated`. 저장소가 없으면 invalid params.
+	 */
+	"git.tool.diff": { params: GitDiffToolParams; result: GitDiffToolResult };
+	/**
+	 * 커밋 로그의 한 쪽: 커밋마다 해시 · 부모 · 작성자 · 작성 시각 · 제목 · 가리키는 ref(본문은 `detail`). 시작은 `branch`(없으면
+	 * HEAD), 필터는 작성자 · 메시지 · 기간 · 경로. 저장소가 없거나 HEAD 에 아직 커밋이 없으면 빈 쪽이다.
+	 */
+	"git.tool.log": { params: GitLogToolParams; result: GitLogToolResult };
+	/**
+	 * 프로젝트 git 저장소의 작업 트리 상태: 요약(HEAD · upstream 과 ahead/behind · 진행 중 작업 · 스테이징 · 미스테이징 ·
+	 * untracked · 충돌 파일 수)과 바뀐 파일 목록의 한 쪽(경로 · 스테이징한 변경 · 스테이징하지 않은 변경 · 충돌).
+	 */
+	"git.tool.status": { params: GitStatusToolParams; result: GitStatusToolResult };
+	/**
 	 * 경로의 스테이징을 푼다(`git reset`): index 를 HEAD 의 것으로(HEAD 에 없으면 index 에서 뺀다 — 커밋이 없는 저장소도 된다).
 	 * 충돌 중인 경로는 `git.stage` 처럼 거절한다(HEAD 쪽을 담아 충돌을 조용히 풀지 않는다). 이름 바뀜은 옛 경로와 새 경로를 둘
 	 * 다 넘긴다.
@@ -1161,6 +1185,11 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.stash.push": {"name":"git.stash.push","kind":"unary","tier":"write","roles":["owner"],"params":"GitStashPushParams","output":"GitStashPushResult","doc":" stash 를 만든다(`git stash push`) — 메시지 · untracked 포함을 고른다. 작업 트리 전체가 바뀌므로 미저장 문서를 먼저 확인한다.\n","mcp":null,"fileScope":false},
 	"git.status": {"name":"git.status","kind":"unary","tier":"read","roles":["owner"],"params":"GitStatusParams","output":"GitStatus","doc":" 작업 트리 상태(gix): HEAD↔index · index↔작업 트리 · untracked(파일마다) · 충돌 · 스테이징한 이름 바뀜. 경로는 저장소 작업\n 트리 기준(`/`). `paths` 를 주면 그 경로만 다시 본다. 저장소가 없으면 `workTree: null`. 큰 저장소의 전체 status 는 작업으로\n 돌고, 작업을 취소하면 cancelled 오류다.\n","mcp":null,"fileScope":false},
 	"git.tag.create": {"name":"git.tag.create","kind":"unary","tier":"write","roles":["owner"],"params":"GitTagCreateParams","output":"GitTagResult","doc":" 태그를 만든다(`git tag`, 메시지가 있으면 주석 태그).\n","mcp":null,"fileScope":false},
+	"git.tool.blame": {"name":"git.tool.blame","kind":"unary","tier":"read","roles":["owner"],"params":"GitBlameToolParams","output":"GitBlameToolResult","doc":" 파일 한 리비전(없으면 HEAD)의 줄 범위(`startLine` ~ `endLine`, 한 번에 500줄까지)를 마지막으로 바꾼 커밋 · 작성자 · 시각 ·\n 제목. 범위가 파일 밖이거나 그 리비전에 파일이 없으면 invalid params.\n","mcp":{"group":"git","name":"git_blame"},"fileScope":false},
+	"git.tool.branchList": {"name":"git.tool.branchList","kind":"unary","tier":"read","roles":["owner"],"params":"GitBranchListToolParams","output":"GitBranchListToolResult","doc":" 프로젝트 git 저장소의 로컬 · 원격 브랜치(이름 · 해시 · upstream 과 ahead/behind · HEAD 여부). 태그는 `includeTags`.\n","mcp":{"group":"git","name":"git_branch_list"},"fileScope":false},
+	"git.tool.diff": {"name":"git.tool.diff","kind":"unary","tier":"read","roles":["owner"],"params":"GitDiffToolParams","output":"GitDiffToolResult","doc":" 두 쪽(커밋 · index · 작업 트리)의 diff. 기본은 바뀐 파일 목록(상태 · 경로 · 더한 · 뺀 줄 수), `detail` 이나 `path` 를\n 주면 hunk 를 unified diff 로 싣는다. 응답 크기 상한에 닿으면 `truncated`. 저장소가 없으면 invalid params.\n","mcp":{"group":"git","name":"git_diff"},"fileScope":false},
+	"git.tool.log": {"name":"git.tool.log","kind":"unary","tier":"read","roles":["owner"],"params":"GitLogToolParams","output":"GitLogToolResult","doc":" 커밋 로그의 한 쪽: 커밋마다 해시 · 부모 · 작성자 · 작성 시각 · 제목 · 가리키는 ref(본문은 `detail`). 시작은 `branch`(없으면\n HEAD), 필터는 작성자 · 메시지 · 기간 · 경로. 저장소가 없거나 HEAD 에 아직 커밋이 없으면 빈 쪽이다.\n","mcp":{"group":"git","name":"git_log"},"fileScope":false},
+	"git.tool.status": {"name":"git.tool.status","kind":"unary","tier":"read","roles":["owner"],"params":"GitStatusToolParams","output":"GitStatusToolResult","doc":" 프로젝트 git 저장소의 작업 트리 상태: 요약(HEAD · upstream 과 ahead/behind · 진행 중 작업 · 스테이징 · 미스테이징 ·\n untracked · 충돌 파일 수)과 바뀐 파일 목록의 한 쪽(경로 · 스테이징한 변경 · 스테이징하지 않은 변경 · 충돌).\n","mcp":{"group":"git","name":"git_status"},"fileScope":false},
 	"git.unstage": {"name":"git.unstage","kind":"unary","tier":"write","roles":["owner"],"params":"GitPathsParams","output":"GitWorkTree","doc":" 경로의 스테이징을 푼다(`git reset`): index 를 HEAD 의 것으로(HEAD 에 없으면 index 에서 뺀다 — 커밋이 없는 저장소도 된다).\n 충돌 중인 경로는 `git.stage` 처럼 거절한다(HEAD 쪽을 담아 충돌을 조용히 풀지 않는다). 이름 바뀜은 옛 경로와 새 경로를 둘\n 다 넘긴다.\n","mcp":null,"fileScope":false},
 	"git.unstageLines": {"name":"git.unstageLines","kind":"unary","tier":"write","roles":["owner"],"params":"GitLinesParams","output":"GitWorkTree","doc":" 스테이징된 diff(HEAD ↔ index)의 hunk · 줄을 골라 스테이징을 푼다(`git apply --cached -R`). 이름이 바뀐 파일은 `oldPath` 를\n 함께 넘긴다.\n","mcp":null,"fileScope":false},
 	"git.watch": {"name":"git.watch","kind":"stream","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitWatching","doc":" 프로젝트(활성 워크트리)의 저장소를 감시한다. 스트림이 열려 있는 동안 바뀜이 프로젝트 범위 이벤트 `git.statusChanged` ·\n `git.refsChanged` 로 나가고, 닫으면 놓는다. 첫 항목이 오면 그 뒤의 바뀜은 놓치지 않는다. 작업 트리의 바뀜은 같은 창의\n `fs.watch` 가 열려 있어야 온다.\n","mcp":null,"fileScope":false},
@@ -3230,6 +3259,50 @@ export type GitBlameParams = {
 	rev?: string | null,
 };
 
+export type GitBlameToolParams = {
+	projectId: string,
+	/**  볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. */
+	worktree?: string | null,
+	/**  작업 트리 기준 파일 경로(`/` 구분). */
+	path: string,
+	/**  리비전(해시 · 브랜치 · 태그 · `HEAD~1`). 비면 HEAD. 작업 트리의 커밋하지 않은 변경은 blame 하지 않는다. */
+	rev?: string | null,
+	/**  첫 줄(1부터). */
+	startLine: number,
+	/**  끝 줄(포함). `startLine` 부터 500줄까지. */
+	endLine: number,
+};
+
+export type GitBlameToolRange = {
+	startLine: number,
+	/**  끝 줄(포함). */
+	endLine: number,
+	/**  이 줄들을 마지막으로 바꾼 커밋. */
+	commit: string,
+	/**  그 커밋에서의 경로(이름이 바뀌었으면 옛 이름). */
+	sourcePath: string,
+	/**  작성자(mailmap 적용). */
+	authorName: string,
+	authorEmail: string,
+	/**  작성 시각(유닉스 초). */
+	authorTime: number,
+	/**  커밋 제목. */
+	subject: string,
+};
+
+export type GitBlameToolResult = {
+	/**  blame 한 커밋(`rev` 를 푼 해시). */
+	commit: string,
+	/**  그 커밋에서의 파일 줄 수. */
+	lines: number,
+	/**  `git`(`git blame -M` — 파일 안에서 옮긴 줄을 원래 커밋으로 돌린다) 또는 `gix`(옮긴 줄은 옮긴 커밋의 것). */
+	engine: BlameEngine,
+	/**  파일 안에서 옮긴 줄을 원래 커밋으로 돌렸는가. */
+	moves: boolean,
+	/**  묻은 줄 범위를 덮는 범위들(줄 순서, 겹치지 않는다). */
+	ranges: GitBlameToolRange[],
+};
+
 export type GitBlob = {
 	/**  blob 해시. */
 	id: string,
@@ -3310,6 +3383,33 @@ export type GitBranchDeleteResult = {
 	workTree: string,
 	/**  지운 브랜치와 그 이전 해시(`current: null`). */
 	deleted: GitRefMove,
+};
+
+export type GitBranchListToolParams = {
+	projectId: string,
+	/**
+	 *  볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. HEAD 여부가 워크트리마다
+	 *  다르다.
+	 */
+	worktree?: string | null,
+	/**  태그도 싣는다. */
+	includeTags?: boolean,
+};
+
+export type GitBranchListToolResult = {
+	/**  저장소의 작업 트리 꼭대기. `null` 이면 프로젝트에 git 저장소가 없다. */
+	workTree: string | null,
+	head: RepoHead | null,
+	/**  로컬 브랜치(이름 · 해시 · HEAD 여부 · upstream 과 ahead/behind), ref 이름순. */
+	branches: GitBranch[],
+	/**  원격 추적 브랜치, ref 이름순. */
+	remoteBranches: GitRemoteBranch[],
+	/**  `includeTags` 일 때만 있다. */
+	tags: GitTag[] | null,
+	/**  응답 크기 상한에 닿아 뒤쪽(원격 브랜치 · 태그부터)을 싣지 못했다. */
+	truncated: boolean,
+	/**  읽지 못하는 저장소 형식이면 그 까닭(나머지는 빈다). */
+	unsupported: GitUnsupported | null,
 };
 
 export type GitBranchRenameParams = {
@@ -3544,6 +3644,66 @@ export type GitDiffParams = {
 	ignoreWhitespace?: boolean,
 };
 
+export type GitDiffToolFile = {
+	status: FileStatus,
+	/**  새 경로(지워졌으면 옛 경로). */
+	path: string,
+	/**  이름이 바뀌었으면 옛 경로. */
+	oldPath: string | null,
+	/**  더한 줄 · 뺀 줄 수(`git diff --numstat`). */
+	added: number,
+	removed: number,
+	/**  바이너리라 hunk 가 없다. */
+	binary: boolean,
+	/**  파일이 너무 커서 hunk 를 만들지 않았다. */
+	tooLarge: boolean,
+	/**  생성 파일이다(`linguist-generated` 등). */
+	generated: boolean,
+	/**
+	 *  hunk 의 unified diff(`@@ -a,b +c,d @@` 와 ` ` · `+` · `-` 줄). hunk 를 묻지 않았거나 없거나(바이너리 · 너무 큼 · 서브모듈)
+	 *  응답 크기 상한에 닿았으면 `null`.
+	 */
+	patch: string | null,
+	/**  이 파일의 내용을 읽지 못한 까닭. */
+	error: string | null,
+};
+
+export type GitDiffToolParams = {
+	projectId: string,
+	/**  볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. */
+	worktree?: string | null,
+	/**
+	 *  옛 쪽. 짝은 넷이다:
+	 *  - `to` 가 커밋(`{"kind":"commit","rev":"…"}`): `from` 이 없으면 그 커밋의 첫 부모(`git show`), 있으면 그 커밋(두 커밋 비교).
+	 *  - `to` 가 index(`{"kind":"index"}`): `from` 은 커밋, 없으면 HEAD — `git diff --cached`.
+	 *  - `to` 가 작업 트리(`{"kind":"workTree"}`): `from` 은 index(없어도) — `git diff`.
+	 */
+	from?: DiffSide | null,
+	/**  새 쪽. 비면 작업 트리(`git diff` — 스테이징하지 않은 변경). */
+	to?: DiffSide | null,
+	/**  이 경로(작업 트리 기준, `/` 구분, 파일이나 폴더)와 그 아래만 보고 hunk 를 싣는다. */
+	path?: string | null,
+	/**  모든 파일의 hunk 를 싣는다. */
+	detail?: boolean,
+	/**  공백을 모두 무시한다(`git diff -w`). */
+	ignoreWhitespace?: boolean,
+};
+
+export type GitDiffToolResult = {
+	/**  파일 경로의 기준인 작업 트리 꼭대기(절대 경로). */
+	workTree: string,
+	/**  옛 쪽 커밋의 해시. 빈 트리 · index 면 `null`. */
+	oldCommit: string | null,
+	/**  새 쪽 커밋의 해시. index · 작업 트리면 `null`. */
+	newCommit: string | null,
+	/**  바뀐 파일(경로순). */
+	files: GitDiffToolFile[],
+	/**  응답 크기 상한에 닿아 뒤쪽 파일의 `patch`(또는 파일 자체 — `omittedFiles`)를 싣지 못했다. `path` 로 좁혀 다시 부른다. */
+	truncated: boolean,
+	/**  상한에 닿아 목록에서 뺀 파일 수. */
+	omittedFiles: number,
+};
+
 export type GitDiscardLinesParams = {
 	projectId: string,
 	worktree?: string | null,
@@ -3643,6 +3803,24 @@ export type GitLinesParams = {
 	ignoreWhitespace?: boolean,
 };
 
+export type GitLogCommit = {
+	/**  전체 해시. */
+	hash: string,
+	/**  부모 해시(첫 부모가 앞). 머지 커밋이면 둘 이상. */
+	parents: string[],
+	/**  작성자(mailmap 적용). */
+	authorName: string,
+	authorEmail: string,
+	/**  작성 시각(유닉스 초). */
+	authorTime: number,
+	/**  제목(메시지 첫 문단을 한 줄로). */
+	subject: string,
+	/**  이 커밋을 가리키는 브랜치 · 원격 브랜치 · 태그 이름(분리된 HEAD 는 `HEAD`). */
+	refs: string[],
+	/**  본문(제목 다음 문단부터, 없으면 빈 글자). `detail` 일 때만 있다. */
+	body: string | null,
+};
+
 export type GitLogPage = {
 	rows: LogRow[],
 	/**
@@ -3680,6 +3858,40 @@ export type GitLogParams = {
 	refs?: string[] | null,
 	filter?: LogFilter,
 	order?: LogOrder,
+};
+
+export type GitLogToolParams = {
+	projectId: string,
+	/**  볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. */
+	worktree?: string | null,
+	/**  이 브랜치 · ref(`main` · `origin/main` · `v1.0` · `HEAD`)에서 닿는 커밋. 비면 HEAD(`git log` 와 같다). */
+	branch?: string | null,
+	/**  작성자 「이름 <메일>」 에 든 글자(대소문자를 가리지 않는다, 정규식이 아니다). */
+	author?: string | null,
+	/**  메시지(제목 · 본문)의 한 줄에 든 글자(대소문자를 가리지 않는다, 정규식이 아니다). */
+	message?: string | null,
+	/**
+	 *  이 시각 이후 커밋(커미터 시각, git `--since` 와 같은 꼴 — `2026-01-31` · `2026-01-31T09:00:00+09:00` · `2 weeks ago` ·
+	 *  유닉스 초는 `@1700000000`).
+	 */
+	since?: string | null,
+	/**  이 시각 이전 커밋(커미터 시각, `since` 와 같은 꼴). */
+	until?: string | null,
+	/**  이 경로(작업 트리 기준, `/` 구분, 파일이나 폴더) 하나라도 바꾼 커밋만. 글롭은 받지 않는다. */
+	paths?: string[] | null,
+	/**  커밋마다 메시지 본문(제목 다음 문단부터)도 싣는다. */
+	detail?: boolean,
+	/**  앞 쪽의 `nextCursor`. 비면 처음부터. 그 커밋이 로그에서 사라졌으면(force push 등) invalid params — 처음부터 다시 부른다. */
+	cursor?: string | null,
+	/**  한 쪽의 커밋 수, 1 ~ 500(기본 50). */
+	limit?: number | null,
+};
+
+export type GitLogToolResult = {
+	/**  자식이 부모보다 먼저(`git log --topo-order`). */
+	commits: GitLogCommit[],
+	/**  다음 쪽을 부를 `cursor`. 마지막 쪽이면 `null`. */
+	nextCursor: string | null,
 };
 
 export type GitLostChanges = {
@@ -4233,6 +4445,46 @@ export type GitStatusParams = {
 	 *  전체. `/` 로 시작하거나 `..` 이 든 경로는 invalid params.
 	 */
 	paths?: string[] | null,
+};
+
+export type GitStatusSummary = {
+	/**  HEAD 가 있는 브랜치 · 분리된 커밋 · 아직 커밋이 없는 브랜치. */
+	head: RepoHead | null,
+	/**  지금 브랜치의 upstream 과 ahead/behind(그 ref 가 없어졌으면 `track: null`). */
+	upstream: GitUpstream | null,
+	/**  진행 중인 merge · rebase · cherry-pick · revert · bisect · am. */
+	operation: RepoOperation | null,
+	/**  스테이징한 변경이 있는 파일 수. 수는 모두 이 쪽만이 아니라 바뀐 파일 전체(`paths` 를 줬으면 그 안)의 것이다. */
+	staged: number,
+	/**  스테이징하지 않은 변경이 있는 파일 수(untracked 는 빼고). */
+	unstaged: number,
+	untracked: number,
+	/**  충돌 중인 파일 수. 충돌 파일은 다른 수에 세지 않는다. */
+	conflicted: number,
+};
+
+export type GitStatusToolParams = {
+	projectId: string,
+	/**  볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. */
+	worktree?: string | null,
+	/**  이 경로(작업 트리 기준, `/` 구분 — 폴더면 그 아래 전체)만 본다. */
+	paths?: string[] | null,
+	/**  앞 쪽의 `nextCursor`. 비면 첫 파일부터. */
+	cursor?: string | null,
+	/**  한 쪽의 파일 수, 1 ~ 1000(기본 200). */
+	limit?: number | null,
+};
+
+export type GitStatusToolResult = {
+	/**  파일 경로의 기준인 작업 트리 꼭대기(절대 경로). `null` 이면 프로젝트에 git 저장소가 없다. */
+	workTree: string | null,
+	summary: GitStatusSummary,
+	/**  바뀐 파일의 한 쪽(경로순). */
+	files: GitStatusEntry[],
+	/**  다음 쪽을 부를 `cursor`. 마지막 쪽이면 `null`. */
+	nextCursor: string | null,
+	/**  읽지 못하는 저장소 형식이면 그 까닭(나머지는 빈다). */
+	unsupported: GitUnsupported | null,
 };
 
 export type GitTag = {

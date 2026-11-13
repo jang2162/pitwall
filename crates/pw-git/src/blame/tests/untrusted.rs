@@ -16,7 +16,7 @@ use crate::file_history::methods::GitFileHistoryParams;
 use crate::testing::TestRepo;
 
 /// 심은 프로그램과 가짜 git. (표식 폴더, 가짜 git 경로).
-fn plant(r: &TestRepo) -> (std::path::PathBuf, std::path::PathBuf) {
+pub(crate) fn plant(r: &TestRepo) -> (std::path::PathBuf, std::path::PathBuf) {
     let marks = r.base().join("marks");
     let bin = r.base().join("planted");
     std::fs::create_dir_all(&marks).unwrap();
@@ -55,7 +55,7 @@ fn plant(r: &TestRepo) -> (std::path::PathBuf, std::path::PathBuf) {
     (marks, fake)
 }
 
-fn marks(dir: &Path) -> Vec<String> {
+pub(crate) fn marks(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())

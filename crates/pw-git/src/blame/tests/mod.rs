@@ -5,7 +5,7 @@ mod compare;
 mod parse;
 pub(crate) mod rpc;
 #[cfg(unix)]
-mod untrusted;
+pub(crate) mod untrusted;
 
 use std::collections::HashMap;
 use std::path::Path;
