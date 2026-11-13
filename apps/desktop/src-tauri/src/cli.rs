@@ -1,10 +1,14 @@
 //! `pitwall` 명령줄(docs/design/04-features.md F2 · F2-2).
 //!
 //! - `pitwall mcp`: MCP stdio 서버(M0-17). 앱을 띄우지 않고 단일 인스턴스로 전달하지도 않는다.
+//! - `pitwall tool …`: MCP 툴을 명령줄에서 부른다(F10-7, `tool_cli.rs`). 앱을 띄우지 않고 단일 인스턴스로 전달하지도 않으며
+//!   stdout 에는 결과만 쓴다.
 //! - `pitwall [<path>[:line[:col]]]...`: 경로를 연다. 상대 경로는 **명령을 실행한 프로세스의 cwd** 로 절대화한다 —
 //!   두 번째 인스턴스면 그 프로세스의 cwd 가 단일 인스턴스 플러그인을 거쳐 함께 온다.
 //!
-//! 첫 인자가 `mcp` 이면 언제나 서브커맨드다. 이름이 `mcp` 인 폴더는 `pitwall ./mcp` 로 연다.
+//! 첫 인자가 `mcp` · `tool` 이면 언제나 서브커맨드다. 이름이 그런 폴더는 `pitwall ./mcp` · `pitwall ./tool` 로 연다. 둘째
+//! 자리부터의 `mcp` · `tool` 은 경로다. 두 서브커맨드는 `main` 이 이 함수보다 먼저 가른다 — 여기서 고르는 것은 두 번째 실행이
+//! 잘못 앱에 닿았을 때 알아보기 위해서다.
 //! `-` 로 시작하는 인자는 경로가 아니다(macOS 가 붙이는 `-psn_…` 등). 그런 이름의 파일은 `--` 뒤에 둔다.
 
 use std::path::{Path, PathBuf};
@@ -13,6 +17,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Mcp,
+    Tool,
     /// 열 경로들. 비었으면 앱(웰컴 창)만 앞으로 가져온다.
     Open(Vec<OpenTarget>),
 }
@@ -41,8 +46,10 @@ pub fn parse(
     cwd: Option<&Path>,
     exists: impl Fn(&Path) -> bool,
 ) -> (Command, Vec<Skipped>) {
-    if args.first().map(String::as_str) == Some("mcp") {
-        return (Command::Mcp, Vec::new());
+    match args.first().map(String::as_str) {
+        Some("mcp") => return (Command::Mcp, Vec::new()),
+        Some("tool") => return (Command::Tool, Vec::new()),
+        _ => {}
     }
     let mut targets = Vec::new();
     let mut skipped = Vec::new();
@@ -137,7 +144,7 @@ mod tests {
         .0
         {
             Command::Open(targets) => targets,
-            Command::Mcp => panic!("mcp 가 아니다"),
+            other => panic!("경로 열기가 아니다: {other:?}"),
         }
     }
 
@@ -163,6 +170,23 @@ mod tests {
         assert_eq!(
             open(&["/a", "mcp"], "/w", &[]),
             [target("/a", None, None), target("/w/mcp", None, None)]
+        );
+    }
+
+    #[test]
+    fn tool_is_a_subcommand_only_in_first_position() {
+        assert_eq!(parse(&args(&["tool"]), None, |_| false).0, Command::Tool);
+        assert_eq!(
+            parse(&args(&["tool", "project_list", "--x"]), None, |_| false).0,
+            Command::Tool
+        );
+        assert_eq!(
+            open(&["./tool"], "/w", &[]),
+            [target("/w/./tool", None, None)]
+        );
+        assert_eq!(
+            open(&["/a", "tool"], "/w", &[]),
+            [target("/a", None, None), target("/w/tool", None, None)]
         );
     }
 

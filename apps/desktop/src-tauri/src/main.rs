@@ -33,6 +33,7 @@ mod perf;
 #[cfg(feature = "perf-fake-db")]
 mod perf_fake_db;
 mod shell_command;
+mod tool_cli;
 mod trust;
 mod update;
 mod windows;
@@ -348,6 +349,16 @@ fn run_mcp() -> ! {
     std::process::exit(code);
 }
 
+/// `pitwall tool`(tool_cli.rs). `pitwall mcp` 와 같은 길로 세션을 연다 — 같은 단일 인스턴스 키로 앱의 소켓을 찾고, 없으면 이
+/// 프로세스 안의 헤드리스 Host 에 붙는다.
+fn run_tool() -> ! {
+    let args: Vec<_> = std::env::args_os().skip(2).collect();
+    let code = tool_cli::run(&args, |paths| {
+        single_instance_key(&context().config().identifier, paths)
+    });
+    std::process::exit(code);
+}
+
 /// Tauri 문맥. 앱과 `pitwall mcp` 가 같은 identifier 를 읽도록 한 자리에서 만든다(매크로가 자산을 한 번만 넣는다).
 fn context() -> tauri::Context {
     tauri::generate_context!()
@@ -470,6 +481,10 @@ fn main() {
     // 서브커맨드는 무엇보다 먼저 가른다 — 로그 · 확장 · Host 를 만들지 않고, 단일 인스턴스 플러그인에도 닿지 않는다.
     if std::env::args_os().nth(1).is_some_and(|a| a == "mcp") {
         run_mcp();
+    }
+    // `pitwall tool …`: MCP 툴을 명령줄에서 부른다(tool_cli.rs). `mcp` 와 같다 — 앱을 띄우지 않고 단일 인스턴스로 전달하지 않는다.
+    if std::env::args_os().nth(1).is_some_and(|a| a == "tool") {
+        run_tool();
     }
     // `pitwall askpass <질문>`: 앱이 띄운 git 이 부르는 도우미(pw_git::write::askpass). 로그 · 경로 · 앱 무엇도 만들지 않는다.
     if std::env::args_os().nth(1).is_some_and(|a| a == "askpass") {

@@ -231,7 +231,85 @@ fn the_convention_check_catches_half_done_tools() {
     assert_eq!(exempt("no_worktree"), Vec::<String>::new());
 }
 
-/// [`the_convention_check_catches_half_done_tools`] 의 가짜 선언. `rpc_method!` 로 만들면 레지스트리(`pw_rpc::methods`)에 들어가
+/// CLI(`pitwall tool`, `tool_cli.rs`)와 겹치는 곳. 비면 겹치지 않는다.
+///
+/// - 입력의 최상위 필드가 예약 플래그(`tool_cli::RESERVED_FLAGS` — `--project` · `--input` · `--help`)가 된다(16-m5-plan 결정 M5-D12 ⓐ).
+/// - 두 필드가 같은 플래그가 된다(`maxCount` · `max_count` → `--max-count`).
+/// - 툴 이름이 명령 `pitwall tool list` 와 같다.
+fn cli_flag_problems(tool: &pw_mcp::Tool) -> Vec<String> {
+    let mut problems = Vec::new();
+    if tool.name == crate::tool_cli::LIST {
+        problems.push("the tool name is the `pitwall tool list` command".to_owned());
+    }
+    let mut seen = std::collections::BTreeMap::new();
+    for flag in crate::tool_cli::flags(&tool.input_schema_for(false)) {
+        if crate::tool_cli::RESERVED_FLAGS.contains(&flag.name.as_str()) {
+            problems.push(format!(
+                "field `{}` becomes the reserved flag --{}",
+                flag.field, flag.name
+            ));
+        }
+        if let Some(other) = seen.insert(flag.name.clone(), flag.field.clone()) {
+            problems.push(format!(
+                "fields `{other}` and `{}` both become --{}",
+                flag.field, flag.name
+            ));
+        }
+    }
+    problems
+}
+
+#[test]
+fn tool_inputs_leave_the_cli_flags_free() {
+    let host = ToolHost::app();
+    let problems: Vec<(String, Vec<String>)> = host
+        .services
+        .catalog
+        .tools()
+        .iter()
+        .map(|t| (t.name.clone(), cli_flag_problems(t)))
+        .filter(|(_, p)| !p.is_empty())
+        .collect();
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
+/// 예약 플래그 검사 자체를 가짜 툴로 본다 — 지금 실제 툴에는 겹치는 필드가 없다.
+#[test]
+fn the_cli_flag_check_catches_reserved_fields() {
+    let catalog = pw_mcp::Catalog::from_methods(&[
+        pw_rpc::MethodInfo::unary::<fake::Good>(),
+        pw_rpc::MethodInfo::unary::<fake::ProjectField>(),
+        pw_rpc::MethodInfo::unary::<fake::InputField>(),
+        pw_rpc::MethodInfo::unary::<fake::HelpField>(),
+        pw_rpc::MethodInfo::unary::<fake::TwoSpellings>(),
+        pw_rpc::MethodInfo::unary::<fake::List>(),
+    ])
+    .unwrap();
+    let problems = |name: &str| cli_flag_problems(catalog.get(name).unwrap());
+    assert_eq!(problems("good"), Vec::<String>::new());
+    assert_eq!(
+        problems("project_field"),
+        ["field `project` becomes the reserved flag --project"]
+    );
+    assert_eq!(
+        problems("input_field"),
+        ["field `input` becomes the reserved flag --input"]
+    );
+    assert_eq!(
+        problems("help_field"),
+        ["field `help` becomes the reserved flag --help"]
+    );
+    assert_eq!(
+        problems("two_spellings"),
+        ["fields `maxCount` and `max_count` both become --max-count"]
+    );
+    assert_eq!(
+        problems("list"),
+        ["the tool name is the `pitwall tool list` command"]
+    );
+}
+
+/// [`the_convention_check_catches_half_done_tools`] · [`the_cli_flag_check_catches_reserved_fields`] 의 가짜 선언. `rpc_method!` 로 만들면 레지스트리(`pw_rpc::methods`)에 들어가
 /// 툴 목록 시험에 섞이므로 손으로 만든다.
 #[allow(dead_code)] // 스키마만 본다 — 값을 읽지 않는다.
 mod fake {
@@ -290,6 +368,30 @@ mod fake {
         pub limit: Option<u32>,
     }
 
+    #[derive(Deserialize, specta::Type, schemars::JsonSchema)]
+    pub struct WithProject {
+        pub project: String,
+    }
+
+    #[derive(Deserialize, specta::Type, schemars::JsonSchema)]
+    pub struct WithInput {
+        pub input: String,
+    }
+
+    #[derive(Deserialize, specta::Type, schemars::JsonSchema)]
+    pub struct WithHelp {
+        #[serde(default)]
+        pub help: Option<bool>,
+    }
+
+    #[derive(Deserialize, specta::Type, schemars::JsonSchema)]
+    pub struct Spellings {
+        #[serde(rename = "maxCount")]
+        pub a: u32,
+        #[serde(rename = "max_count")]
+        pub b: u32,
+    }
+
     #[derive(Serialize, specta::Type, schemars::JsonSchema)]
     #[serde(rename_all = "camelCase")]
     pub struct Page {
@@ -332,6 +434,11 @@ mod fake {
     fake!(NumberWorktree, "number_worktree", WorktreeNumber, ());
     fake!(WideLimit, "wide_limit", Wide, Page);
     fake!(NotProject, "not_project", Plain, ());
+    fake!(ProjectField, "project_field", WithProject, ());
+    fake!(InputField, "input_field", WithInput, ());
+    fake!(HelpField, "help_field", WithHelp, ());
+    fake!(TwoSpellings, "two_spellings", Spellings, ());
+    fake!(List, "list", Plain, ());
 }
 
 /// 도우미 자체: 진짜 세션에서 목록 · 그룹 · 등급 · 호출 · 감사 행이 보인다. 툴 행의 시험은 이 꼴을 따른다.

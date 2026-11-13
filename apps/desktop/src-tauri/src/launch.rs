@@ -87,9 +87,9 @@ pub fn handle<R: Runtime>(app: &AppHandle<R>, args: &[String], cwd: &str) {
         }
     }
     let targets = match command {
-        // main 이 앱을 띄우기 전에 가른다. 두 번째 실행이 `mcp` 로 왔다면 그 경로가 깨진 것이다.
-        Command::Mcp => {
-            tracing::error!("`pitwall mcp` reached the running app");
+        // main 이 앱을 띄우기 전에 가른다. 두 번째 실행이 `mcp` · `tool` 로 왔다면 그 경로가 깨진 것이다.
+        Command::Mcp | Command::Tool => {
+            tracing::error!(?command, "a `pitwall` subcommand reached the running app");
             return;
         }
         Command::Open(targets) => targets,

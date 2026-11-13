@@ -8536,7 +8536,7 @@ SOFTWARE.
 
 ### MIT License (MIT)
 
-Used by: tokio 1.53.3, tokio-util 0.7.20
+Used by: tokio 1.53.3, tokio-stream 0.1.19, tokio-util 0.7.20
 
 ```text
 MIT License

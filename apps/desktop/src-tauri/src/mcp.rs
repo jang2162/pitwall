@@ -63,7 +63,7 @@ pub fn run(args: &[OsString], identifier: impl FnOnce(&AppPaths) -> String) -> i
             return 2;
         }
     };
-    init_logging(&paths);
+    init_logging(&paths, LOG_COMPONENT, "pitwall mcp");
     let request = SessionRequest {
         project: args.project,
         cwd: std::env::current_dir().ok(),
@@ -94,10 +94,14 @@ pub fn run(args: &[OsString], identifier: impl FnOnce(&AppPaths) -> String) -> i
     code
 }
 
-/// 앱에 붙어 본다. 붙으면 세션이 끝날 때까지 잇고 종료 코드를 돌려준다. 앱이 없으면 `None`(헤드리스로).
+/// 실행 중인 앱의 MCP 소켓에 붙는다(핸드셰이크까지). 앱이 없거나 붙을 수 없으면 `None` — 부르는 쪽은 헤드리스로 간다.
+/// `pitwall mcp` 와 `pitwall tool` 이 같은 길로 붙는다(05-mcp.md 「CLI」 — 서버 쪽에 CLI 전용 경로를 두지 않는다).
 #[cfg(unix)]
-async fn proxy(paths: &AppPaths, key: &str, request: &SessionRequest) -> Option<i32> {
-    use pw_mcp::proxy::ProxyEnd;
+pub async fn connect_app(
+    paths: &AppPaths,
+    key: &str,
+    request: &SessionRequest,
+) -> Option<tokio::net::UnixStream> {
     use pw_mcp::socket;
 
     let uid = socket::current_uid();
@@ -108,8 +112,11 @@ async fn proxy(paths: &AppPaths, key: &str, request: &SessionRequest) -> Option<
             return None;
         }
     };
-    let stream = match socket::connect(&path, uid, request.clone()).await {
-        Ok(stream) => stream,
+    match socket::connect(&path, uid, request.clone()).await {
+        Ok(stream) => {
+            tracing::info!(socket = %path.display(), "connected to the running app");
+            Some(stream)
+        }
         Err(e)
             if matches!(
                 e.kind(),
@@ -117,15 +124,22 @@ async fn proxy(paths: &AppPaths, key: &str, request: &SessionRequest) -> Option<
             ) =>
         {
             tracing::info!(socket = %path.display(), "no running app; serving headless");
-            return None;
+            None
         }
         Err(e) => {
             // 다른 사용자 소유 폴더 등. 붙지 않고 헤드리스로 — 그래도 조회는 된다.
             tracing::warn!(%e, socket = %path.display(), "not connecting to the app socket; serving headless");
-            return None;
+            None
         }
-    };
-    tracing::info!(socket = %path.display(), "connected to the running app");
+    }
+}
+
+/// 앱에 붙어 본다. 붙으면 세션이 끝날 때까지 잇고 종료 코드를 돌려준다. 앱이 없으면 `None`(헤드리스로).
+#[cfg(unix)]
+async fn proxy(paths: &AppPaths, key: &str, request: &SessionRequest) -> Option<i32> {
+    use pw_mcp::proxy::ProxyEnd;
+
+    let stream = connect_app(paths, key, request).await?;
     let (from_app, to_app) = stream.into_split();
     let mut stdout = tokio::io::stdout();
     match pw_mcp::proxy::run(tokio::io::stdin(), &mut stdout, from_app, to_app).await {
@@ -143,7 +157,7 @@ async fn proxy(paths: &AppPaths, key: &str, request: &SessionRequest) -> Option<
     }
 }
 
-/// 앱 없이 뜬 `pitwall mcp` 의 Host: 코어 메서드(`host.*` · `config.*` · `project.*`)만, 레지스트리는 읽기 전용.
+/// 앱 없이 뜬 `pitwall mcp` · `pitwall tool` 의 Host: 코어 메서드(`host.*` · `config.*` · `project.*`)만, 레지스트리는 읽기 전용.
 pub fn headless_host(paths: &AppPaths) -> Arc<LocalHost> {
     Arc::new(
         LocalHost::builder(crate::LOCAL_HOST_ID)
@@ -153,15 +167,42 @@ pub fn headless_host(paths: &AppPaths) -> Arc<LocalHost> {
     )
 }
 
+/// 앱 없이 이 프로세스 안에서 도는 세션 자리: 헤드리스 Host 와 그 세션들이 함께 쓰는 것. `pitwall mcp`(stdio)와 앱 없는
+/// `pitwall tool`(프로세스 안 duplex)이 같은 것을 만든다 — 세션의 판정(카탈로그 · 노출 · 정책 · 감사)이 한 벌이다.
+/// 끝낼 때 [`Self::close`].
+pub struct Headless {
+    pub host: Arc<LocalHost>,
+    pub services: Arc<Services>,
+}
+
+impl Headless {
+    /// `transport` 는 로그에 남는 연결 종류다(판정에는 쓰지 않는다 — `HostKind::Headless`).
+    pub fn start(paths: &AppPaths, transport: &'static str) -> Self {
+        let host = headless_host(paths);
+        let services = services(&host, paths, transport, HostKind::Headless);
+        Self { host, services }
+    }
+
+    /// 세션 태스크가 Host 의 복제본을 쥔 채 런타임 종료 시간(`run` 의 2초)을 넘기면 `Drop` 없이 프로세스가 끝나 SQLite 가 닫히지
+    /// 않는다 — `state.db-wal` · `-shm` 이 남는다. 종료 전에 직접 닫는다.
+    pub fn close(&self) {
+        if let Some(registry) = self.host.registry() {
+            registry.close();
+        }
+    }
+}
+
 async fn headless(paths: AppPaths, request: SessionRequest) -> i32 {
-    let host = headless_host(&paths);
-    if let Err(e) = host.watch_config(&tokio::runtime::Handle::current()) {
+    let headless = Headless::start(&paths, "stdio");
+    if let Err(e) = headless
+        .host
+        .watch_config(&tokio::runtime::Handle::current())
+    {
         tracing::warn!(%e, "config watch disabled; tools/list_changed will not follow settings");
     }
-    let services = services(&host, &paths, "stdio", HostKind::Headless);
     let cancel = tokio_util::sync::CancellationToken::new();
     let code = match pw_mcp::serve(
-        services,
+        Arc::clone(&headless.services),
         request,
         (tokio::io::stdin(), tokio::io::stdout()),
         cancel,
@@ -175,11 +216,7 @@ async fn headless(paths: AppPaths, request: SessionRequest) -> i32 {
             1
         }
     };
-    // 세션 태스크가 Host 의 복제본을 쥔 채 런타임 종료 시간(`run` 의 2초)을 넘기면 `Drop` 없이 프로세스가 끝나 SQLite 가 닫히지
-    // 않는다 — `state.db-wal` · `-shm` 이 남는다. 종료 전에 직접 닫는다.
-    if let Some(registry) = host.registry() {
-        registry.close();
-    }
+    headless.close();
     code
 }
 
@@ -242,7 +279,9 @@ pub fn serve_socket(host: Arc<LocalHost>, paths: AppPaths, key: String) {
     });
 }
 
-fn init_logging(paths: &AppPaths) {
+/// 앱 없이 도는 서브커맨드(`pitwall mcp` · `pitwall tool`)의 로그: `$STATE/logs/<component>.<날짜>.log` 회전 파일, 경고 이상은
+/// stderr 에도. stdout 은 쓰지 않는다 — 두 명령 모두 stdout 이 계약이다(MCP 바이트 · 툴 결과). `program` 은 stderr 문장의 머리다.
+pub fn init_logging(paths: &AppPaths, component: &str, program: &str) {
     let level = pw_diag::LogConfig::new(paths.state.join("logs"))
         .level_from_env()
         .level;
@@ -252,7 +291,7 @@ fn init_logging(paths: &AppPaths) {
         .with_filter(tracing::level_filters::LevelFilter::WARN.min(level));
     let file = pw_diag::RollingFile::open(
         paths.state.join("logs"),
-        LOG_COMPONENT,
+        component,
         pw_diag::logging::DEFAULT_RETENTION_DAYS,
         Arc::new(pw_diag::SystemClock),
     );
@@ -267,12 +306,12 @@ fn init_logging(paths: &AppPaths) {
             ),
         ),
         Err(e) => {
-            eprintln!("pitwall mcp: no log file ({e}); warnings go to stderr only");
+            eprintln!("{program}: no log file ({e}); warnings go to stderr only");
             tracing::subscriber::set_global_default(registry)
         }
     };
     if installed.is_ok() {
-        tracing::info!(version = env!("CARGO_PKG_VERSION"), "pitwall mcp starting");
+        tracing::info!(version = env!("CARGO_PKG_VERSION"), "{program} starting");
     }
 }
 
