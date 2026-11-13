@@ -135,7 +135,7 @@
 | `checkout_list` | 그 프로젝트의 체크아웃(머신 · 워크트리 · 브랜치)과 머신의 연결 상태 | read |
 | `checkout_send` | 한 체크아웃의 브랜치를 다른 머신의 체크아웃으로 보내고 대상을 그 커밋으로 맞춘다(origin 을 거치지 않는다). 원본 · 대상을 받는다 — 가져오기는 둘을 바꿔 준 것이다 | write |
 
-- **대상 지정**: 프로젝트 툴은 선택 입력 `checkout`(머신 + 워크트리)을 받는다. 없으면 세션의 체크아웃(`--project` · cwd 가 가리키는 그 머신의 체크아웃)이다. 선택 입력이라 그 전에 만든 툴과 하위 호환이다 — 프로젝트 툴과 그 RPC 의 입력은 struct 이고 워크트리를 선택 입력으로 받는 꼴을 지킨다
+- **대상 지정**: 프로젝트 툴은 선택 입력 `checkout`(머신 + 워크트리)을 받는다. 없으면 세션의 체크아웃(`--project` · cwd 가 가리키는 그 머신의 체크아웃)이다. 선택 입력이라 그 전에 만든 툴과 하위 호환이다 — 프로젝트 툴과 그 RPC 의 입력은 struct 이고 워크트리를 선택 입력으로 받는 꼴을 지킨다(체크아웃을 보지 않고 프로젝트 레코드만 읽는 툴 `project_info` 는 워크트리 입력을 달지 않는다 — 입력이 struct 라 `checkout` 은 깨지 않고 더한다, 16-m5-plan 메인 판정 2026-11-13)
 - **다른 머신을 겨눌 수 있는 것은 Desktop 의 세션뿐이다.** 묶음은 Desktop 만 안다 — Desktop 이 묶음을 풀어 그 머신의 Host 로 보낸다. 그 머신에 닿을 수 있으면 그때 연결을 열고(이미 열린 연결이 있어야 하는 것이 아니다), 승인을 물을 자리가 있어야 하므로 그 프로젝트의 창이 열려 있어야 한다. 창이 없거나 헤드리스면 거절한다
 - **원격 머신 Relay 의 세션은 그 머신의 체크아웃만 다룬다.** `checkout` 에 다른 머신을 주면 거절하고 `checkout_send` 는 싣지 않는다. 원격 머신의 에이전트가 내 기기에 git 쓰기 · 실행을 하는 길을 열지 않는다 — 원격에서 만든 커밋을 로컬로 옮기는 것은 Desktop 쪽의 가져오기다
 - `checkout_send` 는 git 쓰기를 툴로 내놓지 않는다는 규칙(「Git」 표)의 예외다. 에이전트가 git CLI 로는 다른 머신에 origin 없이 보낼 길이 없다. git 이 거절하면(갈라짐 · 대상의 커밋 안 한 변경) 덮지 않고 그 원문을 툴 오류로 돌려준다
@@ -146,12 +146,12 @@
 
 툴은 손으로 등록하지 않고 RPC 선언(`rpc_method!`)에서 만든다. 구현: `crates/pw-mcp/src/catalog.rs`.
 
-- **노출은 선언이 고른다**: `rpc_method!` 의 선택 필드 `mcp: true` 를 단 메서드만 툴이 된다. 생략하면 꺼짐 — **새 RPC 는 말없이 툴이 되지 않는다**(UI 전용 메서드 `host.demoTask` · `project.markOpened` · `i18n.setLanguage` 등). 툴이 되는 메서드의 고정 목록은 모든 메서드 크레이트가 링크되는 데스크톱 크레이트의 `mcp_tools_are_exactly_these`(`apps/desktop/src-tauri/src/main.rs`)가 지킨다 — 어느 크레이트의 선언에 `mcp: true` 를 달아도 거기서 실패하므로, 툴을 늘리려면 선언과 그 목록을 함께 고친다. 스트림 메서드에는 달 수 없다(컴파일 오류)
+- **노출은 선언이 고른다**: `rpc_method!` 의 선택 필드 `mcp`(`mcp: true` 또는 `mcp: { group, name }`)를 단 메서드만 툴이 된다. 생략하면 꺼짐 — **새 RPC 는 말없이 툴이 되지 않는다**(UI 전용 메서드 `host.demoTask` · `project.markOpened` · `i18n.setLanguage` 등). 툴이 되는 메서드의 고정 목록은 모든 메서드 크레이트가 링크되는 데스크톱 크레이트의 `mcp_tools_are_exactly_these`(`apps/desktop/src-tauri/src/mcp_tests.rs`)가 Host 종류별 목록 둘(앱 · 헤드리스 — 헤드리스는 앱의 부분집합)로 지킨다 — 어느 크레이트의 선언에 `mcp` 를 달아도 거기서 실패하므로, 툴을 늘리려면 선언과 그 목록을 함께 고친다. 스트림 메서드에는 달 수 없다(컴파일 오류)
 - **세션의 툴은 그 Host 가 처리하는 것만**: 카탈로그는 실행 파일에 링크된 선언에서 만들고, 세션을 여는 Host 의 라우터가 가진 메서드로 거른다. 헤드리스 Host 는 코어 메서드만 등록하므로 다른 크레이트의 툴이 생겨도 헤드리스 `tools/list` 에는 나오지 않는다
 - **role 은 노출을 정하지 않는다**: role 은 「어느 기기가 부를 수 있나」다. MCP 세션은 Host 에 **owner** 로 붙고(로컬 소켓 · stdio 로만 오는 이 사용자의 프로세스다), 부를 수 있는지는 「툴 노출 설정」 → 「권한 모델」 절이 정한다. 세션은 **제 연결 범위**로 붙는다 — 창 범위가 필요한 RPC(쓰기 · 실행 · DB)는 MCP 세션을 거절하고, 툴 메서드만 MCP 세션용 관문을 받는다([03-architecture.md](03-architecture.md) 「RPC 설계」 의 연결 범위).
-- **이름**: 선언이 `mcp` 에 이름을 적으면 그 이름, `mcp: true` 면 RPC 이름의 `.` → `_`, camelCase → snake_case(`project.list` → `project_list`, `project.markOpened` → `project_mark_opened`). `[a-z0-9_]` 64자 이내, 겹치면 시작 시 실패. 선언에 이름을 적는 자리는 아직 없다(16-m5-plan M5-01)
-- **그룹**: 선언의 `mcp` 가 툴 이름과 함께 싣는다. `mcp: true` 면 RPC 이름의 첫 마디다(`openWith` → `open_with`). 「툴 노출 설정」 의 그룹 이름만 받는다. 아직 없다(16-m5-plan M5-01)
-- **툴 메서드**: 이 문서의 툴과 이름 · 등급 · 꼴이 다른 RPC 에는 `mcp` 를 달지 않고 그 기능 크레이트에 툴 메서드를 따로 선언한다 — 같은 내부 함수 · 같은 관문을 부르는 얇은 선언이다(16-m5-plan 결정 M5-D26). UI 가 쓰는 RPC 는 화면에 맞춘 꼴이고 등급도 다르다. 툴의 등급은 그 선언의 `tier` 이고, 프로젝트 툴의 입력은 struct 에 선택 입력 `worktree` 를 둔다(「체크아웃」)
+- **이름**: 선언이 `mcp` 에 이름을 적으면 그 이름, `mcp: true` 면 RPC 이름의 `.` → `_`, camelCase → snake_case(`project.list` → `project_list`, `project.markOpened` → `project_mark_opened`). `[a-z0-9_]` 64자 이내, 겹치면(적은 이름이 다른 선언의 규칙 이름과 겹쳐도) 시작 시 실패
+- **그룹**: 선언의 `mcp` 가 툴 이름과 함께 싣는다(`mcp: { group: "code", name: "diagnostics" }`). `mcp: true` 면 RPC 이름의 첫 마디를 snake_case 로 옮긴 것이다(`openWith` → `open_with`). 「툴 노출 설정」 의 그룹 이름(`pw_mcp::catalog::GROUPS`)만 받고, 그 밖이면 시작 시 실패
+- **툴 메서드**: 이 문서의 툴과 이름 · 등급 · 꼴이 다른 RPC 에는 `mcp` 를 달지 않고 그 기능 크레이트에 툴 메서드를 따로 선언한다 — 같은 내부 함수 · 같은 관문을 부르는 얇은 선언이다(16-m5-plan 결정 M5-D26). UI 가 쓰는 RPC 는 화면에 맞춘 꼴이고 등급도 다르다. 툴의 등급은 그 선언의 `tier` 이고, 프로젝트 툴의 입력은 struct 에 선택 입력 `worktree` 를 둔다(「체크아웃」 — 프로젝트 레코드만 읽는 툴은 뺀다). 쪽 단위 툴은 선택 입력 `cursor` · `limit` 을 둘 다 받고 결과에 `nextCursor`(없으면 마지막 쪽)를 싣는다. 규약은 `crates/pw-mcp` 머리 주석, 시험은 `tools_follow_the_tool_method_convention`
 - **설명 · 등급**: 선언의 문서 주석과 `tier`. `read` 툴에는 `readOnlyHint` 를 단다
 - **입력 스키마**: 입력 타입의 schemars 스키마를 루트로 펼친다. struct 만 툴이 된다(MCP `inputSchema` 는 object). `()` 입력은 빈 object 로 내보내고 RPC 에는 `null` 을 보낸다. enum 루트는 툴로 만들 수 없다
 - **출력**: 결과 스키마의 루트가 object 면 `outputSchema` 와 `structuredContent`, 아니면(배열 등) JSON 텍스트만
@@ -218,13 +218,13 @@ JetBrains IDE 내장 MCP 서버의 "Exposed Tools" 방식을 따른다. 권한 �
 | UI | 설정 > MCP: 툴 목록(이름 · 설명 · 등급 · 최근 호출 수), 검색, 그룹 토글, 입력 스키마 미리보기 |
 
 지금 구현(`crates/pw-mcp/src/exposure.rs`):
-- 읽는 키는 `preset` 과 `[mcp.tools]` 다. 전역 `[mcp]` 위에 프로젝트 `[mcp]` 를 설정 계층의 병합 규칙으로 덮는다(`[mcp.tools]` 는 키별로 합쳐진다). 내장 기본값은 `preset = "standard"`
+- 읽는 키는 `preset` · `[mcp.tools]` · `[mcp.groups]` 다. 전역 `[mcp]` 위에 프로젝트 `[mcp]` 를 설정 계층의 병합 규칙으로 덮는다(`[mcp.tools]` · `[mcp.groups]` 는 키별로 합쳐진다). 내장 기본값은 `preset = "standard"`
 - 「공유 설정은 좁히기만」: 저장소 모드 프로젝트는 공유 레이어까지 읽은 노출과, 공유 레이어를 뺀(전역 + `.local.toml`) 노출이 **둘 다 켠 툴**만 켠다(`Exposure::narrowed_by`). 개인 전용 프로젝트의 `project.toml` 은 개인 설정이라 넓힐 수 있다
 - `tools/list` 는 **세션 프로젝트**의 설정으로 정한다. 호출은 세션의 노출과 **대상 프로젝트의 노출**(프로젝트 툴의 `projectId` 가 세션 프로젝트가 아닐 때 그 프로젝트의 `[mcp]` — 공유 레이어는 좁히기만)을 둘 다 지나야 한다(16-m5-plan 결정 M5-D28, `pw_mcp::server` 의 `Session::call`). 대상 프로젝트가 끈 툴은 결과 `denied` · 까닭 `not_exposed` 다. 대상 프로젝트의 설정은 호출마다 **디스크에 쓰지 않고** 읽는다(`ConfigSource::without_writes`). `auto_approve` 와 승인 창은 대상 프로젝트의 것으로 판정한다 — 승인 경로와 함께 아직 없다(M5-12)
 - 프리셋은 등급으로 고른다: `read-only` = `read`, `standard` = `read` · `write`, `full` = 전부
-- 판정 순서: 툴 이름과 정확히 같은 키 → 맞는 glob(`*` 는 아무 글자열) 중 가장 긴 것 → 프리셋. 모듈 그룹 on/off 는 지금 glob 으로 쓴다(`"project_*" = false`)
-- 그룹 키 `[mcp.groups]` 는 아직 없다(16-m5-plan M5-01). 들어오면 판정 순서는 툴 이름과 정확히 같은 키 → 맞는 glob 중 가장 긴 것 → 그룹 → 프리셋이고, 공유 설정은 그룹 키로도 좁히기만 한다. glob 은 접두사 없는 이름(`diagnostics` · `settings_get`)을 놓치고, 꺼 둔 그룹에 뒤에 더해진 툴을 켜진 채 내보낸다 — 그래서 그룹은 선언이 싣는다
-- 잘못된 값은 버리고 경고 로그를 남긴다. 모르는 프리셋은 가장 좁은 `read-only` 로 본다
+- 판정 순서: 툴 이름과 정확히 같은 키 → 맞는 glob(`*` 는 아무 글자열) 중 가장 긴 것 → 그룹(`[mcp.groups]`) → 프리셋
+- 그룹은 툴의 선언이 싣는 칸이다(「툴 레지스트리」). glob 은 접두사 없는 이름(`diagnostics` · `settings_get`)을 놓치고 꺼 둔 그룹에 뒤에 더해진 툴을 켜진 채 내보내지만, 그룹 키는 그 그룹의 툴을 이름과 상관없이 모두 끈다. 공유 설정은 그룹 키로도 좁히기만 한다(같은 `Exposure::narrowed_by`)
+- 잘못된 값은 버리고 경고 로그를 남긴다(모르는 그룹 이름, bool 이 아닌 툴 · 그룹 값). 모르는 프리셋은 가장 좁은 `read-only` 로 본다
 - 변경 반영: 전역 · 세션 프로젝트의 설정 파일을 감시해 **보이는 툴 집합이 바뀌면** `notifications/tools/list_changed` 를 보낸다. 2025-11-25 까지의 클라이언트는 initialize 뒤 세션 알림으로, 2026-07-28 클라이언트는 `subscriptions/listen` 구독으로 받는다
 - `auto_approve` · 확장 툴 기본 꺼짐 · 설정 > MCP 화면은 아직 없다
 
