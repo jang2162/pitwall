@@ -440,6 +440,7 @@ async fn db_schema_pages_through_1200_objects() {
             .unwrap();
         seen += page["items"].as_array().unwrap().len();
         pages += 1;
+        assert!(pages <= 3, "the cursor does not advance");
         cursor = page["nextCursor"].clone();
         if cursor.is_null() {
             break;
@@ -737,4 +738,28 @@ async fn a_watched_change_also_marks_the_target() {
     e.f.edit_db("dev.toml", "production = true\n", "");
     let list = e.list(&mut agent, None).await;
     assert_eq!(entry(&list, "dev")["production"], true);
+}
+
+/// 호출이 설정의 DB 대신 고른 DB(`database`)의 대상 표지도 본다 — 같은 서버 · 사용자의 다른 연결로 프로덕션 DB 를 고르면 거절된다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn choosing_a_production_database_through_another_connection_is_refused() {
+    let e = env(true);
+    e.f.write_db("prod.toml", PROD);
+    e.f.write_db(
+        "scratch.toml",
+        &PROD
+            .replace("name = \"prod\"", "name = \"scratch\"")
+            .replace("database = \"app\"", "database = \"scratch\"")
+            .replace("production = true\n", ""),
+    );
+    e.human_opens("scratch", None).await;
+    let mut agent = e.agent();
+    e.schema(&mut agent, "scratch", None, json!({}))
+        .await
+        .unwrap();
+    refused(
+        e.schema(&mut agent, "scratch", None, json!({ "database": "app" }))
+            .await,
+        "productionBlocked",
+    );
 }
