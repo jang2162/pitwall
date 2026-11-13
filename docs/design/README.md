@@ -20,7 +20,7 @@
 | [13-m2-plan.md](13-m2-plan.md) | M2(Git) 작업 분할 · M2 결정(결정 필요) |
 | [14-m3-plan.md](14-m3-plan.md) | M3(DB) 작업 분할 · M3 결정 |
 | [15-m4-plan.md](15-m4-plan.md) | M4(LSP · 편집) 작업 분할 · M4 결정 |
-| [16-m5-plan.md](16-m5-plan.md) | M5(MCP · 에이전트 연동) 작업 분할 · M5 결정(초안 — 결정 필요) |
+| [16-m5-plan.md](16-m5-plan.md) | M5(MCP · 에이전트 연동) 작업 분할 · M5 결정 |
 
 ## 한 줄 요약
 

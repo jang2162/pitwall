@@ -40,7 +40,7 @@
 | UI 언어(i18n) | **Fluent** (`fluent-rs` / `@fluent/bundle`) | 코어 · 데스크톱 공용 리소스 |
 | 문법 | 내장 언어는 tree-sitter 문법을 **앱에 네이티브로 링크**, 외부 확장의 언어는 **WASM으로 동적 로드**(M8) | 언어 추가를 확장으로. 내장을 WASM 으로 올리면 유휴 메모리가 결정 M1-D2 의 상한을 넘었다 |
 | RPC | 자체 JSON-RPC 2.0 (serde) over Tauri IPC / stdio / WebSocket | 타입은 `ts-rs`/`specta`로 TS 생성 |
-| MCP | **`rmcp`** (공식 Rust MCP SDK) | stdio + Streamable HTTP |
+| MCP | **`rmcp`** (공식 Rust MCP SDK) | stdio + Streamable HTTP(HTTP 는 M7 — 06-roadmap.md 결정 D59) |
 | 패키징 | Tauri bundler (dmg/msi/AppImage/deb), 자동 업데이트 plugin-updater | |
 | 단일 인스턴스 | tauri-plugin-single-instance + deep-link | 파일 열기 → 기존 인스턴스로 전달 |
 | 테스트 | Rust: cargo-nextest, insta / UI: Vitest, Playwright | |
