@@ -177,7 +177,7 @@
   | `needs_approval` | `denied` | 사람의 승인이 있어야 하는데 받을 길이 없다 | 앱 세션의 `write` 이상 |
   | `approval_denied` | `denied` | 승인 창에서 거절됐다 | 아직 없다(16-m5-plan M5-12) |
   | `approval_timeout` | `denied` | 승인 창이 시간 안에 답을 받지 못했다 | 아직 없다(M5-12) |
-  | `needs_app` | `denied` | 앱이 있어야 하는 툴을 헤드리스에서 불렀다(결정 M5-D3) | 아직 없다(M5-04) — 지금 헤드리스 카탈로그에는 그 툴이 없어 `not_exposed` 다 |
+  | `needs_app` | `denied` | 앱이 있어야 하는 툴을 헤드리스에서 불렀다(결정 M5-D3) | CLI(`pitwall tool`)가 부르지 않고 가른다 — 실행 파일에 링크된 카탈로그에는 있고 헤드리스 Host 의 카탈로그에는 없는 이름이면 종료 코드 3(「CLI」 절). 서버는 아직 내지 않는다 — 헤드리스 MCP 세션에서 앱 전용 이름은 `not_exposed` 이고, 그 에이전트에게는 서버 안내문(`HEADLESS_NOTICE`)이 같은 뜻을 전한다. 서버가 `needs_app` 을 내는 것은 16-m5-plan M5-20(헤드리스에서 앱으로 넘겨 붙기)이 정한다 |
   | `headless_write` | `denied` | 헤드리스에서 `write` 이상을 불렀다(승인 경로가 없다) | 헤드리스 세션의 `write` 이상 |
   | `cancelled` | `error` | 호출이 취소됐다(취소 알림 · 세션 끊김 · Host 가 그 RPC 를 거둠) | 「호출 취소」 |
   | `too_large` | `error` | 응답이 한 건 상한(256 KiB)을 넘었다 — 범위를 좁혀 다시 부른다 | 「응답 크기」 |
