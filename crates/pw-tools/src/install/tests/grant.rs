@@ -192,7 +192,7 @@ fn changing_methods_are_exec_and_none_is_an_mcp_tool() {
         ToolsUninstallMethod::META,
     ] {
         assert_eq!(meta.tier, Tier::Exec, "{}", meta.name);
-        assert!(!meta.mcp, "{}", meta.name);
+        assert!(meta.mcp.is_none(), "{}", meta.name);
     }
     for meta in [
         ToolsListMethod::META,
@@ -200,6 +200,6 @@ fn changing_methods_are_exec_and_none_is_an_mcp_tool() {
         ToolsLogMethod::META,
     ] {
         assert_eq!(meta.tier, Tier::Read, "{}", meta.name);
-        assert!(!meta.mcp, "{}", meta.name);
+        assert!(meta.mcp.is_none(), "{}", meta.name);
     }
 }

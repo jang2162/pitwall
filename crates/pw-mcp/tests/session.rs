@@ -30,7 +30,7 @@ rpc_method! {
         params: (),
         result: (),
         tier: Write,
-        mcp: true,
+        mcp: { group: "project", name: "mcptest_write" },
     }
 
     /// 시험용 프로젝트 툴. 받은 입력을 그대로 돌려준다(채워진 `projectId` · `worktree` 를 본다).
@@ -38,7 +38,7 @@ rpc_method! {
         params: EchoParams,
         result: EchoParams,
         tier: Read,
-        mcp: true,
+        mcp: { group: "project", name: "mcptest_echo" },
     }
 
     /// 시험용: 300 KiB 글자열을 돌려준다(응답 상한을 넘는다).
@@ -46,7 +46,7 @@ rpc_method! {
         params: (),
         result: String,
         tier: Read,
-        mcp: true,
+        mcp: { group: "project", name: "mcptest_big" },
     }
 
     /// 시험용: 취소될 때까지 돈다.
@@ -54,7 +54,7 @@ rpc_method! {
         params: (),
         result: (),
         tier: Read,
-        mcp: true,
+        mcp: { group: "project", name: "mcptest_slow" },
     }
 
     /// 시험용: Host 가 그 RPC 를 거뒀다고 답한다.
@@ -62,7 +62,7 @@ rpc_method! {
         params: (),
         result: (),
         tier: Read,
-        mcp: true,
+        mcp: { group: "project", name: "mcptest_host_cancelled" },
     }
 }
 
@@ -316,7 +316,7 @@ fn read_rows(conn: &rusqlite::Connection) -> Vec<(Option<String>, String, String
 }
 
 /// 카탈로그는 `mcp: true` 로 고른 선언만 툴로 만든다. 이 시험 바이너리에 링크된 선언(pw-core 와 이 파일의 시험용 선언)만 본다 —
-/// 실제로 툴이 되는 메서드의 고정 목록은 모든 메서드 크레이트가 링크되는 데스크톱 크레이트의 `mcp_tools_are_exactly_these`.
+/// 실제로 툴이 되는 메서드의 고정 목록은 모든 메서드 크레이트가 링크되는 데스크톱 크레이트의 `mcp_tools_are_exactly_these`(`apps/desktop/src-tauri/src/mcp_tests.rs`).
 #[test]
 fn the_catalog_follows_the_mcp_flag() {
     let catalog = Catalog::linked();
@@ -335,7 +335,7 @@ fn the_catalog_follows_the_mcp_flag() {
     );
     for info in pw_rpc::methods() {
         let exposed = catalog.tools().iter().any(|t| t.method == info.meta.name);
-        assert_eq!(exposed, info.meta.mcp, "{}", info.meta.name);
+        assert_eq!(exposed, info.meta.mcp.is_some(), "{}", info.meta.name);
     }
 }
 

@@ -8,14 +8,19 @@
 //! [mcp.tools]
 //! project_info = false         # 툴 하나
 //! "project_*" = true           # glob(`*` 는 아무 글자열)
+//!
+//! [mcp.groups]
+//! db = false                   # 그룹(`catalog::GROUPS`) — 툴의 선언이 그룹을 싣는다
 //! ```
 //!
-//! 판정 순서: 이름이 정확히 같은 항목 → 맞는 glob 중 가장 긴 것 → 프리셋. **커밋되는 공유 프로젝트 설정
-//! (`.pitwall/project.toml`)은 좁히기만 한다** — 넓히는 것은 전역 · `.local.toml` · 개인 전용 설정만([`Exposure::narrowed_by`]). 프리셋은 등급으로 고른다 — `read-only` 는 `read`,
+//! 판정 순서: 이름이 정확히 같은 항목 → 맞는 glob 중 가장 긴 것 → 그룹 → 프리셋. 그룹은 이름이 아니라 선언의 칸이라 꺼 둔 그룹에
+//! 뒤에 더해진 툴도 꺼진 채 나온다(glob `"project_*"` 는 `settings_get` 처럼 접두사 없는 이름을 놓친다 — 결정 M5-D23).
+//! **커밋되는 공유 프로젝트 설정(`.pitwall/project.toml`)은 좁히기만 한다** — 넓히는 것은 전역 · `.local.toml` · 개인 전용
+//! 설정만([`Exposure::narrowed_by`]). 툴 키 · 그룹 키 · 프리셋 모두 같다. 프리셋은 등급으로 고른다 — `read-only` 는 `read`,
 //! `standard` 는 `read` · `write`, `full` 은 전부. 전역 → 프로젝트 병합은 설정 계층의 규칙(`pw_core::config::merge`)이라
-//! `[mcp.tools]` 는 키별로 합쳐진다.
+//! `[mcp.tools]` · `[mcp.groups]` 는 키별로 합쳐진다.
 //!
-//! 값이 잘못되면(모르는 프리셋, bool 이 아닌 툴 값) 그 값을 버리고 경고를 남긴다. 모르는 프리셋은 가장 좁은 `read-only` 로 본다 —
+//! 값이 잘못되면(모르는 프리셋 · 그룹, bool 이 아닌 툴 · 그룹 값) 그 값을 버리고 경고를 남긴다. 모르는 프리셋은 가장 좁은 `read-only` 로 본다 —
 //! 설정을 잘못 쓴 사람이 의도보다 많이 열리지 않게.
 
 use std::collections::BTreeSet;
@@ -23,7 +28,7 @@ use std::collections::BTreeSet;
 use pw_rpc::Tier;
 use serde_json::{Map, Value};
 
-use crate::catalog::{Catalog, Tool};
+use crate::catalog::{Catalog, GROUPS, Tool};
 
 /// 설정 파일 키(`settings.toml` 과 프로젝트 `project.toml` 의 `[mcp]`).
 pub const KEY: &str = "mcp";
@@ -60,6 +65,8 @@ pub struct Exposure {
     pub preset: Preset,
     /// `[mcp.tools]` 의 (이름 또는 glob, 켬).
     pub tools: Vec<(String, bool)>,
+    /// `[mcp.groups]` 의 (그룹, 켬). 그룹은 [`GROUPS`] 가운데 하나다.
+    pub groups: Vec<(String, bool)>,
     /// 이 위로는 열리지 않는다([`Self::narrowed_by`]).
     pub ceiling: Option<Box<Exposure>>,
 }
@@ -70,6 +77,7 @@ impl Default for Exposure {
         Self {
             preset: Preset::Standard,
             tools: Vec::new(),
+            groups: Vec::new(),
             ceiling: None,
         }
     }
@@ -115,10 +123,32 @@ impl Exposure {
             }
             Some(other) => warnings.push(format!("mcp.tools must be a table, found {other}")),
         }
+        let mut groups = Vec::new();
+        match merged.get("groups") {
+            None => {}
+            Some(Value::Object(table)) => {
+                for (group, on) in table {
+                    match on {
+                        Value::Bool(_) if !GROUPS.contains(&group.as_str()) => {
+                            warnings.push(format!(
+                                "mcp.groups.{group} is not a tool group ({}); ignored",
+                                GROUPS.join(", ")
+                            ));
+                        }
+                        Value::Bool(on) => groups.push((group.clone(), *on)),
+                        other => warnings.push(format!(
+                            "mcp.groups.{group} must be true or false, found {other}; ignored"
+                        )),
+                    }
+                }
+            }
+            Some(other) => warnings.push(format!("mcp.groups must be a table, found {other}")),
+        }
         (
             Self {
                 preset,
                 tools,
+                groups,
                 ceiling: None,
             },
             warnings,
@@ -148,7 +178,10 @@ impl Exposure {
             .iter()
             .filter(|(p, _)| p.contains('*') && glob_match(p, &tool.name))
             .max_by_key(|(p, _)| p.len());
-        match glob {
+        if let Some((_, on)) = glob {
+            return *on;
+        }
+        match self.groups.iter().find(|(g, _)| g == tool.group) {
             Some((_, on)) => *on,
             None => self.preset.allows(tool.tier),
         }
@@ -231,6 +264,76 @@ mod tests {
     }
 
     #[test]
+    fn a_group_turned_off_hides_every_tool_in_it() {
+        let (exposure, warnings) = Exposure::from_layers(
+            Some(&json!({"preset": "full", "groups": {"db": false}})),
+            None,
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let on = |group, name: &str, tier| exposure.enabled(&Tool::fake_in(group, name, tier));
+        assert!(!on("db", "db_schema", Tier::Read));
+        assert!(!on("db", "db_execute", Tier::Dangerous));
+        // 이름에 그룹 접두사가 없어도 — 그룹은 선언의 칸이다.
+        assert!(!on("db", "sql_explain", Tier::Read));
+        assert!(on("code", "diagnostics", Tier::Read));
+        assert!(
+            on("project", "db_lookalike", Tier::Read),
+            "이름이 아니라 그룹으로"
+        );
+    }
+
+    #[test]
+    fn exact_keys_and_globs_beat_the_group_and_the_group_beats_the_preset() {
+        let (exposure, _) = Exposure::from_layers(
+            Some(&json!({
+                "preset": "read-only",
+                "tools": {"db_schema": true, "db_conn*": true, "git_status": false},
+                "groups": {"db": false, "git": true}
+            })),
+            None,
+        );
+        let on = |group, name: &str, tier| exposure.enabled(&Tool::fake_in(group, name, tier));
+        assert!(on("db", "db_schema", Tier::Read), "정확한 키");
+        assert!(on("db", "db_connection_list", Tier::Read), "glob");
+        assert!(!on("db", "db_query", Tier::Read), "그룹");
+        assert!(
+            on("git", "git_commit", Tier::Write),
+            "그룹이 프리셋(read-only)보다 앞선다"
+        );
+        assert!(
+            !on("git", "git_status", Tier::Read),
+            "정확한 키가 켜진 그룹을 이긴다"
+        );
+        assert!(
+            !on("code", "rename", Tier::Write),
+            "그룹 키가 없으면 프리셋"
+        );
+    }
+
+    /// 공유 설정의 `groups` 는 켜지 못하고 끄기만 한다. 로컬은 켠다.
+    #[test]
+    fn shared_settings_cannot_turn_a_group_on() {
+        let global = json!({"groups": {"db": false}});
+        let shared = json!({"groups": {"db": true, "git": false}});
+        let (with_shared, _) = Exposure::from_layers(Some(&global), Some(&shared));
+        let (ceiling, _) = Exposure::from_layers(Some(&global), None);
+        let exposure = with_shared.narrowed_by(ceiling);
+        let on = |group, name: &str| exposure.enabled(&Tool::fake_in(group, name, Tier::Read));
+        assert!(!on("db", "db_schema"), "공유가 켠 그룹은 전역이 끈 채로");
+        assert!(!on("git", "git_status"), "공유가 끈 그룹은 꺼진다");
+        assert!(on("code", "diagnostics"));
+
+        let local = json!({"groups": {"db": true}});
+        let (with_local, _) = Exposure::from_layers(Some(&global), Some(&local));
+        let (ceiling, _) = Exposure::from_layers(Some(&global), Some(&local));
+        assert!(with_local.narrowed_by(ceiling).enabled(&Tool::fake_in(
+            "db",
+            "db_schema",
+            Tier::Read
+        )));
+    }
+
+    #[test]
     fn project_layer_overrides_global_key_by_key() {
         let global = json!({"preset": "full", "tools": {"a": false, "b": false}});
         let project = json!({"preset": "read-only", "tools": {"b": true}});
@@ -285,6 +388,15 @@ mod tests {
         assert_eq!(exposure.preset, Preset::ReadOnly);
         assert!(exposure.tools.is_empty());
         assert_eq!(warnings.len(), 2, "{warnings:?}");
+        let (exposure, warnings) = Exposure::from_layers(
+            Some(&json!({"groups": {"lsp": false, "db": "off", "git": false}})),
+            None,
+        );
+        assert_eq!(exposure.groups, [("git".to_owned(), false)]);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        let (exposure, warnings) = Exposure::from_layers(Some(&json!({"groups": false})), None);
+        assert!(exposure.groups.is_empty());
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
         let (exposure, _) = Exposure::from_layers(None, None);
         assert_eq!(exposure, Exposure::default());
     }

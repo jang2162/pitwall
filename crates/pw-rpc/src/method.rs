@@ -17,9 +17,8 @@ use serde::{Deserialize, Serialize, Serializer};
 ///
 /// 메서드가 도달할 수 있는 **가장 높은** 등급으로 선언한다. `roles` 를 생략하면 등급에서 role 이 정해지므로
 /// (`read` 는 readonly 까지 연다), 낮게 선언하면 그 위의 조작이 조용히 열린다.
-/// 입력에 따라 등급이 오르는 메서드(`db_query` 의 read / dangerous 등)는 조회용과 쓰기용으로 나누거나
-/// (`db.query` read / `db.execute` dangerous), 높은 등급으로 선언하고 `roles` 를 명시한다.
-/// 둘 중 어느 쪽을 정책으로 할지는 MCP 툴 레지스트리(M0-17)에서 확정한다.
+/// 입력에 따라 등급이 오르는 메서드는 조회용과 쓰기용으로 나눈다 — `db_query`(read) · `db_execute`(dangerous),
+/// 결정 M5-D4(`docs/design/16-m5-plan.md`). 그래서 MCP 툴의 등급도 이 규칙에 예외가 없다 — 툴의 등급은 그 선언의 `tier` 다.
 #[derive(
     Debug,
     Clone,
@@ -151,14 +150,41 @@ pub struct MethodMeta {
     pub output: &'static str,
     /// 선언의 문서 주석. MCP 툴 설명의 원천.
     pub doc: &'static str,
-    /// MCP 툴로 내보내는가. 선언에서 `mcp: true` 로 고른 메서드만 툴이 된다 — 새 메서드는 말없이 툴이 되지 않는다.
-    /// 툴 이름 · 노출 설정 · 등급 정책은 `crates/pw-mcp` 가 정한다(`docs/design/05-mcp.md` 「툴 레지스트리」 절).
-    pub mcp: bool,
+    /// MCP 툴로 내보내는가. 선언에서 `mcp` 를 단 메서드만 툴이 된다(`None` 이 아니다) — 새 메서드는 말없이 툴이 되지 않는다.
+    /// 이름 · 그룹의 규칙 검사 · 노출 설정 · 등급 정책은 `crates/pw-mcp` 가 정한다(`docs/design/05-mcp.md` 「툴 레지스트리」 절).
+    pub mcp: Option<McpTool>,
     /// 파일 범위 호출자([`Caller::file`](crate::Caller::file), 단일 파일 창)도 부를 수 있는가. 선언에서 `file_scope: true` 로
     /// 고른 메서드만 — 그 핸들러는 [`Ctx::file_scope`](crate::Ctx::file_scope) 를 보고 그 파일 하나 밖에 닿지 않는다. 경로를
     /// 받지 않는 메서드(앱 정보 · 문자열)도 고른 것만 열린다. 새 메서드는 말없이 열리지 않는다.
     pub file_scope: bool,
 }
+
+/// 선언의 `mcp` 칸. `mcp: true` 는 둘 다 `None`([`Self::DERIVED`]) — 이름과 그룹을 RPC 이름에서 만든다.
+/// `mcp: { group: "code", name: "diagnostics" }` 는 둘 다 적는다(결정 M5-D26 · M5-D23).
+///
+/// 여기서는 값을 옮기기만 한다. 이름 규칙(`[a-z0-9_]` 64자) · 겹침 · 아는 그룹인지는 `pw_mcp::catalog` 가 시작 때 본다 —
+/// 그룹 목록은 노출 설정(`[mcp.groups]`)과 함께 그 크레이트에 있다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct McpTool {
+    /// 노출 설정 `[mcp.groups]` 의 그룹. `None` 이면 RPC 이름의 첫 마디를 snake_case 로(`openWith.list` → `open_with`).
+    pub group: Option<&'static str>,
+    /// 툴 이름. `None` 이면 RPC 이름의 `.` → `_`, camelCase → snake_case(`project.list` → `project_list`).
+    pub name: Option<&'static str>,
+}
+
+impl McpTool {
+    /// `mcp: true`.
+    pub const DERIVED: Self = Self {
+        group: None,
+        name: None,
+    };
+}
+
+/// 쪽 단위 MCP 툴(툴 메서드 규약 — `crates/pw-mcp` 머리 주석)의 `limit` 기본값. 툴 메서드를 선언하는 기능 크레이트가 입력의
+/// `limit` 이 비었을 때 쓴다. 툴마다 다르면(`git_log` · `symbol_search` 50, `git_status` 200) 그 툴이 자기 값을 둔다 — 결정 M5-D34
+/// (`docs/design/16-m5-plan.md`). 수는 출발값이다.
+pub const DEFAULT_LIST_LIMIT: u32 = 100;
 
 /// 내장 프로토콜 메서드가 쓰는 접두사. 선언한 메서드는 이 이름들을 쓸 수 없다.
 /// `rpc.` 는 JSON-RPC 2.0 이 시스템 확장용으로 예약했다.
@@ -199,7 +225,7 @@ impl MethodMeta {
             return Err("readonly role may only call read-tier methods");
         }
         // MCP 툴 호출은 결과 하나를 돌려준다. 스트림을 툴로 옮기는 규칙(요약 · `detail`)은 아직 없다.
-        if self.mcp && matches!(self.kind, MethodKind::Stream) {
+        if self.mcp.is_some() && matches!(self.kind, MethodKind::Stream) {
             return Err("stream methods cannot be MCP tools yet");
         }
         Ok(())
@@ -210,7 +236,7 @@ impl MethodMeta {
         self.roles.contains(role)
     }
 
-    /// 이름의 첫 마디(`git.log` → `git`). MCP 의 모듈 그룹 on/off 단위.
+    /// 이름의 첫 마디(`git.log` → `git`). `mcp: true` 툴의 그룹은 이것을 snake_case 로 옮긴 것이다(`pw_mcp::catalog`).
     pub fn module(&self) -> &'static str {
         match self.name.split_once('.') {
             Some((module, _)) => module,
@@ -282,7 +308,9 @@ pub trait StreamMethod: Method {
 /// - `result:` 는 unary, `stream:` 은 스트림 메서드가 된다.
 /// - `tier` 는 [`Tier`] 의 변형 이름, `roles` 는 [`Role`] 의 변형 이름이다.
 ///   `roles` 를 생략하면 [`RoleSet::default_for`] 를 쓴다.
-/// - `mcp: true` 를 단 메서드만 MCP 툴이 된다([`MethodMeta::mcp`]). 생략하면 `false` 다. 스트림 메서드에는 달 수 없다.
+/// - `mcp` 를 단 메서드만 MCP 툴이 된다([`MethodMeta::mcp`]). 생략하면 툴이 아니다. 스트림 메서드에는 달 수 없다.
+///   `mcp: true` 는 이름 · 그룹을 RPC 이름에서 만들고, `mcp: { group: "code", name: "diagnostics" }` 는 둘 다 적는다
+///   ([`McpTool`] — 둘 다 적거나 둘 다 생략한다, 순서는 `group` → `name`). 툴 메서드 규약은 `crates/pw-mcp` 머리 주석.
 /// - `file_scope: true` 를 단 메서드만 파일 범위 호출자가 부를 수 있다([`MethodMeta::file_scope`]). 생략하면 `false` 다.
 /// - 선언은 [`methods`](crate::methods) 레지스트리에 등록된다 — 핸들러를 붙이지 않아도 타입 생성 대상이다.
 /// - 이름 규칙 · role 규칙은 [`MethodMeta::validate`] 가 컴파일 타임에 검사한다.
@@ -302,6 +330,18 @@ pub trait StreamMethod: Method {
 ///
 /// ```compile_fail
 /// pw_rpc::rpc_method! {
+///     NamedStreamTool: "x.tail" { params: (), stream: String, tier: Read, mcp: { group: "code", name: "tail" } }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// pw_rpc::rpc_method! {
+///     HalfNamed: "x.half" { params: (), result: (), tier: Read, mcp: { name: "half" } }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// pw_rpc::rpc_method! {
 ///     ReadonlyWrite: "x.write" { params: (), result: (), tier: Write, roles: [Owner, Readonly] }
 /// }
 /// ```
@@ -315,7 +355,7 @@ macro_rules! rpc_method {
             result: $result:ty,
             tier: $tier:ident
             $(, roles: [$($role:ident),* $(,)?])?
-            $(, mcp: $mcp:literal)?
+            $(, mcp: $mcp:tt)?
             $(, file_scope: $file_scope:literal)?
             $(,)?
         }
@@ -338,7 +378,7 @@ macro_rules! rpc_method {
             stream: $item:ty,
             tier: $tier:ident
             $(, roles: [$($role:ident),* $(,)?])?
-            $(, mcp: $mcp:literal)?
+            $(, mcp: $mcp:tt)?
             $(, file_scope: $file_scope:literal)?
             $(,)?
         }
@@ -361,7 +401,7 @@ macro_rules! rpc_method {
 macro_rules! __rpc_method_define {
     (
         [$($doc:literal)*] $vis:vis $name:ident, $method:literal, $params:ty,
-        $kind:ident, $output:ty, $tier:ident, [$($roles:tt)*], [$($mcp:literal)?],
+        $kind:ident, $output:ty, $tier:ident, [$($roles:tt)*], [$($mcp:tt)?],
         [$($file_scope:literal)?]
     ) => {
         $(#[doc = $doc])*
@@ -378,7 +418,7 @@ macro_rules! __rpc_method_define {
                 params: stringify!($params),
                 output: stringify!($output),
                 doc: concat!($($doc, "\n"),*),
-                mcp: $crate::__rpc_flag!($($mcp)?),
+                mcp: $crate::__rpc_mcp!($($mcp)?),
                 file_scope: $crate::__rpc_flag!($($file_scope)?),
             };
         }
@@ -403,7 +443,28 @@ macro_rules! __rpc_roles {
 
 #[doc(hidden)]
 #[macro_export]
-/// 선언의 켜고 끄는 항목(`mcp` · `file_scope`). 생략하면 `false`.
+/// 선언의 `mcp` 칸 → [`MethodMeta::mcp`]. 생략 · `false` 는 툴이 아니다. 그 밖의 꼴은 매칭되지 않아 빌드가 실패한다.
+macro_rules! __rpc_mcp {
+    () => {
+        ::core::option::Option::None
+    };
+    (false) => {
+        ::core::option::Option::None
+    };
+    (true) => {
+        ::core::option::Option::Some($crate::McpTool::DERIVED)
+    };
+    ({ group: $group:literal, name: $name:literal $(,)? }) => {
+        ::core::option::Option::Some($crate::McpTool {
+            group: ::core::option::Option::Some($group),
+            name: ::core::option::Option::Some($name),
+        })
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+/// 선언의 켜고 끄는 항목(`file_scope`). 생략하면 `false`.
 macro_rules! __rpc_flag {
     () => {
         false
@@ -426,7 +487,7 @@ mod tests {
             params: "()",
             output: "()",
             doc: "",
-            mcp: false,
+            mcp: None,
             file_scope: false,
         }
     }
@@ -473,6 +534,42 @@ mod tests {
                 .validate()
                 .is_ok()
         );
+    }
+
+    crate::rpc_method! {
+        /// 규칙 이름.
+        Derived: "test.derived" { params: (), result: (), tier: Read, mcp: true }
+        /// 이름 · 그룹을 적은 툴.
+        Named: "test.named" { params: (), result: (), tier: Read, mcp: { group: "code", name: "diagnostics" } }
+        /// 뒤의 쉼표.
+        Trailing: "test.trailing" { params: (), result: (), tier: Read, mcp: { group: "db", name: "db_schema", }, file_scope: true }
+        /// 툴이 아니다.
+        Plain: "test.plain" { params: (), result: (), tier: Read }
+        /// `false` 는 생략과 같다.
+        Off: "test.off" { params: (), result: (), tier: Read, mcp: false }
+    }
+
+    #[test]
+    fn the_mcp_field_carries_the_tool_name_and_group() {
+        use crate::Method;
+        assert_eq!(Derived::META.mcp, Some(McpTool::DERIVED));
+        assert_eq!(
+            Named::META.mcp,
+            Some(McpTool {
+                group: Some("code"),
+                name: Some("diagnostics"),
+            })
+        );
+        assert_eq!(
+            Trailing::META.mcp,
+            Some(McpTool {
+                group: Some("db"),
+                name: Some("db_schema"),
+            })
+        );
+        const { assert!(Trailing::META.file_scope) };
+        assert_eq!(Plain::META.mcp, None);
+        assert_eq!(Off::META.mcp, None);
     }
 
     #[test]

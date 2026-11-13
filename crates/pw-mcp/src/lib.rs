@@ -1,7 +1,8 @@
 //! Pitwall MCP 서버(`docs/design/05-mcp.md`).
 //!
-//! - [`catalog`]: `rpc_method!` 선언 중 `mcp: true` 인 것에서 만든 툴 목록(이름 · 설명 · 등급 · 입출력 스키마).
-//! - [`exposure`]: 툴 노출 설정(`[mcp]` 프리셋 · `[mcp.tools]` on/off, 전역 → 프로젝트).
+//! - [`catalog`]: `rpc_method!` 선언 중 `mcp` 를 단 것에서 만든 툴 목록(이름 · 그룹 · 설명 · 등급 · 입출력 스키마).
+//! - [`exposure`]: 툴 노출 설정(`[mcp]` 프리셋 · `[mcp.tools]` · `[mcp.groups]` on/off, 전역 → 프로젝트).
+//! - [`code`]: 이 크레이트의 애플리케이션 오류 코드(6001~).
 //! - [`policy`]: 권한 등급별 정책(지금은 `read` 만 허용).
 //! - [`audit`]: 감사 로그(`$STATE/mcp/audit.db`)와 인자 요약 규칙.
 //! - [`server`]: MCP 세션 하나(rmcp). 툴 호출을 Host 의 RPC 로 옮긴다.
@@ -10,10 +11,35 @@
 //! - [`proxy`]: `pitwall mcp` 의 stdio ↔ 소켓 프록시.
 //!
 //! MCP 메시지(툴 설명 · 오류 문장)는 번역하지 않는다 — 에이전트가 읽는 계약이다.
+//!
+//! # 툴 메서드 규약
+//!
+//! 툴은 RPC 선언의 `mcp` 칸에서 나온다(결정 M5-D26 · M5-D23, `docs/design/16-m5-plan.md`).
+//!
+//! - **05 의 툴과 이름 · 등급 · 입력 꼴이 같은 RPC** 에는 `mcp` 를 그대로 단다. 이름이 규칙 이름(`project.list` → `project_list`)과
+//!   같고 그룹이 첫 마디(`openWith.list` → `open_with`)면 `mcp: true`, 아니면 `mcp: { group: "project", name: "settings_get" }`.
+//! - **다른 것**(UI 의 RPC 가 화면에 맞춘 꼴 · 등급이거나, 한 툴이 RPC 여럿을 묶는 것)은 그 기능 크레이트에 **툴 메서드**를 따로
+//!   선언한다 — UI 의 RPC 와 같은 내부 함수 · 같은 관문을 부르는 얇은 선언이다. 관문을 따로 만들지 않는다.
+//! - 그룹은 [`catalog::GROUPS`] 가운데 하나다(05 「툴 노출 설정」). 이름은 `[a-z0-9_]` 64자, 겹치면 안 된다 — 둘 다 시작 때
+//!   [`Catalog::linked`] 가 본다.
+//! - **입력은 struct** 다(`()` 도 되지만 뒤에 입력을 더하면 깨진다). 프로젝트 툴은 `projectId` 와 **선택 입력 `worktree`**
+//!   (`Option<String>`, 결정 M5-D15 — 뒤에 `checkout` 을 깨지 않고 더할 자리)를 받는다. 체크아웃을 보지 않고 프로젝트 레코드만
+//!   읽는 툴(`project_info`)은 `worktree` 를 달지 않는다 — 받기만 하고 쓰지 않는 입력은 에이전트를 속인다. 그런 툴은 데스크톱
+//!   크레이트 툴 목록 시험의 `PROJECT_RECORD_TOOLS` 에 까닭과 함께 적는다. 입력이 struct 인 것은 예외가 없다.
+//! - **쪽 단위 툴**은 선택 입력 `cursor` · `limit` 을 둘 다 받고, 결과(object)에 다음 쪽을 알리는 `nextCursor`(없으면 `null` —
+//!   마지막 쪽)를 싣는다. `limit` 이 비면 `pw_rpc::DEFAULT_LIST_LIMIT`(100 — 툴마다 다르면 그 툴의 값, 결정 M5-D34). 어느 툴이 쪽 단위인지는 그 툴 행이 정한다 — 넘치는 응답은 세션의 응답 상한이 막는다.
+//! - **등급은 그 툴이 도달할 수 있는 가장 높은 등급**이다(`pw_rpc::Tier` 의 규칙 그대로). 입력에 따라 등급이 오르면 툴을 둘로
+//!   나눈다(`db_query` read · `db_execute` dangerous — 결정 M5-D4).
+//! - 툴 설명은 선언의 문서 주석이다 — 화면 문자열처럼 번역하지 않는다.
+//! - 툴 메서드도 `rpc_method!` 선언이라 TS 생성물(`packages/rpc-client`)에 들어간다 — 웹뷰가 부르지 않는 메서드가 클라이언트
+//!   타입에 보인다. 앱의 Host 에 핸들러를 붙이고(`generated_rpc_covers_the_router`), `mise run gen` 으로 생성물을 다시 만든다.
+//! - 툴을 더하면 데스크톱 크레이트의 툴 목록(`apps/desktop/src-tauri/src/mcp_tests.rs` 의 `APP_TOOLS` · 코어 툴이면
+//!   `HEADLESS_TOOLS`)에 이름을 더하고, 그 파일의 툴 왕복 도우미(`ToolHost`)로 진짜 세션에서 본다.
 
 pub mod audit;
 pub mod catalog;
 mod client;
+pub mod code;
 pub mod exposure;
 pub mod marker;
 pub mod policy;

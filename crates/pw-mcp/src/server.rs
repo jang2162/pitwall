@@ -48,8 +48,9 @@ use crate::policy::{self, Approval, Decision};
 /// (`truncated` 와 다음 `cursor`), 그래도 넘은 응답은 세션이 「범위를 좁혀라」 오류로 바꾼다.
 pub const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 
-/// 목록 툴의 `limit` 기본값(결정 M5-D34). 툴마다 다르게 둘 수 있다(`git_log` · `symbol_search` 50, `git_status` 200).
-pub const DEFAULT_LIST_LIMIT: usize = 100;
+/// 목록 툴의 `limit` 기본값(결정 M5-D34) — 툴 메서드 규약의 값이라 정본은 `pw_rpc` 에 있다(기능 크레이트가 쓴다). 툴마다
+/// 다르게 둘 수 있다(`git_log` · `symbol_search` 50, `git_status` 200).
+pub use pw_rpc::DEFAULT_LIST_LIMIT;
 
 /// 프로젝트 툴이 선택 입력으로 받는 워크트리 꼭대기 키(「체크아웃」). 비었으면 세션의 활성 워크트리로 채운다.
 pub const WORKTREE: &str = "worktree";

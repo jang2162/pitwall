@@ -26,6 +26,8 @@ mod instance;
 mod ipc;
 mod launch;
 mod mcp;
+#[cfg(test)]
+mod mcp_tests;
 mod menu;
 mod perf;
 #[cfg(feature = "perf-fake-db")]
@@ -731,44 +733,6 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(app.get_webview_window(windows::WELCOME_LABEL).is_none());
-    }
-
-    /// MCP 툴이 되는 메서드는 정확히 이 목록이다. 모든 메서드 크레이트(pw-core · pw-diag · pw-ext · pw-i18n)가 링크되는
-    /// 자리라 어느 크레이트의 선언에 `mcp: true` 를 달아도 여기서 실패한다 — 툴을 늘리려면 이 목록을 함께 고친다.
-    /// 앱 Host 와 헤드리스 Host 모두 목록의 모든 툴을 처리해야 한다(헤드리스가 목록에만 내고 못 부르는 툴이 없게).
-    #[test]
-    fn mcp_tools_are_exactly_these() {
-        const TOOLS: [&str; 2] = ["project_info", "project_list"];
-        let linked: Vec<String> = pw_mcp::Catalog::linked()
-            .tools()
-            .iter()
-            .map(|t| t.name.clone())
-            .collect();
-        assert_eq!(linked, TOOLS, "`mcp: true` 선언이 바뀌었다");
-
-        let absent = std::env::temp_dir().join("pitwall-mcp-tools-test-absent");
-        let paths = AppPaths::under(&absent);
-        let app = Arc::new(local_host(
-            paths.clone(),
-            Arc::new(Diagnostics::new("unused-log-dir", "0.0.0")),
-            Arc::new(Registry::default()),
-            no_languages(),
-            Arc::new(Fs::new()),
-            pw_git::write::Askpass::default(),
-        ));
-        let headless = mcp::headless_host(&paths);
-        for (label, host, kind) in [
-            ("app", &app, pw_mcp::HostKind::App),
-            ("headless", &headless, pw_mcp::HostKind::Headless),
-        ] {
-            let names: Vec<String> = mcp::services(host, &paths, "test", kind)
-                .catalog
-                .tools()
-                .iter()
-                .map(|t| t.name.clone())
-                .collect();
-            assert_eq!(names, TOOLS, "{label} Host 가 처리하지 않는 툴이 있다");
-        }
     }
 
     /// 생성물(`packages/rpc-client`)의 메서드 목록 == 앱의 Host 가 실제로 등록한 메서드 목록.

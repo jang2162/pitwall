@@ -299,7 +299,7 @@ async fn only_the_owner_reads_and_writes_and_mcp_does_not_see_it() {
             .into_iter()
             .find(|m| m.meta.name == name)
             .unwrap_or_else(|| panic!("{name} is declared"));
-        assert!(!info.meta.mcp, "{name}");
+        assert!(info.meta.mcp.is_none(), "{name}");
     }
 }
 

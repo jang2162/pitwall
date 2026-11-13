@@ -317,7 +317,7 @@ mod tests {
                     && m.name != "lsp.servers.list"
                     && m.name != "lsp.servers.packages"
             })
-            .map(|m| (m.name, m.tier, m.mcp, m.file_scope))
+            .map(|m| (m.name, m.tier, m.mcp.is_some(), m.file_scope))
             .collect();
         assert_eq!(
             tiers,

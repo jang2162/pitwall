@@ -827,7 +827,7 @@ async fn only_the_owner_may_call_file_operations_and_none_is_an_mcp_tool() {
         FsTrashMethod::META,
     ] {
         assert_eq!(meta.tier, pw_rpc::Tier::Write, "{}", meta.name);
-        assert!(!meta.mcp, "{}", meta.name);
+        assert!(meta.mcp.is_none(), "{}", meta.name);
     }
 }
 

@@ -1,0 +1,510 @@
+//! MCP 툴 목록 시험과 툴 왕복 도우미(`docs/design/16-m5-plan.md` M5-01 ④). 모든 메서드 크레이트가 링크되는 자리라 어느 크레이트의
+//! 선언에 `mcp` 를 달아도 여기서 잡힌다.
+//!
+//! 툴 행이 하는 것:
+//! - [`APP_TOOLS`] 에 자기 툴 이름을 이름순 자리에 더한다. 코어 툴(헤드리스 Host 도 처리하는 것)이면 [`HEADLESS_TOOLS`] 에도.
+//!   병합 충돌은 양쪽 줄을 다 살린다.
+//! - [`ToolHost`] 로 앱과 같은 Host 에 진짜 MCP 세션을 열고 `tools/list` · `tools/call` 로 이름 · 그룹 · 등급 · 스키마 · 감사 행을 본다.
+//!   도우미는 세션을 여는 공개 길(`pw_mcp::serve` · `mcp::services`)만 쓴다 — 세션의 안쪽 꼴(연결 범위 · 호출 길)에 기대지 않는다.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use pw_core::LocalHost;
+use pw_core::config::AppPaths;
+use pw_core::registry::NewProject;
+use pw_mcp::{Services, SessionRequest};
+use rmcp::model::{CallToolRequestParams, CallToolResult};
+use rmcp::service::RunningService;
+use rmcp::{RoleClient, ServiceExt};
+use serde_json::{Map, Value};
+use tokio_util::sync::CancellationToken;
+
+use crate::mcp;
+
+/// 앱 Host 가 내는 툴 전부. 이름순.
+const APP_TOOLS: &[&str] = &["project_info", "project_list"];
+
+/// 헤드리스 Host(앱 없이 뜬 `pitwall mcp` · `pitwall tool`)가 내는 툴 — 코어 툴만(결정 M5-D3). [`APP_TOOLS`] 의 부분집합. 이름순.
+const HEADLESS_TOOLS: &[&str] = &["project_info", "project_list"];
+
+/// 프로젝트 툴 가운데 선택 입력 `worktree` 가 없어도 되는 것 — 체크아웃을 보지 않고 프로젝트 레코드만 읽는 툴. 받기만 하고 쓰지 않는
+/// 입력은 에이전트를 속이므로 달지 않는다(16-m5-plan 결정 M5-D15 의 예외, 메인 판정 2026-11-13). 툴마다 까닭을 적는다.
+const PROJECT_RECORD_TOOLS: &[&str] = &[
+    // 레지스트리의 레코드(루트 · 이름)와 루트의 빌드 파일 · 설정 폴더만 본다 — 워크트리마다 다르지 않다.
+    "project_info",
+];
+
+fn names(catalog: &pw_mcp::Catalog) -> Vec<&str> {
+    catalog.tools().iter().map(|t| t.name.as_str()).collect()
+}
+
+/// MCP 툴이 되는 선언은 정확히 [`APP_TOOLS`] 이고, 앱 Host 는 그 전부를, 헤드리스 Host 는 [`HEADLESS_TOOLS`] 만 처리한다.
+/// 헤드리스 목록에 앱 전용 툴을 넣으면 실패한다 — 헤드리스가 목록에 내고 부르면 method-not-found 인 툴이 없게.
+#[test]
+fn mcp_tools_are_exactly_these() {
+    assert!(
+        HEADLESS_TOOLS.iter().all(|t| APP_TOOLS.contains(t)),
+        "헤드리스 목록은 앱 목록의 부분집합이다"
+    );
+    let linked = pw_mcp::Catalog::linked();
+    assert_eq!(names(&linked), APP_TOOLS, "`mcp` 선언이 바뀌었다");
+
+    let host = ToolHost::app();
+    assert_eq!(
+        names(&host.services.catalog),
+        APP_TOOLS,
+        "앱 Host 가 처리하지 않는 툴이 있다"
+    );
+    let headless = mcp::headless_host(&host.paths);
+    assert_eq!(
+        names(&mcp::services(&headless, &host.paths, "test", pw_mcp::HostKind::Headless).catalog),
+        HEADLESS_TOOLS,
+        "헤드리스 Host 가 처리하는 툴이 목록과 다르다"
+    );
+}
+
+/// 툴 메서드 규약(`crates/pw-mcp` 머리 주석)을 어긴 곳. 비면 규약대로다.
+///
+/// - 프로젝트 툴(입력에 `projectId`)의 입력은 struct 다(예외 없음 — 뒤에 선택 입력 `checkout` 을 깨지 않고 더한다, 결정 M5-D15).
+/// - 프로젝트 툴은 선택 입력 `worktree`(문자열)를 받는다. [`PROJECT_RECORD_TOOLS`] 만 뺀다.
+/// - 쪽 단위 툴: 입력에 `limit` 이나 `cursor` 가 있으면 둘 다 있고 둘 다 선택이며, 결과가 object 이고 다음 쪽을 알리는 `nextCursor`
+///   를 싣는다(없으면 마지막 쪽 — 저장소의 쪽 RPC 와 같은 이름). 어느 툴이 쪽 단위인지는 툴 행이 정한다 — 이 검사는 반쪽만
+///   구현된 쪽 규약을 잡는다.
+fn convention_problems(tool: &pw_mcp::Tool) -> Vec<String> {
+    let mut problems = Vec::new();
+    let schema = tool.input_schema_for(false);
+    let properties = schema.get("properties").and_then(Value::as_object);
+    let has = |key: &str| properties.is_some_and(|p| p.contains_key(key));
+    let required = |key: &str| {
+        schema
+            .get("required")
+            .and_then(Value::as_array)
+            .is_some_and(|r| r.iter().any(|k| k == key))
+    };
+    if tool.project_scoped() {
+        if tool.unit_params {
+            problems.push("project tool input must be a struct".to_owned());
+        }
+        let exempt = PROJECT_RECORD_TOOLS.contains(&tool.name.as_str());
+        match properties.and_then(|p| p.get("worktree")) {
+            None if !exempt => {
+                problems.push("project tool needs an optional `worktree`".to_owned())
+            }
+            None => {}
+            Some(_) if exempt => {
+                problems.push("has `worktree`; drop it from PROJECT_RECORD_TOOLS".to_owned())
+            }
+            Some(w) => {
+                if !accepts_string(w) {
+                    problems.push("`worktree` must be a string".to_owned());
+                }
+                if required("worktree") {
+                    problems.push("`worktree` must be optional".to_owned());
+                }
+            }
+        }
+    } else if PROJECT_RECORD_TOOLS.contains(&tool.name.as_str()) {
+        problems.push("not a project tool; drop it from PROJECT_RECORD_TOOLS".to_owned());
+    }
+    if has("limit") || has("cursor") {
+        for key in ["limit", "cursor"] {
+            if !has(key) {
+                problems.push(format!("paged tool needs `{key}` too"));
+            } else if required(key) {
+                problems.push(format!("`{key}` must be optional"));
+            }
+        }
+        let next = tool
+            .output_schema
+            .as_ref()
+            .and_then(|o| o.get("properties"))
+            .and_then(Value::as_object)
+            .is_some_and(|p| p.contains_key("nextCursor"));
+        if !next {
+            problems.push("paged tool result needs `nextCursor`".to_owned());
+        }
+    }
+    problems
+}
+
+/// `{"type": "string"}` 또는 `{"type": ["string", "null"]}`.
+fn accepts_string(schema: &Value) -> bool {
+    match schema.get("type") {
+        Some(Value::String(t)) => t == "string",
+        Some(Value::Array(types)) => types.iter().any(|t| t == "string"),
+        _ => false,
+    }
+}
+
+#[test]
+fn tools_follow_the_tool_method_convention() {
+    let host = ToolHost::app();
+    let problems: Vec<(String, Vec<String>)> = host
+        .services
+        .catalog
+        .tools()
+        .iter()
+        .map(|t| (t.name.clone(), convention_problems(t)))
+        .filter(|(_, p)| !p.is_empty())
+        .collect();
+    assert!(problems.is_empty(), "{problems:#?}");
+    for name in PROJECT_RECORD_TOOLS {
+        assert!(
+            host.services.catalog.get(name).is_some(),
+            "{name} 은 툴이 아니다"
+        );
+    }
+}
+
+/// 규약 검사 자체를 가짜 툴로 본다 — 지금 실제 툴에는 쪽 단위 툴 · `worktree` 를 받는 프로젝트 툴이 없다.
+#[test]
+fn the_convention_check_catches_half_done_tools() {
+    let catalog = pw_mcp::Catalog::from_methods(&[
+        pw_rpc::MethodInfo::unary::<fake::Good>(),
+        pw_rpc::MethodInfo::unary::<fake::NoWorktree>(),
+        pw_rpc::MethodInfo::unary::<fake::RequiredWorktree>(),
+        pw_rpc::MethodInfo::unary::<fake::LimitOnly>(),
+        pw_rpc::MethodInfo::unary::<fake::NoNextCursor>(),
+    ])
+    .unwrap();
+    let problems = |name: &str| convention_problems(catalog.get(name).unwrap());
+    assert_eq!(problems("good"), Vec::<String>::new());
+    assert_eq!(
+        problems("no_worktree"),
+        ["project tool needs an optional `worktree`"]
+    );
+    assert_eq!(
+        problems("required_worktree"),
+        ["`worktree` must be optional"]
+    );
+    assert_eq!(problems("limit_only"), ["paged tool needs `cursor` too"]);
+    assert_eq!(
+        problems("no_next_cursor"),
+        ["paged tool result needs `nextCursor`"]
+    );
+}
+
+/// [`the_convention_check_catches_half_done_tools`] 의 가짜 선언. `rpc_method!` 로 만들면 레지스트리(`pw_rpc::methods`)에 들어가
+/// 툴 목록 시험에 섞이므로 손으로 만든다.
+#[allow(dead_code)] // 스키마만 본다 — 값을 읽지 않는다.
+mod fake {
+    use pw_rpc::{McpTool, Method, MethodKind, MethodMeta, RoleSet, Tier, UnaryMethod};
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Deserialize, specta::Type, schemars::JsonSchema)]
+    #[serde(rename_all = "camelCase")]
+    pub struct Paged {
+        pub project_id: String,
+        #[serde(default)]
+        pub worktree: Option<String>,
+        #[serde(default)]
+        pub cursor: Option<String>,
+        #[serde(default)]
+        pub limit: Option<u32>,
+    }
+
+    #[derive(Deserialize, specta::Type, schemars::JsonSchema)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ProjectOnly {
+        pub project_id: String,
+    }
+
+    #[derive(Deserialize, specta::Type, schemars::JsonSchema)]
+    #[serde(rename_all = "camelCase")]
+    pub struct WorktreeRequired {
+        pub project_id: String,
+        pub worktree: String,
+    }
+
+    #[derive(Deserialize, specta::Type, schemars::JsonSchema)]
+    pub struct OnlyLimit {
+        #[serde(default)]
+        pub limit: Option<u32>,
+    }
+
+    #[derive(Serialize, specta::Type, schemars::JsonSchema)]
+    #[serde(rename_all = "camelCase")]
+    pub struct Page {
+        pub items: Vec<String>,
+        pub next_cursor: Option<String>,
+    }
+
+    macro_rules! fake {
+        ($ty:ident, $name:literal, $params:ty, $result:ty) => {
+            #[derive(Debug, Clone, Copy)]
+            pub struct $ty;
+            impl Method for $ty {
+                type Params = $params;
+                const META: MethodMeta = MethodMeta {
+                    name: concat!("code.", $name),
+                    kind: MethodKind::Unary,
+                    tier: Tier::Read,
+                    roles: RoleSet::default_for(Tier::Read),
+                    params: "",
+                    output: "",
+                    doc: "",
+                    mcp: Some(McpTool {
+                        group: Some("code"),
+                        name: Some($name),
+                    }),
+                    file_scope: false,
+                };
+            }
+            impl UnaryMethod for $ty {
+                type Result = $result;
+            }
+        };
+    }
+
+    fake!(Good, "good", Paged, Page);
+    fake!(NoWorktree, "no_worktree", ProjectOnly, ());
+    fake!(RequiredWorktree, "required_worktree", WorktreeRequired, ());
+    fake!(LimitOnly, "limit_only", OnlyLimit, Page);
+    fake!(NoNextCursor, "no_next_cursor", Paged, Vec<String>);
+}
+
+/// 도우미 자체: 진짜 세션에서 목록 · 그룹 · 등급 · 호출 · 감사 행이 보인다. 툴 행의 시험은 이 꼴을 따른다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_tool_round_trip_helper_lists_calls_and_reads_the_audit_log() {
+    let host = ToolHost::app();
+    let alpha = host.project("alpha");
+    let session = host.session(SessionRequest::default()).await;
+
+    let listed = session.list().await;
+    let names: Vec<_> = listed.iter().map(|t| t.name.to_string()).collect();
+    assert_eq!(names, APP_TOOLS);
+    let info = host.tool("project_info");
+    assert_eq!((info.group, info.tier), ("project", pw_rpc::Tier::Read));
+    let schema = &listed
+        .iter()
+        .find(|t| t.name == "project_info")
+        .unwrap()
+        .input_schema;
+    assert!(
+        schema["properties"].get("projectId").is_some(),
+        "{schema:?}"
+    );
+
+    let result = session
+        .call("project_info", serde_json::json!({ "projectId": alpha }))
+        .await;
+    assert_ne!(result.is_error, Some(true), "{result:?}");
+    let rows = host.audit_rows(1);
+    assert_eq!(rows[0].tool, "project_info");
+    assert_eq!(rows[0].outcome, "ok");
+    assert_eq!(rows[0].project_id.as_deref(), Some(alpha.as_str()));
+    session.close().await;
+}
+
+/// 앱 Host 에서도 그룹을 끄면 그 그룹의 툴이 목록에서 빠지고, 부르면 거절이 감사 행에 남는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_group_turned_off_in_the_app_hides_its_tools() {
+    let host = ToolHost::app();
+    host.global_settings("[mcp.groups]\nproject = false\n");
+    let session = host.session(SessionRequest::default()).await;
+    assert!(session.list().await.is_empty());
+    assert!(session.try_call("project_list", Value::Null).await.is_err());
+    let rows = host.audit_rows(1);
+    assert_eq!(
+        (rows[0].tool.as_str(), rows[0].outcome.as_str()),
+        ("project_list", "denied")
+    );
+    session.close().await;
+}
+
+/// 앱과 같은 Host(`crate::local_host`)를 임시 폴더에 만든 것. 세션은 [`Self::session`] 으로 연다.
+pub(crate) struct ToolHost {
+    _tmp: tempfile::TempDir,
+    /// 임시 폴더(정규화한 실제 경로). 프로젝트 루트는 그 아래 `work/<이름>`.
+    pub base: PathBuf,
+    pub paths: AppPaths,
+    pub host: Arc<LocalHost>,
+    /// 앱이 소켓 세션에 주는 것과 같은 규칙으로 만든 것(`mcp::services`).
+    pub services: Arc<Services>,
+}
+
+impl ToolHost {
+    pub fn app() -> Self {
+        let tmp = tempfile::tempdir().unwrap();
+        // macOS 의 /var → /private/var 처럼 레지스트리가 저장하는 꼴로 맞춘다.
+        let base = pw_core::registry::path::simplify(std::fs::canonicalize(tmp.path()).unwrap());
+        let paths = AppPaths::under(&base.join("app"));
+        let host = Arc::new(crate::local_host(
+            paths.clone(),
+            Arc::new(pw_diag::Diagnostics::new(base.join("logs"), "0.0.0")),
+            Arc::new(pw_ext::Registry::default()),
+            Arc::new(pw_i18n::I18n::new(pw_i18n::Catalog::default(), Vec::new())),
+            Arc::new(pw_fs::Fs::new()),
+            pw_git::write::Askpass::default(),
+        ));
+        let services = mcp::services(&host, &paths, "test", pw_mcp::HostKind::App);
+        Self {
+            _tmp: tmp,
+            base,
+            paths,
+            host,
+            services,
+        }
+    }
+
+    /// `work/<name>` 폴더를 만들어 프로젝트로 등록하고 그 id 를 돌려준다.
+    pub fn project(&self, name: &str) -> String {
+        let root = self.base.join("work").join(name);
+        std::fs::create_dir_all(&root).unwrap();
+        self.host
+            .registry()
+            .unwrap()
+            .create(NewProject {
+                root,
+                ..NewProject::default()
+            })
+            .unwrap()
+            .id
+    }
+
+    /// 전역 설정(`$CONFIG/settings.toml`)을 쓰고 다시 읽는다. `body` 는 `schema = 1` 뒤에 붙는다.
+    pub fn global_settings(&self, body: &str) {
+        std::fs::create_dir_all(&self.paths.config).unwrap();
+        std::fs::write(
+            self.paths.config.join("settings.toml"),
+            format!("schema = 1\n{body}"),
+        )
+        .unwrap();
+        self.host.config().unwrap().global.reload().unwrap();
+    }
+
+    /// 카탈로그의 툴(그룹 · 등급 · 메서드). MCP 의 `tools/list` 에는 그룹 · 등급이 없다.
+    pub fn tool(&self, name: &str) -> &pw_mcp::Tool {
+        self.services
+            .catalog
+            .get(name)
+            .unwrap_or_else(|| panic!("`{name}` 은 툴이 아니다"))
+    }
+
+    /// 진짜 MCP 세션(rmcp 클라이언트 ↔ `pw_mcp::serve`)을 연다. 세션을 끝낼 때는 [`ToolSession::close`].
+    pub async fn session(&self, request: SessionRequest) -> ToolSession {
+        let (server_io, client_io) = tokio::io::duplex(256 * 1024);
+        let cancel = CancellationToken::new();
+        tokio::spawn(pw_mcp::serve(
+            Arc::clone(&self.services),
+            request,
+            tokio::io::split(server_io),
+            cancel.clone(),
+        ));
+        let client = ().serve(client_io).await.expect("MCP 세션이 열리지 않았다");
+        ToolSession { client, cancel }
+    }
+
+    /// 감사 로그의 행이 `n` 개가 될 때까지 기다려 전부 돌려준다(기록은 응답 뒤에 따로 끝난다). 오래된 것부터.
+    pub fn audit_rows(&self, n: usize) -> Vec<AuditRow> {
+        let file = self.services.audit.file().to_path_buf();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let rows = read_audit(&file);
+            if rows.len() >= n {
+                return rows;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "감사 행이 {n} 개가 되지 않았다: {rows:?}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+/// 감사 로그 한 행 가운데 툴 행이 볼 칸.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AuditRow {
+    pub tool: String,
+    pub project_id: Option<String>,
+    /// 인자 요약(`pw_mcp::audit::summarize`).
+    pub args: String,
+    /// `ok` · `error` · `denied`.
+    pub outcome: String,
+    pub detail: Option<String>,
+}
+
+fn read_audit(file: &Path) -> Vec<AuditRow> {
+    let Ok(conn) =
+        rusqlite::Connection::open_with_flags(file, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+    else {
+        return Vec::new();
+    };
+    let Ok(mut stmt) =
+        conn.prepare("SELECT tool, project_id, args, outcome, detail FROM calls ORDER BY id")
+    else {
+        return Vec::new();
+    };
+    stmt.query_map([], |r| {
+        Ok(AuditRow {
+            tool: r.get(0)?,
+            project_id: r.get(1)?,
+            args: r.get(2)?,
+            outcome: r.get(3)?,
+            detail: r.get(4)?,
+        })
+    })
+    .unwrap()
+    .map(Result::unwrap)
+    .collect()
+}
+
+/// 열린 MCP 세션 하나.
+pub(crate) struct ToolSession {
+    client: RunningService<RoleClient, ()>,
+    cancel: CancellationToken,
+}
+
+impl ToolSession {
+    /// `tools/list`(쪽을 끝까지).
+    pub async fn list(&self) -> Vec<rmcp::model::Tool> {
+        self.client.peer().list_all_tools().await.unwrap()
+    }
+
+    /// `tools/call`. 툴 오류 · 거절은 `is_error` 가 켜진 결과이고, 노출되지 않은 툴은 패닉이다 — 그것은 [`Self::try_call`].
+    pub async fn call(&self, name: &str, args: Value) -> CallToolResult {
+        self.try_call(name, args)
+            .await
+            .unwrap_or_else(|e| panic!("`{name}` 호출이 MCP 오류다: {e}"))
+    }
+
+    /// `tools/call` 의 MCP 오류(모르는 · 꺼진 툴, 잘못된 입력)까지 돌려준다.
+    pub async fn try_call(
+        &self,
+        name: &str,
+        args: Value,
+    ) -> Result<CallToolResult, rmcp::ServiceError> {
+        let mut params = CallToolRequestParams::new(name.to_owned());
+        if let Value::Object(map) = args {
+            params = params.with_arguments(map);
+        }
+        self.client.peer().call_tool(params).await
+    }
+
+    pub async fn close(self) {
+        let _ = self.client.cancel().await;
+        self.cancel.cancel();
+    }
+}
+
+/// 결과의 글(`content` 의 text 를 이은 것).
+#[allow(dead_code)] // 툴 행이 쓴다.
+pub(crate) fn text(result: &CallToolResult) -> String {
+    result
+        .content
+        .iter()
+        .filter_map(|c| c.as_text().map(|t| t.text.clone()))
+        .collect()
+}
+
+/// 결과의 `structuredContent`(결과가 object 인 툴).
+#[allow(dead_code)] // 툴 행이 쓴다.
+pub(crate) fn structured(result: &CallToolResult) -> Map<String, Value> {
+    match &result.structured_content {
+        Some(Value::Object(map)) => map.clone(),
+        other => panic!("structuredContent 가 object 가 아니다: {other:?}"),
+    }
+}

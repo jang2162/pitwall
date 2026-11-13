@@ -155,7 +155,7 @@ async fn no_method_is_an_mcp_tool_and_every_method_is_owner_only() {
         ]
     );
     for meta in metas {
-        assert!(!meta.mcp, "{} must not be an MCP tool", meta.name);
+        assert!(meta.mcp.is_none(), "{} must not be an MCP tool", meta.name);
         assert!(meta.roles.contains(Role::Owner), "{}", meta.name);
         assert!(
             !meta.roles.contains(Role::Mobile) && !meta.roles.contains(Role::Readonly),

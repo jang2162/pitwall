@@ -1,9 +1,13 @@
-//! 툴 목록: `rpc_method!` 선언 중 `mcp: true` 인 것에서 만든다(`docs/design/05-mcp.md` 「툴 레지스트리」 절).
+//! 툴 목록: `rpc_method!` 선언 중 `mcp` 를 단 것에서 만든다(`docs/design/05-mcp.md` 「툴 레지스트리」 절).
 //!
-//! 툴마다 스키마를 손으로 쓰지 않는다 — 이름 · 설명 · 등급은 [`MethodMeta`], 입출력 스키마는 선언의 Rust 타입(schemars)에서 온다.
+//! 툴마다 스키마를 손으로 쓰지 않는다 — 이름 · 그룹 · 설명 · 등급은 [`MethodMeta`], 입출력 스키마는 선언의 Rust 타입(schemars)에서 온다.
 //!
-//! - 이름: RPC 이름의 `.` 을 `_` 로, camelCase 를 snake_case 로(`project.list` → `project_list`, `project.markOpened` →
-//!   `project_mark_opened`). [`tool_name`].
+//! - 이름: 선언이 적은 이름(`mcp: { group: "code", name: "diagnostics" }`), `mcp: true` 면 RPC 이름의 `.` 을 `_` 로,
+//!   camelCase 를 snake_case 로(`project.list` → `project_list`, `project.markOpened` → `project_mark_opened`). [`tool_name`].
+//!   `[a-z0-9_]` 64자 이내이고 겹치면 안 된다 — 적은 이름이 다른 선언의 규칙 이름과 겹쳐도 실패한다.
+//! - 그룹: 선언이 적은 그룹, `mcp: true` 면 RPC 이름의 첫 마디를 snake_case 로(`openWith.list` → `open_with`). [`GROUPS`] 만 받는다.
+//!   노출 설정 `[mcp.groups]` 가 이 단위로 켜고 끈다([`crate::exposure`]).
+//! - 규칙을 어긴 선언은 [`Catalog::linked`] 가 시작 때 패닉한다(프로그래밍 오류 — 데스크톱 크레이트의 툴 목록 시험이 잡는다).
 //! - 입력: MCP 의 `inputSchema` 는 루트가 object 여야 한다. struct 입력은 그 스키마를 루트로 펼치고, `()` 입력은 빈 object 로
 //!   내보내고 RPC 에는 `null` 을 보낸다. enum 등 그 밖의 루트는 툴로 만들 수 없다([`CatalogError`]).
 //! - 출력: 결과 스키마의 루트가 object 일 때만 `outputSchema` 와 `structuredContent` 를 쓴다(MCP 규칙). 배열 등은 JSON 텍스트로만 준다.
@@ -14,12 +18,16 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use pw_rpc::{MethodInfo, MethodKind, Tier};
+use pw_rpc::{McpTool, MethodInfo, MethodKind, Tier};
 use schemars::generate::SchemaSettings;
 use serde_json::{Map, Value, json};
 
 /// 프로젝트 툴이 받는 키(`docs/design/03-architecture.md` §4 「기능 메서드의 params 에는 projectId」).
 pub const PROJECT_ID: &str = "projectId";
+
+/// 툴의 그룹(`docs/design/05-mcp.md` 「툴 노출 설정」 의 그룹 행). 노출 설정 `[mcp.groups]` 의 키도 이것만 받는다.
+/// 확장별 그룹(`<ext-id>`)은 확장 툴(v1.x)과 함께 온다.
+pub const GROUPS: [&str; 7] = ["project", "run", "debug", "db", "git", "code", "open_with"];
 
 /// MCP 툴 이름의 최대 길이. 클라이언트가 서버 이름과 이어 붙이므로(`mcp__pitwall__project_list`) 짧게 둔다.
 pub const MAX_NAME: usize = 64;
@@ -30,6 +38,8 @@ pub struct Tool {
     pub name: String,
     /// 이 툴이 부르는 RPC 메서드.
     pub method: &'static str,
+    /// [`GROUPS`] 가운데 하나.
+    pub group: &'static str,
     pub tier: Tier,
     pub description: String,
     /// 입력이 `()` 라 RPC 에 `null` 을 보낸다.
@@ -65,11 +75,18 @@ impl Tool {
 
 #[cfg(test)]
 impl Tool {
-    /// 노출 · 정책 시험용 툴. 입력은 빈 object.
+    /// 노출 · 정책 시험용 툴. 입력은 빈 object, 그룹은 `project`.
     pub(crate) fn fake(name: &str, tier: Tier) -> Self {
+        Self::fake_in("project", name, tier)
+    }
+
+    /// [`Self::fake`] 의 그룹을 고른 것.
+    pub(crate) fn fake_in(group: &'static str, name: &str, tier: Tier) -> Self {
+        assert!(GROUPS.contains(&group), "{group}");
         Self {
             name: name.to_owned(),
             method: "test.fake",
+            group,
             tier,
             description: String::new(),
             unit_params: true,
@@ -93,6 +110,8 @@ pub enum CatalogError {
     InputNotObject(&'static str),
     /// 툴 이름이 규칙(`[a-z0-9_]`, 64자)에 맞지 않는다.
     BadName { method: &'static str, name: String },
+    /// 그룹이 [`GROUPS`] 에 없다.
+    UnknownGroup { method: &'static str, group: String },
     /// 두 메서드가 같은 툴 이름이 된다.
     Duplicate {
         name: String,
@@ -111,6 +130,11 @@ impl fmt::Display for CatalogError {
             CatalogError::BadName { method, name } => {
                 write!(f, "`{method}`: tool name `{name}` is not [a-z0-9_]{{1,64}}")
             }
+            CatalogError::UnknownGroup { method, group } => write!(
+                f,
+                "`{method}`: tool group `{group}` is not one of {}",
+                GROUPS.join(", ")
+            ),
             CatalogError::Duplicate {
                 name,
                 first,
@@ -131,16 +155,16 @@ impl Catalog {
         Self::from_methods(pw_rpc::methods()).unwrap_or_else(|e| panic!("MCP tool catalog: {e}"))
     }
 
-    /// `mcp: true` 인 선언만 툴로 만든다. 나머지는 보지 않는다.
+    /// `mcp` 를 단 선언만 툴로 만든다. 나머지는 보지 않는다.
     pub fn from_methods<'a>(
         methods: impl IntoIterator<Item = &'a MethodInfo>,
     ) -> Result<Self, CatalogError> {
         let mut by_name: BTreeMap<String, Tool> = BTreeMap::new();
         for info in methods {
-            if !info.meta.mcp {
+            let Some(decl) = info.meta.mcp else {
                 continue;
-            }
-            let tool = tool(info)?;
+            };
+            let tool = tool(info, decl)?;
             if let Some(first) = by_name.get(&tool.name) {
                 return Err(CatalogError::Duplicate {
                     name: tool.name,
@@ -198,18 +222,34 @@ fn valid_name(name: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
-fn tool(info: &MethodInfo) -> Result<Tool, CatalogError> {
+/// `mcp: true` 툴의 그룹: RPC 이름의 첫 마디를 snake_case 로(`openWith.list` → `open_with`).
+pub fn group_name(method: &str) -> String {
+    tool_name(method.split_once('.').map_or(method, |(module, _)| module))
+}
+
+fn tool(info: &MethodInfo, decl: McpTool) -> Result<Tool, CatalogError> {
     let meta = &info.meta;
     if meta.kind == MethodKind::Stream {
         return Err(CatalogError::Stream(meta.name));
     }
-    let name = tool_name(meta.name);
+    let name = decl
+        .name
+        .map_or_else(|| tool_name(meta.name), str::to_owned);
     if !valid_name(&name) {
         return Err(CatalogError::BadName {
             method: meta.name,
             name,
         });
     }
+    let group = decl
+        .group
+        .map_or_else(|| group_name(meta.name), str::to_owned);
+    let Some(group) = GROUPS.iter().copied().find(|g| *g == group) else {
+        return Err(CatalogError::UnknownGroup {
+            method: meta.name,
+            group,
+        });
+    };
     let input = root_schema(|g| info.params_schema(g));
     let (unit_params, input_schema) = match input.get("type").and_then(Value::as_str) {
         Some("object") => (false, input),
@@ -228,6 +268,7 @@ fn tool(info: &MethodInfo) -> Result<Tool, CatalogError> {
     Ok(Tool {
         name,
         method: meta.name,
+        group,
         tier: meta.tier,
         description: description(meta.doc),
         unit_params,
@@ -277,7 +318,141 @@ fn description(doc: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use pw_rpc::{Method, MethodMeta, RoleSet, UnaryMethod};
+
     use super::*;
+
+    pw_rpc::rpc_method! {
+        /// 이름 · 그룹을 적은 툴.
+        Named: "lsp.diagnostics.list" {
+            params: (),
+            result: (),
+            tier: Read,
+            mcp: { group: "code", name: "diagnostics" },
+        }
+        /// 규칙 이름 · 첫 마디 그룹.
+        OpenWithList: "openWith.list" { params: (), result: (), tier: Read, mcp: true }
+        /// 툴이 아니다.
+        NotATool: "openWith.upsert" { params: (), result: (), tier: Write }
+    }
+
+    /// 규칙을 어긴 선언. `rpc_method!` 로 만들면 이 시험 바이너리의 레지스트리(`pw_rpc::methods`)에 들어가므로 손으로 만든다.
+    macro_rules! hand_made {
+        ($name:ident, $method:literal, $group:expr, $tool:expr) => {
+            #[derive(Debug, Clone, Copy)]
+            struct $name;
+            impl Method for $name {
+                type Params = ();
+                const META: MethodMeta = MethodMeta {
+                    name: $method,
+                    kind: MethodKind::Unary,
+                    tier: Tier::Read,
+                    roles: RoleSet::default_for(Tier::Read),
+                    params: "()",
+                    output: "()",
+                    doc: "",
+                    mcp: Some(McpTool {
+                        group: $group,
+                        name: $tool,
+                    }),
+                    file_scope: false,
+                };
+            }
+            impl UnaryMethod for $name {
+                type Result = ();
+            }
+        };
+    }
+
+    hand_made!(UnknownGroup, "lsp.hover", Some("lsp"), Some("hover"));
+    hand_made!(DerivedUnknownGroup, "host.info", None, None);
+    hand_made!(
+        TakesARuleName,
+        "code.symbols",
+        Some("code"),
+        Some("open_with_list")
+    );
+    hand_made!(BadName, "code.x", Some("code"), Some("Diagnostics"));
+
+    fn catalog(infos: &[MethodInfo]) -> Result<Catalog, CatalogError> {
+        Catalog::from_methods(infos)
+    }
+
+    #[test]
+    fn a_declared_name_and_group_become_the_tool_and_mcp_true_derives_both() {
+        let catalog = catalog(&[
+            MethodInfo::unary::<Named>(),
+            MethodInfo::unary::<OpenWithList>(),
+            MethodInfo::unary::<NotATool>(),
+        ])
+        .unwrap();
+        let tools: Vec<_> = catalog
+            .tools()
+            .iter()
+            .map(|t| (t.name.as_str(), t.group, t.method))
+            .collect();
+        assert_eq!(
+            tools,
+            [
+                ("diagnostics", "code", "lsp.diagnostics.list"),
+                ("open_with_list", "open_with", "openWith.list"),
+            ]
+        );
+        assert_eq!(
+            catalog.get("diagnostics").unwrap().description,
+            "이름 · 그룹을 적은 툴."
+        );
+        assert!(catalog.get("lsp_diagnostics_list").is_none());
+    }
+
+    #[test]
+    fn an_unknown_group_fails_the_catalog() {
+        assert_eq!(
+            catalog(&[MethodInfo::unary::<UnknownGroup>()]).unwrap_err(),
+            CatalogError::UnknownGroup {
+                method: "lsp.hover",
+                group: "lsp".into()
+            }
+        );
+        // `mcp: true` 도 첫 마디가 그룹 목록에 있어야 한다.
+        assert_eq!(
+            catalog(&[MethodInfo::unary::<DerivedUnknownGroup>()]).unwrap_err(),
+            CatalogError::UnknownGroup {
+                method: "host.info",
+                group: "host".into()
+            }
+        );
+    }
+
+    #[test]
+    fn a_declared_name_that_collides_with_a_rule_name_or_breaks_the_rule_fails() {
+        assert_eq!(
+            catalog(&[
+                MethodInfo::unary::<OpenWithList>(),
+                MethodInfo::unary::<TakesARuleName>(),
+            ])
+            .unwrap_err(),
+            CatalogError::Duplicate {
+                name: "open_with_list".into(),
+                first: "openWith.list",
+                second: "code.symbols",
+            }
+        );
+        assert_eq!(
+            catalog(&[MethodInfo::unary::<BadName>()]).unwrap_err(),
+            CatalogError::BadName {
+                method: "code.x",
+                name: "Diagnostics".into()
+            }
+        );
+    }
+
+    #[test]
+    fn the_group_of_mcp_true_is_the_first_segment_in_snake_case() {
+        assert_eq!(group_name("openWith.list"), "open_with");
+        assert_eq!(group_name("db.schema.objects"), "db");
+        assert_eq!(group_name("project.markOpened"), "project");
+    }
 
     #[test]
     fn names_turn_dots_and_camel_case_into_snake_case() {

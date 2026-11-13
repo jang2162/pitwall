@@ -29,10 +29,10 @@ export type MethodName = keyof UnaryMethods | keyof StreamMethods;
 
 /** 메서드 메타데이터(권한 등급 · role · 문서). */
 export const METHODS: Record<MethodName, MethodMeta> = {
-	"fixture.echo": {"name":"fixture.echo","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"EchoParams","output":"EchoResult","doc":" 입력을 `repeatCount` 번 이어 붙여 돌려준다.\n","mcp":false,"fileScope":false},
-	"fixture.count": {"name":"fixture.count","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"CountParams","output":"u32","doc":" 0 부터 n-1 까지 청크로 보낸다.\n","mcp":false,"fileScope":false},
-	"fixture.fail": {"name":"fixture.fail","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"()","doc":" 애플리케이션 오류를 돌려준다.\n","mcp":false,"fileScope":false},
-	"fixture.wait": {"name":"fixture.wait","kind":"unary","tier":"exec","roles":["owner","mobile"],"params":"()","output":"()","doc":" 끝나지 않는다. 취소 시험용.\n","mcp":false,"fileScope":false},
+	"fixture.echo": {"name":"fixture.echo","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"EchoParams","output":"EchoResult","doc":" 입력을 `repeatCount` 번 이어 붙여 돌려준다.\n","mcp":null,"fileScope":false},
+	"fixture.count": {"name":"fixture.count","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"CountParams","output":"u32","doc":" 0 부터 n-1 까지 청크로 보낸다.\n","mcp":null,"fileScope":false},
+	"fixture.fail": {"name":"fixture.fail","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"()","doc":" 애플리케이션 오류를 돌려준다.\n","mcp":null,"fileScope":false},
+	"fixture.wait": {"name":"fixture.wait","kind":"unary","tier":"exec","roles":["owner","mobile"],"params":"()","output":"()","doc":" 끝나지 않는다. 취소 시험용.\n","mcp":null,"fileScope":false},
 };
 
 /** 내장 프로토콜 메서드 이름. */
@@ -112,6 +112,20 @@ export type JsonRpcVersion = "2.0";
  */
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue };
 
+/**
+ *  선언의 `mcp` 칸. `mcp: true` 는 둘 다 `None`([`Self::DERIVED`]) — 이름과 그룹을 RPC 이름에서 만든다.
+ *  `mcp: { group: "code", name: "diagnostics" }` 는 둘 다 적는다(결정 M5-D26 · M5-D23).
+ * 
+ *  여기서는 값을 옮기기만 한다. 이름 규칙(`[a-z0-9_]` 64자) · 겹침 · 아는 그룹인지는 `pw_mcp::catalog` 가 시작 때 본다 —
+ *  그룹 목록은 노출 설정(`[mcp.groups]`)과 함께 그 크레이트에 있다.
+ */
+export type McpTool = {
+	/**  노출 설정 `[mcp.groups]` 의 그룹. `None` 이면 RPC 이름의 첫 마디를 snake_case 로(`openWith.list` → `open_with`). */
+	group: string | null,
+	/**  툴 이름. `None` 이면 RPC 이름의 `.` → `_`, camelCase → snake_case(`project.list` → `project_list`). */
+	name: string | null,
+};
+
 /**  응답 형태. `unary` 는 결과 하나, `stream` 은 `streamId` 를 돌려주고 청크를 `stream.chunk` 로 보낸다. */
 export type MethodKind = "unary" | "stream";
 
@@ -129,10 +143,10 @@ export type MethodMeta = {
 	/**  선언의 문서 주석. MCP 툴 설명의 원천. */
 	doc: string,
 	/**
-	 *  MCP 툴로 내보내는가. 선언에서 `mcp: true` 로 고른 메서드만 툴이 된다 — 새 메서드는 말없이 툴이 되지 않는다.
-	 *  툴 이름 · 노출 설정 · 등급 정책은 `crates/pw-mcp` 가 정한다(`docs/design/05-mcp.md` 「툴 레지스트리」 절).
+	 *  MCP 툴로 내보내는가. 선언에서 `mcp` 를 단 메서드만 툴이 된다(`None` 이 아니다) — 새 메서드는 말없이 툴이 되지 않는다.
+	 *  이름 · 그룹의 규칙 검사 · 노출 설정 · 등급 정책은 `crates/pw-mcp` 가 정한다(`docs/design/05-mcp.md` 「툴 레지스트리」 절).
 	 */
-	mcp: boolean,
+	mcp: McpTool | null,
 	/**
 	 *  파일 범위 호출자([`Caller::file`](crate::Caller::file), 단일 파일 창)도 부를 수 있는가. 선언에서 `file_scope: true` 로
 	 *  고른 메서드만 — 그 핸들러는 [`Ctx::file_scope`](crate::Ctx::file_scope) 를 보고 그 파일 하나 밖에 닿지 않는다. 경로를
@@ -240,9 +254,8 @@ export type Subscribed = {
  * 
  *  메서드가 도달할 수 있는 **가장 높은** 등급으로 선언한다. `roles` 를 생략하면 등급에서 role 이 정해지므로
  *  (`read` 는 readonly 까지 연다), 낮게 선언하면 그 위의 조작이 조용히 열린다.
- *  입력에 따라 등급이 오르는 메서드(`db_query` 의 read / dangerous 등)는 조회용과 쓰기용으로 나누거나
- *  (`db.query` read / `db.execute` dangerous), 높은 등급으로 선언하고 `roles` 를 명시한다.
- *  둘 중 어느 쪽을 정책으로 할지는 MCP 툴 레지스트리(M0-17)에서 확정한다.
+ *  입력에 따라 등급이 오르는 메서드는 조회용과 쓰기용으로 나눈다 — `db_query`(read) · `db_execute`(dangerous),
+ *  결정 M5-D4(`docs/design/16-m5-plan.md`). 그래서 MCP 툴의 등급도 이 규칙에 예외가 없다 — 툴의 등급은 그 선언의 `tier` 다.
  */
 export type Tier = "read" | "write" | "exec" | "dangerous";
 

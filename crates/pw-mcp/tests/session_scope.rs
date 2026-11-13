@@ -27,7 +27,7 @@ rpc_method! {
         params: (),
         result: (),
         tier: Read,
-        mcp: true,
+        mcp: { group: "project", name: "mcptest_scope" },
     }
 }
 
