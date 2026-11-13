@@ -887,6 +887,8 @@ pub struct DbSessions {
     pub(crate) schema: crate::schema::SchemaState,
     /// 그리드 편집 문장 하나의 기다림 상한(밀리초, 0 이면 기본 — M3-12 `crate::edit::EDIT_STATEMENT_WAIT`). 시험이 줄인다.
     pub(crate) edit_wait_ms: AtomicU64,
+    /// 「사람이 연 연결」(결정 M5-D2 — `crate::gate` 의 「에이전트의 입구」). 메모리에만 있다 — 앱을 끄면 사라진다.
+    pub(crate) opened: crate::gate::OpenedMemory,
     next_id: AtomicU64,
 }
 
@@ -904,6 +906,7 @@ impl DbSessions {
             executions: Mutex::default(),
             schema: crate::schema::SchemaState::default(),
             edit_wait_ms: AtomicU64::new(0),
+            opened: crate::gate::OpenedMemory::default(),
             next_id: AtomicU64::new(1),
         }
     }
@@ -1645,5 +1648,6 @@ pub fn register(router: &mut Router, sessions: Arc<DbSessions>) {
     crate::schema::register(router, Arc::clone(&sessions));
     crate::kv::register(router, Arc::clone(&sessions));
     crate::edit::register(router, Arc::clone(&sessions));
+    crate::tools::register(router, Arc::clone(&sessions));
     crate::connection::register(router, sessions);
 }

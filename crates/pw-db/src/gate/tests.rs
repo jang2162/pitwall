@@ -320,3 +320,67 @@ fn statements_that_change_how_text_is_read_are_refused() {
     ))
     .unwrap();
 }
+
+/// 에이전트의 증거는 관문이 판정한 연결 id · 워크트리 · 대상에만 쓰인다 — 판정과 열기 사이에 설정이 바뀌면(다른 대상) 열지 않는다
+/// (16-m5-plan M5-06). 창의 증거는 늘 지난다.
+#[test]
+fn an_agent_grant_is_used_only_for_the_judged_connection() {
+    let target = |host: &str| agent::DbTarget {
+        driver: pw_db_types::DriverKind::Postgres,
+        host: Some(host.into()),
+        port: Some(5432),
+        database: Some("app".into()),
+        user: None,
+        tunnel: None,
+        file: None,
+    };
+    let grant = DbGrant {
+        project_id: "p".into(),
+        agent: Some(Box::new(agent::AgentBinding {
+            connection_id: "dev".into(),
+            worktree: Some("/wt".into()),
+            target: target("localhost"),
+            marks: agent::DbMarks::default(),
+        })),
+    };
+    assert!(grant.is_agent());
+    grant
+        .check_agent_use(Some("/wt"), Some("dev"), &target("localhost"))
+        .unwrap();
+    for (worktree, id, host) in [
+        (Some("/wt"), Some("dev"), "elsewhere"),
+        (Some("/wt"), Some("other"), "localhost"),
+        (None, Some("dev"), "localhost"),
+        (Some("/wt"), None, "localhost"),
+    ] {
+        let e = grant
+            .check_agent_use(worktree, id, &target(host))
+            .unwrap_err();
+        assert_eq!(e.data.unwrap()["reason"], "notOpenedByUser");
+    }
+    let window = db_grant(&ConnectionScope::Project("p".into()), "p").unwrap();
+    assert!(!window.is_agent());
+    window
+        .check_agent_use(None, Some("any"), &target("elsewhere"))
+        .unwrap();
+}
+
+/// 대상의 호스트는 소문자로, 포트는 드라이버 기본으로 맞춘다 — 표지를 대소문자 · 적지 않은 포트로 비껴가지 못한다. TLS 설정은
+/// 대상이 아니다.
+#[test]
+fn targets_ignore_host_case_default_ports_and_tls() {
+    let target = |value: serde_json::Value| {
+        agent::DbTarget::of(
+            &crate::config::from_file_value(&value).unwrap(),
+            std::path::Path::new("/r"),
+        )
+    };
+    let a = target(json!({ "name": "a", "driver": "postgres", "host": "DB.Example." }));
+    let b = target(
+        json!({ "name": "b", "driver": "postgres", "host": "db.example",
+                           "port": 5432, "sslmode": "disable" }),
+    );
+    assert_eq!(a, b);
+    let c = target(json!({ "name": "c", "driver": "postgres", "host": "db.example", "user": "x" }));
+    assert_ne!(a, c, "another user is another target");
+}

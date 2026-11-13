@@ -6,6 +6,11 @@
 //! [`OpenedConnection::tunnel`] 을 연결과 함께 쥔다. 풀은 드라이버가 갖는다. 연결을 여는 다른 길(M3-10 메타데이터 · M3-12 편집 · M3-22 Redis)도
 //! [`connect`] 를 지난다.
 //!
+//! **「사람이 연 연결」 의 기록과 에이전트의 증거**(결정 M5-D2, `crate::gate` 의 「에이전트의 입구」): 저장한 연결을 푼 뒤 드라이버로
+//! 열기 전에, 에이전트의 증거면 그 연결 id · 워크트리 · 지금 설정의 대상이 관문이 판정한 것과 같은지 본다(아니면 열지 않는다). 창의
+//! 증거로 저장한 연결을 여는 데 성공하면 (프로젝트, 연결 id, 푼 대상)을 기록한다 — 연결을 여는 길(세션 · 메타데이터 · 쪽 읽기 ·
+//! 연결 테스트)이 모두 [`connect_with`] 나 [`DbSessions::test_connection`] 을 지난다. 저장 전 초안의 테스트는 기록하지 않는다.
+//!
 //! **연결 테스트** `db.connection.test { projectId, worktree?, connectionId | draft, secret? }`: 저장한 연결이나 저장 전 초안으로 붙어
 //! 서버 판본 · TLS 상태를 돌려주고 닫는다. 초안의 비밀은 이 요청으로만 받고 저장하지 않으며 로그에서 가린다(`Secret` 의 `Debug`).
 
@@ -19,7 +24,7 @@ use pw_rpc::{Router, RpcError, rpc_method};
 use serde::{Deserialize, Serialize};
 
 use crate::config::DbConnectionConfig;
-use crate::gate::{DbGrant, db_grant};
+use crate::gate::{DbGrant, DbTarget, db_grant};
 use crate::session::{DbSessions, DbTunnelLease, blocking, db_error};
 use crate::trust::ResolvedConnection;
 
@@ -73,19 +78,22 @@ pub async fn connect_with(
     choice: Choice,
 ) -> Result<OpenedConnection, RpcError> {
     let c = Arc::clone(&sessions.connections);
-    let (project, worktree, id) = (
+    let (project, wt, id) = (
         grant.project_id().to_owned(),
         worktree.map(str::to_owned),
         connection_id.to_owned(),
     );
     let resolved = blocking(move || {
-        let trusted = c.trust_gate(&project, worktree.as_deref())?;
+        let trusted = c.trust_gate(&project, wt.as_deref())?;
         c.resolve(&trusted, &id)
     })
     .await?;
+    let target = DbTarget::of(&resolved.config, &resolved.root);
+    grant.check_agent_use(worktree, Some(connection_id), &target)?;
     let config = resolved.config.clone();
     let (info, connection, server, tunnel) =
         open_resolved(sessions, grant, resolved, choice).await?;
+    remember_opened(sessions, grant, connection_id, target);
     Ok(OpenedConnection {
         connection,
         server,
@@ -96,6 +104,15 @@ pub async fn connect_with(
 }
 
 type Opened = (DriverInfo, DbConnection, ServerInfo, Option<DbTunnelLease>);
+
+/// 창의 증거로 저장한 연결을 열었다 — 「사람이 연 연결」 로 기록한다(에이전트의 증거는 기록하지 않는다).
+fn remember_opened(sessions: &DbSessions, grant: &DbGrant, connection_id: &str, target: DbTarget) {
+    if !grant.is_agent() {
+        sessions
+            .opened
+            .record(grant.project_id(), connection_id, target);
+    }
+}
 
 /// 푼 연결을 드라이버로 연다. 터널이 있으면 [`DbTunnels`] 를 지난다.
 async fn open_resolved(
@@ -214,6 +231,13 @@ impl DbSessions {
         params: DbConnectionTestParams,
     ) -> Result<ServerInfo, RpcError> {
         let c = Arc::clone(&self.connections);
+        let (worktree, saved) = (
+            params.worktree.clone(),
+            params
+                .connection_id
+                .clone()
+                .filter(|_| params.draft.is_none()),
+        );
         let resolved = blocking(move || {
             let trusted = c.trust_gate(&params.project_id, params.worktree.as_deref())?;
             match (&params.draft, &params.connection_id) {
@@ -227,8 +251,14 @@ impl DbSessions {
             }
         })
         .await?;
+        let target = DbTarget::of(&resolved.config, &resolved.root);
+        // 에이전트의 증거는 저장한 연결(초안이 아닌 것)에만 쓰인다 — 초안이면 연결 id 가 없는 것으로 본다.
+        grant.check_agent_use(worktree.as_deref(), saved.as_deref(), &target)?;
         let (info, connection, server, tunnel) =
             open_resolved(self, grant, resolved, Choice::default()).await?;
+        if let Some(id) = &saved {
+            remember_opened(self, grant, id, target);
+        }
         if let Err(e) = within(Budget::CONSOLE.connect, "close", connection.close()).await {
             tracing::info!(target: "pw_db", driver = %info.id, %e, "closing the test connection failed");
         }

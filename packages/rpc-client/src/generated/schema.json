@@ -12433,6 +12433,636 @@
       ],
       "tier": "read"
     },
+    "db.tool.connectionList": {
+      "description": "이 프로젝트의 DB 연결 목록(비밀 없음): id · 이름 · 드라이버 · 대상(호스트 · 포트 · DB · SQLite 경로) · read-only · 프로덕션 ·\n상태, 그리고 에이전트의 DB 툴이 지금 쓸 수 있는가(`usable`)와 그 까닭. 에이전트의 DB 툴은 사람이 이번 앱 실행에서 Pitwall 의\nDB 탐색기로 연 연결만 쓰고(`notOpenedByUser`), 프로덕션 표지가 있는 연결은 쓰지 않는다(`productionBlocked`). 연결을 열지 않는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "워크트리 꼭대기(절대 경로). 연결 설정(`.pitwall/db/*.toml`)을 그 워크트리에서 읽는다. 비우면 세션의 워크트리, 없으면 메인\n체크아웃.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DbToolConnection": {
+            "description": "연결 하나(비밀 없음).",
+            "properties": {
+              "database": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "driver": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DriverKind"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "host": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "description": "연결 id(다른 DB 툴의 `connectionId`).",
+                "type": "string"
+              },
+              "message": {
+                "description": "설정이 틀렸으면 그 까닭.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "description": "설정이 틀렸으면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "description": "SQLite 파일(설정에 적힌 그대로 — 상대 경로면 프로젝트 루트 기준).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "port": {
+                "description": "쓰이는 포트(적지 않았으면 드라이버 기본).",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "production": {
+                "description": "프로덕션 표지 — 에이전트에게 적용하는 것(같은 규칙). 켜져 있으면 DB 툴이 쓰지 않는다.",
+                "type": "boolean"
+              },
+              "readOnly": {
+                "description": "read-only 표지 — 에이전트에게 적용하는 것(이 대상에서 이번 앱 실행 중 본 가장 엄한 것).",
+                "type": "boolean"
+              },
+              "state": {
+                "$ref": "#/$defs/DbToolConnectionState"
+              },
+              "unusableReason": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DbToolUnusable"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "쓸 수 없는 까닭(`usable` 이 참이면 `null`)."
+              },
+              "usable": {
+                "description": "에이전트의 DB 툴(`db_schema` 등)이 지금 이 연결을 쓸 수 있는가.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "driver",
+              "host",
+              "port",
+              "database",
+              "path",
+              "readOnly",
+              "production",
+              "state",
+              "usable",
+              "unusableReason",
+              "message"
+            ],
+            "type": "object"
+          },
+          "DbToolConnectionState": {
+            "description": "연결을 지금 열 수 있는가(창의 상태와 같다 — 비밀 · 확인이 필요하면 에이전트는 답할 수 없다).",
+            "oneOf": [
+              {
+                "enum": [
+                  "ready"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "untrusted",
+                "description": "프로젝트를 신뢰하지 않았다.",
+                "type": "string"
+              },
+              {
+                "const": "invalid",
+                "description": "설정 파일이 틀렸다(`message`).",
+                "type": "string"
+              },
+              {
+                "const": "secretRequired",
+                "description": "비밀번호가 필요하다 — 사람이 Pitwall 에서 넣는다.",
+                "type": "string"
+              },
+              {
+                "const": "approvalRequired",
+                "description": "사람의 확인이 필요하다 — 사람이 Pitwall 에서 확인한다.",
+                "type": "string"
+              }
+            ]
+          },
+          "DbToolUnusable": {
+            "description": "에이전트가 이 연결을 지금 쓸 수 없는 까닭(DB 툴이 거절할 때의 `data.reason` 과 같다).",
+            "oneOf": [
+              {
+                "const": "untrusted",
+                "description": "프로젝트를 신뢰하지 않았다.",
+                "type": "string"
+              },
+              {
+                "const": "invalid",
+                "description": "설정 파일이 틀렸다.",
+                "type": "string"
+              },
+              {
+                "const": "productionBlocked",
+                "description": "프로덕션 표지가 있는 대상이다 — 에이전트 툴은 쓰지 않는다.",
+                "type": "string"
+              },
+              {
+                "const": "notOpenedByUser",
+                "description": "사람이 이번 앱 실행에서 Pitwall 의 DB 탐색기로 이 연결(지금 대상)을 연 적이 없다 — 사람이 한 번 연 뒤 다시.",
+                "type": "string"
+              }
+            ]
+          },
+          "DriverKind": {
+            "description": "내장 드라이버. 설정 파일의 `driver` 값이다.\n\n드라이버 등록부의 키는 이 enum 이 아니라 문자열 id 다([`DriverKind::id`]) — 프로세스 밖 드라이버(JDBC 브리지 F6-3b)가\n이 enum 을 고치지 않고 들어올 자리다.",
+            "enum": [
+              "postgres",
+              "mysql",
+              "sqlite",
+              "redis"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "connections": {
+            "description": "id 순.",
+            "items": {
+              "$ref": "#/$defs/DbToolConnection"
+            },
+            "type": "array"
+          },
+          "problem": {
+            "description": "프로젝트 설정을 읽지 못한 까닭(그러면 목록이 비어 있다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "trusted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "connections",
+          "trusted",
+          "problem"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "db.tool.schema": {
+      "description": "DB 스키마 조회(SQL 드라이버만 — PG · MySQL/MariaDB · SQLite). `object` 가 없으면 한 단계의 목록 한 쪽(`kind`: `database` ·\n`schema` · `table`(기본) · `view` 등 — 객체 목록은 `database` · `schema` 안에서, `filter` 로 거른다), 있으면 그 객체의 열(이름 ·\n타입 · null · 기본값 · 기본 키) · 인덱스 · FK, `detail: \"ddl\"` 이면 DDL 글. Pitwall 의 DB 탐색기와 같은 것을 본다. 사람이 이번\n앱 실행에서 Pitwall 의 DB 탐색기로 연 연결만 쓰고(아니면 `notOpenedByUser` — 사람이 한 번 연 뒤 다시), 프로덕션 표지가 있는\n연결은 쓰지 않는다. Redis 연결이면 `unsupported` — `db_kv_scan` 을 쓴다.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "DbToolSchemaDetail": {
+            "description": "`object` 를 줬을 때 무엇을 읽는가.",
+            "oneOf": [
+              {
+                "const": "columns",
+                "description": "열 · 인덱스 · FK.",
+                "type": "string"
+              },
+              {
+                "const": "ddl",
+                "description": "DDL 글.",
+                "type": "string"
+              }
+            ]
+          },
+          "DbToolSchemaKind": {
+            "description": "목록의 단계. `database` · `schema` 는 DB · 스키마 목록, 나머지는 그 종류의 객체 목록이다.",
+            "enum": [
+              "database",
+              "schema",
+              "table",
+              "view",
+              "materializedView",
+              "sequence",
+              "function",
+              "procedure",
+              "trigger"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "connectionId": {
+            "description": "`db_connection_list` 의 연결 id.",
+            "type": "string"
+          },
+          "cursor": {
+            "default": null,
+            "description": "앞 쪽의 `nextCursor`. 처음 쪽은 비운다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "database": {
+            "default": null,
+            "description": "비우면 연결 설정의 DB.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DbToolSchemaDetail"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "`object` 를 줬을 때: `columns`(기본 — 열 · 인덱스 · FK) 또는 `ddl`."
+          },
+          "filter": {
+            "default": null,
+            "description": "객체 목록: 이름에 이 글이 든 것만(서버 쪽, 대소문자 무시).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DbToolSchemaKind"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "`object` 가 없을 때 무엇의 목록인가. 기본 `table`."
+          },
+          "limit": {
+            "default": null,
+            "description": "쪽 크기(1 ~ 500, 기본 100).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "object": {
+            "default": null,
+            "description": "테이블 · 뷰 등의 이름. 주면 그 객체의 열 · 인덱스 · FK(또는 `detail: \"ddl\"` 이면 DDL). `schema.name` 꼴이면 점 앞을 스키마로\n(스키마가 없는 드라이버는 DB 로) 읽는다 — `schema`(또는 `database`)를 따로 주면 점째 이름이다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "schema": {
+            "default": null,
+            "description": "비우면 연결의 기본 스키마(PG `current_schema()`). 스키마가 없는 드라이버(MySQL · SQLite)는 쓰지 않는다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worktree": {
+            "default": null,
+            "description": "워크트리 꼭대기(절대 경로). 연결 설정을 그 워크트리에서 읽는다. 비우면 세션의 워크트리, 없으면 메인 체크아웃.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "connectionId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DbToolColumn": {
+            "description": "열 하나.",
+            "properties": {
+              "comment": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "default": {
+                "description": "기본값 식의 글.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "nullable": {
+                "type": "boolean"
+              },
+              "primaryKey": {
+                "description": "기본 키에 든 열인가.",
+                "type": "boolean"
+              },
+              "type": {
+                "description": "DB 의 타입 글.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "type",
+              "nullable",
+              "default",
+              "primaryKey",
+              "comment"
+            ],
+            "type": "object"
+          },
+          "DbToolSchemaItem": {
+            "description": "목록의 한 항목.",
+            "properties": {
+              "comment": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ObjectKind"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "객체 목록이면 그 종류."
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "kind",
+              "comment"
+            ],
+            "type": "object"
+          },
+          "DbToolSchemaLevel": {
+            "description": "결과가 무엇인가.",
+            "enum": [
+              "databases",
+              "schemas",
+              "objects",
+              "object",
+              "ddl"
+            ],
+            "type": "string"
+          },
+          "ForeignKeyInfo": {
+            "description": "외래 키.",
+            "properties": {
+              "columns": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "name": {
+                "type": "string"
+              },
+              "referencedColumns": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "references": {
+                "$ref": "#/$defs/ObjectRef"
+              }
+            },
+            "required": [
+              "name",
+              "columns",
+              "references",
+              "referencedColumns"
+            ],
+            "type": "object"
+          },
+          "IndexInfo": {
+            "description": "인덱스. 그리드 편집의 키 판정(M3-10 — PK 또는 NOT NULL 열만으로 된 유일 인덱스)이 `primary` · `unique` · `partial` 을 본다.",
+            "properties": {
+              "columns": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "name": {
+                "type": "string"
+              },
+              "partial": {
+                "description": "조건이 붙은 인덱스(PG 부분 인덱스). 키로 쓰지 않는다.",
+                "type": "boolean"
+              },
+              "primary": {
+                "type": "boolean"
+              },
+              "unique": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "name",
+              "columns",
+              "primary",
+              "unique",
+              "partial"
+            ],
+            "type": "object"
+          },
+          "ObjectKind": {
+            "description": "객체 종류.",
+            "enum": [
+              "table",
+              "view",
+              "materializedView",
+              "sequence",
+              "function",
+              "procedure",
+              "trigger"
+            ],
+            "type": "string"
+          },
+          "ObjectRef": {
+            "description": "객체를 가리키는 이름. 세션의 `USE` · `search_path` 에 기대지 않게 늘 한정한다(M3-12).",
+            "properties": {
+              "database": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "schema": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "database",
+              "schema",
+              "name"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/$defs/DbToolColumn"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "ddl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "foreignKeys": {
+            "items": {
+              "$ref": "#/$defs/ForeignKeyInfo"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "indexes": {
+            "items": {
+              "$ref": "#/$defs/IndexInfo"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "items": {
+            "description": "목록이면 그 쪽(`object` 를 줬으면 빈 목록).",
+            "items": {
+              "$ref": "#/$defs/DbToolSchemaItem"
+            },
+            "type": "array"
+          },
+          "level": {
+            "$ref": "#/$defs/DbToolSchemaLevel"
+          },
+          "nextCursor": {
+            "description": "다음 쪽의 커서(그대로 `cursor` 로 돌려준다). 없으면 마지막 쪽이다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "object": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ObjectRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`object` 를 줬으면 읽은 객체(한정한 이름)."
+          }
+        },
+        "required": [
+          "level",
+          "items",
+          "object",
+          "columns",
+          "indexes",
+          "foreignKeys",
+          "ddl",
+          "nextCursor"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "diag.collect": {
       "description": "「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.\n경로 · 비밀 · 홈 디렉터리 이름은 가린다.",
       "kind": "unary",

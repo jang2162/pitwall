@@ -7,10 +7,10 @@
 //! - [`ToolHost`] 로 앱과 같은 Host 에 진짜 MCP 세션을 열고 `tools/list` · `tools/call` 로 이름 · 그룹 · 등급 · 스키마 · 감사 행을 본다.
 //!   도우미는 세션을 여는 공개 길(`pw_mcp::serve` · `mcp::services`)만 쓴다 — 세션의 안쪽 꼴(연결 범위 · 호출 길)에 기대지 않는다.
 //!
-//! 헤드리스 목록 단언은 앱 전용 툴(git — M5-05)이 생긴 뒤로 `mcp::services` 의 `routed_by` 를 가른다 — 빼면 헤드리스 목록에
-//! git 툴이 섞여 [`mcp_tools_are_exactly_these`] 가 실패한다(M5-05 가 빼 보고 확인했다).
+//! 헤드리스 목록 단언은 앱 전용 툴(git — M5-05, DB — M5-06)이 생긴 뒤로 `mcp::services` 의 `routed_by` 를 가른다 — 빼면 헤드리스
+//! 목록에 앱 전용 툴이 섞여 [`mcp_tools_are_exactly_these`] 가 실패한다(M5-05 · M5-06 이 각각 빼 보고 확인했다).
 //!
-//! 툴 행의 왕복 시험은 하위 모듈에 둔다(`git` — 이 파일의 병합 충돌을 줄이려고).
+//! 툴 행의 왕복 시험은 하위 모듈에 둔다(`git` · `db` — 이 파일의 병합 충돌을 줄이려고).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -28,10 +28,13 @@ use tokio_util::sync::CancellationToken;
 
 use crate::mcp;
 
+mod db;
 mod git;
 
 /// 앱 Host 가 내는 툴 전부. 이름순.
 const APP_TOOLS: &[&str] = &[
+    "db_connection_list",
+    "db_schema",
     "git_blame",
     "git_branch_list",
     "git_diff",
@@ -582,6 +585,37 @@ impl ToolHost {
         ));
         let client = ().serve(client_io).await.expect("MCP 세션이 열리지 않았다");
         ToolSession { client, cancel }
+    }
+
+    /// 그 프로젝트 창의 연결(`ConnectionScope::Project`)로 RPC 하나를 부른다 — 사람이 창에서 한 일.
+    pub async fn window_call(
+        &self,
+        project: &str,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, Value> {
+        use pw_core::Host;
+        let caller = pw_rpc::Caller {
+            role: pw_rpc::Role::Owner,
+            scope: pw_rpc::ConnectionScope::Project(project.to_owned()),
+            window: Some("main".to_owned()),
+        };
+        let mut connection = self.host.connect(caller).await.unwrap();
+        connection.sink.send(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": method, "params": params,
+        }));
+        loop {
+            let frame = tokio::time::timeout(Duration::from_secs(10), connection.source.recv())
+                .await
+                .expect("no response")
+                .expect("closed");
+            if frame.get("id") == Some(&Value::from(1)) {
+                return match frame.get("error") {
+                    Some(error) => Err(error.clone()),
+                    None => Ok(frame["result"].clone()),
+                };
+            }
+        }
     }
 
     /// 감사 로그의 행이 `n` 개가 될 때까지 기다려 전부 돌려준다(기록은 응답 뒤에 따로 끝난다). 오래된 것부터.

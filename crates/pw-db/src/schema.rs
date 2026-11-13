@@ -7,8 +7,10 @@
 //! - **관문**: 연결 범위([`DbGrant`] — 그 프로젝트 창만)와 신뢰 게이트를 **캐시를 보기 전에** 지난다 — 캐시에 든 것도 다른 창 ·
 //!   미신뢰 프로젝트에는 내주지 않는다. 연결은 `crate::connection::connect` 로만 연다.
 //! - **메타데이터용 연결**: 사람의 세션(콘솔 탭)과 따로, (프로젝트, 워크트리, 연결 id, 카탈로그)마다 하나를 열어 둔다. 사람의 세션
-//!   연결과 갈라져 있으므로 **커밋된 스키마만 본다** — 수동 커밋 탭의 커밋 전 DDL 은 그 탭의 `COMMIT` 뒤 무효화로 보인다. 그 연결을
-//!   처음 연 창의 RPC 연결이 닫히거나 [`IDLE_CLOSE`] 동안 쓰지 않으면 닫는다. 스키마 단계가 있는 드라이버(지원 플래그 `schemas` —
+//!   연결과 갈라져 있으므로 **커밋된 스키마만 본다** — 수동 커밋 탭의 커밋 전 DDL 은 그 탭의 `COMMIT` 뒤 무효화로 보인다. 창이
+//!   연 연결은 그 창의 RPC 연결이 닫히거나 [`IDLE_CLOSE`] 동안 쓰지 않으면 닫는다. 툴 호출(MCP 세션 — `db_schema`, 16-m5-plan
+//!   M5-06 ④)이 연 연결은 [`IDLE_CLOSE`] 로만 닫는다 — 세션이 닫혀도 둔다(CLI 는 호출마다 세션이 닫힌다). 열쇠가 같으면 창이
+//!   연 것을 툴이, 툴이 연 것을 창이 그대로 쓴다. 스키마 단계가 있는 드라이버(지원 플래그 `schemas` —
 //!   PG)는 연결이 그 DB 의 카탈로그만 읽으므로 DB 마다 따로 열되, (프로젝트, 연결 id)마다 [`MAX_LINKS`] 개를 넘으면 가장 오래 안 쓴
 //!   것을 닫는다. 질의 도중 RPC 가 취소되면(핸들러 future 가 버려진다) 그 연결을 다시 쓰지 않고 닫는다.
 //! - **캐시**: (연결, DB, 스키마) 단위 메모리 캐시, Host 전체 [`MAX_CACHED`] 항목(넘으면 가장 오래 안 쓴 것부터 버린다). 콘솔에서
@@ -37,7 +39,7 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::DbConnectionConfig;
-use crate::gate::{DbGrant, db_grant};
+use crate::gate::{DbGrant, DbTarget, db_grant};
 use crate::session::{DbSession, DbSessions, DbTunnelLease, blocking, db_error, lock};
 
 /// 스키마가 바뀌었을 수 있다. 내용은 [`DbSchemaChanged`]. 그 프로젝트 범위로만 나간다.
@@ -394,7 +396,7 @@ struct LinkKey {
 
 /// 드라이버에 보낼 요청.
 #[derive(Debug, Clone)]
-enum Request {
+pub(crate) enum Request {
     Databases,
     Schemas(Option<String>),
     Objects(ObjectQuery),
@@ -484,7 +486,7 @@ impl Request {
 }
 
 #[derive(Debug, Clone)]
-enum Cached {
+pub(crate) enum Cached {
     Databases(Vec<DatabaseInfo>),
     Schemas(Vec<SchemaInfo>),
     Objects(ObjectPage),
@@ -814,7 +816,7 @@ async fn shut(link: &MetaLink) {
 }
 
 /// 이름 · 필터 · 커서: 1024 바이트 이하, 빈 글은 거절.
-fn check_text(what: &str, value: Option<&str>) -> Result<(), RpcError> {
+pub(crate) fn check_text(what: &str, value: Option<&str>) -> Result<(), RpcError> {
     match value {
         Some(v) if v.is_empty() || v.len() > MAX_NAME => Err(RpcError::invalid_params(format!(
             "{what} must be 1-{MAX_NAME} bytes"
@@ -823,13 +825,13 @@ fn check_text(what: &str, value: Option<&str>) -> Result<(), RpcError> {
     }
 }
 
-fn check_object(object: &ObjectRef) -> Result<(), RpcError> {
+pub(crate) fn check_object(object: &ObjectRef) -> Result<(), RpcError> {
     check_text("object.database", object.database.as_deref())?;
     check_text("object.schema", object.schema.as_deref())?;
     check_text("object.name", Some(&object.name))
 }
 
-fn check_limit(limit: u32) -> Result<u32, RpcError> {
+pub(crate) fn check_limit(limit: u32) -> Result<u32, RpcError> {
     if (1..=MAX_PAGE).contains(&limit) {
         Ok(limit)
     } else {
@@ -840,7 +842,7 @@ fn check_limit(limit: u32) -> Result<u32, RpcError> {
 }
 
 /// 드라이버가 준 목록 하나를 `cursor`(앞에서 건너뛴 수) · `limit` 으로 자른다.
-fn slice<T: Clone>(
+pub(crate) fn slice<T: Clone>(
     items: &[T],
     cursor: Option<&str>,
     limit: Option<u32>,
@@ -861,7 +863,7 @@ fn slice<T: Clone>(
     ))
 }
 
-fn unexpected() -> RpcError {
+pub(crate) fn unexpected() -> RpcError {
     RpcError::internal("the schema cache returned another kind of item")
 }
 
@@ -993,7 +995,7 @@ impl DbSessions {
     }
 
     /// 관문(연결 범위는 부른 쪽이 [`DbGrant`] 로 지났다) → 신뢰 · 지금 설정 → 캐시 → 메타데이터용 연결.
-    async fn meta(
+    pub(crate) async fn meta(
         self: &Arc<Self>,
         ctx: &Ctx,
         grant: &DbGrant,
@@ -1011,17 +1013,21 @@ impl DbSessions {
             connection_id.to_owned(),
         );
         // 신뢰는 캐시를 보기 전에 본다 — 신뢰를 거둔 프로젝트에는 캐시에 든 것도 내주지 않는다.
-        let config = blocking(move || {
+        let (config, target) = blocking(move || {
             c.trust_gate(&project, wt.as_deref())?;
             let loaded = c.load(&project, wt.as_deref())?;
             let connection = loaded
                 .get(&id)
                 .ok_or_else(|| crate::config::not_found(&id))?;
-            connection.config.clone().map_err(|e| {
+            let config = connection.config.clone().map_err(|e| {
                 RpcError::invalid_params(format!("db connection `{id}` is invalid: {e}"))
-            })
+            })?;
+            let target = DbTarget::of(&config, &loaded.root);
+            Ok((config, target))
         })
         .await?;
+        // 에이전트의 증거는 관문이 판정한 연결 · 대상에만 — 캐시에 든 것도 그 밖에는 내주지 않는다.
+        grant.check_agent_use(worktree, Some(connection_id), &target)?;
         let driver = self.drivers.get(config.driver.id()).ok_or_else(|| {
             db_error(DbError::new(
                 DbErrorKind::Unsupported,
@@ -1098,13 +1104,13 @@ impl DbSessions {
             };
             let id = self.schema.opened.fetch_add(1, Ordering::SeqCst);
             let retired = CancellationToken::new();
-            self.watch(
-                ctx.connection_closed(),
-                retired.clone(),
-                id,
-                &link_key,
-                &link,
-            );
+            // 툴 호출(MCP 세션)이 연 것은 쉬는 시간으로만 닫는다 — 세션이 닫혀도 둔다(CLI 는 호출마다 세션이 닫힌다).
+            let owner_closed = if grant.is_agent() {
+                CancellationToken::new()
+            } else {
+                ctx.connection_closed()
+            };
+            self.watch(owner_closed, retired.clone(), id, &link_key, &link);
             *open = Some(MetaConn {
                 conn: sql,
                 config: opened.config,

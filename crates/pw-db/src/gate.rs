@@ -1,11 +1,19 @@
 //! 실행 관문(M3-05, 결정 M3-D18 · M3-D20 · M3-D6) — 연결을 열거나 실행하기 전의 한 자리.
 //!
-//! 1. **연결 범위** — [`DbGrant`] 는 [`db_grant`] 만 만든다: `scope_may_write` 를 지난 `ConnectionScope::Project(그 id)` 연결이다
-//!    (다른 프로젝트 창 · 웰컴 · 설정 · 파일 창은 `PERMISSION_DENIED`). 연결을 열거나 실행하는 함수(`crate::connection`,
-//!    `crate::session`)는 이것을 받아야 하고, 이 모듈 밖에서는 만들 수 없다:
+//! 1. **연결 범위** — [`DbGrant`] 를 만드는 입구는 둘이다: 창의 입구 [`db_grant`](`scope_may_write` 를 지난
+//!    `ConnectionScope::Project(그 id)` 연결 — 다른 프로젝트 창 · 웰컴 · 설정 · 파일 창 · MCP 세션은 `PERMISSION_DENIED`)와 MCP
+//!    세션의 입구 [`db_grant_for_agent`](결정 M5-D2 · M5-D27 · M5-D37 — 「사람이 연 연결」 과 대상에 묶은 표지, 아래 「에이전트의
+//!    입구」). 연결을 열거나 실행하는 함수(`crate::connection`, `crate::session`)는 이것을 받아야 하고, 이 모듈 밖에서는 만들 수
+//!    없다 — 창의 증거도 에이전트의 증거도:
 //!
 //!    ```compile_fail
-//!    let _ = pw_db::gate::DbGrant { project_id: String::from("p") };
+//!    let _ = pw_db::gate::DbGrant { project_id: String::from("p"), agent: None };
+//!    ```
+//!
+//!    ```compile_fail
+//!    fn forge(grant: pw_db::gate::DbGrant) -> pw_db::gate::DbGrant {
+//!        pw_db::gate::DbGrant { agent: None, ..grant }
+//!    }
 //!    ```
 //!
 //! 2. **신뢰 게이트** — M3-02 의 `db_trust_gate`(`Connections::trust_gate`)를 연결을 열 때와 실행마다 지난다.
@@ -16,6 +24,23 @@
 //!    `confirmed { grade, statementsHash, name? }` 로 다시 부른다 — Host 는 지금 실행할 문장들(세션 id · 방언 · 원문 · 트랜잭션 효과)로
 //!    해시를 다시 만들어 같고 등급이 그 이상일 때만 돌린다. 프로덕션 연결의 파괴 등급은 `name` 이 연결 이름과 같아야 한다.
 //! 4. **read-only 실행은 드라이버의 읽기 전용 트랜잭션 안에서**(결정 M3-D6) — 실행 파이프라인(`crate::execute`)이 연다.
+//!
+//! # 에이전트의 입구
+//!
+//! [`db_grant_for_agent`] 는 `pw_core::registry::agent::agent_grant` 를 지난 호출(MCP 세션의 툴 메서드)에만 [`DbGrant`] 를 준다.
+//! 판정 순서: 연결 id 꼴 → 신뢰 게이트(`untrusted`) → 연결 설정 읽기(메인 체크아웃 · 그 워크트리 — 둘 다 표지를 기억에 더한다) →
+//! 표지(`productionBlocked` — 그 대상에서 이번 실행 중 본 가장 엄한 것) → 「사람이 연 연결」(`notOpenedByUser`). 거절은 모두
+//! `PERMISSION_DENIED` 이고 `data.reason` 이 까닭이다. 그 증거는 (연결 id · 워크트리 · 푼 대상)에 묶인다 — 연결을 여는 자리
+//! (`crate::connection` 의 드라이버 연결 직전, `crate::schema` 의 캐시 앞)가 그때 다시 읽은 설정의 대상이 증거와 다르면 연결을
+//! 열지 않고 `notOpenedByUser` 로 거절한다(판정과 열기 사이에 설정 파일이 바뀌는 틈).
+//!
+//! - **「사람이 연 연결」**: 그 프로젝트 창의 증거([`db_grant`])로 저장한 연결을 드라이버까지 연 적이 있는 (프로젝트, 연결 id, 푼
+//!   대상). 연결을 여는 길은 모두 `crate::connection` 의 한 자리를 지나므로(세션 · 메타데이터 · 쪽 읽기 · 연결 테스트) 거기서
+//!   기록한다. 저장 전 초안의 연결 테스트는 기록하지 않는다. `DbSessions` 의 메모리에만 있다(앱을 끄면 사라진다).
+//! - **표지**([`DbMarks`]): `Connections` 가 연결 설정을 읽어 올리는 자리(`load` · `refresh` — 목록 · 열기 · 툴 호출, 어느
+//!   워크트리의 것이든)에서 연결마다 프로덕션 · read-only 표지를 그 **푼 대상**([`DbTarget`])에 묶어 더한다. 연결 id 와 무관하고
+//!   사람이 열었는지와도 무관하다. 조여지기만 한다 — 설정에서 지워도, 표지 없는 새 연결 id 로 같은 대상을 가리켜도 남는다.
+//!   대상만 열쇠다(프로젝트를 가리지 않는다 — 같은 대상은 같은 데이터다).
 
 use std::fmt::Write as _;
 
@@ -43,15 +68,39 @@ pub mod code {
     pub const DB_ERROR: i32 = 3003;
 }
 
-/// 연결 범위를 지난 증거(결정 M3-D18). [`db_grant`] 밖에서는 만들 수 없다(머리 주석의 `compile_fail`).
+/// 연결 범위를 지난 증거(결정 M3-D18 · M5-D2). [`db_grant`] · [`db_grant_for_agent`] 밖에서는 만들 수 없다(머리 주석의
+/// `compile_fail`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DbGrant {
     project_id: String,
+    /// 에이전트의 입구가 준 것이면 그 판정(연결 · 대상 · 표지). 창의 증거면 `None`.
+    agent: Option<Box<AgentBinding>>,
 }
 
 impl DbGrant {
     pub fn project_id(&self) -> &str {
         &self.project_id
+    }
+
+    /// MCP 세션의 증거인가([`db_grant_for_agent`]).
+    pub fn is_agent(&self) -> bool {
+        self.agent.is_some()
+    }
+
+    /// 에이전트의 증거가 묶인 연결 id. 창의 증거면 `None`.
+    pub fn agent_connection_id(&self) -> Option<&str> {
+        self.agent.as_deref().map(|a| a.connection_id.as_str())
+    }
+
+    /// 에이전트에게 적용하는 표지(결정 M5-D37 — 그 대상에서 이번 실행 중 본 가장 엄한 것). 창의 증거면 `None` — 창은 연결 설정의
+    /// 표지를 따른다. 실행 파이프라인은 이 read-only 를 연결 설정의 것과 함께 본다(표지를 따로 읽어 판정하지 않는다).
+    pub fn agent_marks(&self) -> Option<DbMarks> {
+        self.agent.as_deref().map(|a| a.marks)
+    }
+
+    /// 에이전트의 증거가 판정한 연결의 드라이버. 창의 증거면 `None`.
+    pub fn agent_driver(&self) -> Option<pw_db_types::DriverKind> {
+        self.agent.as_deref().map(|a| a.target.driver)
     }
 }
 
@@ -61,6 +110,7 @@ pub fn db_grant(scope: &ConnectionScope, project_id: &str) -> Result<DbGrant, Rp
     if scope_may_write(scope, project_id) {
         Ok(DbGrant {
             project_id: project_id.to_owned(),
+            agent: None,
         })
     } else {
         tracing::info!(target: "pw_db", project = project_id, ?scope, "db access refused: not the project's window");
@@ -413,6 +463,14 @@ pub(crate) fn refuse_untranslatable(statements: &[Planned]) -> Result<(), RpcErr
     }
     Ok(())
 }
+
+mod agent;
+
+pub use agent::{
+    AgentBinding, DbMarks, DbTarget, NOT_OPENED_BY_USER, PRODUCTION_BLOCKED, db_grant_for_agent,
+    not_opened_by_user, production_blocked,
+};
+pub(crate) use agent::{MarkMemory, OpenedMemory, agent_view, judge_for_agent};
 
 #[cfg(test)]
 mod tests;

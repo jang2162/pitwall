@@ -8,6 +8,8 @@
 //!   `host` 는 `ssh` 의 argv 로 가므로 허용 글자 목록을 벗어나면 저장도 읽기도 거절한다([`validate`],
 //!   `pw_db_driver::tunnel::check_destination`). 터널이 없는 DB `host` 는 `-` 로 시작하거나 공백 · 제어 문자를 담으면 거절한다.
 //! - 읽기는 디스크에 쓰지 않는다(`ConfigSource::without_writes`) — 목록만 봐도 커밋된 파일이 마이그레이션되면 안 된다.
+//! - 읽어 올린 연결마다 프로덕션 · read-only 표지를 그 푼 대상에 묶어 기억에 더한다(결정 M5-D37, `crate::gate` 의 「에이전트의
+//!   입구」). 연결 설정의 내용은 [`Connections::load`] · [`Connections::refresh`] 둘로만 읽으므로 둘 다 더한다.
 //! - 쓰기(`upsert` · `delete`)는 파일 쓰기와 같은 연결 범위다 — 그 프로젝트 창의 연결만(결정 M3-D18, `scope_may_write`).
 //! - 감시: 데스크톱은 프로젝트 설정 스토어를 열지 않으므로 파일 감시(`fs.changed`)를 따라가 `.pitwall/` 이 바뀌면 다시 읽고, 병합
 //!   값이 바뀐 연결만 `config.changed { changed: ["db/<id>"] }`(프로젝트 범위)로 낸다([`follow_files`]). 개인 전용 모드 폴더와 메인
@@ -641,6 +643,9 @@ pub struct Connections {
     pub(crate) writing: Mutex<()>,
     /// 전역 설정의 `[db]`(M3-20 — 연결 타임아웃 기본값 · Redis 응답 타임아웃 · 그리드 · 셀 상한).
     pub settings: crate::settings::DbSettings,
+    /// 대상에 묶어 기억하는 프로덕션 · read-only 표지(결정 M5-D37 — `crate::gate` 의 「에이전트의 입구」). 연결 설정을 읽어 올리는
+    /// 자리([`Connections::load`] · [`Connections::refresh`])가 모두 여기에 더한다 — 연결 설정의 내용을 읽는 길은 그 둘뿐이다.
+    pub(crate) marks: crate::gate::MarkMemory,
 }
 
 /// (프로젝트 id, 활성 워크트리) — 워크트리마다 공유 설정이 다를 수 있다.
@@ -764,6 +769,7 @@ impl Connections {
             seen: Mutex::default(),
             writing: Mutex::new(()),
             settings: crate::settings::DbSettings::default(),
+            marks: crate::gate::MarkMemory::default(),
         }
     }
 
@@ -802,6 +808,8 @@ impl Connections {
             .map(|snapshot| connections_of(&snapshot))
             .map_err(|e| e.to_string());
         if let Ok(list) = &connections {
+            // 표지는 대상에 묶어 기억한다(결정 M5-D37) — 목록 · 열기 · 툴 호출 모두 이 자리를 지난다.
+            self.marks.see(&root, list);
             // 파일 감시보다 목록 요청이 먼저 바뀐 값을 봐도 `config.changed` 를 낸다 — 열린 연결(M3-05)이 놓치지 않게.
             self.announce(project_id, worktree, list);
         }
@@ -908,11 +916,13 @@ impl Connections {
             // 깨진 파일은 다음 목록 요청이 `problem` 으로 보인다. 이전 값을 그대로 둔다(설정 계층의 「이전 설정 유지」).
             return;
         };
-        self.announce(project_id, worktree, &connections_of(&snapshot));
+        let list = connections_of(&snapshot);
+        self.marks.see(&root, &list);
+        self.announce(project_id, worktree, &list);
     }
 
     /// `approvals` 는 신뢰한 프로젝트에서만 있다(미신뢰면 상태를 정하지 않는다).
-    fn entry(
+    pub(crate) fn entry(
         &self,
         loaded: &Loaded,
         connection: &LoadedConnection,

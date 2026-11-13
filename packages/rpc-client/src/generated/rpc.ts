@@ -255,6 +255,20 @@ export type UnaryMethods = {
 	 */
 	"db.ssh.hosts": { params: DbProjectParams; result: DbSshHosts };
 	/**
+	 * 이 프로젝트의 DB 연결 목록(비밀 없음): id · 이름 · 드라이버 · 대상(호스트 · 포트 · DB · SQLite 경로) · read-only · 프로덕션 ·
+	 * 상태, 그리고 에이전트의 DB 툴이 지금 쓸 수 있는가(`usable`)와 그 까닭. 에이전트의 DB 툴은 사람이 이번 앱 실행에서 Pitwall 의
+	 * DB 탐색기로 연 연결만 쓰고(`notOpenedByUser`), 프로덕션 표지가 있는 연결은 쓰지 않는다(`productionBlocked`). 연결을 열지 않는다.
+	 */
+	"db.tool.connectionList": { params: DbToolConnectionListParams; result: DbToolConnectionList };
+	/**
+	 * DB 스키마 조회(SQL 드라이버만 — PG · MySQL/MariaDB · SQLite). `object` 가 없으면 한 단계의 목록 한 쪽(`kind`: `database` ·
+	 * `schema` · `table`(기본) · `view` 등 — 객체 목록은 `database` · `schema` 안에서, `filter` 로 거른다), 있으면 그 객체의 열(이름 ·
+	 * 타입 · null · 기본값 · 기본 키) · 인덱스 · FK, `detail: "ddl"` 이면 DDL 글. Pitwall 의 DB 탐색기와 같은 것을 본다. 사람이 이번
+	 * 앱 실행에서 Pitwall 의 DB 탐색기로 연 연결만 쓰고(아니면 `notOpenedByUser` — 사람이 한 번 연 뒤 다시), 프로덕션 표지가 있는
+	 * 연결은 쓰지 않는다. Redis 연결이면 `unsupported` — `db_kv_scan` 을 쓴다.
+	 */
+	"db.tool.schema": { params: DbToolSchemaParams; result: DbToolSchema };
+	/**
 	 * 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.
 	 * 경로 · 비밀 · 홈 디렉터리 이름은 가린다.
 	 */
@@ -1124,6 +1138,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"db.sql.split": {"name":"db.sql.split","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlSplitParams","output":"SqlSplitResult","doc":" SQL 스크립트를 문장으로 나눈다(방언별 따옴표 · 주석 · 달러 인용 · `DELIMITER` · 루틴 본문을 지나 구분자로). 범위는\n UTF-16 이고 끝의 구분자와 앞뒤 공백 · 주석을 뺀다. 파서가 못 읽는 문장도 나뉜다. `sql` 이 16 MiB 를 넘으면\n `INVALID_PARAMS`.\n","mcp":null,"fileScope":false},
 	"db.sql.statementAt": {"name":"db.sql.statementAt","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlStatementAtParams","output":"SqlStatementAtResult","doc":" 커서(UTF-16 오프셋)의 「현재 문장」 — 빈 줄이 아니라 구분자 기준. 두 문장 사이면 앞 문장, 첫 문장 앞이면 첫 문장.\n 오프셋이 `sql` 의 길이를 넘으면 `INVALID_PARAMS`.\n","mcp":null,"fileScope":false},
 	"db.ssh.hosts": {"name":"db.ssh.hosts","kind":"unary","tier":"read","roles":["owner"],"params":"DbProjectParams","output":"DbSshHosts","doc":" `~/.ssh/config`(과 그 `Include`)의 `Host` 이름 — 와일드카드 · 부정 패턴이 없고 터널 목적지로 쓸 수 있는 것만. 다른 값은\n 읽지 않는다. 읽지 못하면 빈 목록. 그 프로젝트 창의 연결 + 신뢰한 프로젝트만.\n","mcp":null,"fileScope":false},
+	"db.tool.connectionList": {"name":"db.tool.connectionList","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolConnectionListParams","output":"DbToolConnectionList","doc":" 이 프로젝트의 DB 연결 목록(비밀 없음): id · 이름 · 드라이버 · 대상(호스트 · 포트 · DB · SQLite 경로) · read-only · 프로덕션 ·\n 상태, 그리고 에이전트의 DB 툴이 지금 쓸 수 있는가(`usable`)와 그 까닭. 에이전트의 DB 툴은 사람이 이번 앱 실행에서 Pitwall 의\n DB 탐색기로 연 연결만 쓰고(`notOpenedByUser`), 프로덕션 표지가 있는 연결은 쓰지 않는다(`productionBlocked`). 연결을 열지 않는다.\n","mcp":{"group":"db","name":"db_connection_list"},"fileScope":false},
+	"db.tool.schema": {"name":"db.tool.schema","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolSchemaParams","output":"DbToolSchema","doc":" DB 스키마 조회(SQL 드라이버만 — PG · MySQL/MariaDB · SQLite). `object` 가 없으면 한 단계의 목록 한 쪽(`kind`: `database` ·\n `schema` · `table`(기본) · `view` 등 — 객체 목록은 `database` · `schema` 안에서, `filter` 로 거른다), 있으면 그 객체의 열(이름 ·\n 타입 · null · 기본값 · 기본 키) · 인덱스 · FK, `detail: \"ddl\"` 이면 DDL 글. Pitwall 의 DB 탐색기와 같은 것을 본다. 사람이 이번\n 앱 실행에서 Pitwall 의 DB 탐색기로 연 연결만 쓰고(아니면 `notOpenedByUser` — 사람이 한 번 연 뒤 다시), 프로덕션 표지가 있는\n 연결은 쓰지 않는다. Redis 연결이면 `unsupported` — `db_kv_scan` 을 쓴다.\n","mcp":{"group":"db","name":"db_schema"},"fileScope":false},
 	"diag.collect": {"name":"diag.collect","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"DiagnosticsText","doc":" 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.\n 경로 · 비밀 · 홈 디렉터리 이름은 가린다.\n","mcp":null,"fileScope":false},
 	"ext.list": {"name":"ext.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ExtensionList","doc":" 등록된 확장과 읽는 중에 나온 진단.\n","mcp":null,"fileScope":false},
 	"fs.copy": {"name":"fs.copy","kind":"unary","tier":"write","roles":["owner"],"params":"FsFromToParams","output":"FsCopied","doc":" 파일이나 폴더(그 아래 전부)를 복사한다. 심링크는 따르지 않고 링크로 복사한다. 대상 이름이 있으면 덮지 않고 `CONFLICT`.\n","mcp":null,"fileScope":false},
@@ -2690,6 +2706,146 @@ export type DbStatementClass = {
 	grade: RiskGrade,
 	reasons: RiskReason[],
 };
+
+/**  열 하나. */
+export type DbToolColumn = {
+	name: string,
+	/**  DB 의 타입 글. */
+	type: string,
+	nullable: boolean,
+	/**  기본값 식의 글. */
+	default: string | null,
+	/**  기본 키에 든 열인가. */
+	primaryKey: boolean,
+	comment: string | null,
+};
+
+/**  연결 하나(비밀 없음). */
+export type DbToolConnection = {
+	/**  연결 id(다른 DB 툴의 `connectionId`). */
+	id: string,
+	/**  설정이 틀렸으면 `null`. */
+	name: string | null,
+	driver: DriverKind | null,
+	host: string | null,
+	/**  쓰이는 포트(적지 않았으면 드라이버 기본). */
+	port: number | null,
+	database: string | null,
+	/**  SQLite 파일(설정에 적힌 그대로 — 상대 경로면 프로젝트 루트 기준). */
+	path: string | null,
+	/**  read-only 표지 — 에이전트에게 적용하는 것(이 대상에서 이번 앱 실행 중 본 가장 엄한 것). */
+	readOnly: boolean,
+	/**  프로덕션 표지 — 에이전트에게 적용하는 것(같은 규칙). 켜져 있으면 DB 툴이 쓰지 않는다. */
+	production: boolean,
+	state: DbToolConnectionState,
+	/**  에이전트의 DB 툴(`db_schema` 등)이 지금 이 연결을 쓸 수 있는가. */
+	usable: boolean,
+	/**  쓸 수 없는 까닭(`usable` 이 참이면 `null`). */
+	unusableReason: DbToolUnusable | null,
+	/**  설정이 틀렸으면 그 까닭. */
+	message: string | null,
+};
+
+export type DbToolConnectionList = {
+	/**  id 순. */
+	connections: DbToolConnection[],
+	trusted: boolean,
+	/**  프로젝트 설정을 읽지 못한 까닭(그러면 목록이 비어 있다). */
+	problem: string | null,
+};
+
+export type DbToolConnectionListParams = {
+	projectId: string,
+	/**
+	 *  워크트리 꼭대기(절대 경로). 연결 설정(`.pitwall/db/*.toml`)을 그 워크트리에서 읽는다. 비우면 세션의 워크트리, 없으면 메인
+	 *  체크아웃.
+	 */
+	worktree?: string | null,
+};
+
+/**  연결을 지금 열 수 있는가(창의 상태와 같다 — 비밀 · 확인이 필요하면 에이전트는 답할 수 없다). */
+export type DbToolConnectionState = 
+/**  프로젝트를 신뢰하지 않았다. */
+"untrusted" | 
+/**  설정 파일이 틀렸다(`message`). */
+"invalid" | 
+/**  비밀번호가 필요하다 — 사람이 Pitwall 에서 넣는다. */
+"secretRequired" | 
+/**  사람의 확인이 필요하다 — 사람이 Pitwall 에서 확인한다. */
+"approvalRequired" | "ready";
+
+export type DbToolSchema = {
+	level: DbToolSchemaLevel,
+	/**  목록이면 그 쪽(`object` 를 줬으면 빈 목록). */
+	items: DbToolSchemaItem[],
+	/**  `object` 를 줬으면 읽은 객체(한정한 이름). */
+	object: ObjectRef | null,
+	columns: DbToolColumn[] | null,
+	indexes: IndexInfo[] | null,
+	foreignKeys: ForeignKeyInfo[] | null,
+	ddl: string | null,
+	/**  다음 쪽의 커서(그대로 `cursor` 로 돌려준다). 없으면 마지막 쪽이다. */
+	nextCursor: string | null,
+};
+
+/**  `object` 를 줬을 때 무엇을 읽는가. */
+export type DbToolSchemaDetail = 
+/**  열 · 인덱스 · FK. */
+"columns" | 
+/**  DDL 글. */
+"ddl";
+
+/**  목록의 한 항목. */
+export type DbToolSchemaItem = {
+	name: string,
+	/**  객체 목록이면 그 종류. */
+	kind: ObjectKind | null,
+	comment: string | null,
+};
+
+/**  목록의 단계. `database` · `schema` 는 DB · 스키마 목록, 나머지는 그 종류의 객체 목록이다. */
+export type DbToolSchemaKind = "database" | "schema" | "table" | "view" | "materializedView" | "sequence" | "function" | "procedure" | "trigger";
+
+/**  결과가 무엇인가. */
+export type DbToolSchemaLevel = "databases" | "schemas" | "objects" | "object" | "ddl";
+
+export type DbToolSchemaParams = {
+	projectId: string,
+	/**  워크트리 꼭대기(절대 경로). 연결 설정을 그 워크트리에서 읽는다. 비우면 세션의 워크트리, 없으면 메인 체크아웃. */
+	worktree?: string | null,
+	/**  `db_connection_list` 의 연결 id. */
+	connectionId: string,
+	/**  비우면 연결 설정의 DB. */
+	database?: string | null,
+	/**  비우면 연결의 기본 스키마(PG `current_schema()`). 스키마가 없는 드라이버(MySQL · SQLite)는 쓰지 않는다. */
+	schema?: string | null,
+	/**
+	 *  테이블 · 뷰 등의 이름. 주면 그 객체의 열 · 인덱스 · FK(또는 `detail: "ddl"` 이면 DDL). `schema.name` 꼴이면 점 앞을 스키마로
+	 *  (스키마가 없는 드라이버는 DB 로) 읽는다 — `schema`(또는 `database`)를 따로 주면 점째 이름이다.
+	 */
+	object?: string | null,
+	/**  `object` 가 없을 때 무엇의 목록인가. 기본 `table`. */
+	kind?: DbToolSchemaKind | null,
+	/**  객체 목록: 이름에 이 글이 든 것만(서버 쪽, 대소문자 무시). */
+	filter?: string | null,
+	/**  앞 쪽의 `nextCursor`. 처음 쪽은 비운다. */
+	cursor?: string | null,
+	/**  쪽 크기(1 ~ 500, 기본 100). */
+	limit?: number | null,
+	/**  `object` 를 줬을 때: `columns`(기본 — 열 · 인덱스 · FK) 또는 `ddl`. */
+	detail?: DbToolSchemaDetail | null,
+};
+
+/**  에이전트가 이 연결을 지금 쓸 수 없는 까닭(DB 툴이 거절할 때의 `data.reason` 과 같다). */
+export type DbToolUnusable = 
+/**  프로젝트를 신뢰하지 않았다. */
+"untrusted" | 
+/**  설정 파일이 틀렸다. */
+"invalid" | 
+/**  프로덕션 표지가 있는 대상이다 — 에이전트 툴은 쓰지 않는다. */
+"productionBlocked" | 
+/**  사람이 이번 앱 실행에서 Pitwall 의 DB 탐색기로 이 연결(지금 대상)을 연 적이 없다 — 사람이 한 번 연 뒤 다시. */
+"notOpenedByUser";
 
 /**  셀 상한을 넘어 잘린 값. */
 export type DbTruncated = {
