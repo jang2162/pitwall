@@ -42,10 +42,10 @@ pitwall <path>[:line[:col]]
 | F2-4 | 루트 후보 추천 + 생성 시 자동 감지 체크리스트 | P0 (추천) / P1 (체크리스트) |
 | F2-5 | **git worktree 경로 인식**: 미등록 워크트리면 메인 저장소 프로젝트에 연결해 해당 워크트리로 열기 (Orca 워크트리 대응) | P0 |
 
-**명령줄 규칙** (구현: `apps/desktop/src-tauri/src/cli.rs` · `detach.rs` · `launch.rs` · `shell_command.rs`)
+**명령줄 규칙** (구현: `apps/desktop/src-tauri/src/cli.rs` · `detach.rs` · `launch.rs` · `shell_command.rs`, 서브커맨드 `mcp` · `tool` 은 `mcp.rs` · `tool_cli.rs`)
 - `pitwall [<path>[:line[:col]]]...`. 상대 경로는 **실행한 프로세스의 cwd** 로 절대화한다(두 번째 실행이면 그 cwd 가 기존 앱에 함께 간다). 경로가 없으면 웰컴 창을 열거나 앞으로 가져온다. `-` 로 시작하는 인자는 무시한다(macOS 의 `-psn_…` 등) — 그런 이름의 파일은 `--` 뒤에 둔다
 - 첫 인자 `mcp` 는 언제나 서브커맨드다(F10-1). 앱을 띄우지 않고 단일 인스턴스로 전달하지도 않으며 stdout 에 아무것도 쓰지 않는다. 이름이 `mcp` 인 폴더는 `pitwall ./mcp`
-- 첫 인자 `tool` 도 언제나 서브커맨드다(F10-7 — MCP 툴을 명령줄에서 부른다, 05-mcp.md 「CLI (`pitwall tool`)」 절). 앱을 띄우지 않고 단일 인스턴스로 전달하지도 않으며 stdout 에는 결과만 쓴다. 앱이 꺼져 있으면 코어 툴만 되고 그 밖의 툴은 거절이다(05-mcp.md 「로컬 소켓과 헤드리스」). 이름이 `tool` 인 폴더는 `pitwall ./tool`
+- 첫 인자 `tool` 도 언제나 서브커맨드다(F10-7 — MCP 툴을 명령줄에서 부른다, 05-mcp.md 「CLI (`pitwall tool`)」 절). 앱을 띄우지 않고 단일 인스턴스로 전달하지도 않으며 stdout 에는 결과만 쓴다. 앱이 꺼져 있으면 코어 툴만 되고 그 밖의 툴은 거절이다(05-mcp.md 「로컬 소켓과 헤드리스」). 이름이 `tool` 인 폴더는 `pitwall ./tool`. 둘째 자리부터의 `mcp` · `tool` 은 경로다. `tool` 뒤의 `--project <path>` 는 어디에 와도 된다
 - `:숫자` 가 경로 이름에 실제로 들어 있을 수 있다(`foo:12` 라는 파일). 가르는 법은 셋(통째로 · 끝 `:줄` · 끝 `:줄:열`)이고 **덜 가른 것부터 보아 디스크에 있는 첫 해석**을 고른다. 어느 것도 없으면 가장 많이 가른 것. 줄 · 열은 1 이상이고 `:0` 은 이름의 일부다
 - 찾은 프로젝트가 있으면 그 프로젝트 창(프로젝트마다 하나, label `project-<id>`)을 열거나 앞으로 가져오고 `markOpened` 를 기록한다. 등록 안 된 워크트리로 왔으면 `ActiveWorktree.top` 을, 파일이면 파일 · 줄 · 열을 넘긴다(창별 보류 큐에 쌓고 `project://open` 으로 알린다. 창은 리스너를 건 뒤 마운트할 때와 알림마다 `take_pending_project_opens` 로 꺼낸다 — 막 만든 창도 요청을 잃지 않고, 새 창의 첫 요청도 같은 큐로 간다). 디렉터리는 파일로 넘기지 않는다(웰컴 창이 `open_project_window` 에 디렉터리를 `file` 로 넘겨도 버린다)
 - 못 찾았는데 그 파일(정규화한 실제 경로)의 단일 파일 창(10-ui S4f, M1-24)이 열려 있으면 그 창을 앞으로 가져오고 줄 · 열을 넘긴다(같은 창별 큐 · `project://open`). 단일 파일 창의 label 은 `file-<번호>`(다시 쓰지 않는다)이고 쿼리는 `?window=file&path=<실제 경로>` 다

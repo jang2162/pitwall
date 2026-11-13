@@ -150,7 +150,7 @@ macOS · Linux 모두 **XDG Base Directory** 규칙을 따른다 (mise · gh · 
 - 마이그레이션은 버전별 순차 함수(`v1→v2→v3`)로 구현, 각 단계 테스트 픽스처 유지
 
 ### 로그 · 진단 (D22)
-- 로그: `$STATE/logs/` 회전 로그(코어 · UI · LSP · DAP · Relay 별), 기본 7일 보관
+- 로그: `$STATE/logs/` 회전 로그(코어 · UI · LSP · DAP · Relay 별), 기본 7일 보관. 앱 없이 도는 서브커맨드는 자기 구성요소 파일에 쓴다 — `pitwall mcp` 는 `mcp.<날짜>.log`, `pitwall tool` 은 `cli.<날짜>.log`(호출마다 프로세스가 떠 앱의 `core` 와 섞이지 않게). 둘 다 stdout 이 계약(MCP 바이트 · 툴 결과)이라 경고 이상은 stderr 에도 쓴다
 - 사용 통계(텔레메트리) 수집 없음
 - UI 언어: 전역 `settings.toml` 의 `[ui] language`(내장 기본값 `"system"` — OS 언어를 따른다). 고르기 · 쓰기 규칙은 [07-extensibility.md](07-extensibility.md) §4.1
 - 업데이트 채널: 전역 `settings.toml` 의 `[update] channel`(`"stable"` 내장 기본값 | `"preview"`, 그 밖의 값은 경고를 남기고 stable). 매니페스트 위치 · 확인 시점은 [02-tech-stack.md](02-tech-stack.md) §3-1
