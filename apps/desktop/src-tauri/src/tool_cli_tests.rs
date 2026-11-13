@@ -448,12 +448,11 @@ impl Fixture {
                 () = cut.cancelled() => {}
             }
         });
-        let server = CancellationToken::new();
         tokio::spawn(pw_mcp::serve(
             services,
             pw_mcp::SessionRequest::default(),
             tokio::io::split(server_io),
-            server.clone(),
+            CancellationToken::new(),
         ));
         let request = Request {
             action: &invocation.action,
@@ -462,8 +461,9 @@ impl Fixture {
             headless: headless.as_deref(),
         };
         let (mut out, mut err) = (Vec::new(), Vec::new());
+        // 서버 세션은 CLI 가 전송을 닫으면 스스로 끝난다. 여기서 세션 토큰을 취소하지 않는다 — 취소하면 돌던 호출이 그 토큰으로
+        // 거둬져, CLI 가 취소 알림을 보냈는지를 시험이 가르지 못한다.
         let code = execute(request, client_io, interrupt, &mut out, &mut err).await;
-        server.cancel();
         (
             code,
             String::from_utf8(out).unwrap(),
@@ -647,8 +647,9 @@ async fn an_interrupt_cancels_the_call_and_exits_130() {
         )
         .await;
     assert_eq!((code, out.as_str()), (exit::INTERRUPTED, ""), "{err}");
-    // Host 의 핸들러 future 가 버려지고 감사 행이 결과 `error` · 까닭 `cancelled`.
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    // Host 의 핸들러 future 가 버려지고 감사 행이 결과 `error` · 까닭 `cancelled`. 연결이 끊긴 뒤 rmcp 가 남은 응답을 5초
+    // 기다렸다 거두는 길이 아니라 취소 알림으로 거둔다 — 그보다 짧게 기다린다.
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
     while !f.probe.dropped.load(Ordering::SeqCst) {
         assert!(
             std::time::Instant::now() < deadline,
