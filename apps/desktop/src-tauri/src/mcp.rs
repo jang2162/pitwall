@@ -3,7 +3,7 @@
 //! - 앱이 떠 있으면(같은 단일 인스턴스 키의 소켓이 있으면) 그 앱의 로컬 소켓에 붙어 stdio 를 잇는 **얇은 프록시**다.
 //!   세션 · 툴 · 감사 로그는 앱 안에서 돈다.
 //! - 앱이 꺼져 있으면 **헤드리스**: 이 프로세스 안에 `LocalHost` 를 만들어 stdio 로 직접 서비스한다. 레지스트리는 읽기만 하고
-//!   ([`pw_core::LocalHostBuilder::read_only_registry`]) 앱을 띄우지 않는다. 승인 경로가 없으므로 `read` 툴만 성공한다.
+//!   ([`pw_core::LocalHostBuilder::read_only_registry`]) 앱을 띄우지 않는다. 헤드리스에는 코어 툴만 있고 승인 경로가 없어 그 가운데 `read` 툴만 성공한다.
 //! - Windows 는 아직 소켓이 없어 언제나 헤드리스다.
 //!
 //! **stdout 에는 MCP 바이트만 쓴다.** 로그는 `$STATE/logs/mcp.<날짜>.log`, 경고 이상은 stderr 에도 쓴다(MCP 클라이언트는

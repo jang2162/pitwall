@@ -24,14 +24,14 @@
   - 헤드리스는 레지스트리를 **읽기만** 한다: 파일이 없으면 빈 목록, 손상 · 마이그레이션이 필요한 파일도 건드리지 않고 빈 목록이다(복구 · 마이그레이션은 레지스트리를 소유한 앱의 일). 헤드리스에는 **코어 툴만** 있다(「툴 레지스트리」 의 「세션의 툴은 그 Host 가 처리하는 것만」) — `project_list` · `project_info`, 그리고 `settings_get`(아직 없다 — 16-m5-plan M5-09). 승인 경로가 없으므로 그 가운데 `read` 툴만 성공한다. 그 밖의 툴(git · DB · 코드)은 앱이 실행 중이어야 한다 — 연 연결 · 승인 창 · 언어 서버 · 심볼 색인이 앱에 있다(06-roadmap.md 결정 D61)
     - 연결은 쓰기 가능한 플래그(파일은 만들지 않는다)로 열고 질의를 `query_only` 로 막는다. state.db 가 WAL 이라(03 「state.db」) `SQLITE_OPEN_READ_ONLY` 로 열면 앱이 꺼져 있을 때 `-wal` · `-shm` 을 만들고 닫으며 지우지 못해 남긴다. 쓸 수 있는 연결은 열려 있는 동안만 둘을 두고 마지막으로 닫힐 때 걷는다. 앱이 비정상 종료로 남긴 `-wal` 이 있으면 닫히며 그 내용(이미 커밋된 쓰기)을 파일에 옮긴다. 쓸 수 없는 폴더면 읽기 전용 · `immutable` 연결로 연다
   - Windows 는 소켓이 아직 없어 언제나 헤드리스다
-  - **헤드리스로 시작한 뒤 앱이 뜨면** 그 뒤의 요청을 앱으로 넘긴다: 헤드리스 세션이 `tools/list` · `tools/call` 을 받을 때 소켓을 다시 보고, 앱이 받으면 넘겨 붙고 `tools/list_changed` 를 보낸다. 에이전트 클라이언트는 세션을 시작할 때 `pitwall mcp` 를 띄우므로 앱보다 에이전트를 먼저 켜는 순서가 흔하다. 아직 없다(16-m5-plan M5-20) — 지금 `pitwall mcp` 는 시작할 때 한 번만 앱을 찾는다. 넘겨 붙기가 들어오기 전까지는 헤드리스 세션의 서버 안내문이 「앱을 켠 뒤 MCP 서버를 다시 시작」 을 알린다(안내문도 아직 없다 — M5-03)
+  - **헤드리스로 시작한 뒤 앱이 뜨면** 그 뒤의 요청을 앱으로 넘긴다: 헤드리스 세션이 `tools/list` · `tools/call` 을 받을 때 소켓을 다시 보고, 앱이 받으면 넘겨 붙고 `tools/list_changed` 를 보낸다. 에이전트 클라이언트는 세션을 시작할 때 `pitwall mcp` 를 띄우므로 앱보다 에이전트를 먼저 켜는 순서가 흔하다. 아직 없다(16-m5-plan M5-20) — 지금 `pitwall mcp` 는 시작할 때 한 번만 앱을 찾는다. 넘겨 붙기가 들어오기 전까지는 헤드리스 세션의 서버 안내문(`instructions`)이 「앱이 꺼져 있어 코어 툴만 있다. 앱을 켠 뒤 MCP 서버를 다시 시작하면 나머지가 나온다」 를 알린다(`pw_mcp::server::HEADLESS_NOTICE`). 앱 세션에는 싣지 않는다. 헤드리스 세션은 stdio 로 직접 서비스하는 세션이다(`HEADLESS_TRANSPORT` — 앱의 세션은 언제나 로컬 소켓으로 온다)
 - **위치**: `$STATE/run/<해시>.sock`. 경로가 `sun_path` 한도(103바이트, macOS 104 · Linux 108 의 작은 쪽)를 넘으면 `<임시 폴더>/pitwall-<uid>/<해시>.sock`(macOS `$TMPDIR` 는 사용자 전용). 양쪽이 같은 규칙으로 고른다
 - **그 사용자만 붙는다**: 폴더는 0700 · 이 사용자 소유 · 심링크 아님(서버는 만들거나 0700 으로 고치고, 다른 사용자 소유 · 심링크면 소켓을 열지 않는다. 클라이언트는 같은 검사를 통과한 폴더에만 붙는다), 소켓 파일 0600, 연결마다 양쪽이 상대 uid(`getpeereid` · `SO_PEERCRED`)를 본다(`pw_mcp::socket::peer_allowed` — 다른 uid · 자격을 못 읽은 연결은 거절). macOS 는 소켓 파일 권한으로 connect 를 막지 않으므로 폴더 권한이 실제 방어선이다
 - **워크트리 격리**: 소켓 이름의 해시는 단일 인스턴스 키(debug: 빌드 폴더 + `$DATA`, release: 앱 identifier — 기본이 아닌 `$DATA` 면 그 해시를 붙인 것, `apps/desktop/src-tauri/src/instance.rs`)와 `$STATE` 로 만든다. 다른 워크트리 · 다른 `$DATA` 의 `pitwall mcp` 는 다른 이름을 계산해 이 앱에 붙지 않고 헤드리스로 돈다
 - **이미 있는 소켓**: 붙어 보고 받으면 다른 앱이 쓰는 중이라 열지 않는다. 받지 않으면(앱이 죽고 남은 파일) 지우고 연다. 소켓이 아닌 파일 · 심링크는 지우지 않는다. 앱이 끝날 때 소켓 파일이 남을 수 있는데, 다음 시작이 이 규칙으로 바꾼다
 - **핸드셰이크**: 연결 직후 클라이언트가 JSON 한 줄(`protocol: "pitwall-mcp/1"`, `project`, `cwd`), 서버가 한 줄(`ok`, `error`)로 답한다. 그 뒤는 MCP 바이트다. 프로젝트 해석(`project.resolve`)은 앱이 한다
 - **끊김**: 앱이 도중에 닫히면 프록시는 응답을 기다리던 요청마다 JSON-RPC 오류(`-32001`)를 stdout 에 쓰고 stderr 에 이유를 남긴 뒤 **종료 코드 1** 로 끝난다. 클라이언트가 stdin 을 닫으면 소켓의 쓰기 쪽을 닫아 앱 쪽 세션을 끝내고(남은 응답은 5초까지 옮긴다) 0 으로 끝난다. 앱 쪽 세션이 끝나면 그 세션의 Host 연결 · 설정 감시 · 버스 구독도 걷힌다
-- **호출 취소**: 클라이언트가 호출을 취소하거나 세션이 끊기면 그 호출의 Host RPC 를 취소한다(`request.cancel`). 취소된 호출은 감사 로그에 결과 `error` · 까닭 `cancelled` 로 남는다. 아직 없다(16-m5-plan M5-03) — 지금은 취소해도 Host 의 RPC 가 끝까지 돈다
+- **호출 취소**: 클라이언트가 호출을 취소하거나(`notifications/cancelled` — rmcp 가 그 요청의 취소 토큰을 건다) 세션이 끊기면 그 호출의 Host RPC 를 취소한다 — `pw_mcp::HostClient` 가 그 요청 id 로 `request.cancel` 을 보내고 Host 는 핸들러 future 를 버린다. 응답 전에 호출 future 가 버려져도 같다(`HostClient::call_until` · `call`). 세션이 끊긴 경우는 rmcp 가 남은 응답을 5초까지 기다린 뒤 취소 토큰을 건다. 취소된 호출은 감사 로그에 결과 `error` · 상세 `cancelled` 로 남고 결과 표지의 까닭도 `cancelled` 다. CLI 의 Ctrl+C · `db_query` 의 취소 · 승인 대기 거두기는 이 길만 쓴다
 - **세션은 프로젝트 설정을 쓰지 않는다**: 노출 판정용으로 세션 프로젝트의 설정을 읽을 때 구버전 파일은 메모리에서만 올린다(`ConfigSource::without_writes`). 커밋된 `.pitwall/project.toml` 에 `schema` 가 써지거나 저장소에 `.backup/` 이 생기지 않는다. 그 설정의 이벤트는 세션 전용 버스로 내 앱의 버스에 같은 프로젝트의 `config.*` 가 한 번 더 나가지 않는다
 - **stdout 에는 MCP 바이트만**: 로그는 `$STATE/logs/mcp.<날짜>.log`, 경고 이상은 stderr 에도 쓴다. `pitwall mcp` 는 확장을 읽지 않는다
 - 사용법 오류는 종료 코드 2
@@ -155,8 +155,22 @@
 - **설명 · 등급**: 선언의 문서 주석과 `tier`. `read` 툴에는 `readOnlyHint` 를 단다
 - **입력 스키마**: 입력 타입의 schemars 스키마를 루트로 펼친다. struct 만 툴이 된다(MCP `inputSchema` 는 object). `()` 입력은 빈 object 로 내보내고 RPC 에는 `null` 을 보낸다. enum 루트는 툴로 만들 수 없다
 - **출력**: 결과 스키마의 루트가 object 면 `outputSchema` 와 `structuredContent`, 아니면(배열 등) JSON 텍스트만
-- **결과 표지**: `tools/call` 결과의 `_meta` 에 결과(`ok` · `error` · `denied`)와 거절 까닭 코드를 싣는다(취소는 거절이 아니라 결과 `error` 의 까닭 `cancelled` 다 — 감사 로그와 같다). CLI 의 종료 코드가 이것을 읽는다(「CLI」). 아직 없다(16-m5-plan M5-03) — 지금은 거절과 툴 오류가 둘 다 오류 글이다
-- **프로젝트 지정**: 입력에 `projectId` 가 있으면 프로젝트 툴이다. 세션에 프로젝트가 있으면(`--project` · cwd) `projectId` 를 필수에서 빼고 빠지면 서버가 채운다. 입력에 `worktree` 가 있고 비었으면 세션의 활성 워크트리 꼭대기로 채운다(세션을 연 경로가 미등록 워크트리 안일 때 — Orca 워크트리 안의 에이전트가 메인 체크아웃이 아니라 자기 워크트리를 본다). 워크트리 채우기는 아직 없다(16-m5-plan M5-03)
+- **결과 표지**: `tools/call` 결과의 `_meta` 에 결과(`ok` · `error` · `denied`)와 까닭 코드를 싣는다(취소는 거절이 아니라 결과 `error` 의 까닭 `cancelled` 다 — 감사 로그와 같다). 키는 `pitwall/outcome`(감사 로그의 `outcome` 과 같은 셋)과 `pitwall/reason`(까닭이 없으면 키가 없다). 노출 안 된 툴 호출(JSON-RPC invalid params)은 오류의 `data` 객체에 같은 두 키를 싣는다. CLI 의 종료 코드가 이것을 읽는다(「CLI」). 구현과 읽는 쪽: `pw_mcp::marker`(`Mark::read` — 모르는 까닭 코드는 까닭 없음으로 읽어 결과 값으로는 계속 가른다). 다른 행이 코드를 더하면 아래 표에 한 줄을 더한다
+
+  | 까닭 코드 | 결과 | 뜻 | 지금 내는 곳 |
+  |---|---|---|---|
+  | `not_exposed` | `denied` | 세션 또는 대상 프로젝트의 노출 설정이 그 툴을 껐다(모르는 툴 이름 포함) | 세션의 노출(invalid params) · 대상 프로젝트의 노출 |
+  | `needs_approval` | `denied` | 사람의 승인이 있어야 하는데 받을 길이 없다 | 앱 세션의 `write` 이상 |
+  | `approval_denied` | `denied` | 승인 창에서 거절됐다 | 아직 없다(16-m5-plan M5-12) |
+  | `approval_timeout` | `denied` | 승인 창이 시간 안에 답을 받지 못했다 | 아직 없다(M5-12) |
+  | `needs_app` | `denied` | 앱이 있어야 하는 툴을 헤드리스에서 불렀다(결정 M5-D3) | 아직 없다(M5-04) — 지금 헤드리스 카탈로그에는 그 툴이 없어 `not_exposed` 다 |
+  | `headless_write` | `denied` | 헤드리스에서 `write` 이상을 불렀다(승인 경로가 없다) | 헤드리스 세션의 `write` 이상 |
+  | `cancelled` | `error` | 호출이 취소됐다(취소 알림 · 세션 끊김 · Host 가 그 RPC 를 거둠) | 「호출 취소」 |
+  | `too_large` | `error` | 응답이 한 건 상한(256 KiB)을 넘었다 — 범위를 좁혀 다시 부른다 | 「응답 크기」 |
+
+  까닭이 없는 `error` 는 툴(Host RPC)이 실패한 것이다
+- **응답 크기**: 툴 응답 한 건은 직렬화한 결과 JSON 256 KiB 까지(`pw_mcp::server::MAX_RESPONSE_BYTES`), 목록 툴의 `limit` 기본은 100(`DEFAULT_LIST_LIMIT` — `git_log` · `symbol_search` 50, `git_status` 200. 16-m5-plan 결정 M5-D34, 수는 출발값). 툴 메서드는 넘지 않게 자르고(`truncated` 와 다음 `cursor`), 그래도 넘은 응답은 세션이 결과 대신 「범위를 좁혀라」 오류(까닭 `too_large`)로 바꾼다. 감사 행은 결과 `error` 이고 크기 열에 넘은 크기를 남긴다
+- **프로젝트 지정**: 입력에 `projectId` 가 있으면 프로젝트 툴이다. 세션에 프로젝트가 있으면(`--project` · cwd) `projectId` 를 필수에서 빼고 빠지면 서버가 채운다. 입력에 `worktree` 가 있고 비었으면(없음 · `null` · 빈 글자열) 세션의 활성 워크트리 꼭대기(`project.resolve` 의 `worktree.top`)로 채운다(세션을 연 경로가 미등록 워크트리 안일 때 — Orca 워크트리 안의 에이전트가 메인 체크아웃이 아니라 자기 워크트리를 본다). 준 값은 덮지 않고, 호출이 세션 프로젝트가 아닌 `projectId` 를 겨누면 채우지 않는다 — 세션의 워크트리는 세션 프로젝트의 것이다
 - **지금 툴**: `project_list`(← `project.list`), `project_info`(← `project.info`: 프로젝트 · 루트 폴더 유무 · 빌드 파일 · 빌드 파일에서 짐작한 언어 · 설정 폴더와 그 안의 설정 파일 id. 설정 내용은 읽지 않는다 — 읽으면 구버전 파일의 마이그레이션이 따라와 조회 툴이 저장소를 고친다)
 - MCP 메시지(툴 설명 · 오류)는 번역하지 않는다
 
@@ -206,7 +220,7 @@ JetBrains IDE 내장 MCP 서버의 "Exposed Tools" 방식을 따른다. 권한 �
 지금 구현(`crates/pw-mcp/src/exposure.rs`):
 - 읽는 키는 `preset` 과 `[mcp.tools]` 다. 전역 `[mcp]` 위에 프로젝트 `[mcp]` 를 설정 계층의 병합 규칙으로 덮는다(`[mcp.tools]` 는 키별로 합쳐진다). 내장 기본값은 `preset = "standard"`
 - 「공유 설정은 좁히기만」: 저장소 모드 프로젝트는 공유 레이어까지 읽은 노출과, 공유 레이어를 뺀(전역 + `.local.toml`) 노출이 **둘 다 켠 툴**만 켠다(`Exposure::narrowed_by`). 개인 전용 프로젝트의 `project.toml` 은 개인 설정이라 넓힐 수 있다
-- 노출은 **세션 프로젝트**의 설정으로 정한다. 프로젝트 툴에 다른 프로젝트의 `projectId` 를 넘겨도 그 프로젝트의 `[mcp]` 는 보지 않는다 — 지금 툴은 모두 `read` 다. 호출은 세션의 노출과 **대상 프로젝트의 노출**(그 프로젝트의 `[mcp]` — 공유 레이어는 좁히기만)을 둘 다 지나야 하고, `auto_approve` 와 승인 창은 대상 프로젝트의 것으로 판정한다(16-m5-plan 결정 M5-D28). 대상 프로젝트의 판정은 아직 없다(M5-03 · M5-12)
+- `tools/list` 는 **세션 프로젝트**의 설정으로 정한다. 호출은 세션의 노출과 **대상 프로젝트의 노출**(프로젝트 툴의 `projectId` 가 세션 프로젝트가 아닐 때 그 프로젝트의 `[mcp]` — 공유 레이어는 좁히기만)을 둘 다 지나야 한다(16-m5-plan 결정 M5-D28, `pw_mcp::server` 의 `Session::call`). 대상 프로젝트가 끈 툴은 결과 `denied` · 까닭 `not_exposed` 다. 대상 프로젝트의 설정은 호출마다 **디스크에 쓰지 않고** 읽는다(`ConfigSource::without_writes`). `auto_approve` 와 승인 창은 대상 프로젝트의 것으로 판정한다 — 승인 경로와 함께 아직 없다(M5-12)
 - 프리셋은 등급으로 고른다: `read-only` = `read`, `standard` = `read` · `write`, `full` = 전부
 - 판정 순서: 툴 이름과 정확히 같은 키 → 맞는 glob(`*` 는 아무 글자열) 중 가장 긴 것 → 프리셋. 모듈 그룹 on/off 는 지금 glob 으로 쓴다(`"project_*" = false`)
 - 그룹 키 `[mcp.groups]` 는 아직 없다(16-m5-plan M5-01). 들어오면 판정 순서는 툴 이름과 정확히 같은 키 → 맞는 glob 중 가장 긴 것 → 그룹 → 프리셋이고, 공유 설정은 그룹 키로도 좁히기만 한다. glob 은 접두사 없는 이름(`diagnostics` · `settings_get`)을 놓치고, 꺼 둔 그룹에 뒤에 더해진 툴을 켜진 채 내보낸다 — 그래서 그룹은 선언이 싣는다
@@ -279,5 +293,5 @@ MCP 툴 전부를 같은 이름 · 같은 입력 · 같은 판정으로 명령�
 ## 5. 설계 메모
 
 - 툴 입력 스키마는 코어 Rust 타입에서 `schemars`로 생성 → UI 폼과 MCP 검증이 동일
-- 응답은 토큰 절약을 위해 기본 요약 + `detail` 옵션 (예: `run_logs`는 기본 마지막 200줄)
+- 응답은 토큰 절약을 위해 기본 요약 + `detail` 옵션 (예: `run_logs`는 기본 마지막 200줄). 한 건의 상한과 목록 `limit` 의 기본은 「툴 레지스트리」 의 「응답 크기」
 - 설정 변경은 결국 `.pitwall/*.toml` 파일 변경이므로, 에이전트가 파일을 직접 고쳐도 동일하게 반영됨 (파일 감시). MCP 툴은 **검증 · 승인 · 자동감지**라는 부가가치를 제공
