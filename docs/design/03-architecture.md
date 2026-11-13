@@ -27,7 +27,8 @@
 
 **핵심: "Host" = 한 머신에서 프로젝트를 다루는 헤드리스 서비스.**
 - 로컬 프로젝트 → 데스크톱 프로세스 안의 Local Host가 처리
-- 원격 프로젝트 → 원격에 설치된 `pitwall-relay`가 처리, 데스크톱은 같은 RPC를 `pw-link` 위로 전달
+- 원격 머신의 프로젝트 → 원격에 설치된 `pitwall-relay`가 처리, 데스크톱은 같은 RPC를 `pw-link` 위로 전달
+- 같은 저장소의 로컬 · 원격 체크아웃은 사람에게 프로젝트 하나다 — 머신마다의 프로젝트를 Desktop 이 묶음으로 잇고, Host 는 다른 머신의 체크아웃을 알지 못한다(08-remote-mobile.md 「프로젝트와 체크아웃 (D57)」)
 - (보류) 모바일을 붙일 경우에도 같은 RPC를 `pw-link`로 사용하도록 role 메타데이터를 유지
 - 확장(`pw-ext`)은 Host 안에서 로드 → 원격 Relay에서도 같은 확장이 동작
 - UI와 MCP는 Host가 로컬인지 원격인지 몰라도 된다
@@ -57,7 +58,7 @@
 
 ## 3. 프로세스 · 창 모델
 
-- **한 프로세스, 프로젝트당 한 창** (IntelliJ와 동일한 감각)
+- **한 프로세스, 프로젝트당 한 창** (IntelliJ와 동일한 감각). 프로젝트의 체크아웃이 여러 머신에 있어도 창은 하나이고, 창이 쓰는 머신마다 Host 연결을 하나씩 둔다 — 활성 체크아웃의 머신과 탭이 열린 체크아웃의 머신(08-remote-mobile.md 「프로젝트와 체크아웃 (D57)」 의 「창과 활성 체크아웃」)
 - 프로젝트 창을 닫으면 해당 프로젝트의 LSP/DAP/실행 프로세스 정리 (실행 중 프로세스는 확인 후)
 - 단일 인스턴스: 두 번째 실행(`pitwall path`)은 기존 인스턴스에 인자와 cwd 를 전달하고 종료. 첫 실행도 같은 열기 경로를 지난다(04 F2 「명령줄 규칙」). 키는 앱 identifier 하나다 — release 는 그대로 하나, **debug 빌드는 identifier 에 「빌드한 크레이트 폴더 + `$DATA`」의 해시를 붙여** 워크트리마다 · 데이터 폴더마다 갈린다(여러 워크트리의 dev 앱이 서로에게 전달되지 않게). release 빌드도 `PITWALL_DATA_DIR` 로 기본이 아닌 `$DATA` 를 주면 identifier 에 그 `$DATA` 의 해시를 붙인다 — 기본 `$DATA` 의 정식 앱은 키 하나 그대로이고, 임시 데이터로 띄운 release 빌드(성능 측정 · 시험)는 정식 앱과 인자를 주고받지 않는다. 그래서 Windows · Linux 에서는 키가 갈린 빌드마다 웹뷰 데이터 폴더(localStorage)도 따로다. macOS WKWebView 는 키가 아니라 번들 identifier 로 저장소를 정하므로, 기본이 아닌 `$DATA` 로 뜬 앱(debug 포함)은 그 `$DATA` 로 정한 별도 웹뷰 저장소(`data_store_identifier`, macOS 14+)를 쓴다
 - 웰컴 창: 최근 프로젝트, 원격 호스트, 새 프로젝트
@@ -65,7 +66,7 @@
 ## 4. RPC 설계
 
 - JSON-RPC 2.0, 메서드명 `<module>.<action>` (예: `git.log`, `db.query.execute`)
-- Host Router 는 연결 단위로 라우팅한다. 클라이언트는 `projectId`(또는 프로젝트가 없는 창은 `hostId`)로 Host 연결을 열고, 그 연결의 요청 · 스트림 · 구독 id 는 그 Host 세션 안에서만 유효하다. 기능 메서드의 params 에는 여전히 `projectId` 를 넣어 Host 안에서 `ProjectContext` 를 고른다. 여러 Host 의 프로젝트를 한 세션에서 다루는 클라이언트(MCP 서버)는 Host 별 연결을 하나씩 두고 요청마다 `projectId` 로 연결을 고른다. 프로젝트를 다른 Host 로 다시 묶으면 그 프로젝트의 기존 연결은 닫고 새로 연다.
+- Host Router 는 연결 단위로 라우팅한다. 클라이언트는 `projectId`(또는 프로젝트가 없는 창은 `hostId`)로 Host 연결을 열고, 그 연결의 요청 · 스트림 · 구독 id 는 그 Host 세션 안에서만 유효하다. 기능 메서드의 params 에는 여전히 `projectId` 를 넣어 Host 안에서 `ProjectContext` 를 고른다. 여러 Host 의 프로젝트를 한 세션에서 다루는 클라이언트(MCP 서버)는 Host 별 연결을 하나씩 두고 요청마다 `projectId` 로 연결을 고른다. 프로젝트를 다른 Host 로 다시 묶으면 그 프로젝트의 기존 연결은 닫고 새로 연다. 프로젝트 창도 여러 Host 를 다루는 클라이언트다 — 체크아웃이 여러 머신에 있으면 머신마다 그 머신의 프로젝트로 연 연결을 두고, 탭 · 툴 윈도우가 자기 체크아웃의 연결을 쓴다(08-remote-mobile.md 「프로젝트와 체크아웃 (D57)」).
 - 대용량 응답(로그, 쿼리 결과, git log)은 **스트림**: `streamId`를 반환하고 `stream.chunk` 알림으로 전달, 백프레셔는 credit 방식
 - 터미널(`terminal.create`, `crates/pw-run`)은 스트림 하나가 터미널 하나다. 셸의 작업 디렉터리는 `cwd`(프로젝트 루트나 그 연결 워크트리 안), 없으면 `worktree`(창의 활성 워크트리 꼭대기, `fs.*` · `openWith.run` 의 `worktree` 와 같다) 안의 프로젝트 루트, 둘 다 없으면 주 루트다 — 창은 워크트리의 꼭대기만 알고 그 안의 프로젝트 루트(모노레포의 하위 폴더일 수 있다)는 Host 가 `pw_core::registry::path::worktree_root` 로 정한다. 그 프로젝트의 연결 워크트리가 아닌 `worktree`(위조한 `.git` 파일 포함)는 `cwd` 가 있어도 invalid params 다. 항목은 `started { terminalId, pid, shell, cwd }` → `output { data }`(PTY 바이트의 base64 — 청크 경계가 UTF-8 문자 가운데일 수 있다) … → `exited { code }`(마지막 항목, 출력을 다 보낸 뒤. 신호로 끝났으면 `code` 가 `null`) 순서다. 입력 · 크기 · 닫기는 `terminalId` 로 `terminal.input` · `terminal.resize` · `terminal.close` 를 부른다. `terminalId` 는 **그 터미널을 연 세션(연결) 안에서만** 유효하다 — 다른 창 · 다른 연결이 같은 번호를 보내면 없는 터미널이다(입력 · 크기는 invalid params, 닫기는 아무것도 하지 않는다. Host 는 세션마다 다른 `pw_rpc::SessionId` 로 가른다). **스트림이 끝나면(셸 종료 · `terminal.close` · `stream.cancel` · 연결이 닫혀 세션이 스트림을 버림) 셸의 세션에 든 프로세스를 모두 끝낸다**(SIGHUP, 300 ms 안에 안 끝난 것은 SIGKILL — 대화형 셸은 작업마다 프로세스 그룹을 따로 만들므로 세션 id 로 찾는다). 스트림 없이 사는 터미널이 없으므로 종료를 알리는 버스 이벤트는 따로 없다. credit 1 은 청크 하나이고 터미널 청크는 16 KiB 이하다. 소비자가 읽지 않을 때 터미널 하나가 쌓는 출력 — Host 버퍼(512 KiB)와 credit 을 받아 이미 내보낸 청크(window × 16 KiB, TS 클라이언트 기본 window 32 면 512 KiB) — 은 기본 window 에서 1 MiB 를 넘지 않는다. Host 버퍼가 차면 PTY 를 읽지 않아 셸이 쓰기에서 멈춘다. window 를 더 크게 주는 클라이언트는 그만큼(청크 수 × 16 KiB) 더 받기로 한 것이다
 - 이벤트 구독: `events.subscribe({ projectId, topics })`. `projectId` 를 빼면 Host 범위(프로젝트에 속하지 않는 이벤트 — 전역 설정 변경 등)를 받는다. 프로젝트 없는 창은 이것으로 구독한다
@@ -357,7 +358,8 @@ GUI 앱은 터미널과 환경이 달라 프로젝트가 고정한 런타임 버
 - 연결: 직접(QUIC, LAN/Tailscale) → SSH stdio 순으로 시도, 모두 Noise로 인증 · 암호화. 중계 서버(Hub)는 두지 않음
 - Relay는 상주 데몬이므로 연결이 끊겨도 실행 중 프로세스 · 로그 · 디버그 세션 유지
 - 포트 포워딩: 원격 웹 서버 · 디버그 포트를 로컬로 포워딩 (DAP attach용)
-- DB는 원격 프로젝트면 Relay에서 직접 연결, 로컬 프로젝트는 SSH 터널 옵션 제공
+- DB는 원격 머신의 체크아웃이면 Relay에서 직접 연결, 로컬 체크아웃은 SSH 터널 옵션 제공
+- 한 프로젝트의 체크아웃이 여러 머신에 있을 수 있고, 커밋은 머신 사이를 origin 없이 직접 건넌다(08 「프로젝트와 체크아웃 (D57)」)
 
 ## 7. 보안
 

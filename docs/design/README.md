@@ -29,7 +29,7 @@
 - 에디터는 "뷰어 우선, 가벼운 편집" (CodeMirror 6)
 - **macOS 우선**, Linux/Windows 지원
 - 확장: 선언형 확장(테마 · 언어 · 키맵) + WASM 플러그인, 내장 기능도 확장 API 위에서 구현
-- 원격: 원격 머신에 **Pitwall Relay** 설치 → 직접 연결(LAN · Tailscale), SSH 대체. 중계 서버 없음
+- 원격: 원격 머신에 **Pitwall Relay** 설치 → 직접 연결(LAN · Tailscale), SSH 대체. 중계 서버 없음. 원격 머신의 체크아웃은 같은 프로젝트 안에서 워크트리처럼 고르고, 커밋은 머신 사이를 origin 없이 직접 건넌다
 - 모바일: **보류** (MVP · 로드맵 제외)
 - MCP: 툴별 on/off · 프리셋 · 등급별 자동 승인. 같은 툴을 CLI(`pitwall tool`)로도 부른다
 - DB 계층은 DBX(Apache-2.0) 구조 참고 + SQL 위험도 분류 · Redis 명령 분류 코드 차용(고지)
