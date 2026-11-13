@@ -154,7 +154,8 @@ impl Fs {
     ///   `project_id` 가 다른 프로젝트면 거절한다. 판정은 git 쓰기와 같은 함수다([`scope_may_write`]).
     /// - 파일 하나에만 닿는 연결([`ConnectionScope::File`], 단일 파일 창)은 그 파일만 쓴다([`Roots::file`], 요청의 프로젝트는 보지
     ///   않는다).
-    /// - Host 를 고른 연결(웰컴 · 설정 창, 창의 UI 로그)은 프로젝트 파일을 쓰지 못한다.
+    /// - Host 를 고른 연결(웰컴 · 설정 창, 창의 UI 로그)과 MCP 세션([`ConnectionScope::Agent`] — 파일 쓰기는 툴이 아니다, 결정
+    ///   M5-D27)은 프로젝트 파일을 쓰지 못한다.
     ///
     /// 거절은 `PERMISSION_DENIED` 이고 아무것도 바꾸지 않는다. `.git/config` 같은 파일 하나를 덮는 것으로 훅 · `core.fsmonitor` ·
     /// credential helper 를 거쳐 코드 실행까지 가므로, git 쓰기를 그 프로젝트의 창으로 묶은 판정이 이 길로 새지 않게 한다.
@@ -171,11 +172,13 @@ impl Fs {
             _ if scope_may_write(scope, project_id) => {
                 Ok(WriteRoots::granted(self.roots(project_id, worktree)?))
             }
-            ConnectionScope::Project(_) | ConnectionScope::Host => Err(RpcError::new(
-                code::PERMISSION_DENIED,
-                "only the project's own window may write its files",
-            )
-            .with_data(serde_json::json!({ "projectId": project_id }))),
+            ConnectionScope::Project(_) | ConnectionScope::Host | ConnectionScope::Agent => {
+                Err(RpcError::new(
+                    code::PERMISSION_DENIED,
+                    "only the project's own window may write its files",
+                )
+                .with_data(serde_json::json!({ "projectId": project_id })))
+            }
         }
     }
 

@@ -13,6 +13,7 @@
 //! 레지스트리는 처음 쓰일 때 파일을 연다. Host 를 만들기만 해서는 `$DATA` 에 아무것도 생기지 않는다.
 //! 변경은 [`Scope::Host`] 의 [`TOPIC_CHANGED`] 이벤트로 나간다.
 
+pub mod agent;
 pub mod candidates;
 pub mod consoles;
 pub mod exec;

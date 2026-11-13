@@ -819,7 +819,13 @@ async fn only_the_project_window_starts_a_shell_in_it() {
         .unwrap()
         .id;
     let file = Caller::file(Role::Owner, f.root.join("a.txt")).scope;
-    for scope in [ConnectionScope::Host, ConnectionScope::Project(other), file] {
+    // MCP 세션(`ConnectionScope::Agent`, 결정 M5-D27)도 터미널을 열지 못한다.
+    for scope in [
+        ConnectionScope::Host,
+        ConnectionScope::Project(other),
+        file,
+        ConnectionScope::Agent,
+    ] {
         let mut c = f.client_in(scope.clone());
         for params in [
             f.create_params(80, 24),

@@ -39,6 +39,8 @@ fn only_the_project_window_gets_a_grant() {
     for scope in [
         ConnectionScope::Project("other".into()),
         ConnectionScope::Host,
+        // MCP 세션(결정 M5-D27) — DB 툴은 MCP 세션용 입구를 따로 지난다(M5-06).
+        ConnectionScope::Agent,
     ] {
         let e = db_grant(&scope, "p").unwrap_err();
         assert_eq!(e.code, rpc_code::PERMISSION_DENIED);

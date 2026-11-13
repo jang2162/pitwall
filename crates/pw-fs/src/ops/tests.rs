@@ -949,3 +949,51 @@ fn import_stops_when_cancelled_and_cleans_up_the_current_item() {
     assert!(!root.join("after.txt").exists());
     no_leftovers(&root);
 }
+
+/// MCP 세션(`Caller::agent`, 결정 M5-D27)은 owner 여도 파일을 쓰지 못한다 — `fs.write` 와 네 조작 모두 `PERMISSION_DENIED` 이고
+/// 아무것도 바뀌지 않는다. 막는 것은 디스패처가 아니라 핸들러의 쓰기 범위(`Fs::write_roots`)다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_mcp_session_writes_no_file() {
+    let fx = Fixture::new();
+    let (id, root) = fx.project();
+    write(&root.join("a.txt"), "a");
+    let mut router = Router::new();
+    crate::methods::register(&mut router, Arc::clone(&fx.fs));
+    let a = root.join("a.txt").display().to_string();
+    let b = root.join("b.txt").display().to_string();
+    let calls = [
+        (
+            "fs.write",
+            json!({"projectId": id, "path": a, "content": {"kind": "text", "text": "changed"}}),
+        ),
+        (
+            "fs.create",
+            json!({"projectId": id, "path": b, "kind": "file"}),
+        ),
+        ("fs.rename", json!({"projectId": id, "from": a, "to": b})),
+        ("fs.copy", json!({"projectId": id, "from": a, "to": b})),
+        (
+            "fs.trash",
+            json!({"projectId": id, "paths": [a], "permanent": true}),
+        ),
+    ];
+    let (session, mut rx) = Session::new(
+        Arc::new(router),
+        EventHub::new(),
+        Caller::agent(Role::Owner),
+    );
+    for (n, (method, params)) in calls.iter().enumerate() {
+        session
+            .handle_value(json!({"jsonrpc": "2.0", "id": n, "method": method, "params": params}));
+        let response = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .into_response()
+            .unwrap();
+        let e = response.outcome.expect_err(method);
+        assert_eq!(e.code, code::PERMISSION_DENIED, "{method}: {e:?}");
+    }
+    assert_eq!(read(&root.join("a.txt")), "a");
+    assert!(!root.join("b.txt").exists());
+}

@@ -134,6 +134,24 @@ mod tests {
         }
     }
 
+    /// MCP 세션(결정 M5-D27)은 창 범위가 아니다 — Host 연결의 「다음에서 열기」 예외도 받지 않는다. 쓰기 판정도 거절이다.
+    #[test]
+    fn an_mcp_session_runs_nothing_and_writes_nothing() {
+        let agent = ConnectionScope::Agent;
+        assert!(!scope_may_write(&agent, "p1"));
+        assert!(denied(exec_grant(&agent, "p1", &Launch::Process)));
+        assert!(denied(exec_grant(
+            &agent,
+            "p1",
+            &Launch::OpenWith(open(Some("fake")))
+        )));
+        assert!(denied(exec_grant(
+            &agent,
+            "p1",
+            &Launch::OpenWith(open(None))
+        )));
+    }
+
     #[test]
     fn a_host_connection_only_opens_the_registered_root_with_a_registered_tool() {
         let host = ConnectionScope::Host;

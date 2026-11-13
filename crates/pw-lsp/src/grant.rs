@@ -275,6 +275,8 @@ mod tests {
             ConnectionScope::Host,
             ConnectionScope::Project(f.untrusted.clone()),
             file,
+            // MCP 세션(결정 M5-D27) — 언어 서버를 띄우지 못한다.
+            ConnectionScope::Agent,
         ] {
             let e = lsp_grant(&scope, open(), &f.projects, &f.trusted, None).unwrap_err();
             assert_eq!(e.code, code::PERMISSION_DENIED, "{scope:?}");

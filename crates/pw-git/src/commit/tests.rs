@@ -449,6 +449,8 @@ async fn only_the_project_s_own_window_may_commit() {
     for (who, scope) in [
         ("other project window", ConnectionScope::Project(other)),
         ("host", ConnectionScope::Host),
+        // MCP 세션(결정 M5-D27) — git 쓰기는 툴이 아니다(결정 M5-D18).
+        ("mcp session", ConnectionScope::Agent),
     ] {
         let mut connection = host
             .connect(Caller {

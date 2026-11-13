@@ -34,7 +34,20 @@ fn only_the_settings_window_and_project_windows_get_a_grant() {
     let file = Caller::file(Role::Owner, PathBuf::from("/tmp/a.txt")).scope;
     for (label, scope, window, reason) in [
         ("file window", file, Some("file-1"), "fileWindow"),
-        ("mcp session", ConnectionScope::Host, None, "noWindow"),
+        ("mcp session", ConnectionScope::Agent, None, "agentSession"),
+        // 설정 창 label 을 들고 와도 MCP 세션은 MCP 세션이다.
+        (
+            "mcp session with a window",
+            ConnectionScope::Agent,
+            Some("settings"),
+            "agentSession",
+        ),
+        (
+            "windowless host connection",
+            ConnectionScope::Host,
+            None,
+            "noWindow",
+        ),
         (
             "welcome window",
             ConnectionScope::Host,
@@ -102,8 +115,9 @@ async fn file_mcp_and_welcome_connections_cannot_install() {
             "file window",
             Caller::file(Role::Owner, fx.tmp.path().join("a.txt")).in_window("file-1"),
         ),
-        // MCP 세션은 창 없는 Host 연결이다(`pw-mcp` 의 `Caller::new(Role::Owner)`).
-        ("mcp session", Caller::new(Role::Owner)),
+        // MCP 세션은 제 범위로 붙는다(`pw-mcp` 의 `Caller::agent(Role::Owner)`, 결정 M5-D27).
+        ("mcp session", Caller::agent(Role::Owner)),
+        ("windowless host connection", Caller::new(Role::Owner)),
         (
             "welcome window",
             Caller::new(Role::Owner).in_window("welcome"),

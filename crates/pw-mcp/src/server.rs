@@ -208,7 +208,7 @@ impl Session {
             .router
             .connect(
                 &Target::HostId(services.host_id.clone()),
-                Caller::new(Role::Owner),
+                Caller::agent(Role::Owner),
             )
             .await
             .map_err(|e| ServeError::Host(e.to_string()))?;

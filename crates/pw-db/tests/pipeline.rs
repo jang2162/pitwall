@@ -515,7 +515,7 @@ async fn the_gate_classifies_with_the_connection_dialect() {
     assert_eq!(by_dialect["grade"], "read");
 }
 
-/// ⑤ 다른 프로젝트 창 · 웰컴 · 파일 창의 세션 · 실행 RPC 는 `PERMISSION_DENIED` 이고 드라이버가 불리지 않는다.
+/// ⑤ 다른 프로젝트 창 · 웰컴 · 파일 창 · MCP 세션의 세션 · 실행 RPC 는 `PERMISSION_DENIED` 이고 드라이버가 불리지 않는다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn other_windows_cannot_open_or_drive_sessions() {
     let e = env(true);
@@ -552,6 +552,8 @@ async fn other_windows_cannot_open_or_drive_sessions() {
         ConnectionScope::Project(e.f.other.clone()),
         ConnectionScope::Host,
         pw_rpc::Caller::file(pw_rpc::Role::Owner, file).scope,
+        // MCP 세션(결정 M5-D27) — UI 의 DB RPC 는 MCP 세션을 거절한다(DB 툴은 M5-06 의 입구를 따로 지난다).
+        ConnectionScope::Agent,
     ];
     for scope in scopes {
         let mut other = e.f.connect(scope.clone());

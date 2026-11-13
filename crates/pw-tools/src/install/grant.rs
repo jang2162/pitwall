@@ -1,8 +1,8 @@
 //! 도구 설치의 허가(결정 M4-D18 — 15-m4-plan.md M4-04 ⑥).
 //!
 //! 설치 · 업데이트 · 되돌리기 · 제거 RPC 는 tier exec(owner)이고, 연결 범위는 **설정 창의 Host 연결** 또는 **프로젝트 창의 그 프로젝트
-//! 연결**만 받는다. 파일 창 · 웰컴 창 · 창이 없는 Host 연결(MCP 세션 — `pw-mcp` 는 `Caller(Owner, Host, window = None)` 로 붙는다 ·
-//! 원격)은 `PERMISSION_DENIED` 다. 어느 창이 설정 창인지는 데스크톱이 창 label 판정 함수로 넘긴다(이 크레이트는 창 label 을 모른다).
+//! 연결**만 받는다. 파일 창 · 웰컴 창 · 창이 없는 Host 연결(원격) · MCP 세션(`ConnectionScope::Agent`, 결정 M5-D27)은
+//! `PERMISSION_DENIED` 다. 어느 창이 설정 창인지는 데스크톱이 창 label 판정 함수로 넘긴다(이 크레이트는 창 label 을 모른다).
 //!
 //! [`ToolGrant`] 는 [`tool_grant`] 만 만든다. 설치 함수는 이것을 받아야 하고, 이 모듈 밖에서는 만들 수 없다:
 //!
@@ -46,6 +46,8 @@ pub fn tool_grant(
             None => "noWindow",
         },
         ConnectionScope::File(_) => "fileWindow",
+        // MCP 세션(결정 M5-D27) — 도구 설치는 툴이 아니다.
+        ConnectionScope::Agent => "agentSession",
     };
     tracing::info!(target: "pw_tools", reason, "tool install refused for this connection");
     Err(RpcError::new(

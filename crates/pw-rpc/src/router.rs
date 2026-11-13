@@ -62,6 +62,10 @@ pub enum ConnectionScope {
     Project(String),
     /// 파일 하나에만 닿는 연결([`Caller::file`]).
     File(Arc<FileScope>),
+    /// MCP 세션의 연결([`Caller::agent`], 결정 M5-D27). Host 범위도 창 범위도 아니다 — 창 범위가 필요한 판정(쓰기 · 실행 · DB ·
+    /// 도구 설치 · 언어 서버)은 이것을 거절하고, 툴 메서드만 MCP 세션용 관문(`pw_core::registry::agent::agent_grant`)으로 받는다.
+    /// 디스패처는 이것으로 막는 것이 없다(role 이 허용하는 전부 — 막는 것은 핸들러의 관문이다).
+    Agent,
 }
 
 impl Caller {
@@ -92,11 +96,20 @@ impl Caller {
         }
     }
 
+    /// MCP 세션의 호출자([`ConnectionScope::Agent`]). 창이 없다.
+    pub fn agent(role: Role) -> Self {
+        Self {
+            role,
+            scope: ConnectionScope::Agent,
+            window: None,
+        }
+    }
+
     /// 파일 범위 호출자면 그 파일.
     pub fn file_scope(&self) -> Option<&FileScope> {
         match &self.scope {
             ConnectionScope::File(file) => Some(file),
-            ConnectionScope::Host | ConnectionScope::Project(_) => None,
+            ConnectionScope::Host | ConnectionScope::Project(_) | ConnectionScope::Agent => None,
         }
     }
 }
