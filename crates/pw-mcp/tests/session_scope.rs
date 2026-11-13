@@ -13,7 +13,7 @@ use pw_core::registry::NewProject;
 use pw_core::{HostRouter, LocalHost};
 use pw_mcp::audit::AuditLog;
 use pw_mcp::policy::Approval;
-use pw_mcp::{Catalog, Services, SessionRequest};
+use pw_mcp::{Catalog, HostKind, Services, SessionRequest};
 use pw_rpc::{ConnectionScope, RpcError, rpc_method};
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::RunningService;
@@ -90,6 +90,8 @@ impl Fixture {
             catalog: Arc::new(Catalog::linked()),
             approval: Approval::Unavailable,
             transport: "test",
+            // 앱의 Host 에 붙은 세션(시험이 LocalHost 를 앱처럼 띄운다) — 범위는 Host 종류와 무관하다.
+            host_kind: HostKind::App,
         })
     }
 
