@@ -1,20 +1,24 @@
-//! MCP 세션을 실제 rmcp 클라이언트로 돌린다: 툴 목록 · 호출 · 노출 설정과 `list_changed` · 등급 정책 · 감사 로그.
+//! MCP 세션을 실제 rmcp 클라이언트로 돌린다: 툴 목록 · 호출 · 노출 설정과 `list_changed` · 등급 정책 · 감사 로그,
+//! 세션 워크트리 · 응답 상한 · 결과 표지 · 대상 프로젝트의 노출 · 호출 취소 · 헤드리스 안내(16-m5-plan M5-03).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use pw_core::config::AppPaths;
 use pw_core::registry::NewProject;
 use pw_core::{HostRouter, LocalHost};
 use pw_mcp::audit::AuditLog;
+use pw_mcp::marker::{Mark, Reason};
 use pw_mcp::policy::Approval;
 use pw_mcp::{Catalog, Services, SessionRequest};
-use pw_rpc::{RpcError, rpc_method};
-use rmcp::model::{CallToolRequestParams, CallToolResult};
+use pw_rpc::{Router, RpcError, rpc_method};
+use rmcp::model::{CallToolRequest, CallToolRequestParams, CallToolResult, ClientRequest};
 use rmcp::model::{ProtocolVersion, ServerNotification, SubscriptionFilter};
-use rmcp::service::{MaybeSendFuture, NotificationContext, RunningService};
+use rmcp::service::{
+    MaybeSendFuture, NotificationContext, PeerRequestOptions, RunningService, ServiceError,
+};
 use rmcp::{ClientHandler, ClientLifecycleMode, ClientServiceExt, RoleClient, ServiceExt};
 use serde_json::{Map, Value, json};
 use tokio::sync::Notify;
@@ -27,6 +31,89 @@ rpc_method! {
         result: (),
         tier: Write,
         mcp: true,
+    }
+
+    /// 시험용 프로젝트 툴. 받은 입력을 그대로 돌려준다(채워진 `projectId` · `worktree` 를 본다).
+    pub TestEcho: "mcptest.echo" {
+        params: EchoParams,
+        result: EchoParams,
+        tier: Read,
+        mcp: true,
+    }
+
+    /// 시험용: 300 KiB 글자열을 돌려준다(응답 상한을 넘는다).
+    pub TestBig: "mcptest.big" {
+        params: (),
+        result: String,
+        tier: Read,
+        mcp: true,
+    }
+
+    /// 시험용: 취소될 때까지 돈다.
+    pub TestSlow: "mcptest.slow" {
+        params: (),
+        result: (),
+        tier: Read,
+        mcp: true,
+    }
+
+    /// 시험용: Host 가 그 RPC 를 거뒀다고 답한다.
+    pub TestHostCancelled: "mcptest.hostCancelled" {
+        params: (),
+        result: (),
+        tier: Read,
+        mcp: true,
+    }
+}
+
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct EchoParams {
+    pub project_id: String,
+    #[serde(default)]
+    pub worktree: Option<String>,
+}
+
+/// 오래 도는 가짜 핸들러가 남기는 것: 시작했다, 끝나기 전에 버려졌다.
+#[derive(Clone, Default)]
+struct Probe {
+    started: Arc<Notify>,
+    dropped: Arc<AtomicBool>,
+}
+
+/// 핸들러 future 안에 둔다. future 가 끝나지 않고 버려지면 표지를 세운다.
+struct DropFlag(Arc<AtomicBool>);
+
+impl Drop for DropFlag {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+/// 시험용 툴 메서드를 Host 에 더한다.
+fn test_methods(probe: Probe) -> impl FnOnce(&mut Router) + 'static {
+    move |router: &mut Router| {
+        router.unary(TestEcho, |_ctx, params: EchoParams| async move {
+            Ok::<_, RpcError>(params)
+        });
+        router.unary(TestBig, |_ctx, ()| async {
+            Ok::<_, RpcError>("x".repeat(300 * 1024))
+        });
+        router.unary(TestSlow, move |_ctx, ()| {
+            let probe = probe.clone();
+            async move {
+                let flag = DropFlag(probe.dropped.clone());
+                probe.started.notify_one();
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                std::mem::forget(flag);
+                Ok::<(), RpcError>(())
+            }
+        });
+        router.unary(TestHostCancelled, |_ctx, ()| async {
+            Err::<(), _>(RpcError::cancelled())
+        });
     }
 }
 
@@ -58,6 +145,11 @@ struct Fixture {
 impl Fixture {
     /// 프로젝트 셋(`alpha` · `beta` · `gamma`)을 등록한 Host.
     fn new() -> Self {
+        Self::with_methods(|_| {})
+    }
+
+    /// [`Self::new`] 에 메서드를 더 등록한 Host. 세션의 카탈로그는 Host 가 처리하는 메서드만 보인다.
+    fn with_methods(extra: impl FnOnce(&mut Router) + 'static) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         // Windows 의 canonicalize 는 verbatim 접두를 붙인다 — 레지스트리가 저장하는 꼴로 맞춘다.
         let base = pw_core::registry::path::simplify(std::fs::canonicalize(tmp.path()).unwrap());
@@ -65,8 +157,9 @@ impl Fixture {
         let host = Arc::new(
             LocalHost::builder("local")
                 .config(paths.clone())
-                .methods(|router| {
+                .methods(move |router| {
                     router.unary(TestWrite, |_ctx, ()| async { Ok::<(), RpcError>(()) });
+                    extra(router);
                 })
                 .build(),
         );
@@ -96,6 +189,10 @@ impl Fixture {
     }
 
     fn services(&self) -> Arc<Services> {
+        self.services_on("test")
+    }
+
+    fn services_on(&self, transport: &'static str) -> Arc<Services> {
         let router = Arc::new(HostRouter::new());
         router.add_host(self.host.clone()).unwrap();
         let config = self.host.config().unwrap();
@@ -106,9 +203,9 @@ impl Fixture {
             global: config.global.clone(),
             bus: self.host.bus().clone(),
             audit: Arc::new(AuditLog::under_state(&self.paths.state)),
-            catalog: Arc::new(Catalog::linked()),
+            catalog: Arc::new(Catalog::linked().routed_by(self.host.router())),
             approval: Approval::Unavailable,
-            transport: "test",
+            transport,
         })
     }
 
@@ -120,11 +217,23 @@ impl Fixture {
         Client,
         CancellationToken,
     ) {
+        self.connect_on(request, "test").await
+    }
+
+    async fn connect_on(
+        &self,
+        request: SessionRequest,
+        transport: &'static str,
+    ) -> (
+        RunningService<RoleClient, Client>,
+        Client,
+        CancellationToken,
+    ) {
         let (server_io, client_io) = tokio::io::duplex(64 * 1024);
         let (r, w) = tokio::io::split(server_io);
         let cancel = CancellationToken::new();
         tokio::spawn(pw_mcp::serve(
-            self.services(),
+            self.services_on(transport),
             request,
             (r, w),
             cancel.clone(),
@@ -211,7 +320,18 @@ fn read_rows(conn: &rusqlite::Connection) -> Vec<(Option<String>, String, String
 fn the_catalog_follows_the_mcp_flag() {
     let catalog = Catalog::linked();
     let names: Vec<_> = catalog.tools().iter().map(|t| t.name.as_str()).collect();
-    assert_eq!(names, ["mcptest_write", "project_info", "project_list"]);
+    assert_eq!(
+        names,
+        [
+            "mcptest_big",
+            "mcptest_echo",
+            "mcptest_host_cancelled",
+            "mcptest_slow",
+            "mcptest_write",
+            "project_info",
+            "project_list"
+        ]
+    );
     for info in pw_rpc::methods() {
         let exposed = catalog.tools().iter().any(|t| t.method == info.meta.name);
         assert_eq!(exposed, info.meta.mcp, "{}", info.meta.name);
@@ -644,4 +764,391 @@ fn the_catalog_keeps_only_methods_the_host_routes() {
         .map(|t| t.name.clone())
         .collect();
     assert_eq!(names, ["mcptest_write", "project_info", "project_list"]);
+}
+
+/// `tools/call` 결과의 표지.
+fn mark(result: &CallToolResult) -> Option<Mark> {
+    result.meta.as_ref().and_then(|m| Mark::read(m))
+}
+
+/// 시험용 툴 메서드를 더한 Fixture 와 그 오래 도는 핸들러의 표지.
+fn fixture_with_test_tools() -> (Fixture, Probe) {
+    let probe = Probe::default();
+    (Fixture::with_methods(test_methods(probe.clone())), probe)
+}
+
+/// `git worktree add` 가 만드는 모양을 손으로 만든다: `main`(메인 체크아웃)의 연결 워크트리 `wt`. 돌려주는 것은 워크트리 꼭대기.
+fn fake_worktree(main: &Path, wt: &Path) -> PathBuf {
+    let admin = main.join(".git/worktrees/wt");
+    std::fs::create_dir_all(&admin).unwrap();
+    std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+    std::fs::create_dir_all(wt).unwrap();
+    std::fs::write(wt.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+    std::fs::write(
+        admin.join("gitdir"),
+        format!("{}\n", wt.join(".git").display()),
+    )
+    .unwrap();
+    pw_core::registry::path::simplify(std::fs::canonicalize(wt).unwrap())
+}
+
+/// ① 미등록 연결 워크트리 안에서 연 세션: 입력에 `worktree` 가 있는 툴이 세션 프로젝트를 겨누면 빈 `worktree` 가 그 워크트리
+/// 꼭대기로 채워진다. 준 값은 덮지 않고, 다른 프로젝트를 겨누면 채우지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_in_a_linked_worktree_fills_the_worktree_input() {
+    let (f, _) = fixture_with_test_tools();
+    let top = fake_worktree(&f.work("alpha"), &f.base.join("wt-alpha"));
+    let (client, _, cancel) = f
+        .connect(SessionRequest {
+            project: None,
+            cwd: Some(top.clone()),
+        })
+        .await;
+    let top = top.display().to_string();
+
+    let filled = call(&client, "mcptest_echo", json!({})).await;
+    let echoed = filled.structured_content.expect("object 결과");
+    assert_eq!(echoed["projectId"], json!(f.projects[0]));
+    assert_eq!(echoed["worktree"], json!(top));
+    for empty in [json!(null), json!("")] {
+        let filled = call(&client, "mcptest_echo", json!({ "worktree": empty })).await;
+        assert_eq!(filled.structured_content.unwrap()["worktree"], json!(top));
+    }
+
+    let given = call(&client, "mcptest_echo", json!({"worktree": "/given"})).await;
+    assert_eq!(
+        given.structured_content.unwrap()["worktree"],
+        json!("/given")
+    );
+
+    let other = call(&client, "mcptest_echo", json!({"projectId": f.projects[1]})).await;
+    assert_eq!(other.structured_content.unwrap()["worktree"], json!(null));
+    client.cancel().await.unwrap();
+    cancel.cancel();
+}
+
+/// 메인 체크아웃에서 연 세션에는 활성 워크트리가 없다 — `worktree` 를 채우지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_in_the_main_checkout_leaves_the_worktree_empty() {
+    let (f, _) = fixture_with_test_tools();
+    let (client, _, cancel) = f
+        .connect(SessionRequest {
+            project: None,
+            cwd: Some(f.work("alpha")),
+        })
+        .await;
+    let echoed = call(&client, "mcptest_echo", json!({})).await;
+    assert_eq!(echoed.structured_content.unwrap()["worktree"], json!(null));
+    client.cancel().await.unwrap();
+    cancel.cancel();
+}
+
+/// ② 응답 한 건이 256 KiB 를 넘으면 「범위를 좁혀라」 오류다. 감사 행은 `error`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_oversized_response_becomes_a_narrow_the_request_error() {
+    let (f, _) = fixture_with_test_tools();
+    let (client, _, cancel) = f.connect(SessionRequest::default()).await;
+    let big = call(&client, "mcptest_big", json!({})).await;
+    assert_eq!(big.is_error, Some(true));
+    assert!(text(&big).contains("narrow the request"), "{}", text(&big));
+    assert!(text(&big).len() < 1024, "잘린 결과도 싣지 않는다");
+    assert_eq!(mark(&big), Some(Mark::error(Some(Reason::TooLarge))));
+    let rows = audit_rows(&f.paths.state, 1);
+    assert_eq!(
+        (rows[0].1.as_str(), rows[0].2.as_str()),
+        ("mcptest_big", "error")
+    );
+    assert_eq!(pw_mcp::server::MAX_RESPONSE_BYTES, 256 * 1024);
+    client.cancel().await.unwrap();
+    cancel.cancel();
+}
+
+/// ③ 성공 · 거절 · 노출 안 됨 · 툴 오류 · 취소가 결과 표지로 갈린다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn call_results_carry_an_outcome_mark() {
+    let (f, _) = fixture_with_test_tools();
+    std::fs::create_dir_all(&f.paths.config).unwrap();
+    std::fs::write(
+        f.paths.config.join("settings.toml"),
+        "schema = 1\n[mcp.tools]\nmcptest_slow = false\n",
+    )
+    .unwrap();
+    f.host.config().unwrap().global.reload().unwrap();
+    let (client, _, cancel) = f
+        .connect(SessionRequest {
+            project: None,
+            cwd: Some(f.work("beta")),
+        })
+        .await;
+
+    let ok = call(&client, "project_list", json!({})).await;
+    assert_eq!(mark(&ok), Some(Mark::ok()));
+    let structured = call(&client, "project_info", json!({})).await;
+    assert_eq!(mark(&structured), Some(Mark::ok()));
+
+    let denied = call(&client, "mcptest_write", json!({})).await;
+    assert_eq!(denied.is_error, Some(true));
+    assert_eq!(mark(&denied), Some(Mark::denied(Reason::NeedsApproval)));
+
+    let failed = call(&client, "project_info", json!({"projectId": "nope"})).await;
+    assert_eq!(failed.is_error, Some(true));
+    assert_eq!(mark(&failed), Some(Mark::error(None)));
+
+    let cancelled = call(&client, "mcptest_host_cancelled", json!({})).await;
+    assert_eq!(cancelled.is_error, Some(true));
+    assert_eq!(mark(&cancelled), Some(Mark::error(Some(Reason::Cancelled))));
+
+    // 노출 안 된 툴(꺼진 툴 · 모르는 이름)은 JSON-RPC invalid params 이고 그 `data` 에 같은 표지가 있다.
+    for name in ["mcptest_slow", "no_such_tool"] {
+        let hidden = client
+            .peer()
+            .call_tool(CallToolRequestParams::new(name))
+            .await;
+        let Err(ServiceError::McpError(error)) = hidden else {
+            panic!("노출 안 된 툴이 불렸다: {hidden:?}");
+        };
+        let data = error.data.expect("오류 data");
+        assert_eq!(
+            Mark::read(data.as_object().unwrap()),
+            Some(Mark::denied(Reason::NotExposed)),
+            "{name}"
+        );
+    }
+    let rows = audit_rows(&f.paths.state, 7);
+    let outcomes: Vec<_> = rows.iter().map(|r| (r.1.as_str(), r.2.as_str())).collect();
+    assert_eq!(
+        outcomes,
+        [
+            ("project_list", "ok"),
+            ("project_info", "ok"),
+            ("mcptest_write", "denied"),
+            ("project_info", "error"),
+            ("mcptest_host_cancelled", "error"),
+            ("mcptest_slow", "denied"),
+            ("no_such_tool", "denied"),
+        ]
+    );
+    assert_eq!(rows[4].3.as_deref(), Some("cancelled"));
+    client.cancel().await.unwrap();
+    cancel.cancel();
+}
+
+/// ④ 세션 프로젝트 alpha 에서 beta 의 `projectId` 로 부르면 beta 의 `[mcp]` 로도 판정한다(결정 M5-D28). beta 가 끈 툴은 거절되고
+/// 감사 로그에 `denied`. beta 의 구버전(v0) `project.toml` 은 바이트 그대로이고 `.backup/` 도 생기지 않는다. 설정이 없는 gamma 는
+/// 세션의 노출만 따른다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_call_into_another_project_also_needs_that_projects_exposure() {
+    let f = Fixture::new();
+    let beta = f.work("beta");
+    std::fs::create_dir_all(beta.join(".pitwall")).unwrap();
+    std::fs::write(
+        beta.join(".pitwall/project.toml"),
+        "# hand written v0\n[mcp.tools]\nproject_info = false\n",
+    )
+    .unwrap();
+    let before = tree(&beta);
+    let (client, _, cancel) = f
+        .connect(SessionRequest {
+            project: None,
+            cwd: Some(f.work("alpha")),
+        })
+        .await;
+    // 세션(alpha)에서는 보인다.
+    assert!(
+        tool_names(&client)
+            .await
+            .contains(&"project_info".to_owned())
+    );
+
+    let into_beta = call(&client, "project_info", json!({"projectId": f.projects[1]})).await;
+    assert_eq!(into_beta.is_error, Some(true));
+    assert_eq!(mark(&into_beta), Some(Mark::denied(Reason::NotExposed)));
+    assert!(
+        text(&into_beta).contains(&f.projects[1]),
+        "{}",
+        text(&into_beta)
+    );
+
+    let into_gamma = call(&client, "project_info", json!({"projectId": f.projects[2]})).await;
+    assert_eq!(mark(&into_gamma), Some(Mark::ok()));
+    let own = call(&client, "project_info", json!({})).await;
+    assert_eq!(mark(&own), Some(Mark::ok()));
+
+    let rows = audit_rows(&f.paths.state, 3);
+    assert_eq!(
+        (rows[0].0.as_deref(), rows[0].1.as_str(), rows[0].2.as_str()),
+        (Some(f.projects[1].as_str()), "project_info", "denied")
+    );
+    client.cancel().await.unwrap();
+    cancel.cancel();
+    assert_eq!(tree(&beta), before, "대상 프로젝트의 설정 폴더가 바뀌었다");
+    assert!(!beta.join(".pitwall/.backup").exists());
+}
+
+/// 대상 프로젝트의 커밋된 설정도 좁히기만 한다 — 세션이 끈 툴을 대상 프로젝트가 켜도 부를 수 없다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn another_projects_config_cannot_widen_the_session_exposure() {
+    let f = Fixture::new();
+    let alpha = f.work("alpha/.pitwall");
+    std::fs::create_dir_all(&alpha).unwrap();
+    std::fs::write(
+        alpha.join("project.local.toml"),
+        "schema = 1\n[mcp.tools]\nproject_info = false\n",
+    )
+    .unwrap();
+    let beta = f.work("beta/.pitwall");
+    std::fs::create_dir_all(&beta).unwrap();
+    std::fs::write(
+        beta.join("project.local.toml"),
+        "schema = 1\n[mcp.tools]\nproject_info = true\n",
+    )
+    .unwrap();
+    let (client, _, cancel) = f
+        .connect(SessionRequest {
+            project: None,
+            cwd: Some(f.work("alpha")),
+        })
+        .await;
+    let hidden = client
+        .peer()
+        .call_tool(
+            CallToolRequestParams::new("project_info").with_arguments(
+                json!({"projectId": f.projects[1]})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await;
+    assert!(hidden.is_err(), "세션이 끈 툴이 불렸다: {hidden:?}");
+    client.cancel().await.unwrap();
+    cancel.cancel();
+}
+
+/// 감사 행 중 `tool` 의 것이 나올 때까지 기다린다.
+fn audit_row_of(state: &Path, tool: &str) -> (Option<String>, String, String, Option<String>) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Ok(conn) = rusqlite_open(&state.join("mcp/audit.db"))
+            && let Some(row) = read_rows(&conn).into_iter().find(|r| r.1 == tool)
+        {
+            return row;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no audit row for {tool}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+async fn wait_dropped(probe: &Probe, within: Duration) {
+    let deadline = tokio::time::Instant::now() + within;
+    while !probe.dropped.load(Ordering::SeqCst) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "Host 의 핸들러 future 가 버려지지 않았다"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+fn slow_call() -> ClientRequest {
+    ClientRequest::CallToolRequest(CallToolRequest::new(CallToolRequestParams::new(
+        "mcptest_slow",
+    )))
+}
+
+/// ⑤ MCP 의 취소 알림이 오면 그 호출의 Host RPC 를 거둔다 — Host 의 핸들러 future 가 버려지고(세션은 그대로 돈다) 감사 행은
+/// 결과 `error` · 까닭 `cancelled`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelling_a_call_drops_the_host_handler() {
+    let (f, probe) = fixture_with_test_tools();
+    let (client, _, cancel) = f.connect(SessionRequest::default()).await;
+    let handle = client
+        .peer()
+        .send_cancellable_request(slow_call(), PeerRequestOptions::no_options())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), probe.started.notified())
+        .await
+        .expect("가짜 핸들러가 시작하지 않았다");
+    handle.cancel(Some("test".into())).await.unwrap();
+    wait_dropped(&probe, Duration::from_secs(5)).await;
+
+    // 세션은 살아 있다 — 버려진 것은 그 호출 하나다.
+    let list = call(&client, "project_list", json!({})).await;
+    assert_eq!(mark(&list), Some(Mark::ok()));
+    let row = audit_row_of(&f.paths.state, "mcptest_slow");
+    assert_eq!(
+        (row.2.as_str(), row.3.as_deref()),
+        ("error", Some("cancelled"))
+    );
+    client.cancel().await.unwrap();
+    cancel.cancel();
+}
+
+/// ⑤ 세션이 끊겨도 같다: 돌던 호출의 Host 핸들러가 버려지고 감사 행이 `error` · `cancelled` 로 남는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dropped_session_cancels_its_running_calls() {
+    let (f, probe) = fixture_with_test_tools();
+    let (client, _, _cancel) = f.connect(SessionRequest::default()).await;
+    let _handle = client
+        .peer()
+        .send_cancellable_request(slow_call(), PeerRequestOptions::no_options())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), probe.started.notified())
+        .await
+        .expect("가짜 핸들러가 시작하지 않았다");
+    client.cancel().await.unwrap();
+    // rmcp 는 끊긴 뒤 남은 응답을 5초까지 기다렸다가 핸들러의 취소 토큰을 건다.
+    wait_dropped(&probe, Duration::from_secs(15)).await;
+    let row = audit_row_of(&f.paths.state, "mcptest_slow");
+    assert_eq!(
+        (row.2.as_str(), row.3.as_deref()),
+        ("error", Some("cancelled"))
+    );
+}
+
+/// ⑥ 헤드리스 세션(stdio 로 직접 서비스)의 안내문에 「앱을 켠 뒤 MCP 서버를 다시 시작」 이 있고 앱 세션(소켓)에는 없다. 헤드리스의
+/// `write` 이상 툴 거절은 까닭 `headless_write` 다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_a_headless_session_tells_the_agent_to_start_the_app() {
+    let f = Fixture::new();
+    let instructions = |client: &RunningService<RoleClient, Client>| {
+        client
+            .peer()
+            .peer_info()
+            .and_then(|info| info.instructions.clone())
+            .unwrap_or_default()
+    };
+    let (headless, _, cancel) = f
+        .connect_on(
+            SessionRequest::default(),
+            pw_mcp::server::HEADLESS_TRANSPORT,
+        )
+        .await;
+    assert!(
+        instructions(&headless).contains(pw_mcp::server::HEADLESS_NOTICE),
+        "{}",
+        instructions(&headless)
+    );
+    assert!(instructions(&headless).contains("restart this MCP server"));
+    let write = call(&headless, "mcptest_write", json!({})).await;
+    assert_eq!(mark(&write), Some(Mark::denied(Reason::HeadlessWrite)));
+    headless.cancel().await.unwrap();
+    cancel.cancel();
+
+    let (app, _, cancel) = f.connect_on(SessionRequest::default(), "socket").await;
+    assert!(instructions(&app).starts_with("Pitwall IDE"));
+    assert!(
+        !instructions(&app).contains("restart"),
+        "{}",
+        instructions(&app)
+    );
+    let write = call(&app, "mcptest_write", json!({})).await;
+    assert_eq!(mark(&write), Some(Mark::denied(Reason::NeedsApproval)));
+    app.cancel().await.unwrap();
+    cancel.cancel();
 }

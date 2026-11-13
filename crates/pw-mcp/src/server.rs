@@ -3,6 +3,17 @@
 //! 세션은 Host 에 **owner** role 로 붙는다 — 에이전트는 이 사용자의 로컬 프로세스다(로컬 소켓 · stdio 만 받는다). 무엇을
 //! 부를 수 있는지는 role 이 아니라 이 계층이 정한다: 노출([`crate::exposure`]) → 등급 정책([`crate::policy`]).
 //! 호출 하나하나는 결과와 상관없이 감사 로그([`crate::audit`])에 남는다.
+//!
+//! 호출 하나가 지나는 길(`docs/design/05-mcp.md` 「툴 레지스트리」 · 「툴 노출 설정」, 16-m5-plan M5-03):
+//!
+//! 1. 세션의 노출 — 보이지 않는 툴은 JSON-RPC invalid params(오류 `data` 에 결과 표지).
+//! 2. 빈 `projectId` 는 세션 프로젝트로, 빈 `worktree` 는 세션의 활성 워크트리 꼭대기로 채운다(세션 프로젝트를 겨눌 때만).
+//! 3. 대상 프로젝트의 노출 — `projectId` 가 세션 프로젝트가 아니면 그 프로젝트의 `[mcp]` 로도 판정한다(결정 M5-D28).
+//! 4. 등급 정책([`crate::policy`]).
+//! 5. Host RPC. MCP 의 취소 알림이 오거나 세션이 끝나면 그 RPC 를 거둔다(`request.cancel` — [`crate::client`]).
+//! 6. 응답 상한 [`MAX_RESPONSE_BYTES`] — 넘으면 「범위를 좁혀라」 오류(결정 M5-D34).
+//!
+//! 결과는 모두 `_meta` 에 결과 표지([`crate::marker`])를 단다.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -10,13 +21,14 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
 use pw_core::config::{AppPaths, ConfigSource, ConfigStore, TOPIC_CHANGED};
-use pw_core::registry::methods::PathParams;
-use pw_core::registry::{ConfigMode, Resolution};
+use pw_core::registry::methods::{PathParams, ProjectIdParams};
+use pw_core::registry::{ConfigMode, Project, Resolution};
 use pw_core::{EventBus, Filter, HostRouter, Scope, Target};
 use pw_rpc::{Caller, Role};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
-    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, SubscriptionFilter,
+    ListToolsResult, MetaObject, PaginatedRequestParams, ServerCapabilities, ServerConfig,
+    SubscriptionFilter,
 };
 use rmcp::service::{MaybeSendFuture, NotificationContext, RequestContext, SubscriptionContext};
 use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
@@ -27,9 +39,28 @@ use tokio_util::sync::CancellationToken;
 
 use crate::audit::{AuditLog, Entry, Outcome, summarize};
 use crate::catalog::{Catalog, PROJECT_ID, Tool};
-use crate::client::HostClient;
+use crate::client::{CallError, HostClient};
 use crate::exposure::{self, Exposure};
+use crate::marker::{Mark, Reason};
 use crate::policy::{self, Approval, Decision};
+
+/// 툴 응답 한 건의 상한: 직렬화한 결과 JSON 의 바이트 수(결정 M5-D34 — 출발값이다). 툴 메서드는 이것을 넘지 않게 자르고
+/// (`truncated` 와 다음 `cursor`), 그래도 넘은 응답은 세션이 「범위를 좁혀라」 오류로 바꾼다.
+pub const MAX_RESPONSE_BYTES: usize = 256 * 1024;
+
+/// 목록 툴의 `limit` 기본값(결정 M5-D34). 툴마다 다르게 둘 수 있다(`git_log` · `symbol_search` 50, `git_status` 200).
+pub const DEFAULT_LIST_LIMIT: usize = 100;
+
+/// 프로젝트 툴이 선택 입력으로 받는 워크트리 꼭대기 키(「체크아웃」). 비었으면 세션의 활성 워크트리로 채운다.
+pub const WORKTREE: &str = "worktree";
+
+/// 앱 없이 뜬 헤드리스 세션이 stdio 로 직접 서비스할 때의 [`Services::transport`]. 앱의 세션은 언제나 로컬 소켓(`socket`)으로
+/// 오고, `pitwall mcp` 프록시의 stdio 는 앱의 소켓 세션으로 이어지므로, 이 전송으로 도는 세션이 곧 헤드리스 세션이다.
+pub const HEADLESS_TRANSPORT: &str = "stdio";
+
+/// 헤드리스 세션의 서버 안내문(결정 M5-D3). 앱 세션에는 싣지 않는다. 넘겨 붙기(16-m5-plan M5-20)가 들어오면 그 행이 바꾼다.
+pub const HEADLESS_NOTICE: &str = "The Pitwall app is not running, so only the core tools are available. \
+Start the Pitwall app, then restart this MCP server to get the rest.";
 
 /// 세션들이 함께 쓰는 것. 앱에서는 앱의 Host · 전역 설정 · 버스를, 앱 없이 뜬 `pitwall mcp` 는 자기가 만든 것을 넣는다.
 pub struct Services {
@@ -44,7 +75,7 @@ pub struct Services {
     pub audit: Arc<AuditLog>,
     pub catalog: Arc<Catalog>,
     pub approval: Approval,
-    /// 로그에 남길 연결 종류(`socket` · `stdio`).
+    /// 로그에 남길 연결 종류(`socket` · `stdio`). `stdio` 는 헤드리스 세션이다([`HEADLESS_TRANSPORT`]).
     pub transport: &'static str,
 }
 
@@ -115,6 +146,8 @@ where
 #[derive(Debug, Clone)]
 struct SessionProject {
     id: String,
+    /// 세션을 연 경로가 미등록 연결 워크트리 안이면 그 꼭대기(`Resolution.worktree`). 빈 `worktree` 입력을 이것으로 채운다.
+    worktree: Option<String>,
 }
 
 #[derive(Clone)]
@@ -184,7 +217,10 @@ impl Session {
             project_config,
             cancel.clone(),
         );
-        let project = resolved.map(|r| SessionProject { id: r.project.id });
+        let project = resolved.map(|r| SessionProject {
+            id: r.project.id,
+            worktree: r.worktree.map(|w| w.top),
+        });
         let id = session_id();
         let audit = audit_writer(Arc::clone(&services.audit), &id);
         tracing::info!(
@@ -234,7 +270,18 @@ impl Session {
         )
     }
 
-    async fn call(&self, request: CallToolRequestParams) -> Result<CallToolResult, ErrorData> {
+    /// 세션이 헤드리스인가([`HEADLESS_TRANSPORT`]).
+    fn headless(&self) -> bool {
+        self.inner.services.transport == HEADLESS_TRANSPORT
+    }
+
+    /// `cancel` 은 rmcp 가 그 요청에 건 취소 토큰이다 — 클라이언트의 취소 알림(`notifications/cancelled`)이 오거나 rmcp 의
+    /// 서비스 루프가 끝나면 취소된다.
+    async fn call(
+        &self,
+        request: CallToolRequestParams,
+        cancel: CancellationToken,
+    ) -> Result<CallToolResult, ErrorData> {
         let started = Instant::now();
         let name = request.name.to_string();
         let mut args = request.arguments.unwrap_or_default();
@@ -251,7 +298,7 @@ impl Session {
             );
             return Err(ErrorData::invalid_params(
                 format!("unknown tool `{name}`"),
-                None,
+                Some(Value::Object(Mark::denied(Reason::NotExposed).to_map())),
             ));
         };
         if tool.project_scoped()
@@ -264,13 +311,48 @@ impl Session {
             .get(PROJECT_ID)
             .and_then(Value::as_str)
             .map(str::to_owned);
+        self.fill_worktree(&tool, &mut args, project_id.as_deref());
+        if tool.project_scoped()
+            && let Some(target) = project_id.as_deref()
+            && self.inner.project.as_ref().is_none_or(|p| p.id != target)
+        {
+            match self.target_exposes(&tool, target).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    let reason = format!(
+                        "`{name}` is turned off in the [mcp] settings of project `{target}`"
+                    );
+                    self.audit(
+                        &name,
+                        &args,
+                        project_id,
+                        Outcome::Denied,
+                        Some(reason.clone()),
+                        None,
+                        started,
+                    );
+                    return Ok(failed(reason, Mark::denied(Reason::NotExposed)));
+                }
+                Err(e) => return Ok(self.call_failed(&name, &args, project_id, e, started)),
+            }
+        }
         let denied = match policy::decide(tool.tier, self.inner.services.approval) {
             Decision::Allow => None,
             // 승인 화면이 아직 없다. `Approval::Available` 을 넣는 쪽이 생기면 여기서 승인을 기다린다.
-            Decision::Ask => Some("approval is required and is not available yet".to_owned()),
-            Decision::Deny(reason) => Some(reason),
+            Decision::Ask => Some((
+                "approval is required and is not available yet".to_owned(),
+                Reason::NeedsApproval,
+            )),
+            Decision::Deny(reason) => Some((
+                reason,
+                if self.headless() {
+                    Reason::HeadlessWrite
+                } else {
+                    Reason::NeedsApproval
+                },
+            )),
         };
-        if let Some(reason) = denied {
+        if let Some((reason, code)) = denied {
             self.audit(
                 &name,
                 &args,
@@ -280,16 +362,40 @@ impl Session {
                 None,
                 started,
             );
-            return Ok(CallToolResult::error(vec![ContentBlock::text(reason)]));
+            return Ok(failed(reason, Mark::denied(code)));
         }
         let params = if tool.unit_params {
             Value::Null
         } else {
             Value::Object(args.clone())
         };
-        match self.inner.client.call(tool.method, params).await {
+        // 클라이언트가 취소하거나(`cancel`) 세션이 끝나면(`inner.cancel`) Host RPC 를 거둔다 — 어느 쪽이든 `HostClient` 가 그 요청
+        // id 로 `request.cancel` 을 보낸다(취소 토큰이 이기거나, 호출 future 가 버려진다).
+        let outcome = tokio::select! {
+            biased;
+            () = self.inner.cancel.cancelled() => Err(CallError::Cancelled),
+            outcome = self.inner.client.call_until(tool.method, params, &cancel) => outcome,
+        };
+        match outcome {
             Ok(result) => {
                 let size = result.to_string().len();
+                if size > MAX_RESPONSE_BYTES {
+                    let message = format!(
+                        "the response is {size} bytes, over the {} KiB limit for one tool response; \
+                         narrow the request (a smaller `limit`, a path, a filter) and call again",
+                        MAX_RESPONSE_BYTES / 1024
+                    );
+                    self.audit(
+                        &name,
+                        &args,
+                        project_id,
+                        Outcome::Error,
+                        Some(message.clone()),
+                        Some(size),
+                        started,
+                    );
+                    return Ok(failed(message, Mark::error(Some(Reason::TooLarge))));
+                }
                 self.audit(
                     &name,
                     &args,
@@ -299,26 +405,116 @@ impl Session {
                     Some(size),
                     started,
                 );
-                Ok(if tool.output_schema.is_some() && result.is_object() {
+                let result = if tool.output_schema.is_some() && result.is_object() {
                     CallToolResult::structured(result)
                 } else {
                     CallToolResult::success(vec![ContentBlock::text(result.to_string())])
-                })
+                };
+                Ok(marked(result, Mark::ok()))
             }
-            Err(e) => {
-                let message = e.to_string();
-                self.audit(
-                    &name,
-                    &args,
-                    project_id,
-                    Outcome::Error,
-                    Some(message.clone()),
-                    None,
-                    started,
-                );
-                Ok(CallToolResult::error(vec![ContentBlock::text(message)]))
-            }
+            Err(e) => Ok(self.call_failed(&name, &args, project_id, e, started)),
         }
+    }
+
+    /// Host RPC 가 실패한 호출(취소 포함)의 감사 행과 결과.
+    fn call_failed(
+        &self,
+        name: &str,
+        args: &Map<String, Value>,
+        project_id: Option<String>,
+        error: CallError,
+        started: Instant,
+    ) -> CallToolResult {
+        let cancelled = match &error {
+            CallError::Cancelled => true,
+            // Host 가 그 RPC 를 거뒀다(Host 종료 등).
+            CallError::Rpc { code, .. } => *code == i64::from(pw_rpc::code::CANCELLED),
+            CallError::Closed => false,
+        };
+        // 취소된 호출의 감사 행은 결과 `error` · 까닭 `cancelled` 다(결과 값을 늘리지 않는다).
+        let (message, mark) = if cancelled {
+            (
+                Reason::Cancelled.as_str().to_owned(),
+                Mark::error(Some(Reason::Cancelled)),
+            )
+        } else {
+            (error.to_string(), Mark::error(None))
+        };
+        self.audit(
+            name,
+            args,
+            project_id,
+            Outcome::Error,
+            Some(message.clone()),
+            None,
+            started,
+        );
+        failed(message, mark)
+    }
+
+    /// 입력에 [`WORKTREE`] 가 있는 툴이 세션 프로젝트를 겨누고 그 값이 비었으면(없음 · `null` · 빈 글자열) 세션의 활성 워크트리
+    /// 꼭대기로 채운다. 다른 프로젝트를 겨누면 채우지 않는다 — 세션의 워크트리는 세션 프로젝트의 것이다.
+    fn fill_worktree(&self, tool: &Tool, args: &mut Map<String, Value>, project_id: Option<&str>) {
+        let Some(project) = &self.inner.project else {
+            return;
+        };
+        let Some(top) = &project.worktree else {
+            return;
+        };
+        if project_id != Some(project.id.as_str()) || !takes_worktree(tool) {
+            return;
+        }
+        let empty = match args.get(WORKTREE) {
+            None | Some(Value::Null) => true,
+            Some(Value::String(s)) => s.is_empty(),
+            Some(_) => false,
+        };
+        if empty {
+            args.insert(WORKTREE.into(), Value::String(top.clone()));
+        }
+    }
+
+    /// 대상 프로젝트(세션 프로젝트가 아닌 `projectId`)의 노출 설정이 그 툴을 켰는가(결정 M5-D28). 세션의 노출은 이미 지났다 —
+    /// 둘 다 켠 툴만 부른다. 그 프로젝트의 설정은 **디스크에 쓰지 않고** 읽는다(구버전 파일은 메모리에서만 올린다). 프로젝트를
+    /// 찾지 못하면 그 오류를 호출의 오류로 돌려준다(없는 id 면 툴이 돌려줄 오류와 같다).
+    async fn target_exposes(&self, tool: &Tool, project_id: &str) -> Result<bool, CallError> {
+        let params = serde_json::to_value(ProjectIdParams {
+            id: project_id.to_owned(),
+        })
+        .expect("ProjectIdParams 는 직렬화된다");
+        let value = self.inner.client.call("project.get", params).await?;
+        let project: Project = serde_json::from_value(value).map_err(|e| CallError::Rpc {
+            code: i64::from(pw_rpc::code::INTERNAL_ERROR),
+            message: format!("unexpected project.get result: {e}"),
+            data: None,
+        })?;
+        let services = &self.inner.services;
+        let global = services.global.snapshot();
+        let source = match project.config_source(&services.paths, project.root()) {
+            Ok(source) => Some(source.without_writes()),
+            Err(e) => {
+                tracing::warn!(%e, project = project_id, "cannot read the target project config");
+                None
+            }
+        };
+        let loaded = source.as_ref().and_then(|s| match s.load() {
+            Ok(snapshot) => Some(snapshot),
+            Err(e) => {
+                tracing::warn!(%e, project = project_id, "cannot read the target project config");
+                None
+            }
+        });
+        let without_shared = source
+            .filter(|_| project.config_mode == ConfigMode::Repository)
+            .map(ConfigSource::without_shared);
+        let exposure = layered_exposure(
+            global.get("settings", exposure::KEY),
+            loaded
+                .as_ref()
+                .and_then(|s| s.get("project", exposure::KEY)),
+            without_shared.as_ref(),
+        );
+        Ok(exposure.enabled(tool))
     }
 
     #[allow(clippy::too_many_arguments)] // 감사 로그 한 행의 열이다.
@@ -368,6 +564,11 @@ impl ServerHandler for Session {
                 )
             })
             .unwrap_or_default();
+        let headless = if self.headless() {
+            format!(" {HEADLESS_NOTICE}")
+        } else {
+            String::new()
+        };
         ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
@@ -376,7 +577,7 @@ impl ServerHandler for Session {
         )
         .with_server_info(Implementation::new("pitwall", env!("CARGO_PKG_VERSION")))
         .with_instructions(format!(
-            "Pitwall IDE: project registry and settings that only the IDE knows.{project}"
+            "Pitwall IDE: project registry and settings that only the IDE knows.{project}{headless}"
         ))
     }
 
@@ -405,7 +606,7 @@ impl ServerHandler for Session {
                 .unwrap_or_else(PoisonError::into_inner) =
                 Some(format!("{} {}", info.name, info.version));
         }
-        self.call(request).await.map(Into::into)
+        self.call(request, context.ct.clone()).await.map(Into::into)
     }
 
     /// 2025-11-25 까지의 클라이언트: initialize 뒤 세션 내내 `tools/list_changed` 를 보낸다.
@@ -580,25 +781,12 @@ fn exposure_feed(
         .map(|p| p.bus.subscribe(Filter::all().topics([TOPIC_CHANGED])));
     let read = move || {
         let g = global.snapshot();
-        let global_mcp = g.get("settings", exposure::KEY);
         let p = project.as_ref().map(|p| p.store.snapshot());
-        let (mut exposure, mut warnings) = Exposure::from_layers(
-            global_mcp,
+        Arc::new(layered_exposure(
+            g.get("settings", exposure::KEY),
             p.as_ref().and_then(|p| p.get("project", exposure::KEY)),
-        );
-        if let Some(source) = project.as_ref().and_then(|p| p.without_shared.as_ref()) {
-            // 공유 레이어를 뺀 값을 다시 읽는다. 읽지 못하면(로컬 파일이 깨짐) 전역만을 상한으로 둔다 — 넓어지지 않는다.
-            let local = source.load().ok();
-            let (ceiling, _) = Exposure::from_layers(
-                global_mcp,
-                local.as_ref().and_then(|s| s.get("project", exposure::KEY)),
-            );
-            exposure = exposure.narrowed_by(ceiling);
-        }
-        for w in warnings.drain(..) {
-            tracing::warn!("{w}");
-        }
-        Arc::new(exposure)
+            project.as_ref().and_then(|p| p.without_shared.as_ref()),
+        ))
     };
     let (tx, rx) = watch::channel(read());
     tokio::spawn(async move {
@@ -627,6 +815,50 @@ fn exposure_feed(
         }
     });
     rx
+}
+
+/// 전역 `[mcp]` 위에 프로젝트 `[mcp]` 를 덮어 읽는다. `without_shared`(저장소 모드의 공유 레이어를 뺀 읽기)가 있으면 그 값으로
+/// 누른다 — 커밋된 설정은 노출을 좁히기만 한다. 세션 프로젝트와 대상 프로젝트(결정 M5-D28)가 같은 규칙을 쓴다.
+fn layered_exposure(
+    global_mcp: Option<&Value>,
+    project_mcp: Option<&Value>,
+    without_shared: Option<&ConfigSource>,
+) -> Exposure {
+    let (mut exposure, warnings) = Exposure::from_layers(global_mcp, project_mcp);
+    if let Some(source) = without_shared {
+        // 공유 레이어를 뺀 값을 다시 읽는다. 읽지 못하면(로컬 파일이 깨짐) 전역만을 상한으로 둔다 — 넓어지지 않는다.
+        let local = source.load().ok();
+        let (ceiling, _) = Exposure::from_layers(
+            global_mcp,
+            local.as_ref().and_then(|s| s.get("project", exposure::KEY)),
+        );
+        exposure = exposure.narrowed_by(ceiling);
+    }
+    for w in warnings {
+        tracing::warn!("{w}");
+    }
+    exposure
+}
+
+/// 입력 스키마에 [`WORKTREE`] 가 있는가.
+fn takes_worktree(tool: &Tool) -> bool {
+    tool.input_schema_for(false)
+        .get("properties")
+        .and_then(Value::as_object)
+        .is_some_and(|p| p.contains_key(WORKTREE))
+}
+
+fn marked(mut result: CallToolResult, mark: Mark) -> CallToolResult {
+    result.meta = Some(MetaObject(mark.to_map()));
+    result
+}
+
+/// `isError` 결과(거절 · 툴 오류)와 그 표지.
+fn failed(message: String, mark: Mark) -> CallToolResult {
+    marked(
+        CallToolResult::error(vec![ContentBlock::text(message)]),
+        mark,
+    )
 }
 
 /// 감사 로그에서 한 세션의 호출을 묶는 id: pid · 시작 시각(밀리초) · 프로세스 안 순번.

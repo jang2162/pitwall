@@ -5,6 +5,7 @@
 //! - [`policy`]: 권한 등급별 정책(지금은 `read` 만 허용).
 //! - [`audit`]: 감사 로그(`$STATE/mcp/audit.db`)와 인자 요약 규칙.
 //! - [`server`]: MCP 세션 하나(rmcp). 툴 호출을 Host 의 RPC 로 옮긴다.
+//! - [`marker`]: `tools/call` 결과의 `_meta` 에 싣는 결과 표지와 까닭 코드.
 //! - [`socket`]: 실행 중인 앱의 로컬 소켓(unix). 위치 · 권한 · 워크트리 격리 · 핸드셰이크.
 //! - [`proxy`]: `pitwall mcp` 의 stdio ↔ 소켓 프록시.
 //!
@@ -14,6 +15,7 @@ pub mod audit;
 pub mod catalog;
 mod client;
 pub mod exposure;
+pub mod marker;
 pub mod policy;
 pub mod proxy;
 pub mod server;
