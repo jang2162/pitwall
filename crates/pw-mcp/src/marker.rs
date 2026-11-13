@@ -8,6 +8,10 @@
 //! 결과 값은 감사 로그의 `outcome` 과 같은 셋이다(`ok` · `error` · `denied`). 까닭 코드는 [`Reason`] 이고, 거절의 까닭이
 //! 대부분이지만 [`Reason::Cancelled`] · [`Reason::TooLarge`] 는 결과 `error` 의 까닭이다. 다른 행이 코드를 더하면 05 의 표에
 //! 한 줄을 더한다.
+//!
+//! **툴의 Host RPC 가 `PERMISSION_DENIED` 로 답하면 결과는 `denied` 다**(메인 판정 2026-11-14 — 16-m5-plan M5-06): 까닭은 그
+//! `data.reason` 이 [`Reason::of_permission_denied`] 의 표에 있으면 그 코드, 아니면 `permission_denied`. 다른 오류(비밀 · 확인이
+//! 필요하다는 DB 의 3101 · 3102 등)는 결과 `error` 다.
 
 use serde_json::{Map, Value};
 
@@ -37,6 +41,15 @@ pub enum Reason {
     Cancelled,
     /// (결과 `error`) 응답이 [`crate::server::MAX_RESPONSE_BYTES`] 를 넘었다. 범위를 좁혀 다시 부른다.
     TooLarge,
+    /// (거절) 툴의 Host RPC 가 `PERMISSION_DENIED` 로 답했고 그 `data.reason` 이 아래 코드 가운데 어느 것도 아니다(없음 포함).
+    PermissionDenied,
+    /// (거절) 사람이 이번 앱 실행에서 Pitwall 의 DB 탐색기로 그 연결(같은 대상)을 연 적이 없다(16-m5-plan M5-06 —
+    /// `data.reason = "notOpenedByUser"`).
+    NotOpenedByUser,
+    /// (거절) 프로젝트를 신뢰하지 않았다(`data.reason = "untrusted"`).
+    Untrusted,
+    /// (거절) 프로덕션 표지가 있는 DB 대상이다(M5-06 — `data.reason = "productionBlocked"`).
+    ProductionBlocked,
 }
 
 impl Reason {
@@ -49,7 +62,27 @@ impl Reason {
         Reason::HeadlessWrite,
         Reason::Cancelled,
         Reason::TooLarge,
+        Reason::PermissionDenied,
+        Reason::NotOpenedByUser,
+        Reason::Untrusted,
+        Reason::ProductionBlocked,
     ];
+
+    /// Host RPC 의 `PERMISSION_DENIED` 오류가 싣는 `data.reason`(camelCase) ↔ 까닭 코드. 거절 까닭을 더하는 행은 [`Reason`] 과 이
+    /// 표에 한 줄씩 더한다 — 여기 없는 `data.reason` 은 [`Reason::PermissionDenied`] 다.
+    const FROM_RPC: &'static [(&'static str, Reason)] = &[
+        ("notOpenedByUser", Reason::NotOpenedByUser),
+        ("untrusted", Reason::Untrusted),
+        ("productionBlocked", Reason::ProductionBlocked),
+    ];
+
+    /// `PERMISSION_DENIED` 오류의 `data.reason` 을 까닭 코드로. 모르거나 없으면 [`Reason::PermissionDenied`].
+    pub fn of_permission_denied(rpc_reason: Option<&str>) -> Self {
+        Self::FROM_RPC
+            .iter()
+            .find(|(r, _)| Some(*r) == rpc_reason)
+            .map_or(Reason::PermissionDenied, |(_, reason)| *reason)
+    }
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -61,6 +94,10 @@ impl Reason {
             Reason::HeadlessWrite => "headless_write",
             Reason::Cancelled => "cancelled",
             Reason::TooLarge => "too_large",
+            Reason::PermissionDenied => "permission_denied",
+            Reason::NotOpenedByUser => "not_opened_by_user",
+            Reason::Untrusted => "untrusted",
+            Reason::ProductionBlocked => "production_blocked",
         }
     }
 
@@ -166,6 +203,30 @@ mod tests {
             );
             assert!(seen.insert(code), "{code} twice");
             assert_eq!(Reason::parse(code), Some(*reason));
+        }
+    }
+
+    #[test]
+    fn permission_denied_reasons_map_to_reason_codes() {
+        assert_eq!(
+            Reason::of_permission_denied(Some("notOpenedByUser")),
+            Reason::NotOpenedByUser
+        );
+        assert_eq!(
+            Reason::of_permission_denied(Some("untrusted")),
+            Reason::Untrusted
+        );
+        assert_eq!(
+            Reason::of_permission_denied(Some("productionBlocked")),
+            Reason::ProductionBlocked
+        );
+        assert_eq!(
+            Reason::of_permission_denied(Some("notProjectWindow")),
+            Reason::PermissionDenied
+        );
+        assert_eq!(Reason::of_permission_denied(None), Reason::PermissionDenied);
+        for (rpc, reason) in Reason::FROM_RPC {
+            assert!(Reason::ALL.contains(reason), "{rpc}");
         }
     }
 

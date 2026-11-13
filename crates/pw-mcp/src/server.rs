@@ -442,12 +442,27 @@ impl Session {
             CallError::Rpc { code, .. } => *code == i64::from(pw_rpc::code::CANCELLED),
             CallError::Closed => false,
         };
+        // 툴의 관문이 거절했다(`PERMISSION_DENIED`) — 결과 `denied`, 까닭은 `data.reason`(`marker` 머리 주석).
+        let refused = match &error {
+            CallError::Rpc { code, data, .. }
+                if *code == i64::from(pw_rpc::code::PERMISSION_DENIED) =>
+            {
+                Some(Reason::of_permission_denied(
+                    data.as_ref()
+                        .and_then(|d| d.get("reason"))
+                        .and_then(Value::as_str),
+                ))
+            }
+            _ => None,
+        };
         // 취소된 호출의 감사 행은 결과 `error` · 까닭 `cancelled` 다(결과 값을 늘리지 않는다).
         let (message, mark) = if cancelled {
             (
                 Reason::Cancelled.as_str().to_owned(),
                 Mark::error(Some(Reason::Cancelled)),
             )
+        } else if let Some(reason) = refused {
+            (error.to_string(), Mark::denied(reason))
         } else {
             (error.to_string(), Mark::error(None))
         };
@@ -455,7 +470,7 @@ impl Session {
             name,
             args,
             project_id,
-            Outcome::Error,
+            mark.outcome,
             Some(message.clone()),
             None,
             started,

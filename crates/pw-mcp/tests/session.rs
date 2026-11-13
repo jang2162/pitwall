@@ -64,6 +64,24 @@ rpc_method! {
         tier: Read,
         mcp: { group: "project", name: "mcptest_host_cancelled" },
     }
+
+    /// 시험용: 받은 코드와 `data.reason` 으로 실패한다(관문의 거절 · 다른 오류).
+    pub TestRefuse: "mcptest.refuse" {
+        params: RefuseParams,
+        result: (),
+        tier: Read,
+        mcp: { group: "project", name: "mcptest_refuse" },
+    }
+}
+
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RefuseParams {
+    pub code: i32,
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 #[derive(
@@ -113,6 +131,13 @@ fn test_methods(probe: Probe) -> impl FnOnce(&mut Router) + 'static {
         });
         router.unary(TestHostCancelled, |_ctx, ()| async {
             Err::<(), _>(RpcError::cancelled())
+        });
+        router.unary(TestRefuse, |_ctx, p: RefuseParams| async move {
+            let error = RpcError::new(p.code, "refused");
+            Err::<(), _>(match p.reason {
+                Some(reason) => error.with_data(json!({ "reason": reason })),
+                None => error,
+            })
         });
     }
 }
@@ -327,6 +352,7 @@ fn the_catalog_follows_the_mcp_flag() {
             "mcptest_big",
             "mcptest_echo",
             "mcptest_host_cancelled",
+            "mcptest_refuse",
             "mcptest_slow",
             "mcptest_write",
             "project_info",
@@ -930,6 +956,56 @@ async fn call_results_carry_an_outcome_mark() {
         ]
     );
     assert_eq!(rows[4].3.as_deref(), Some("cancelled"));
+    client.cancel().await.unwrap();
+    cancel.cancel();
+}
+
+/// 툴의 Host RPC 가 `PERMISSION_DENIED` 로 답하면 결과는 `denied` 이고(CLI 종료 3) 까닭은 `data.reason` 의 코드다 — 모르거나
+/// 없으면 `permission_denied`. 다른 오류(DB 의 비밀이 필요하다 3101 등)는 그대로 `error` 다(16-m5-plan M5-06, 메인 판정).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_permission_denied_tool_error_is_a_denied_result() {
+    let (f, _) = fixture_with_test_tools();
+    let (client, _, cancel) = f.connect(SessionRequest::default()).await;
+    let denied = pw_rpc::code::PERMISSION_DENIED;
+    let cases = [
+        (
+            denied,
+            Some("notOpenedByUser"),
+            Mark::denied(Reason::NotOpenedByUser),
+        ),
+        (denied, Some("untrusted"), Mark::denied(Reason::Untrusted)),
+        (
+            denied,
+            Some("productionBlocked"),
+            Mark::denied(Reason::ProductionBlocked),
+        ),
+        (
+            denied,
+            Some("fromTheFuture"),
+            Mark::denied(Reason::PermissionDenied),
+        ),
+        (denied, None, Mark::denied(Reason::PermissionDenied)),
+        (3101, Some("notOpenedByUser"), Mark::error(None)),
+        (pw_rpc::code::INVALID_PARAMS, None, Mark::error(None)),
+    ];
+    for (code, reason, expected) in cases {
+        let result = call(
+            &client,
+            "mcptest_refuse",
+            json!({ "code": code, "reason": reason }),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(mark(&result), Some(expected), "{code} {reason:?}");
+    }
+    let rows = audit_rows(&f.paths.state, cases.len());
+    let outcomes: Vec<&str> = rows.iter().map(|r| r.2.as_str()).collect();
+    assert_eq!(
+        outcomes,
+        [
+            "denied", "denied", "denied", "denied", "denied", "error", "error"
+        ]
+    );
     client.cancel().await.unwrap();
     cancel.cancel();
 }
