@@ -56,7 +56,7 @@
 | 렌더링 일관성 | △ (OS WebView 차이, 특히 Linux WebKitGTK) | ◎ | ◎ |
 | 시스템 작업(git/pty/ssh) | ◎ Rust | ○ Node 네이티브 모듈 | ◎ |
 
-- "IntelliJ보다 가볍게"가 핵심 목표 → Electron 제외
+- "IntelliJ보다 가볍게"가 핵심 목표 → Electron 제외. 같은 이유로 VS Code 확장 · Code 포크로 옮기지 않는다(06-roadmap.md 결정 D56)
 - GPUI는 성능은 최상이지만 DB 그리드 · git 그래프 · 폼 UI 등 구현량이 너무 큼
 - **리스크**: Linux WebKitGTK 성능. 대응 → 무거운 뷰(그래프, 그리드)는 canvas 렌더링, 가상화 필수.
   최악의 경우 코어가 헤드리스이므로 UI만 Electron으로 교체 가능 (아키텍처상 보험).
