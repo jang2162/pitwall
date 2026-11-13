@@ -1,4 +1,6 @@
-//! `git.blame`(스트림). UI 전용이라 MCP 툴이 아니다(결정 M2-D7 — 스트림 메서드는 툴이 될 수 없다).
+//! `git.blame`(스트림). UI 전용이라 MCP 툴이 아니다(결정 M2-D7 — 스트림 메서드는 툴이 될 수 없다). 툴 `git_blame`
+//! (`crate::tools::blame`)은 같은 엔진([`prepare`] · [`run`])을 부르고 청크를 모아 줄 범위로 자른다 — 엔진 고르기(신뢰 → git,
+//! 미신뢰 → gix)는 여기 한 곳이다.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -57,40 +59,64 @@ async fn stream(
     params: GitBlameParams,
     sink: &StreamSink<BlameChunk>,
 ) -> Result<(), RpcError> {
-    let prepared = {
-        let git = Arc::clone(&git);
-        tokio::task::spawn_blocking(move || -> Result<Option<(Opened, Subject)>, RpcError> {
-            let Some(opened) = git.open(&params.project_id, params.worktree.as_deref())? else {
-                return Ok(None);
-            };
-            let found = subject(&opened.repo, params.rev.as_deref(), &params.path)?;
-            Ok(found.map(|s| (opened, s)))
-        })
-        .await
-        .map_err(|e| RpcError::internal(e.to_string()))??
-    };
-    let Some((opened, subject)) = prepared else {
+    let Some((opened, subject)) = prepare(&git, params).await? else {
         return Ok(());
     };
+    run(&git, opened, subject, sink).await
+}
+
+/// blame 청크를 받는 쪽: 스트림(`git.blame`)과 툴(`git_blame` 이 모은다).
+pub(crate) trait BlameOut: Sync {
+    /// 보내지 못하면(받는 쪽이 사라짐) 그 오류.
+    fn send(&self, chunk: BlameChunk) -> impl Future<Output = Result<(), RpcError>> + Send;
+}
+
+impl BlameOut for StreamSink<BlameChunk> {
+    fn send(&self, chunk: BlameChunk) -> impl Future<Output = Result<(), RpcError>> + Send {
+        StreamSink::send(self, chunk)
+    }
+}
+
+/// 저장소를 열고 blame 할 대상을 푼다(블로킹 스레드). 저장소가 없거나 HEAD 가 태어나지 않았거나 그 리비전에 파일이 없으면 `None`.
+pub(crate) async fn prepare(
+    git: &Arc<Git>,
+    params: GitBlameParams,
+) -> Result<Option<(Opened, Subject)>, RpcError> {
+    let git = Arc::clone(git);
+    tokio::task::spawn_blocking(move || -> Result<Option<(Opened, Subject)>, RpcError> {
+        let Some(opened) = git.open(&params.project_id, params.worktree.as_deref())? else {
+            return Ok(None);
+        };
+        let found = subject(&opened.repo, params.rev.as_deref(), &params.path)?;
+        Ok(found.map(|s| (opened, s)))
+    })
+    .await
+    .map_err(|e| RpcError::internal(e.to_string()))?
+}
+
+/// `subject` 를 blame 해 청크를 `out` 으로 보낸다. 엔진은 신뢰로 고른다(모듈 머리 주석): 신뢰한 프로젝트는 git CLI, 미신뢰 ·
+/// git 을 찾지 못하면 gix.
+pub(crate) async fn run(
+    git: &Git,
+    opened: Opened,
+    subject: Subject,
+    out: &impl BlameOut,
+) -> Result<(), RpcError> {
     // 연 뒤에 신뢰를 거뒀으면 미신뢰로 본다(`Git::command` 도 같은 판정으로 거절한다).
     let trusted = opened.trusted && git.is_current(&opened);
     if trusted {
         match git.command(&opened.target, Access::Read).await {
-            Ok(command) => return cli(command, &subject, sink).await,
+            Ok(command) => return cli(command, &subject, out).await,
             Err(reason) => {
                 tracing::info!(target: "pw_git", ?reason, "cannot run `git blame`; blaming with gix");
             }
         }
     }
-    gix(opened, subject, trusted, sink).await
+    gix(opened, subject, trusted, out).await
 }
 
 /// `git blame --incremental -M`. 받는 쪽이 사라지면(스트림이 끝나 이 future 가 버려지면) git 의 프로세스 그룹을 끝낸다.
-async fn cli(
-    command: GitCommand,
-    subject: &Subject,
-    sink: &StreamSink<BlameChunk>,
-) -> Result<(), RpcError> {
+async fn cli(command: GitCommand, subject: &Subject, out: &impl BlameOut) -> Result<(), RpcError> {
     let mut running = incremental::command(command, subject)
         .spawn()
         .map_err(|e| RpcError::internal(e.to_string()))?;
@@ -103,7 +129,7 @@ async fn cli(
         engine: BlameEngine::Git,
         moves: incremental::moves(subject),
     };
-    let mut to_sink = ToSink { sink, gone: None };
+    let mut to_sink = ToSink { out, gone: None };
     let Some(drained) = incremental::pump(stdout, file, &mut to_sink).await? else {
         return Err(to_sink.gone.unwrap_or_else(RpcError::cancelled));
     };
@@ -119,20 +145,20 @@ async fn cli(
         )));
     }
     if let Some(chunk) = drained.finish()? {
-        sink.send(chunk).await?;
+        out.send(chunk).await?;
     }
     Ok(())
 }
 
-/// 스트림으로 보낸다. 보내지 못하면(연결이 닫힘) 그 오류를 쥔다.
-struct ToSink<'a> {
-    sink: &'a StreamSink<BlameChunk>,
+/// 받는 쪽으로 보낸다. 보내지 못하면(연결이 닫힘) 그 오류를 쥔다.
+struct ToSink<'a, O> {
+    out: &'a O,
     gone: Option<RpcError>,
 }
 
-impl incremental::Emit for ToSink<'_> {
+impl<O: BlameOut> incremental::Emit for ToSink<'_, O> {
     async fn emit(&mut self, chunk: BlameChunk) -> bool {
-        match self.sink.send(chunk).await {
+        match self.out.send(chunk).await {
             Ok(()) => true,
             Err(e) => {
                 self.gone = Some(e);
@@ -142,12 +168,12 @@ impl incremental::Emit for ToSink<'_> {
     }
 }
 
-/// gix blame(블로킹 스레드). 스트림이 끝나 이 future 가 버려지면 멈춤 신호를 켠다.
+/// gix blame(블로킹 스레드). 받는 쪽이 사라져 이 future 가 버려지면 멈춤 신호를 켠다.
 async fn gix(
     opened: Opened,
     subject: Subject,
     trusted: bool,
-    sink: &StreamSink<BlameChunk>,
+    out: &impl BlameOut,
 ) -> Result<(), RpcError> {
     let stop = Arc::new(AtomicBool::new(false));
     let _stop_on_drop = StopOnDrop(Arc::clone(&stop));
@@ -159,7 +185,7 @@ async fn gix(
         .map(drop)
     });
     while let Some(chunk) = rx.recv().await {
-        sink.send(chunk).await?;
+        out.send(chunk).await?;
     }
     worker
         .await
