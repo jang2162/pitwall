@@ -12,7 +12,7 @@ use pw_core::{HostRouter, LocalHost};
 use pw_mcp::audit::AuditLog;
 use pw_mcp::marker::{Mark, Reason};
 use pw_mcp::policy::Approval;
-use pw_mcp::{Catalog, Services, SessionRequest};
+use pw_mcp::{Catalog, HostKind, Services, SessionRequest};
 use pw_rpc::{Router, RpcError, rpc_method};
 use rmcp::model::{CallToolRequest, CallToolRequestParams, CallToolResult, ClientRequest};
 use rmcp::model::{ProtocolVersion, ServerNotification, SubscriptionFilter};
@@ -189,10 +189,10 @@ impl Fixture {
     }
 
     fn services(&self) -> Arc<Services> {
-        self.services_on("test")
+        self.services_on(HostKind::App)
     }
 
-    fn services_on(&self, transport: &'static str) -> Arc<Services> {
+    fn services_on(&self, host_kind: HostKind) -> Arc<Services> {
         let router = Arc::new(HostRouter::new());
         router.add_host(self.host.clone()).unwrap();
         let config = self.host.config().unwrap();
@@ -205,7 +205,8 @@ impl Fixture {
             audit: Arc::new(AuditLog::under_state(&self.paths.state)),
             catalog: Arc::new(Catalog::linked().routed_by(self.host.router())),
             approval: Approval::Unavailable,
-            transport,
+            transport: "test",
+            host_kind,
         })
     }
 
@@ -217,13 +218,13 @@ impl Fixture {
         Client,
         CancellationToken,
     ) {
-        self.connect_on(request, "test").await
+        self.connect_on(request, HostKind::App).await
     }
 
     async fn connect_on(
         &self,
         request: SessionRequest,
-        transport: &'static str,
+        host_kind: HostKind,
     ) -> (
         RunningService<RoleClient, Client>,
         Client,
@@ -233,7 +234,7 @@ impl Fixture {
         let (r, w) = tokio::io::split(server_io);
         let cancel = CancellationToken::new();
         tokio::spawn(pw_mcp::serve(
-            self.services_on(transport),
+            self.services_on(host_kind),
             request,
             (r, w),
             cancel.clone(),
@@ -1111,8 +1112,9 @@ async fn a_dropped_session_cancels_its_running_calls() {
     );
 }
 
-/// ⑥ 헤드리스 세션(stdio 로 직접 서비스)의 안내문에 「앱을 켠 뒤 MCP 서버를 다시 시작」 이 있고 앱 세션(소켓)에는 없다. 헤드리스의
-/// `write` 이상 툴 거절은 까닭 `headless_write` 다.
+/// ⑥ 헤드리스 Host 에 붙은 세션의 안내문에 「앱을 켠 뒤 MCP 서버를 다시 시작」 이 있고 앱 세션에는 없다. 헤드리스의 `write` 이상
+/// 툴 거절은 까닭 `headless_write` 다. 판정은 연결 방식이 아니라 `Services::host_kind` 다 — 이 시험의 세션은 둘 다 프로세스 안
+/// duplex(`transport: "test"`)로 붙는다(앱 없는 CLI 가 헤드리스 Host 에 붙는 꼴).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn only_a_headless_session_tells_the_agent_to_start_the_app() {
     let f = Fixture::new();
@@ -1124,10 +1126,7 @@ async fn only_a_headless_session_tells_the_agent_to_start_the_app() {
             .unwrap_or_default()
     };
     let (headless, _, cancel) = f
-        .connect_on(
-            SessionRequest::default(),
-            pw_mcp::server::HEADLESS_TRANSPORT,
-        )
+        .connect_on(SessionRequest::default(), HostKind::Headless)
         .await;
     assert!(
         instructions(&headless).contains(pw_mcp::server::HEADLESS_NOTICE),
@@ -1140,7 +1139,7 @@ async fn only_a_headless_session_tells_the_agent_to_start_the_app() {
     headless.cancel().await.unwrap();
     cancel.cancel();
 
-    let (app, _, cancel) = f.connect_on(SessionRequest::default(), "socket").await;
+    let (app, _, cancel) = f.connect_on(SessionRequest::default(), HostKind::App).await;
     assert!(instructions(&app).starts_with("Pitwall IDE"));
     assert!(
         !instructions(&app).contains("restart"),
@@ -1151,4 +1150,93 @@ async fn only_a_headless_session_tells_the_agent_to_start_the_app() {
     assert_eq!(mark(&write), Some(Mark::denied(Reason::NeedsApproval)));
     app.cancel().await.unwrap();
     cancel.cancel();
+}
+
+/// ④ 대상 프로젝트의 커밋된 공유 `project.toml` 은 좁히기만 한다: 전역이 끈 툴을 세션 프로젝트(alpha)는 `.local.toml` 로 켰고,
+/// 대상(beta)은 공유 설정으로 켰다 — alpha 로는 불리고 beta 로는 `not_exposed` 다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_target_projects_shared_config_cannot_widen_its_exposure() {
+    let f = Fixture::new();
+    std::fs::create_dir_all(&f.paths.config).unwrap();
+    std::fs::write(
+        f.paths.config.join("settings.toml"),
+        "schema = 1\n[mcp.tools]\nproject_info = false\n",
+    )
+    .unwrap();
+    f.host.config().unwrap().global.reload().unwrap();
+    let alpha = f.work("alpha/.pitwall");
+    std::fs::create_dir_all(&alpha).unwrap();
+    std::fs::write(
+        alpha.join("project.local.toml"),
+        "schema = 1\n[mcp.tools]\nproject_info = true\n",
+    )
+    .unwrap();
+    let beta = f.work("beta/.pitwall");
+    std::fs::create_dir_all(&beta).unwrap();
+    std::fs::write(
+        beta.join("project.toml"),
+        "schema = 1\n[mcp.tools]\nproject_info = true\n",
+    )
+    .unwrap();
+    let (client, _, cancel) = f
+        .connect(SessionRequest {
+            project: None,
+            cwd: Some(f.work("alpha")),
+        })
+        .await;
+    let own = call(&client, "project_info", json!({})).await;
+    assert_eq!(mark(&own), Some(Mark::ok()), "{}", text(&own));
+    let into_beta = call(&client, "project_info", json!({"projectId": f.projects[1]})).await;
+    assert_eq!(
+        mark(&into_beta),
+        Some(Mark::denied(Reason::NotExposed)),
+        "{}",
+        text(&into_beta)
+    );
+    client.cancel().await.unwrap();
+    cancel.cancel();
+}
+
+/// ④ 프로젝트 없는 세션의 `projectId` 는 언제나 대상 프로젝트다 — 그 프로젝트가 끈 툴은 `not_exposed`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_without_a_project_checks_every_target_project() {
+    let f = Fixture::new();
+    let beta = f.work("beta/.pitwall");
+    std::fs::create_dir_all(&beta).unwrap();
+    std::fs::write(
+        beta.join("project.local.toml"),
+        "schema = 1\n[mcp.tools]\nproject_info = false\n",
+    )
+    .unwrap();
+    let (client, _, cancel) = f.connect(SessionRequest::default()).await;
+    let into_beta = call(&client, "project_info", json!({"projectId": f.projects[1]})).await;
+    assert_eq!(mark(&into_beta), Some(Mark::denied(Reason::NotExposed)));
+    let into_alpha = call(&client, "project_info", json!({"projectId": f.projects[0]})).await;
+    assert_eq!(mark(&into_alpha), Some(Mark::ok()));
+    client.cancel().await.unwrap();
+    cancel.cancel();
+}
+
+/// ⑤ 세션을 연 쪽이 세션 토큰을 취소하면(앱 종료 · 소켓 서버가 연결을 거둠) 돌던 호출의 Host 핸들러가 곧바로 버려지고 감사 행이
+/// `error` · `cancelled` 로 남는다. 클라이언트는 아직 붙어 있다 — 끊김의 5초 drain 을 기다리지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelling_the_session_token_cancels_its_running_calls() {
+    let (f, probe) = fixture_with_test_tools();
+    let (client, _, cancel) = f.connect(SessionRequest::default()).await;
+    let _handle = client
+        .peer()
+        .send_cancellable_request(slow_call(), PeerRequestOptions::no_options())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), probe.started.notified())
+        .await
+        .expect("가짜 핸들러가 시작하지 않았다");
+    cancel.cancel();
+    wait_dropped(&probe, Duration::from_secs(1)).await;
+    let row = audit_row_of(&f.paths.state, "mcptest_slow");
+    assert_eq!(
+        (row.2.as_str(), row.3.as_deref()),
+        ("error", Some("cancelled"))
+    );
+    drop(client);
 }

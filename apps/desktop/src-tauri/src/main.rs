@@ -757,8 +757,11 @@ mod tests {
             pw_git::write::Askpass::default(),
         ));
         let headless = mcp::headless_host(&paths);
-        for (label, host) in [("app", &app), ("headless", &headless)] {
-            let names: Vec<String> = mcp::services(host, &paths, "test")
+        for (label, host, kind) in [
+            ("app", &app, pw_mcp::HostKind::App),
+            ("headless", &headless, pw_mcp::HostKind::Headless),
+        ] {
+            let names: Vec<String> = mcp::services(host, &paths, "test", kind)
                 .catalog
                 .tools()
                 .iter()

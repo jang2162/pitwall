@@ -17,7 +17,7 @@ use pw_core::config::AppPaths;
 use pw_core::{HostRouter, LocalHost};
 use pw_mcp::audit::AuditLog;
 use pw_mcp::policy::Approval;
-use pw_mcp::{Catalog, Services, SessionRequest};
+use pw_mcp::{Catalog, HostKind, Services, SessionRequest};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{Layer, fmt};
 
@@ -158,7 +158,7 @@ async fn headless(paths: AppPaths, request: SessionRequest) -> i32 {
     if let Err(e) = host.watch_config(&tokio::runtime::Handle::current()) {
         tracing::warn!(%e, "config watch disabled; tools/list_changed will not follow settings");
     }
-    let services = services(&host, &paths, "stdio");
+    let services = services(&host, &paths, "stdio", HostKind::Headless);
     let cancel = tokio_util::sync::CancellationToken::new();
     let code = match pw_mcp::serve(
         services,
@@ -183,8 +183,13 @@ async fn headless(paths: AppPaths, request: SessionRequest) -> i32 {
     code
 }
 
-/// 세션들이 함께 쓰는 것. 앱과 헤드리스가 같은 규칙으로 만든다.
-pub fn services(host: &Arc<LocalHost>, paths: &AppPaths, transport: &'static str) -> Arc<Services> {
+/// 세션들이 함께 쓰는 것. 앱과 헤드리스가 같은 규칙으로 만든다. `host_kind` 는 `host` 가 앱의 Host 인지 [`headless_host`] 인지다.
+pub fn services(
+    host: &Arc<LocalHost>,
+    paths: &AppPaths,
+    transport: &'static str,
+    host_kind: HostKind,
+) -> Arc<Services> {
     let router = Arc::new(HostRouter::new());
     router
         .add_host(host.clone())
@@ -205,6 +210,7 @@ pub fn services(host: &Arc<LocalHost>, paths: &AppPaths, transport: &'static str
         catalog: Arc::new(Catalog::linked().routed_by(host.router())),
         approval: Approval::Unavailable,
         transport,
+        host_kind,
     })
 }
 
@@ -225,7 +231,7 @@ pub fn serve_socket(host: Arc<LocalHost>, paths: AppPaths, key: String) {
             }
         };
         tracing::info!(socket = %listener.path().display(), "mcp socket listening");
-        let services = services(&host, &paths, "socket");
+        let services = services(&host, &paths, "socket", HostKind::App);
         socket::accept_loop(
             listener,
             services,

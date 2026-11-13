@@ -24,4 +24,4 @@ pub mod socket;
 
 pub use catalog::{Catalog, Tool};
 pub use client::{CallError, HostClient};
-pub use server::{ServeError, Services, SessionRequest, serve};
+pub use server::{HostKind, ServeError, Services, SessionRequest, serve};

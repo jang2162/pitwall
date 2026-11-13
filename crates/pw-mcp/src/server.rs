@@ -54,9 +54,17 @@ pub const DEFAULT_LIST_LIMIT: usize = 100;
 /// 프로젝트 툴이 선택 입력으로 받는 워크트리 꼭대기 키(「체크아웃」). 비었으면 세션의 활성 워크트리로 채운다.
 pub const WORKTREE: &str = "worktree";
 
-/// 앱 없이 뜬 헤드리스 세션이 stdio 로 직접 서비스할 때의 [`Services::transport`]. 앱의 세션은 언제나 로컬 소켓(`socket`)으로
-/// 오고, `pitwall mcp` 프록시의 stdio 는 앱의 소켓 세션으로 이어지므로, 이 전송으로 도는 세션이 곧 헤드리스 세션이다.
-pub const HEADLESS_TRANSPORT: &str = "stdio";
+/// 세션을 서비스하는 Host 가 무엇인가. 헤드리스는 연결 방식(stdio · 소켓 · 프로세스 안 duplex)이 아니라 Host 의 성질이다 —
+/// 앱 없이 뜬 `pitwall mcp` 와 앱 없이 도는 CLI(16-m5-plan M5-04)가 만든 Host 는 코어 메서드만 처리하고 승인 경로가 없다.
+/// 기본값을 두지 않는다 — [`Services`] 를 만드는 자리가 반드시 고른다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostKind {
+    /// 실행 중인 앱의 Host.
+    App,
+    /// 앱 없이 그 프로세스 안에 만든 Host(`pitwall mcp` 의 헤드리스, 앱 없는 CLI). 서버 안내문에 [`HEADLESS_NOTICE`] 를 싣고,
+    /// `write` 이상의 거절 까닭은 `headless_write` 다.
+    Headless,
+}
 
 /// 헤드리스 세션의 서버 안내문(결정 M5-D3). 앱 세션에는 싣지 않는다. 넘겨 붙기(16-m5-plan M5-20)가 들어오면 그 행이 바꾼다.
 pub const HEADLESS_NOTICE: &str = "The Pitwall app is not running, so only the core tools are available. \
@@ -75,8 +83,9 @@ pub struct Services {
     pub audit: Arc<AuditLog>,
     pub catalog: Arc<Catalog>,
     pub approval: Approval,
-    /// 로그에 남길 연결 종류(`socket` · `stdio`). `stdio` 는 헤드리스 세션이다([`HEADLESS_TRANSPORT`]).
+    /// 로그에 남길 연결 종류(`socket` · `stdio`). 판정에는 쓰지 않는다 — 헤드리스인지는 [`Self::host_kind`].
     pub transport: &'static str,
+    pub host_kind: HostKind,
 }
 
 /// 세션을 여는 쪽이 알려 주는 것(`pitwall mcp [--project <path>]` 와 그 cwd).
@@ -270,9 +279,9 @@ impl Session {
         )
     }
 
-    /// 세션이 헤드리스인가([`HEADLESS_TRANSPORT`]).
+    /// 세션이 헤드리스 Host 에 붙었는가([`HostKind`]).
     fn headless(&self) -> bool {
-        self.inner.services.transport == HEADLESS_TRANSPORT
+        self.inner.services.host_kind == HostKind::Headless
     }
 
     /// `cancel` 은 rmcp 가 그 요청에 건 취소 토큰이다 — 클라이언트의 취소 알림(`notifications/cancelled`)이 오거나 rmcp 의
@@ -316,7 +325,7 @@ impl Session {
             && let Some(target) = project_id.as_deref()
             && self.inner.project.as_ref().is_none_or(|p| p.id != target)
         {
-            match self.target_exposes(&tool, target).await {
+            match self.target_exposes(&tool, target, &cancel).await {
                 Ok(true) => {}
                 Ok(false) => {
                     let reason = format!(
@@ -369,14 +378,15 @@ impl Session {
         } else {
             Value::Object(args.clone())
         };
-        // 클라이언트가 취소하거나(`cancel`) 세션이 끝나면(`inner.cancel`) Host RPC 를 거둔다 — 어느 쪽이든 `HostClient` 가 그 요청
-        // id 로 `request.cancel` 을 보낸다(취소 토큰이 이기거나, 호출 future 가 버려진다).
-        let outcome = tokio::select! {
-            biased;
-            () = self.inner.cancel.cancelled() => Err(CallError::Cancelled),
-            outcome = self.inner.client.call_until(tool.method, params, &cancel) => outcome,
-        };
-        match outcome {
+        // 클라이언트가 취소하거나 세션이 끝나면 Host RPC 를 거둔다 — `HostClient` 가 그 요청 id 로 `request.cancel` 을 보낸다.
+        // 세션의 끝을 따로 보지 않는다: rmcp 의 요청 토큰(`cancel`)은 [`serve`] 가 `serve_with_ct` 에 넘긴 세션 토큰의 자손이라,
+        // 세션 토큰이 취소되거나 전송이 닫혀 서비스 루프가 끝나면 함께 취소된다(rmcp 3.9 `serve_inner` 의 `serve_loop_ct`).
+        match self
+            .inner
+            .client
+            .call_until(tool.method, params, &cancel)
+            .await
+        {
             Ok(result) => {
                 let size = result.to_string().len();
                 if size > MAX_RESPONSE_BYTES {
@@ -477,12 +487,21 @@ impl Session {
     /// 대상 프로젝트(세션 프로젝트가 아닌 `projectId`)의 노출 설정이 그 툴을 켰는가(결정 M5-D28). 세션의 노출은 이미 지났다 —
     /// 둘 다 켠 툴만 부른다. 그 프로젝트의 설정은 **디스크에 쓰지 않고** 읽는다(구버전 파일은 메모리에서만 올린다). 프로젝트를
     /// 찾지 못하면 그 오류를 호출의 오류로 돌려준다(없는 id 면 툴이 돌려줄 오류와 같다).
-    async fn target_exposes(&self, tool: &Tool, project_id: &str) -> Result<bool, CallError> {
+    async fn target_exposes(
+        &self,
+        tool: &Tool,
+        project_id: &str,
+        cancel: &CancellationToken,
+    ) -> Result<bool, CallError> {
         let params = serde_json::to_value(ProjectIdParams {
             id: project_id.to_owned(),
         })
         .expect("ProjectIdParams 는 직렬화된다");
-        let value = self.inner.client.call("project.get", params).await?;
+        let value = self
+            .inner
+            .client
+            .call_until("project.get", params, cancel)
+            .await?;
         let project: Project = serde_json::from_value(value).map_err(|e| CallError::Rpc {
             code: i64::from(pw_rpc::code::INTERNAL_ERROR),
             message: format!("unexpected project.get result: {e}"),

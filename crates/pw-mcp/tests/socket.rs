@@ -170,6 +170,7 @@ async fn app() -> App {
         catalog: Arc::new(Catalog::linked()),
         approval: Approval::Unavailable,
         transport: "socket",
+        host_kind: pw_mcp::HostKind::App,
     });
     let uid = socket::current_uid();
     let path = socket::endpoint("test-key", &paths.state, &base, uid).unwrap();
