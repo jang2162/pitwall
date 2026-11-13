@@ -28,14 +28,15 @@ import type { EditorWorkspace } from "./editor-workspace";
 import { editorContext } from "./extensions";
 import { historyCommand } from "./extensions/editing";
 import { openFind } from "./find-bar";
+import { editorOfElement } from "./tooltip-layer";
 import { getDocLanguage } from "./language";
 import { multiCursorActions } from "./multi-cursor-actions";
 import { lspCompletionActions } from "../lsp/completion-actions";
 
 /** 포커스가 든 에디터 뷰, 없으면 활성 탭의 뷰. */
 export function targetView(workspace: EditorWorkspace): EditorView | undefined {
-  const dom = document.activeElement?.closest(".cm-editor");
-  const focused = dom instanceof HTMLElement ? EditorView.findFromDOM(dom) : null;
+  // 포커스가 툴팁 안(이름 바꾸기 칸 · 코드 액션 단추)이어도 그 에디터다 — 툴팁은 툴팁 층에 있다(tooltip-layer.ts).
+  const focused = editorOfElement(document.activeElement);
   if (focused) return focused;
   const panel = workspace.activeTab();
   return panel ? workspace.view(panel.id) : undefined;

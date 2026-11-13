@@ -34,6 +34,7 @@ import { ThemeStoreProvider } from "../theme/theme-switcher";
 import { parseTheme } from "../theme/tokens";
 import type { fakeSyntaxServer } from "../editor/syntax-testing";
 import { fakeLspServer } from "./lsp-testing";
+import { withTooltips } from "../test-support/editor-tooltips";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -625,7 +626,7 @@ it("moves to the next error with F2 in the editor and wraps around (⑤)", async
   expect(at()).toBe(3);
   await keydown({ key: "F2", code: "F2", shiftKey: true }, view().contentDOM);
   expect(at()).toBe(8);
-  expect(view().dom.querySelector(".pw-lsp-popup .pw-diagnostic-message")?.textContent).toBe(
-    "error 0:8",
-  );
+  expect(
+    withTooltips(view()).querySelector(".pw-lsp-popup .pw-diagnostic-message")?.textContent,
+  ).toBe("error 0:8");
 });

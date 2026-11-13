@@ -37,6 +37,7 @@ import type {
 } from "@pitwall/rpc-client";
 
 import type { NavTarget } from "../editor/navigation";
+import { tooltipHostOf } from "../editor/tooltip-layer";
 import type { LspEditorFeature } from "./features";
 import type { LspDocument, LspServices } from "./lsp-sessions";
 import { closePopup, currentPopup, openPopup, type PopupSpec } from "./popup";
@@ -599,6 +600,22 @@ class Hovering implements PluginValue {
     view.dom.addEventListener("mouseleave", this.onLeave);
     window.addEventListener("keydown", this.onKey);
     window.addEventListener("keyup", this.onKey);
+    this.watchHost();
+  }
+
+  /** 툴팁은 툴팁 층의 호스트에 있다(editor/tooltip-layer.ts) — 팝업에서 에디터 밖으로 나가는 것은 호스트의 `mouseleave` 로 본다. */
+  private host: HTMLElement | undefined;
+  private watchHost() {
+    const host = tooltipHostOf(this.view);
+    if (host === this.host) return;
+    this.host?.removeEventListener("mouseleave", this.onLeave);
+    host?.addEventListener("mouseleave", this.onLeave);
+    this.host = host;
+  }
+
+  update() {
+    // 툴팁 확장을 다시 구성하면 호스트가 바뀐다.
+    this.watchHost();
   }
 
   private source() {
@@ -658,9 +675,9 @@ class Hovering implements PluginValue {
   }
 
   private leave(e: MouseEvent) {
-    // 팝업 안으로 들어간 것은 떠난 것이 아니다.
-    const into = e.relatedTarget instanceof Element && e.relatedTarget.closest(".pw-lsp-popup");
-    if (into) return;
+    // 팝업 안으로 들어간 것은 떠난 것이 아니다. 팝업에서 에디터로 돌아온 것도 — 그 뒤는 마우스 움직임이 정한다.
+    const to = e.relatedTarget instanceof Element ? e.relatedTarget : null;
+    if (to?.closest(".pw-lsp-popup") || (to && this.view.dom.contains(to))) return;
     this.clear();
     const popup = currentPopup(this.view, "main");
     if (popup?.kind === "hover" && !(popup.data as { pinned?: boolean } | undefined)?.pinned)
@@ -684,6 +701,7 @@ class Hovering implements PluginValue {
     clearTimeout(this.timer);
     this.view.contentDOM.removeEventListener("mousemove", this.onMove);
     this.view.dom.removeEventListener("mouseleave", this.onLeave);
+    this.host?.removeEventListener("mouseleave", this.onLeave);
     window.removeEventListener("keydown", this.onKey);
     window.removeEventListener("keyup", this.onKey);
   }

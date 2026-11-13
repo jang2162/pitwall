@@ -34,6 +34,7 @@ import { ThemeStoreProvider } from "../theme/theme-switcher";
 import { parseTheme } from "../theme/tokens";
 import { MAX_OCCURRENCES } from "./extensions/multi-cursor";
 import type { fakeSyntaxServer } from "./syntax-testing";
+import { withTooltips } from "../test-support/editor-tooltips";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -614,9 +615,9 @@ it("keeps every cursor when Esc closes an editor popup that CodeMirror's keymap 
   );
   await act(async () => view().dispatch({ effects: StateEffect.appendConfig.of([popup, escape]) }));
   await settle();
-  expect(view().dom.querySelector(".cm-tooltip")).not.toBeNull();
+  expect(withTooltips(view()).querySelector(".cm-tooltip")).not.toBeNull();
   await keydown({ code: "Escape", key: "Escape" }, view().contentDOM);
-  expect(view().dom.querySelector(".cm-tooltip")).toBeNull();
+  expect(withTooltips(view()).querySelector(".cm-tooltip")).toBeNull();
   expect(view().state.selection.ranges).toHaveLength(3);
   await keydown({ code: "Escape", key: "Escape" }, view().contentDOM);
   expect(view().state.selection.ranges).toHaveLength(1);

@@ -37,6 +37,7 @@ import { fakeSyntaxServer, miniHighlight } from "../editor/syntax-testing";
 import { fakeLspServer } from "./lsp-testing";
 import { lspCapabilities } from "./features";
 import { currentPopup, openPopup, popupActions, popupField } from "./popup";
+import { withTooltips } from "../test-support/editor-tooltips";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -382,7 +383,7 @@ async function emit(topic: string, payload: unknown) {
 }
 
 const lspContext = () => view().state.facet(editorContext)?.lsp;
-const popupDom = () => view().dom.querySelector<HTMLElement>(".pw-lsp-popup");
+const popupDom = () => withTooltips(view()).querySelector<HTMLElement>(".pw-lsp-popup");
 
 async function compose(event: "compositionstart" | "compositionend") {
   await act(async () => {
@@ -618,7 +619,7 @@ it("keeps a signature popup through edits and scrolls in its own slot, under a h
     openPopup(view(), { kind: "hover", pos: 3, body: { kind: "text", text: "fn main" } }),
   );
   await settle();
-  expect(view().dom.querySelectorAll(".pw-lsp-popup")).toHaveLength(2);
+  expect(withTooltips(view()).querySelectorAll(".pw-lsp-popup")).toHaveLength(2);
   await act(async () => view().dispatch({ changes: { from: 0, insert: "// x\n" } }));
   // 편집에 호버는 닫히고 시그니처는 남아 자리를 옮긴다.
   expect(currentPopup(view(), "main")).toBeNull();
@@ -655,7 +656,7 @@ it("keeps the same signature popup node through edits and a hover, so code is co
   );
   await settle();
   const signature = () =>
-    view().dom.querySelector<HTMLElement>('.pw-lsp-popup[data-popup-kind="signature"]');
+    withTooltips(view()).querySelector<HTMLElement>('.pw-lsp-popup[data-popup-kind="signature"]');
   const node = signature()!;
   const coloured = host.syntax.called("open").length;
   expect(node.querySelector("pre code span")).not.toBeNull();

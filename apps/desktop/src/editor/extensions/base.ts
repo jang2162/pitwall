@@ -8,6 +8,7 @@ import {
 } from "@codemirror/view";
 
 import type { EditorFeature } from ".";
+import { editorTooltips } from "../tooltip-layer";
 
 export const base: EditorFeature = {
   id: "base",
@@ -16,5 +17,7 @@ export const base: EditorFeature = {
     highlightActiveLineGutter(),
     highlightActiveLine(),
     drawSelection(),
+    // 툴팁은 패널에 잘리지 않게 body 의 툴팁 층에(../tooltip-layer.ts).
+    editorTooltips(),
   ],
 };

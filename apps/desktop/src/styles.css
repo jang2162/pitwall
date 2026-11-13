@@ -104,3 +104,9 @@ body {
   --dv-paneview-active-outline-color: var(--pw-ui-accent);
   --dv-active-sash-color: var(--pw-ui-accent);
 }
+
+/* 에디터 툴팁 층(src/editor/tooltip-layer.ts): 모달 대화상자 · 메뉴가 열려 Radix 가 나머지에 `aria-hidden` 을 걸면 숨긴다 — Radix 의
+   포털은 z-index 없이 body 끝에 붙어, 숨기지 않으면 층(z-index 40)이 그 위에 그려진다. */
+#pw-editor-tooltips[aria-hidden="true"] {
+  display: none;
+}

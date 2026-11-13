@@ -48,6 +48,7 @@ import type { TransactionSpec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { RpcClient } from "@pitwall/rpc-client";
 
+import { tooltipHostOf } from "./editor/tooltip-layer";
 import { gotoDeclaration } from "./lsp/navigation";
 import { frameStats, scrollFrames } from "./perf-frames";
 import { type ScenarioEnv, treeRow, until } from "./perf-scenario";
@@ -276,9 +277,12 @@ function appendToLine(view: EditorView, line: number, text: string): () => void 
   return () => view.dispatch({ changes: { from: at, to: at + text.length }, userEvent: "delete" });
 }
 
+/** 에디터의 툴팁이 든 곳 — 툴팁 층의 호스트(editor/tooltip-layer.ts), 없으면 `view.dom`. */
+const tooltipRoot = (view: EditorView): ParentNode => tooltipHostOf(view) ?? view.dom;
+
 /** 자동완성 팝업에 서버의 첫 항목이 있는가. */
 const completionShown = (view: EditorView) => {
-  const popup = view.dom.querySelector(".cm-tooltip-autocomplete");
+  const popup = tooltipRoot(view).querySelector(".cm-tooltip-autocomplete");
   return popup !== null && (popup.textContent ?? "").includes(`${COMPLETION_LABEL}0`);
 };
 
@@ -674,7 +678,7 @@ export function countSources(
 }
 
 const popupRows = (view: EditorView) =>
-  view.dom.querySelectorAll(".cm-tooltip-autocomplete > ul > li").length;
+  tooltipRoot(view).querySelectorAll(".cm-tooltip-autocomplete > ul > li").length;
 
 /**
  * 타이핑을 시작할 때: 커서를 `TYPING_LINE` 끝에 두고 그 줄을 에디터 가운데로 스크롤한다. 줄 50 은 창을 연 자리(맨 위)에서 보이는

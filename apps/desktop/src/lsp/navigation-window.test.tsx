@@ -38,6 +38,8 @@ import type { fakeSyntaxServer } from "../editor/syntax-testing";
 import { fakeLspServer } from "./lsp-testing";
 import { PREVIEW_READ_BYTES } from "./navigation";
 import { currentPopup } from "./popup";
+import { tooltipHostOf } from "../editor/tooltip-layer";
+import { withTooltips } from "../test-support/editor-tooltips";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -398,7 +400,7 @@ async function emit(topic: string, payload: unknown) {
   await settle();
 }
 
-const popupDom = () => view().dom.querySelector<HTMLElement>(".pw-lsp-popup");
+const popupDom = () => withTooltips(view()).querySelector<HTMLElement>(".pw-lsp-popup");
 
 async function compose(event: "compositionstart" | "compositionend") {
   await act(async () => {
@@ -932,13 +934,40 @@ it("hovers after 0.5 s, underlines with ⌘ and previews the declaration, and cl
   // ⌘ 를 누른 채: 밑줄과 선언 미리보기(정의의 앞 줄들을 코드 블록으로).
   pointer = 17;
   await mouse("mousemove", { metaKey: true });
-  expect(view().dom.querySelector(".pw-lsp-link")?.textContent).toBe("helper");
+  expect(withTooltips(view()).querySelector(".pw-lsp-link")?.textContent).toBe("helper");
   await act(async () => vi.advanceTimersByTimeAsync(550));
   await settle();
   const code = popupDom()!.querySelector("pre code")!;
   expect(code.textContent).toBe("pub fn helper() {}\npub fn other() {}\npub fn third() {}\n");
   await act(async () => window.dispatchEvent(new KeyboardEvent("keyup", { key: "Meta" })));
-  expect(view().dom.querySelector(".pw-lsp-link")).toBeNull();
+  expect(withTooltips(view()).querySelector(".pw-lsp-link")).toBeNull();
+});
+
+it("keeps the hover while the mouse goes into it and closes it when the mouse leaves the popup out of the editor", async () => {
+  // 툴팁은 툴팁 층에 있어 `view.dom` 밖이다(editor/tooltip-layer.ts) — 팝업에서 에디터 밖으로 나가는 것은 호스트의 `mouseleave` 다.
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  serve();
+  host.lsp!.handle("lsp.hover", async () => ({
+    staleVersion: false,
+    hover: { kind: "plaintext", value: "fn helper()", from: null, to: null },
+  }));
+  await mount();
+  await open(MAIN, 1, 1);
+  pointer = 17;
+  await mouse("mousemove");
+  await act(async () => vi.advanceTimersByTimeAsync(550));
+  await settle();
+  const popup = popupDom()!;
+  expect(view().dom.contains(popup)).toBe(false);
+  const leave = (from: Element, to: Element | null) =>
+    act(async () => from.dispatchEvent(new MouseEvent("mouseleave", { relatedTarget: to })));
+  await leave(view().dom, popup);
+  expect(popupDom()).not.toBeNull();
+  // 팝업에서 에디터로 돌아온 것은 떠난 것이 아니다.
+  await leave(tooltipHostOf(view())!, view().contentDOM);
+  expect(popupDom()).not.toBeNull();
+  await leave(tooltipHostOf(view())!, document.body);
+  expect(popupDom()).toBeNull();
 });
 
 /** `⌘` 를 누른 채 「helper」 위에 머물러 선언 미리보기의 글을 받고, 마우스를 낱말 밖으로 뺀다. */

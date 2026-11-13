@@ -9,6 +9,7 @@ import { annotations, toggleAnnotations } from "./blame-extension";
 import { goToChange, gutterLink, gutterState, togglePopupAt } from "./gutter-extension";
 import { BLAME_REVISION_ACTION, HISTORY_ACTION, REVEAL_ACTION } from "./gutter-host";
 import { FakeSource, type Harness, openEditor, textBlob, TOP, unifiedFile } from "./testing";
+import { withTooltips } from "../../test-support/editor-tooltips";
 
 let open: Harness[] = [];
 afterEach(() => {
@@ -35,7 +36,7 @@ function focus(h: Harness) {
 
 const hunks = (h: Harness) => h.view.state.field(gutterState).hunks;
 const marks = (h: Harness) =>
-  [...h.view.dom.querySelectorAll<HTMLElement>(".pw-git-gutter .pw-git-mark")].map(
+  [...withTooltips(h.view).querySelectorAll<HTMLElement>(".pw-git-gutter .pw-git-mark")].map(
     (m) => m.dataset.gitChange,
   );
 
@@ -51,7 +52,7 @@ function type(h: Harness, line: number, text: string) {
 }
 
 function popupButton(h: Harness, name: string): HTMLButtonElement {
-  const b = h.view.dom.querySelector<HTMLButtonElement>(`[data-git-popup="${name}"]`);
+  const b = withTooltips(h.view).querySelector<HTMLButtonElement>(`[data-git-popup="${name}"]`);
   if (!b) throw new Error(`no popup button ${name}`);
   return b;
 }
@@ -89,11 +90,11 @@ describe("gutter markers", () => {
     const h = start({ text: "A\nb\n" }, "a\nb\n");
     await ready(h);
     await vi.waitFor(() => expect(marks(h)).toEqual(["modified"]));
-    const element = h.view.dom.querySelector(".pw-git-mark")!.parentElement!;
+    const element = withTooltips(h.view).querySelector(".pw-git-mark")!.parentElement!;
     element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
-    expect(h.view.dom.querySelector(".pw-git-popup")).not.toBeNull();
+    expect(withTooltips(h.view).querySelector(".pw-git-popup")).not.toBeNull();
     element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
-    expect(h.view.dom.querySelector(".pw-git-popup")).toBeNull();
+    expect(withTooltips(h.view).querySelector(".pw-git-popup")).toBeNull();
   });
 
   it("reads HEAD in its work tree form at the commit HEAD points to", async () => {
@@ -140,7 +141,7 @@ describe("gutter markers", () => {
     const f = openEditor({ text: "pointer\n", source: filtered });
     open.push(f);
     await vi.waitFor(() =>
-      expect(f.view.dom.querySelector(".pw-git-off")?.textContent).toContain(
+      expect(withTooltips(f.view).querySelector(".pw-git-off")?.textContent).toContain(
         'git-gutter-off-filter {"driver":"lfs"}',
       ),
     );
@@ -285,7 +286,7 @@ describe("inline diff popup", () => {
     await ready(h);
     await vi.waitFor(() => expect(hunks(h)).toHaveLength(2));
     clickMark(h, 2);
-    const popup = () => h.view.dom.querySelector<HTMLElement>(".pw-git-popup")!;
+    const popup = () => withTooltips(h.view).querySelector<HTMLElement>(".pw-git-popup")!;
     expect(popup().getAttribute("role")).toBe("dialog");
     expect(popup().querySelector(".pw-git-popup-position")?.textContent).toContain('"index":1');
     // diff 뷰(통합 보기)가 HEAD 의 줄과 지금 줄을 함께 그린다.
@@ -300,7 +301,7 @@ describe("inline diff popup", () => {
     );
     expect(popupButton(h, "next").disabled).toBe(true);
     popupButton(h, "close").click();
-    expect(h.view.dom.querySelector(".pw-git-popup")).toBeNull();
+    expect(withTooltips(h.view).querySelector(".pw-git-popup")).toBeNull();
   });
 
   it("does not roll back in a read-only document", async () => {
@@ -403,7 +404,7 @@ describe("staging from the popup", () => {
     clickMark(h, 2);
     // 미리 본 판정이 버튼을 끄고 까닭을 적는다.
     await vi.waitFor(() =>
-      expect(h.view.dom.querySelector(".pw-git-popup-status")?.textContent).toBe(
+      expect(withTooltips(h.view).querySelector(".pw-git-popup-status")?.textContent).toBe(
         "git-gutter-stage-disk-changed",
       ),
     );
@@ -426,7 +427,7 @@ describe("staging from the popup", () => {
     clickMark(h, 3);
     await vi.waitFor(() => expect(popupButton(h, "stage").title).toBe("git-gutter-stage-inexact"));
     expect(popupButton(h, "stage").disabled).toBe(true);
-    expect(h.view.dom.querySelector(".pw-git-popup-status")?.textContent).toBe(
+    expect(withTooltips(h.view).querySelector(".pw-git-popup-status")?.textContent).toBe(
       "git-gutter-stage-inexact",
     );
     expect(source.staged).toEqual([]);
@@ -510,7 +511,7 @@ function startBlame(options: { text?: string; moves?: boolean; available?: strin
 }
 
 const annotationTexts = (h: Harness) =>
-  [...h.view.dom.querySelectorAll<HTMLElement>(".pw-blame-annotation")].map(
+  [...withTooltips(h.view).querySelectorAll<HTMLElement>(".pw-blame-annotation")].map(
     (e) => e.dataset.blameCommit ?? "uncommitted",
   );
 
@@ -523,7 +524,9 @@ describe("blame", () => {
     expect(annotationTexts(h)).toEqual([]);
     expect(toggleAnnotations(h.view)).toBe(true);
     await vi.waitFor(() => expect(annotationTexts(h)).toEqual(GIT_BLAME));
-    expect(h.view.dom.querySelector(".pw-blame-annotation")?.textContent).toContain("cat");
+    expect(withTooltips(h.view).querySelector(".pw-blame-annotation")?.textContent).toContain(
+      "cat",
+    );
     toggleAnnotations(h.view);
     await vi.waitFor(() => expect(annotationTexts(h)).toEqual([]));
   });
@@ -557,11 +560,13 @@ describe("blame", () => {
     focus(h);
     h.view.dispatch({ selection: { anchor: h.view.state.doc.line(3).from } });
     await vi.waitFor(() =>
-      expect(h.view.dom.querySelector(".pw-blame-inline")?.textContent).toContain('"author":"bob"'),
+      expect(withTooltips(h.view).querySelector(".pw-blame-inline")?.textContent).toContain(
+        '"author":"bob"',
+      ),
     );
     type(h, 3, "edited");
     await vi.waitFor(() =>
-      expect(h.view.dom.querySelector(".pw-blame-inline")?.textContent).toBe(
+      expect(withTooltips(h.view).querySelector(".pw-blame-inline")?.textContent).toBe(
         "git-blame-uncommitted",
       ),
     );
@@ -572,7 +577,9 @@ describe("blame", () => {
     await ready(h);
     toggleAnnotations(h.view);
     await vi.waitFor(() =>
-      expect(h.view.dom.querySelector(".pw-blame-notice")?.textContent).toBe("git-blame-no-moves"),
+      expect(withTooltips(h.view).querySelector(".pw-blame-notice")?.textContent).toBe(
+        "git-blame-no-moves",
+      ),
     );
     const tracked = startBlame({ moves: true });
     await ready(tracked);
@@ -587,7 +594,7 @@ describe("blame", () => {
     toggleAnnotations(h.view);
     await vi.waitFor(() => expect(annotationTexts(h)).toHaveLength(7));
     // happy-dom 은 배치가 없어 주석 칸이 누른 자리를 맨 위 줄로 읽는다 — 첫 줄(cfea…, 앞 커밋 86d0…)을 누른다.
-    const first = h.view.dom.querySelector<HTMLElement>(".pw-blame-annotation")!;
+    const first = withTooltips(h.view).querySelector<HTMLElement>(".pw-blame-annotation")!;
     expect(first.title).toContain("cfea20e5e65002ca6f23d790140cd8ce47c2a818");
     expect(first.title).toContain("third");
     expect(first.title).toContain("git-blame-click");
@@ -654,7 +661,7 @@ describe("blame", () => {
     await ready(h);
     toggleAnnotations(h.view);
     await vi.waitFor(() => expect(annotationTexts(h)).toHaveLength(7));
-    const first = h.view.dom.querySelector<HTMLElement>(".pw-blame-annotation")!;
+    const first = withTooltips(h.view).querySelector<HTMLElement>(".pw-blame-annotation")!;
     expect(first.title).not.toContain("git-blame-click");
     first.parentElement!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
     expect(h.ran).toEqual([]);

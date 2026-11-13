@@ -40,6 +40,7 @@ import { editorContext } from "../editor/extensions/context";
 import type { fakeSyntaxServer } from "../editor/syntax-testing";
 import { fakeLspServer } from "./lsp-testing";
 import { currentPopup } from "./popup";
+import { withTooltips } from "../test-support/editor-tooltips";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -502,9 +503,9 @@ async function type(chars: string) {
 }
 
 const text = () => view().state.doc.toString();
-const listOpen = () => view().dom.querySelector(".cm-tooltip-autocomplete") !== null;
+const listOpen = () => withTooltips(view()).querySelector(".cm-tooltip-autocomplete") !== null;
 const listLabels = () =>
-  [...view().dom.querySelectorAll(".cm-tooltip-autocomplete li .cm-completionLabel")].map(
+  [...withTooltips(view()).querySelectorAll(".cm-tooltip-autocomplete li .cm-completionLabel")].map(
     (e) => e.textContent,
   );
 const selection = () => {
@@ -581,7 +582,7 @@ it("asks again on every letter only while the list is incomplete (②)", async (
   await openMain("r\n", 1);
   await type(".ar");
   // 「더 있음」 표지 — 모자란 목록이다.
-  expect(view().dom.querySelector(".cm-tooltip-autocomplete")!.classList).toContain(
+  expect(withTooltips(view()).querySelector(".cm-tooltip-autocomplete")!.classList).toContain(
     "pw-lsp-completion-more",
   );
   expect(asked.map((a) => a.trigger)).toEqual([
@@ -599,7 +600,7 @@ it("asks again on every letter only while the list is incomplete (②)", async (
   await type("ar");
   expect(asked).toHaveLength(before);
   expect(listLabels()).toEqual(["arc", "area"]);
-  expect(view().dom.querySelector(".cm-tooltip-autocomplete")!.classList).not.toContain(
+  expect(withTooltips(view()).querySelector(".cm-tooltip-autocomplete")!.classList).not.toContain(
     "pw-lsp-completion-more",
   );
 });
@@ -616,8 +617,8 @@ it("filters by filterText, orders equal matches by sortText and shows the kind i
   await type(".");
   // 빈 접두어 — 점수가 같아 `sortText` 순이다(이름 순이 아니다).
   expect(listLabels()).toEqual(["•describe()", "zeta", "alpha"]);
-  expect(view().dom.querySelector(".cm-completionIcon-variable")).not.toBeNull();
-  expect(view().dom.querySelector(".cm-completionIcon-snippet")).not.toBeNull();
+  expect(withTooltips(view()).querySelector(".cm-completionIcon-variable")).not.toBeNull();
+  expect(withTooltips(view()).querySelector(".cm-completionIcon-snippet")).not.toBeNull();
   await type("des");
   expect(listLabels()).toEqual(["•describe()"]);
 });
@@ -743,7 +744,7 @@ it("resolves only the selected item, cancels the one left behind, and draws its 
   await settle();
   expect(resolves.map((r) => r.label)).toEqual(["a1", "b2", "c3"]);
   expect(resolves.map((r) => r.signal?.aborted)).toEqual([true, true, false]);
-  const info = view().dom.querySelector<HTMLElement>(".cm-completionInfo")!;
+  const info = withTooltips(view()).querySelector<HTMLElement>(".cm-completionInfo")!;
   expect(info.querySelector("strong")?.textContent).toBe("c");
   expect(info.querySelector("script, img")).toBeNull();
   expect((window as { pwed?: number }).pwed).toBeUndefined();
@@ -815,15 +816,16 @@ it("moves the active parameter at every comma and closes outside the call (⑦)"
   });
   await openMain("scale\n", 5);
   const active = () =>
-    view().dom.querySelector(".pw-lsp-popup[data-popup-kind=signature] .pw-lsp-signature-active")
-      ?.textContent;
+    withTooltips(view()).querySelector(
+      ".pw-lsp-popup[data-popup-kind=signature] .pw-lsp-signature-active",
+    )?.textContent;
   await type("(");
   expect(active()).toBe("width: u32");
   await type("1");
   expect(active()).toBe("width: u32");
   await type(",");
   expect(active()).toBe("height: u32");
-  expect(view().dom.querySelector(".pw-lsp-signature-doc")?.textContent).toBe("높이");
+  expect(withTooltips(view()).querySelector(".pw-lsp-signature-doc")?.textContent).toBe("높이");
   await type(" 2)");
   expect(currentPopup(view(), "signature")).toBeNull();
   // ⌘P 로 다시 부른다.
@@ -1326,7 +1328,7 @@ it("switches between overloads with ↑ ↓ while the caret stays", async () => 
   }));
   await openMain("f\n", 1);
   await type("(");
-  const shown = () => view().dom.querySelector(".pw-lsp-signature")?.textContent;
+  const shown = () => withTooltips(view()).querySelector(".pw-lsp-signature")?.textContent;
   expect(shown()).toBe("1/2 f(a)");
   await press("ArrowDown");
   expect(shown()).toBe("2/2 f(b, c)");
