@@ -6,6 +6,9 @@
 //!   병합 충돌은 양쪽 줄을 다 살린다.
 //! - [`ToolHost`] 로 앱과 같은 Host 에 진짜 MCP 세션을 열고 `tools/list` · `tools/call` 로 이름 · 그룹 · 등급 · 스키마 · 감사 행을 본다.
 //!   도우미는 세션을 여는 공개 길(`pw_mcp::serve` · `mcp::services`)만 쓴다 — 세션의 안쪽 꼴(연결 범위 · 호출 길)에 기대지 않는다.
+//!
+//! 보지 못하는 것: 앱 전용 툴이 하나도 없는 동안(`APP_TOOLS == HEADLESS_TOOLS`)은 헤드리스 목록 단언이 `mcp::services` 의
+//! `routed_by` 를 구분하지 못한다 — 빼도 통과한다. 첫 앱 전용 툴을 더하는 행이 그것을 빼 보고 이 시험이 실패하는지 본다.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -67,12 +70,17 @@ fn mcp_tools_are_exactly_these() {
 
 /// 툴 메서드 규약(`crates/pw-mcp` 머리 주석)을 어긴 곳. 비면 규약대로다.
 ///
-/// - 프로젝트 툴(입력에 `projectId`)의 입력은 struct 다(예외 없음 — 뒤에 선택 입력 `checkout` 을 깨지 않고 더한다, 결정 M5-D15).
-/// - 프로젝트 툴은 선택 입력 `worktree`(문자열)를 받는다. [`PROJECT_RECORD_TOOLS`] 만 뺀다.
+/// - 프로젝트 툴(입력에 `projectId`)의 입력이 struct 인 것(뒤에 선택 입력 `checkout` 을 깨지 않고 더한다, 결정 M5-D15)은 여기서
+///   보지 않는다 — 카탈로그가 루트가 object 가 아닌 입력을 거절하고(`CatalogError::InputNotObject`), `()` 입력은 `projectId` 가 없어
+///   프로젝트 툴이 될 수 없다(`Tool::project_scoped`).
+/// - 프로젝트 툴은 선택 입력 `worktree`(문자열)를 받는다. `exempt`(실제 툴은 [`PROJECT_RECORD_TOOLS`])만 뺀다. 예외 목록의 툴이
+///   `worktree` 를 갖거나 프로젝트 툴이 아니면 예외가 낡은 것이다.
 /// - 쪽 단위 툴: 입력에 `limit` 이나 `cursor` 가 있으면 둘 다 있고 둘 다 선택이며, 결과가 object 이고 다음 쪽을 알리는 `nextCursor`
-///   를 싣는다(없으면 마지막 쪽 — 저장소의 쪽 RPC 와 같은 이름). 어느 툴이 쪽 단위인지는 툴 행이 정한다 — 이 검사는 반쪽만
-///   구현된 쪽 규약을 잡는다.
-fn convention_problems(tool: &pw_mcp::Tool) -> Vec<String> {
+///   를 싣는다(없으면 마지막 쪽 — 저장소의 쪽 RPC 와 같은 이름). `limit` 은 `u32` 다 — 기본값 `pw_rpc::DEFAULT_LIST_LIMIT` 와 같은
+///   타입. 어느 툴이 쪽 단위인지는 툴 행이 정한다 — 이 검사는 반쪽만 구현된 쪽 규약을 잡는다.
+fn convention_problems(tool: &pw_mcp::Tool, exempt: &[&str]) -> Vec<String> {
+    // `limit` 의 타입이 기본값 상수와 같다는 것을 컴파일 때 묶는다 — 상수 타입이 바뀌면 여기와 아래 `uint32` 검사를 함께 고친다.
+    const _: u32 = pw_rpc::DEFAULT_LIST_LIMIT;
     let mut problems = Vec::new();
     let schema = tool.input_schema_for(false);
     let properties = schema.get("properties").and_then(Value::as_object);
@@ -84,10 +92,7 @@ fn convention_problems(tool: &pw_mcp::Tool) -> Vec<String> {
             .is_some_and(|r| r.iter().any(|k| k == key))
     };
     if tool.project_scoped() {
-        if tool.unit_params {
-            problems.push("project tool input must be a struct".to_owned());
-        }
-        let exempt = PROJECT_RECORD_TOOLS.contains(&tool.name.as_str());
+        let exempt = exempt.contains(&tool.name.as_str());
         match properties.and_then(|p| p.get("worktree")) {
             None if !exempt => {
                 problems.push("project tool needs an optional `worktree`".to_owned())
@@ -105,7 +110,7 @@ fn convention_problems(tool: &pw_mcp::Tool) -> Vec<String> {
                 }
             }
         }
-    } else if PROJECT_RECORD_TOOLS.contains(&tool.name.as_str()) {
+    } else if exempt.contains(&tool.name.as_str()) {
         problems.push("not a project tool; drop it from PROJECT_RECORD_TOOLS".to_owned());
     }
     if has("limit") || has("cursor") {
@@ -115,6 +120,13 @@ fn convention_problems(tool: &pw_mcp::Tool) -> Vec<String> {
             } else if required(key) {
                 problems.push(format!("`{key}` must be optional"));
             }
+        }
+        let limit_format = properties
+            .and_then(|p| p.get("limit"))
+            .and_then(|l| l.get("format"))
+            .and_then(Value::as_str);
+        if has("limit") && limit_format != Some("uint32") {
+            problems.push("`limit` must be a u32 like DEFAULT_LIST_LIMIT".to_owned());
         }
         let next = tool
             .output_schema
@@ -146,7 +158,7 @@ fn tools_follow_the_tool_method_convention() {
         .catalog
         .tools()
         .iter()
-        .map(|t| (t.name.clone(), convention_problems(t)))
+        .map(|t| (t.name.clone(), convention_problems(t, PROJECT_RECORD_TOOLS)))
         .filter(|(_, p)| !p.is_empty())
         .collect();
     assert!(problems.is_empty(), "{problems:#?}");
@@ -167,9 +179,12 @@ fn the_convention_check_catches_half_done_tools() {
         pw_rpc::MethodInfo::unary::<fake::RequiredWorktree>(),
         pw_rpc::MethodInfo::unary::<fake::LimitOnly>(),
         pw_rpc::MethodInfo::unary::<fake::NoNextCursor>(),
+        pw_rpc::MethodInfo::unary::<fake::NumberWorktree>(),
+        pw_rpc::MethodInfo::unary::<fake::WideLimit>(),
+        pw_rpc::MethodInfo::unary::<fake::NotProject>(),
     ])
     .unwrap();
-    let problems = |name: &str| convention_problems(catalog.get(name).unwrap());
+    let problems = |name: &str| convention_problems(catalog.get(name).unwrap(), &[]);
     assert_eq!(problems("good"), Vec::<String>::new());
     assert_eq!(
         problems("no_worktree"),
@@ -184,6 +199,24 @@ fn the_convention_check_catches_half_done_tools() {
         problems("no_next_cursor"),
         ["paged tool result needs `nextCursor`"]
     );
+    assert_eq!(problems("number_worktree"), ["`worktree` must be a string"]);
+    assert_eq!(
+        problems("wide_limit"),
+        ["`limit` must be a u32 like DEFAULT_LIST_LIMIT"]
+    );
+    assert_eq!(problems("not_project"), Vec::<String>::new());
+
+    // 예외 목록이 낡았을 때: 예외인데 `worktree` 가 있다 · 예외인데 프로젝트 툴이 아니다. 예외가 맞으면 문제가 없다.
+    let exempt = |name: &str| convention_problems(catalog.get(name).unwrap(), &[name]);
+    assert_eq!(
+        exempt("good"),
+        ["has `worktree`; drop it from PROJECT_RECORD_TOOLS"]
+    );
+    assert_eq!(
+        exempt("not_project"),
+        ["not a project tool; drop it from PROJECT_RECORD_TOOLS"]
+    );
+    assert_eq!(exempt("no_worktree"), Vec::<String>::new());
 }
 
 /// [`the_convention_check_catches_half_done_tools`] 의 가짜 선언. `rpc_method!` 로 만들면 레지스트리(`pw_rpc::methods`)에 들어가
@@ -216,6 +249,27 @@ mod fake {
     pub struct WorktreeRequired {
         pub project_id: String,
         pub worktree: String,
+    }
+
+    #[derive(Deserialize, specta::Type, schemars::JsonSchema)]
+    #[serde(rename_all = "camelCase")]
+    pub struct WorktreeNumber {
+        pub project_id: String,
+        #[serde(default)]
+        pub worktree: Option<u32>,
+    }
+
+    #[derive(Deserialize, specta::Type, schemars::JsonSchema)]
+    pub struct Wide {
+        #[serde(default)]
+        pub cursor: Option<String>,
+        #[serde(default)]
+        pub limit: Option<u64>,
+    }
+
+    #[derive(Deserialize, specta::Type, schemars::JsonSchema)]
+    pub struct Plain {
+        pub query: String,
     }
 
     #[derive(Deserialize, specta::Type, schemars::JsonSchema)]
@@ -263,6 +317,9 @@ mod fake {
     fake!(RequiredWorktree, "required_worktree", WorktreeRequired, ());
     fake!(LimitOnly, "limit_only", OnlyLimit, Page);
     fake!(NoNextCursor, "no_next_cursor", Paged, Vec<String>);
+    fake!(NumberWorktree, "number_worktree", WorktreeNumber, ());
+    fake!(WideLimit, "wide_limit", Wide, Page);
+    fake!(NotProject, "not_project", Plain, ());
 }
 
 /// 도우미 자체: 진짜 세션에서 목록 · 그룹 · 등급 · 호출 · 감사 행이 보인다. 툴 행의 시험은 이 꼴을 따른다.

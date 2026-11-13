@@ -336,6 +336,12 @@ pub trait StreamMethod: Method {
 ///
 /// ```compile_fail
 /// pw_rpc::rpc_method! {
+///     Reversed: "x.rev" { params: (), result: (), tier: Read, mcp: { name: "rev", group: "code" } }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// pw_rpc::rpc_method! {
 ///     HalfNamed: "x.half" { params: (), result: (), tier: Read, mcp: { name: "half" } }
 /// }
 /// ```
@@ -459,6 +465,12 @@ macro_rules! __rpc_mcp {
             group: ::core::option::Option::Some($group),
             name: ::core::option::Option::Some($name),
         })
+    };
+    // 그 밖의 꼴(순서를 바꾼 것 · 한쪽만 적은 것 · 리터럴이 아닌 값)은 매크로 안쪽을 가리키는 「no rules expected」 대신 이 문장으로.
+    ($($other:tt)*) => {
+        ::core::compile_error!(
+            "mcp: expected `true`, `false` or `{ group: \"<group>\", name: \"<tool_name>\" }` (both, group first)"
+        )
     };
 }
 
