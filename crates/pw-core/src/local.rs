@@ -107,6 +107,7 @@ impl LocalHost {
             id: id.into(),
             paths: None,
             read_only_registry: false,
+            open_requests: None,
             extensions: Vec::new(),
         }
     }
@@ -115,6 +116,7 @@ impl LocalHost {
         id: HostId,
         paths: Option<AppPaths>,
         read_only_registry: bool,
+        open_requests: Option<crate::open::OpenRequests>,
         extensions: Vec<Extension>,
     ) -> Self {
         let hub = EventHub::new();
@@ -138,6 +140,14 @@ impl LocalHost {
         let mut router = build_router(&id, &bus, &tasks, config.as_ref(), &projects);
         if let Some(registry) = &registry {
             crate::registry::methods::register(&mut router, registry);
+        }
+        // 코어 툴 메서드(결정 M5-D3 — 헤드리스 Host 도 처리한다).
+        if let (Some(config), Some(registry)) = (&config, &registry) {
+            crate::config::tool::register(&mut router, config.paths.clone(), registry.clone());
+        }
+        // 창을 열 수 있는 Host(앱)만 — 헤드리스 Host 에는 없다(결정 M5-D3 · M5-D24).
+        if let (Some(requests), Some(registry)) = (open_requests, &registry) {
+            crate::open::register(&mut router, requests, registry.clone());
         }
         // 코어 메서드를 먼저 붙이고 확장을 붙인다. 같은 이름을 두 번 붙이면 Router 가 패닉한다.
         for extend in extensions {
@@ -269,6 +279,7 @@ pub struct LocalHostBuilder {
     id: HostId,
     paths: Option<AppPaths>,
     read_only_registry: bool,
+    open_requests: Option<crate::open::OpenRequests>,
     extensions: Vec<Extension>,
 }
 
@@ -287,6 +298,14 @@ impl LocalHostBuilder {
         self
     }
 
+    /// `project_open` 툴 메서드(`project.tool.open`)를 붙이고 그 요청을 `requests` 로 보낸다. 창을 열 수 있는 Host(앱)만 준다 —
+    /// 설정(레지스트리)이 없는 Host 에는 붙지 않는다.
+    #[must_use]
+    pub fn open_requests(mut self, requests: crate::open::OpenRequests) -> Self {
+        self.open_requests = Some(requests);
+        self
+    }
+
     /// `host.*` · `config.*` · `project.*` 에 더해 붙일 메서드. 여러 번 부르면 부른 순서대로 붙는다.
     #[must_use]
     pub fn methods(mut self, extend: impl FnOnce(&mut Router) + 'static) -> Self {
@@ -299,6 +318,7 @@ impl LocalHostBuilder {
             self.id,
             self.paths,
             self.read_only_registry,
+            self.open_requests,
             self.extensions,
         )
     }

@@ -148,7 +148,13 @@ async fn a_group_turned_off_drops_all_of_its_tools() {
     let (client, cancel) = f.connect(SessionRequest::default()).await;
     assert_eq!(
         tool_names(&client).await,
-        ["lint", "project_info", "project_list"]
+        [
+            "lint",
+            "project_info",
+            "project_list",
+            "project_open",
+            "settings_get"
+        ]
     );
     let hidden = client
         .peer()
@@ -168,7 +174,13 @@ async fn an_exact_key_and_a_glob_beat_the_group() {
     let (client, cancel) = f.connect(SessionRequest::default()).await;
     assert_eq!(
         tool_names(&client).await,
-        ["project_info", "project_list", "sql_explain"]
+        [
+            "project_info",
+            "project_list",
+            "project_open",
+            "settings_get",
+            "sql_explain"
+        ]
     );
     client.cancel().await.unwrap();
     cancel.cancel();
@@ -191,7 +203,15 @@ async fn shared_project_settings_cannot_turn_a_group_on() {
             cwd: Some(f.base.join("work")),
         })
         .await;
-    assert_eq!(tool_names(&client).await, ["project_info", "project_list"]);
+    assert_eq!(
+        tool_names(&client).await,
+        [
+            "project_info",
+            "project_list",
+            "project_open",
+            "settings_get"
+        ]
+    );
     client.cancel().await.unwrap();
     cancel.cancel();
 }

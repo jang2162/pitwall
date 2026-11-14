@@ -17,6 +17,12 @@ export type UnaryMethods = {
 	 */
 	"config.paths": { params: null; result: ConfigPathsInfo };
 	/**
+	 * 설정 키 조회 — 디스크에 쓰지 않고 읽는다. `projectId` 가 없으면(`null`) 전역 설정, 있으면 그 프로젝트의 병합된 설정(전역
+	 * 위에 프로젝트 설정). `key`(`표.키` 접두)로 좁힌다. 값마다 어느 레이어(builtin · global · shared · personal)에서 왔는지 싣는다.
+	 * 키 이름이 비밀을 가리키는 값은 가린다. 그 밖의 값은 설정 파일 그대로다 — 에이전트가 파일을 직접 읽는 것과 같은 범위.
+	 */
+	"config.tool.get": { params: SettingsGetToolParams; result: SettingsGetToolResult };
+	/**
 	 * 사람이 확인한 것을 기록한다 — `env` 참조의 (변수, 대상), 루트 밖 SQLite 의 실제 경로, SSH 터널 목적지 · 인증서 파일의
 	 * (값, 대상). 지금 설정에서 나오는 것과 같을 때만
 	 * 기록하고 다르면 conflict 오류(그 사이 설정이 바뀌었다). 확인 기록이 깨져 있으면 덮지 않고 storage unavailable. 그 프로젝트 창의
@@ -810,7 +816,9 @@ export type UnaryMethods = {
 	 */
 	"lsp.workspaceSymbol": { params: LspWorkspaceSymbolParams; result: LspWorkspaceSymbols };
 	/**
-	 * 이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.
+	 * 이 OS 에서 쓸 수 있는 외부 도구(id · 이름 · 기여한 확장 · 파일까지 여는가 · 설정 형식 오류)와 기본 도구. `projectId` 를
+	 * 주면 그 프로젝트 설정의 `[open_with] default` 까지 보고 기본 도구를 고른다(세션에 프로젝트가 있으면 키를 빼면 세션 프로젝트다
+	 * — 전역 기본값만 보려면 `null`). 실행 명령은 싣지 않는다.
 	 */
 	"openWith.list": { params: OpenWithListParams; result: OpenWithList };
 	/**
@@ -905,6 +913,12 @@ export type UnaryMethods = {
 	 * `reason` 을 배너로 보여 준다.
 	 */
 	"project.storage": { params: null; result: StorageStatus };
+	/**
+	 * Pitwall 앱에서 프로젝트 · 파일 · 줄을 연다. 창을 앞으로 가져오지 않는다 — 그 프로젝트 창이 열려 있으면 그 안에 탭만 열고,
+	 * 없으면 활성화하지 않고 창을 만든다. `path` 는 프로젝트 루트 안만(상대 경로는 루트 기준). 세션마다 10초에 5번까지
+	 * (넘으면 `rateLimited`). 앱이 실행 중이어야 한다.
+	 */
+	"project.tool.open": { params: ProjectOpenToolParams; result: ProjectOpenToolResult };
 	/**
 	 * 프로젝트의 신뢰. 워크트리 프로젝트는 메인 저장소 프로젝트의 신뢰를 따른다(`ownerId`). 없는 id 면 invalid params 오류.
 	 */
@@ -1110,6 +1124,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"cli.status": {"name":"cli.status","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"CliStatus","doc":" 「Orca 에서 Pitwall 열기」 안내의 검사(04 F8-6): 설치 위치의 심링크가 이 앱을 가리키는가, 로그인 셸 PATH 로 찾은\n `pitwall` 이 이 앱인가. 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n","mcp":null,"fileScope":false},
 	"config.get": {"name":"config.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ConfigGetParams","output":"ConfigView","doc":" 병합된 설정 스냅숏. `projectId` 가 없으면 전역(`$CONFIG`), 있으면 그 프로젝트(설정을 붙여 연 프로젝트만).\n","mcp":null,"fileScope":true},
 	"config.paths": {"name":"config.paths","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ConfigPathsInfo","doc":" 해석된 `$CONFIG`/`$DATA`/`$STATE`/`$CACHE`. 설정 화면의 「설정 폴더 열기」 · 「경로 복사」 가 쓴다.\n","mcp":null,"fileScope":false},
+	"config.tool.get": {"name":"config.tool.get","kind":"unary","tier":"read","roles":["owner"],"params":"SettingsGetToolParams","output":"SettingsGetToolResult","doc":" 설정 키 조회 — 디스크에 쓰지 않고 읽는다. `projectId` 가 없으면(`null`) 전역 설정, 있으면 그 프로젝트의 병합된 설정(전역\n 위에 프로젝트 설정). `key`(`표.키` 접두)로 좁힌다. 값마다 어느 레이어(builtin · global · shared · personal)에서 왔는지 싣는다.\n 키 이름이 비밀을 가리키는 값은 가린다. 그 밖의 값은 설정 파일 그대로다 — 에이전트가 파일을 직접 읽는 것과 같은 범위.\n","mcp":{"group":"project","name":"settings_get"},"fileScope":false},
 	"db.connection.approve": {"name":"db.connection.approve","kind":"unary","tier":"write","roles":["owner"],"params":"DbConnectionApproveParams","output":"()","doc":" 사람이 확인한 것을 기록한다 — `env` 참조의 (변수, 대상), 루트 밖 SQLite 의 실제 경로, SSH 터널 목적지 · 인증서 파일의\n (값, 대상). 지금 설정에서 나오는 것과 같을 때만\n 기록하고 다르면 conflict 오류(그 사이 설정이 바뀌었다). 확인 기록이 깨져 있으면 덮지 않고 storage unavailable. 그 프로젝트 창의\n 연결 + 신뢰한 프로젝트만.\n","mcp":null,"fileScope":false},
 	"db.connection.delete": {"name":"db.connection.delete","kind":"unary","tier":"write","roles":["owner"],"params":"DbConnectionParams","output":"()","doc":" 연결 설정 파일(공유 · 개인 둘 다)과 그 연결의 비밀 · 확인 기록을 지운다. 그 프로젝트 창의 연결만.\n","mcp":null,"fileScope":false},
 	"db.connection.get": {"name":"db.connection.get","kind":"unary","tier":"read","roles":["owner"],"params":"DbConnectionParams","output":"DbConnectionEntry","doc":" 연결 하나. 없으면 not found 오류.\n","mcp":null,"fileScope":false},
@@ -1280,7 +1295,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lsp.tool.diagnostics": {"name":"lsp.tool.diagnostics","kind":"unary","tier":"read","roles":["owner"],"params":"DiagnosticsToolParams","output":"DiagnosticsToolResult","doc":" Language server diagnostics (errors, warnings, hints) for a project, one page at a time: files in path order, each\n file's diagnostics most severe first. Filter by one file (`path`, absolute or relative to the project root) and by\n `minSeverity`. Lines and columns start at 1; columns count UTF-16 code units. Only what the language servers have\n published on their own: servers run while the project is open in a Pitwall window (they start when a file of that\n language is opened there), and many servers only report files that are open in the editor, so files nobody opened\n may be missing — an empty list is not proof the project builds. `servers` tells \"no problems\" apart from \"no server\n yet / still starting / still indexing\" (a `progress` means more diagnostics may come). This tool never starts a\n server. An untrusted project runs no language servers: the result is empty with `unavailable.reason = \"untrusted\"`.\n","mcp":{"group":"code","name":"diagnostics"},"fileScope":false},
 	"lsp.typeDefinition": {"name":"lsp.typeDefinition","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspLocationsResult","doc":" 타입 정의로(`textDocument/typeDefinition`).\n","mcp":null,"fileScope":false},
 	"lsp.workspaceSymbol": {"name":"lsp.workspaceSymbol","kind":"unary","tier":"read","roles":["owner"],"params":"LspWorkspaceSymbolParams","output":"LspWorkspaceSymbols","doc":" 프로젝트의 언어 서버들에 `workspace/symbol` 을 묻는다(심볼로 이동 · 클래스로 이동 · SE 「심볼」 탭 — M4-16). 이 창이 문서를 연\n 떠 있는 서버에만 묻고 서버를 띄우지 않는다. 루트 밖 위치는 읽기 토큰과 함께(결정 M4-D13). 미신뢰면 untrusted.\n","mcp":null,"fileScope":false},
-	"openWith.list": {"name":"openWith.list","kind":"unary","tier":"read","roles":["owner"],"params":"OpenWithListParams","output":"OpenWithList","doc":" 이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.\n","mcp":null,"fileScope":false},
+	"openWith.list": {"name":"openWith.list","kind":"unary","tier":"read","roles":["owner"],"params":"OpenWithListParams","output":"OpenWithList","doc":" 이 OS 에서 쓸 수 있는 외부 도구(id · 이름 · 기여한 확장 · 파일까지 여는가 · 설정 형식 오류)와 기본 도구. `projectId` 를\n 주면 그 프로젝트 설정의 `[open_with] default` 까지 보고 기본 도구를 고른다(세션에 프로젝트가 있으면 키를 빼면 세션 프로젝트다\n — 전역 기본값만 보려면 `null`). 실행 명령은 싣지 않는다.\n","mcp":{"group":null,"name":null},"fileScope":false},
 	"openWith.run": {"name":"openWith.run","kind":"unary","tier":"exec","roles":["owner"],"params":"OpenWithRunParams","output":"OpenWithOutcome","doc":" 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n 그 프로젝트의 창이 아니면 permission denied 오류다 — 웰컴 창(Host 연결)만 예외로, 목록에 있는 도구(또는 기본 도구)로\n 프로젝트 루트를 여는 것(`worktree` · `file` · `line` · `column` 없이)은 된다.\n","mcp":null,"fileScope":false},
 	"project.candidates": {"name":"project.candidates","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Vec<RootCandidate>","doc":" 경로의 루트 후보: 워크트리의 메인 저장소, 가장 가까운 `.git`, 빌드 파일이 있는 상위 폴더(가까운 것부터).\n 홈 디렉터리와 그 위, 파일 시스템 루트는 넣지 않는다.\n","mcp":null,"fileScope":false},
 	"project.claimTrustPrompt": {"name":"project.claimTrustPrompt","kind":"unary","tier":"write","roles":["owner"],"params":"ProjectIdParams","output":"bool","doc":" 신뢰 확인 다이얼로그를 띄울 차례인가. 아직 묻지 않은 프로젝트면 미신뢰로 기록하고 `true` — 같은 프로젝트의 창이 여럿이어도\n 처음 부른 하나만 `true` 를 받는다. 이미 물었으면 `false`.\n","mcp":null,"fileScope":false},
@@ -1300,6 +1315,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"project.state.get": {"name":"project.state.get","kind":"unary","tier":"read","roles":["owner"],"params":"ProjectScopedParams","output":"ProjectState","doc":" 프로젝트 창의 상태(`$DATA/projects/<id>/state.json`). 없거나 읽지 못했으면 `state: null`(읽지 못한 이유는 `problem`).\n 레지스트리에 없는 id 면 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"project.state.set": {"name":"project.state.set","kind":"unary","tier":"write","roles":["owner"],"params":"SetProjectStateParams","output":"()","doc":" 프로젝트 창의 상태를 통째로 바꾼다. 원자적으로 쓰고, JSON 객체가 아니거나 1 MiB 를 넘으면 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"project.storage": {"name":"project.storage","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"StorageStatus","doc":" 레지스트리 파일(`$DATA/state.db`)의 상태. `readOnly` · `memory` 면 쓰기 메서드가 오류로 거절된다 — 웰컴 화면은 정상이 아니면\n `reason` 을 배너로 보여 준다.\n","mcp":null,"fileScope":false},
+	"project.tool.open": {"name":"project.tool.open","kind":"unary","tier":"read","roles":["owner"],"params":"ProjectOpenToolParams","output":"ProjectOpenToolResult","doc":" Pitwall 앱에서 프로젝트 · 파일 · 줄을 연다. 창을 앞으로 가져오지 않는다 — 그 프로젝트 창이 열려 있으면 그 안에 탭만 열고,\n 없으면 활성화하지 않고 창을 만든다. `path` 는 프로젝트 루트 안만(상대 경로는 루트 기준). 세션마다 10초에 5번까지\n (넘으면 `rateLimited`). 앱이 실행 중이어야 한다.\n","mcp":{"group":"project","name":"project_open"},"fileScope":false},
 	"project.trust": {"name":"project.trust","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ProjectIdParams","output":"ProjectTrust","doc":" 프로젝트의 신뢰. 워크트리 프로젝트는 메인 저장소 프로젝트의 신뢰를 따른다(`ownerId`). 없는 id 면 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"project.update": {"name":"project.update","kind":"unary","tier":"write","roles":["owner"],"params":"UpdateProjectParams","output":"Project","doc":" 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.\n","mcp":null,"fileScope":false},
 	"runtime.get": {"name":"runtime.get","kind":"unary","tier":"read","roles":["owner"],"params":"RuntimeGetParams","output":"RuntimeInfo","doc":" 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.\n","mcp":null,"fileScope":false},
@@ -6581,6 +6597,13 @@ export type OpenWithRunParams = {
 	column?: number | null,
 };
 
+/**  요청이 열린 자리. */
+export type OpenedIn = 
+/**  이미 열린 그 프로젝트 창(앞으로 가져오지 않았다). */
+"existingWindow" | 
+/**  새로 만든 그 프로젝트 창(활성화하지 않았다). */
+"newWindow";
+
 export type OperationAction = "continue" | "abort" | "skip";
 
 export type OperationInfo = {
@@ -6676,6 +6699,30 @@ export type ProjectInfo = {
 	/**  빌드 파일에서 짐작한 언어(`rust`, `typescript` …). 먼저 나온 빌드 파일 순. */
 	languages: string[],
 	config: ConfigSummary,
+};
+
+export type ProjectOpenToolParams = {
+	projectId: string,
+	/**
+	 *  열 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. 창은 이 워크트리를 활성
+	 *  워크트리로 연다.
+	 */
+	worktree?: string | null,
+	/**
+	 *  열 파일. 상대 경로면 프로젝트 루트(워크트리를 정했으면 그 워크트리 안의 프로젝트 루트) 기준이다. 루트 밖(심링크로 밖을
+	 *  가리키는 것 포함)은 거절한다. 폴더면 프로젝트만 연다. 없으면 프로젝트 창만.
+	 */
+	path?: string | null,
+	/**  커서를 둘 줄(1부터). `path` 가 있어야 한다. */
+	line?: number | null,
+	/**  커서를 둘 열(1부터). `line` 이 있어야 한다. */
+	column?: number | null,
+};
+
+export type ProjectOpenToolResult = {
+	openedIn: OpenedIn,
+	/**  연 파일의 실제 경로(절대). 파일 없이 프로젝트만 열었으면 `null`. */
+	path: string | null,
 };
 
 /**  고칠 것만 채운다. */
@@ -7145,6 +7192,64 @@ export type SetProjectStateParams = {
 export type SetTrustParams = {
 	id: string,
 	trusted: boolean,
+};
+
+/**  값 하나(테이블이 아닌 것 — 배열은 통째로 한 값이다). */
+export type SettingEntry = {
+	/**  표와 키를 점으로 이은 것(`mcp.preset`). 점 · 공백 등이 든 키 이름은 큰따옴표로 감싼다(`mcp.tools."project_*"`). */
+	key: string,
+	/**  이긴 레이어의 값. `redacted` 면 가린 값이다. */
+	value: JsonValue,
+	layer: SettingLayer,
+	/**  키 이름이 비밀을 가리켜(`token` · `password` · `apiKey` …) 값(또는 그 안의 비밀 키 값)을 가렸다. */
+	redacted: boolean,
+};
+
+/**  값이 온 레이어. 아래(먼저 적용)부터 `builtin` → `global` → `shared` → `personal` 이다. */
+export type SettingLayer = 
+/**  앱의 내장 기본값. */
+"builtin" | 
+/**  전역 설정(`$CONFIG/settings.toml` · `settings.local.toml`). */
+"global" | 
+/**  저장소에 커밋되는 프로젝트 설정(`.pitwall/project.toml`). */
+"shared" | 
+/**  커밋되지 않는 개인 프로젝트 설정(`.pitwall/project.local.toml`, 개인 전용 프로젝트의 `$CONFIG/projects/<slug>/` 파일). */
+"personal";
+
+/**  읽은 설정 파일 하나. */
+export type SettingsFileInfo = {
+	layer: SettingLayer,
+	path: string,
+	schema: number,
+	/**  앱보다 새 스키마라 읽기만 한 파일(값은 그대로 싣는다). */
+	readOnly: boolean,
+};
+
+export type SettingsGetToolParams = {
+	/**
+	 *  없으면(`null`) 전역 설정, 있으면 그 프로젝트의 병합된 설정(전역 위에 프로젝트 설정). 세션에 프로젝트가 있으면 키를 빼면
+	 *  세션 프로젝트다 — 전역만 보려면 `null` 을 준다.
+	 */
+	projectId?: string | null,
+	/**
+	 *  볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. 커밋된
+	 *  `.pitwall/project.toml` 은 워크트리(브랜치)마다 다를 수 있다.
+	 */
+	worktree?: string | null,
+	/**
+	 *  이 키와 그 아래만. 표와 키를 점으로 잇는다(`mcp`, `mcp.tools`, `open_with.default`). 점 · 공백이 든 키 이름은 결과의 `key`
+	 *  처럼 큰따옴표로 감싼다.
+	 */
+	key?: string | null,
+};
+
+export type SettingsGetToolResult = {
+	/**  프로젝트의 설정이면 그 id. 전역이면 `null`. */
+	projectId: string | null,
+	/**  키 이름순. */
+	entries: SettingEntry[],
+	/**  값을 읽은 설정 파일(아래 레이어부터). 내장 기본값은 없다. */
+	files: SettingsFileInfo[],
 };
 
 export type Signature = {

@@ -8,6 +8,8 @@
 //! - [`config`]: 설정 계층(파일 위치 · 병합 · 스키마 마이그레이션 · 감시).
 //! - [`registry`]: 프로젝트 레지스트리(`$DATA/state.db`, 경로 → 프로젝트 해석, 루트 후보).
 //! - [`notification`]: Host 가 창에 알림을 내는 버스 토픽(`notification.show`).
+//! - [`open`]: `project_open` 툴 메서드와 「열기 요청」 자리(데스크톱이 창을 여는 쪽을 붙인다).
+//! - [`secret`]: 이름으로 가리는 비밀 키(감사 로그 요약 · 설정 조회 툴이 함께 쓴다).
 
 pub mod bus;
 pub mod config;
@@ -15,8 +17,10 @@ mod host;
 mod local;
 pub mod methods;
 pub mod notification;
+pub mod open;
 pub mod registry;
 mod router;
+pub mod secret;
 pub mod task;
 
 pub use bus::{EventBus, Filter, Received, Scope, Subscription};

@@ -50,6 +50,8 @@ pub enum Reason {
     Untrusted,
     /// (거절) 프로덕션 표지가 있는 DB 대상이다(M5-06 — `data.reason = "productionBlocked"`).
     ProductionBlocked,
+    /// (거절) 세션마다의 호출 빈도를 넘었다(16-m5-plan M5-09 — `project_open`, `data.reason = "rateLimited"`). 잠시 뒤 다시 부른다.
+    RateLimited,
 }
 
 impl Reason {
@@ -66,6 +68,7 @@ impl Reason {
         Reason::NotOpenedByUser,
         Reason::Untrusted,
         Reason::ProductionBlocked,
+        Reason::RateLimited,
     ];
 
     /// Host RPC 의 `PERMISSION_DENIED` 오류가 싣는 `data.reason`(camelCase) ↔ 까닭 코드. 거절 까닭을 더하는 행은 [`Reason`] 과 이
@@ -74,6 +77,7 @@ impl Reason {
         ("notOpenedByUser", Reason::NotOpenedByUser),
         ("untrusted", Reason::Untrusted),
         ("productionBlocked", Reason::ProductionBlocked),
+        ("rateLimited", Reason::RateLimited),
     ];
 
     /// `PERMISSION_DENIED` 오류의 `data.reason` 을 까닭 코드로. 모르거나 없으면 [`Reason::PermissionDenied`].
@@ -98,6 +102,7 @@ impl Reason {
             Reason::NotOpenedByUser => "not_opened_by_user",
             Reason::Untrusted => "untrusted",
             Reason::ProductionBlocked => "production_blocked",
+            Reason::RateLimited => "rate_limited",
         }
     }
 
@@ -219,6 +224,10 @@ mod tests {
         assert_eq!(
             Reason::of_permission_denied(Some("productionBlocked")),
             Reason::ProductionBlocked
+        );
+        assert_eq!(
+            Reason::of_permission_denied(Some("rateLimited")),
+            Reason::RateLimited
         );
         assert_eq!(
             Reason::of_permission_denied(Some("notProjectWindow")),

@@ -1,10 +1,11 @@
-//! 외부 도구 RPC. UI 전용이라 MCP 툴이 아니다(`docs/design/05-mcp.md` 의 `open_with_*` 툴은 이후).
+//! 외부 도구 RPC. `openWith.list` 는 05 의 `open_with_list` 툴과 이름 · 등급 · 입력 꼴(`projectId` · `worktree` 선택)이 같아 그대로
+//! 툴이다(16-m5-plan M5-09 ② — 툴 메서드 규약). 실행(`openWith.run`)은 툴이 아니고 `open_with_upsert` 는 이후다.
 //!
 //! 웹뷰는 도구 id 와 문맥(프로젝트, 활성 워크트리, 있으면 파일 · 줄 · 열)만 넘긴다. 명령을 만들고 띄우는 것은 이 Host 다.
 
 use std::sync::Arc;
 
-use pw_rpc::{Router, RpcError, rpc_method};
+use pw_rpc::{ConnectionScope, Router, RpcError, rpc_method};
 use serde::{Deserialize, Serialize};
 
 use crate::OpenWith;
@@ -151,12 +152,15 @@ pub enum OpenWithOutcome {
 }
 
 rpc_method! {
-    /// 이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.
+    /// 이 OS 에서 쓸 수 있는 외부 도구(id · 이름 · 기여한 확장 · 파일까지 여는가 · 설정 형식 오류)와 기본 도구. `projectId` 를
+    /// 주면 그 프로젝트 설정의 `[open_with] default` 까지 보고 기본 도구를 고른다(세션에 프로젝트가 있으면 키를 빼면 세션 프로젝트다
+    /// — 전역 기본값만 보려면 `null`). 실행 명령은 싣지 않는다.
     pub OpenWithListMethod: "openWith.list" {
         params: OpenWithListParams,
         result: OpenWithList,
         tier: Read,
         roles: [Owner],
+        mcp: true,
     }
 
     /// 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는
@@ -184,10 +188,13 @@ pub fn register(router: &mut Router, open_with: Arc<OpenWith>) {
     router
         .unary(
             OpenWithListMethod,
-            move |_ctx, params: OpenWithListParams| {
+            move |ctx, params: OpenWithListParams| {
                 let s = Arc::clone(&list);
-                // 팝업을 여는 사람은 곧 실행한다 — 로그인 셸 환경을 미리 가져오기 시작한다.
-                s.prefetch_env();
+                // 팝업을 여는 사람은 곧 실행한다 — 로그인 셸 환경을 미리 가져오기 시작한다. 툴(`open_with_list`)로 부른 에이전트는
+                // 실행하지 않으므로(실행 RPC 는 창 범위만 받는다) 로그인 셸을 띄우지 않는다.
+                if !matches!(ctx.scope(), ConnectionScope::Agent) {
+                    s.prefetch_env();
+                }
                 blocking(move || s.list(&params))
             },
         )

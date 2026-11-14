@@ -356,7 +356,9 @@ fn the_catalog_follows_the_mcp_flag() {
             "mcptest_slow",
             "mcptest_write",
             "project_info",
-            "project_list"
+            "project_list",
+            "project_open",
+            "settings_get"
         ]
     );
     for info in pw_rpc::methods() {
@@ -397,7 +399,12 @@ async fn lists_and_calls_project_tools() {
     // 프리셋 standard: read · write 툴이 보인다(write 는 부르면 정책이 거절한다).
     assert_eq!(
         tool_names(&client).await,
-        ["mcptest_write", "project_info", "project_list"]
+        [
+            "mcptest_write",
+            "project_info",
+            "project_list",
+            "settings_get"
+        ]
     );
 
     let list = call(&client, "project_list", json!({})).await;
@@ -480,7 +487,7 @@ async fn exposure_follows_global_and_project_config() {
             cwd: Some(f.base.join("work")),
         })
         .await;
-    assert_eq!(tool_names(&client).await, ["project_list"]);
+    assert_eq!(tool_names(&client).await, ["project_list", "settings_get"]);
     let hidden = client
         .peer()
         .call_tool(CallToolRequestParams::new("project_info"))
@@ -491,7 +498,10 @@ async fn exposure_follows_global_and_project_config() {
     tokio::time::timeout(Duration::from_secs(10), handler.notify.notified())
         .await
         .expect("tools/list_changed 가 오지 않았다");
-    assert_eq!(tool_names(&client).await, ["project_info", "project_list"]);
+    assert_eq!(
+        tool_names(&client).await,
+        ["project_info", "project_list", "settings_get"]
+    );
     let rows = audit_rows(&f.paths.state, 1);
     assert_eq!(rows[0].1, "project_info");
     assert_eq!(rows[0].2, "denied");
@@ -578,7 +588,10 @@ async fn a_stateless_client_gets_client_info_audited_and_list_changes_by_subscri
         ),
         "{note:?}"
     );
-    assert_eq!(tool_names(&client).await, ["mcptest_write", "project_info"]);
+    assert_eq!(
+        tool_names(&client).await,
+        ["mcptest_write", "project_info", "settings_get"]
+    );
     client.cancel().await.unwrap();
     cancel.cancel();
 }
@@ -648,7 +661,10 @@ async fn a_session_never_writes_the_project_folder() {
             cwd: Some(project.clone()),
         })
         .await;
-    assert_eq!(tool_names(&client).await, ["mcptest_write", "project_list"]);
+    assert_eq!(
+        tool_names(&client).await,
+        ["mcptest_write", "project_list", "settings_get"]
+    );
     call(&client, "project_list", json!({})).await;
     client.cancel().await.unwrap();
     cancel.cancel();
@@ -705,7 +721,10 @@ async fn shared_project_config_cannot_widen_exposure() {
         cwd: Some(f.work("alpha")),
     };
     let (client, _, cancel) = f.connect(request()).await;
-    assert_eq!(tool_names(&client).await, ["project_info", "project_list"]);
+    assert_eq!(
+        tool_names(&client).await,
+        ["project_info", "project_list", "settings_get"]
+    );
     client.cancel().await.unwrap();
     cancel.cancel();
 
@@ -717,7 +736,12 @@ async fn shared_project_config_cannot_widen_exposure() {
     let (client, _, cancel) = f.connect(request()).await;
     assert_eq!(
         tool_names(&client).await,
-        ["mcptest_write", "project_info", "project_list"]
+        [
+            "mcptest_write",
+            "project_info",
+            "project_list",
+            "settings_get"
+        ]
     );
     client.cancel().await.unwrap();
     cancel.cancel();
@@ -750,7 +774,7 @@ async fn a_stateless_client_without_a_subscription_gets_no_list_changed() {
         )
         .await
         .unwrap();
-    assert_eq!(tool_names(&client).await.len(), 3);
+    assert_eq!(tool_names(&client).await.len(), 4);
     std::fs::create_dir_all(&f.paths.config).unwrap();
     std::fs::write(
         f.paths.config.join("settings.toml"),
@@ -759,7 +783,7 @@ async fn a_stateless_client_without_a_subscription_gets_no_list_changed() {
     .unwrap();
     // 변경이 서버에 닿았음을 목록으로 확인한 뒤, 알림이 오지 않았는지 본다.
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while tool_names(&client).await.len() != 2 {
+    while tool_names(&client).await.len() != 3 {
         assert!(
             std::time::Instant::now() < deadline,
             "설정 변경이 반영되지 않았다"
@@ -790,7 +814,15 @@ fn the_catalog_keeps_only_methods_the_host_routes() {
         .iter()
         .map(|t| t.name.clone())
         .collect();
-    assert_eq!(names, ["mcptest_write", "project_info", "project_list"]);
+    assert_eq!(
+        names,
+        [
+            "mcptest_write",
+            "project_info",
+            "project_list",
+            "settings_get"
+        ]
+    );
 }
 
 /// `tools/call` 결과의 표지.

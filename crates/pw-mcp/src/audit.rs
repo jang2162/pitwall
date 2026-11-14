@@ -30,25 +30,8 @@ pub const MAX_SUMMARY: usize = 1024;
 /// 툴 이름 · 오류나 거절 이유의 최대 글자 수. 노출 안 된 툴 호출은 클라이언트가 보낸 이름을 그대로 남기므로 자른다.
 pub const MAX_TOOL: usize = crate::catalog::MAX_NAME;
 pub const MAX_DETAIL: usize = 512;
-/// 값을 지우는 키의 단어(camelCase · snake_case · kebab-case 로 가른 단어 하나가 이것과 같으면). 비교는 소문자로.
-pub const SECRET_WORDS: &[&str] = &[
-    "password",
-    "passwd",
-    "pass",
-    "passphrase",
-    "secret",
-    "token",
-    "key",
-    "apikey",
-    "auth",
-    "authorization",
-    "credential",
-    "credentials",
-    "cookie",
-    "private",
-    "otp",
-];
-pub const REDACTED: &str = "[redacted]";
+/// 값을 지우는 키의 단어와 그 자리의 글. 정본은 `pw_core::secret` 이다(설정 조회 툴 `settings_get` 과 한 벌).
+pub use pw_core::secret::{REDACTED, SECRET_WORDS};
 
 /// 버전 `i` → `i + 1`.
 const MIGRATIONS: &[&str] = &["CREATE TABLE calls (
@@ -299,34 +282,7 @@ fn clip(s: &str, max: usize) -> String {
 }
 
 fn secret_key(key: &str) -> bool {
-    words(key)
-        .iter()
-        .any(|w| SECRET_WORDS.contains(&w.as_str()))
-}
-
-/// `apiKey` → [api, key], `db_password` → [db, password], `X-Auth-Token` → [x, auth, token].
-fn words(key: &str) -> Vec<String> {
-    let mut words = Vec::new();
-    let mut current = String::new();
-    let mut previous_lower = false;
-    for c in key.chars() {
-        if !c.is_alphanumeric() {
-            if !current.is_empty() {
-                words.push(std::mem::take(&mut current));
-            }
-            previous_lower = false;
-            continue;
-        }
-        if c.is_uppercase() && previous_lower && !current.is_empty() {
-            words.push(std::mem::take(&mut current));
-        }
-        previous_lower = c.is_lowercase() || c.is_ascii_digit();
-        current.extend(c.to_lowercase());
-    }
-    if !current.is_empty() {
-        words.push(current);
-    }
-    words
+    pw_core::secret::is_secret_key(key)
 }
 
 #[cfg(test)]

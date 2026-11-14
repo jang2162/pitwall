@@ -60,6 +60,21 @@ impl ConfigSnapshot {
     }
 }
 
+/// [`ConfigSource::load_layered`] 의 결과: 스냅숏과, 파일 id 마다 레이어 하나하나의 값.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LayeredSnapshot {
+    pub snapshot: ConfigSnapshot,
+    /// 파일 id → 레이어 값(아래부터 — 내장 기본값 · 공유 · 개인). 병합하면 `snapshot` 의 그 파일 값이다.
+    pub layers: BTreeMap<String, Vec<LayerValue>>,
+}
+
+/// 레이어 하나의 값(`schema` 키는 뺀 것).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayerValue {
+    pub origin: LayerOrigin,
+    pub value: Map<String, Value>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigFile {
@@ -391,6 +406,21 @@ impl ConfigSource {
     /// 디스크에서 다시 읽는다. 구버전 파일은 이 자리에서 마이그레이션해 쓴다(원본 보관 후).
     /// 파일 하나라도 읽기 · 파싱 · 마이그레이션에 실패하면 스냅숏 전체가 오류다 — 일부만 반영된 설정을 만들지 않는다.
     pub fn load(&self) -> Result<ConfigSnapshot, ConfigError> {
+        self.load_with(None)
+    }
+
+    /// [`Self::load`] 과 같게 읽고, 파일 id 마다 레이어 하나하나의 값(아래부터, `schema` 키는 뺀 것)도 돌려준다. 값마다 어느
+    /// 레이어에서 왔는지 보이는 읽기(설정 조회 툴 `settings_get`)가 쓴다.
+    pub fn load_layered(&self) -> Result<LayeredSnapshot, ConfigError> {
+        let mut layers = BTreeMap::new();
+        let snapshot = self.load_with(Some(&mut layers))?;
+        Ok(LayeredSnapshot { snapshot, layers })
+    }
+
+    fn load_with(
+        &self,
+        mut keep: Option<&mut BTreeMap<String, Vec<LayerValue>>>,
+    ) -> Result<ConfigSnapshot, ConfigError> {
         let mut entries: BTreeMap<String, Entry<'_>> = BTreeMap::new();
         let mut broken = Vec::new();
         for found in list(&self.primary.dir, self.subdirs, &mut broken)? {
@@ -424,6 +454,13 @@ impl ConfigSource {
         for (id, entry) in entries {
             let mut value = Map::new();
             let mut layers = Vec::new();
+            let mut values = Vec::new();
+            if let Some(builtin) = self.builtin_value(&id) {
+                values.push(LayerValue {
+                    origin: LayerOrigin::Builtin,
+                    value: builtin,
+                });
+            }
             self.apply_builtin(&id, &mut value, &mut layers);
             let kind = id.split('/').next().unwrap_or(&id);
             let migrator = self.schemas.get(kind);
@@ -473,7 +510,17 @@ impl ConfigSource {
                     schema: schema_of(&doc).unwrap_or(0),
                     read_only,
                 });
-                merge(&mut value, without_schema(&doc));
+                let layer = without_schema(&doc);
+                if keep.is_some() {
+                    values.push(LayerValue {
+                        origin,
+                        value: layer.clone(),
+                    });
+                }
+                merge(&mut value, layer);
+            }
+            if let Some(keep) = keep.as_deref_mut() {
+                keep.insert(id.clone(), values);
             }
             snapshot.files.push(ConfigFile {
                 id,
@@ -506,6 +553,13 @@ impl ConfigSource {
             files,
             notices: Vec::new(),
         }
+    }
+
+    /// `id` 의 내장 기본값(`schema` 키는 뺀 것). 없으면 `None`.
+    fn builtin_value(&self, id: &str) -> Option<Map<String, Value>> {
+        let text = self.defaults.get(id)?;
+        let doc: DocumentMut = text.parse().expect("builtin defaults are valid TOML");
+        Some(without_schema(&doc))
     }
 
     fn apply_builtin(

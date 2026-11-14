@@ -625,6 +625,156 @@
       ],
       "tier": "read"
     },
+    "config.tool.get": {
+      "description": "설정 키 조회 — 디스크에 쓰지 않고 읽는다. `projectId` 가 없으면(`null`) 전역 설정, 있으면 그 프로젝트의 병합된 설정(전역\n위에 프로젝트 설정). `key`(`표.키` 접두)로 좁힌다. 값마다 어느 레이어(builtin · global · shared · personal)에서 왔는지 싣는다.\n키 이름이 비밀을 가리키는 값은 가린다. 그 밖의 값은 설정 파일 그대로다 — 에이전트가 파일을 직접 읽는 것과 같은 범위.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "key": {
+            "default": null,
+            "description": "이 키와 그 아래만. 표와 키를 점으로 잇는다(`mcp`, `mcp.tools`, `open_with.default`). 점 · 공백이 든 키 이름은 결과의 `key`\n처럼 큰따옴표로 감싼다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectId": {
+            "default": null,
+            "description": "없으면(`null`) 전역 설정, 있으면 그 프로젝트의 병합된 설정(전역 위에 프로젝트 설정). 세션에 프로젝트가 있으면 키를 빼면\n세션 프로젝트다 — 전역만 보려면 `null` 을 준다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worktree": {
+            "default": null,
+            "description": "볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. 커밋된\n`.pitwall/project.toml` 은 워크트리(브랜치)마다 다를 수 있다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "SettingEntry": {
+            "description": "값 하나(테이블이 아닌 것 — 배열은 통째로 한 값이다).",
+            "properties": {
+              "key": {
+                "description": "표와 키를 점으로 이은 것(`mcp.preset`). 점 · 공백 등이 든 키 이름은 큰따옴표로 감싼다(`mcp.tools.\"project_*\"`).",
+                "type": "string"
+              },
+              "layer": {
+                "$ref": "#/$defs/SettingLayer"
+              },
+              "redacted": {
+                "description": "키 이름이 비밀을 가리켜(`token` · `password` · `apiKey` …) 값(또는 그 안의 비밀 키 값)을 가렸다.",
+                "type": "boolean"
+              },
+              "value": {
+                "description": "이긴 레이어의 값. `redacted` 면 가린 값이다."
+              }
+            },
+            "required": [
+              "key",
+              "value",
+              "layer",
+              "redacted"
+            ],
+            "type": "object"
+          },
+          "SettingLayer": {
+            "description": "값이 온 레이어. 아래(먼저 적용)부터 `builtin` → `global` → `shared` → `personal` 이다.",
+            "oneOf": [
+              {
+                "const": "builtin",
+                "description": "앱의 내장 기본값.",
+                "type": "string"
+              },
+              {
+                "const": "global",
+                "description": "전역 설정(`$CONFIG/settings.toml` · `settings.local.toml`).",
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "저장소에 커밋되는 프로젝트 설정(`.pitwall/project.toml`).",
+                "type": "string"
+              },
+              {
+                "const": "personal",
+                "description": "커밋되지 않는 개인 프로젝트 설정(`.pitwall/project.local.toml`, 개인 전용 프로젝트의 `$CONFIG/projects/<slug>/` 파일).",
+                "type": "string"
+              }
+            ]
+          },
+          "SettingsFileInfo": {
+            "description": "읽은 설정 파일 하나.",
+            "properties": {
+              "layer": {
+                "$ref": "#/$defs/SettingLayer"
+              },
+              "path": {
+                "type": "string"
+              },
+              "readOnly": {
+                "description": "앱보다 새 스키마라 읽기만 한 파일(값은 그대로 싣는다).",
+                "type": "boolean"
+              },
+              "schema": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "layer",
+              "path",
+              "schema",
+              "readOnly"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "entries": {
+            "description": "키 이름순.",
+            "items": {
+              "$ref": "#/$defs/SettingEntry"
+            },
+            "type": "array"
+          },
+          "files": {
+            "description": "값을 읽은 설정 파일(아래 레이어부터). 내장 기본값은 없다.",
+            "items": {
+              "$ref": "#/$defs/SettingsFileInfo"
+            },
+            "type": "array"
+          },
+          "projectId": {
+            "description": "프로젝트의 설정이면 그 id. 전역이면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "entries",
+          "files"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "db.connection.approve": {
       "description": "사람이 확인한 것을 기록한다 — `env` 참조의 (변수, 대상), 루트 밖 SQLite 의 실제 경로, SSH 터널 목적지 · 인증서 파일의\n(값, 대상). 지금 설정에서 나오는 것과 같을 때만\n기록하고 다르면 conflict 오류(그 사이 설정이 바뀌었다). 확인 기록이 깨져 있으면 덮지 않고 storage unavailable. 그 프로젝트 창의\n연결 + 신뢰한 프로젝트만.",
       "kind": "unary",
@@ -33346,7 +33496,7 @@
       "tier": "read"
     },
     "openWith.list": {
-      "description": "이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.",
+      "description": "이 OS 에서 쓸 수 있는 외부 도구(id · 이름 · 기여한 확장 · 파일까지 여는가 · 설정 형식 오류)와 기본 도구. `projectId` 를\n주면 그 프로젝트 설정의 `[open_with] default` 까지 보고 기본 도구를 고른다(세션에 프로젝트가 있으면 키를 빼면 세션 프로젝트다\n— 전역 기본값만 보려면 `null`). 실행 명령은 싣지 않는다.",
       "kind": "unary",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -35224,6 +35374,99 @@
         "owner",
         "mobile",
         "readonly"
+      ],
+      "tier": "read"
+    },
+    "project.tool.open": {
+      "description": "Pitwall 앱에서 프로젝트 · 파일 · 줄을 연다. 창을 앞으로 가져오지 않는다 — 그 프로젝트 창이 열려 있으면 그 안에 탭만 열고,\n없으면 활성화하지 않고 창을 만든다. `path` 는 프로젝트 루트 안만(상대 경로는 루트 기준). 세션마다 10초에 5번까지\n(넘으면 `rateLimited`). 앱이 실행 중이어야 한다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "column": {
+            "default": null,
+            "description": "커서를 둘 열(1부터). `line` 이 있어야 한다.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "line": {
+            "default": null,
+            "description": "커서를 둘 줄(1부터). `path` 가 있어야 한다.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "default": null,
+            "description": "열 파일. 상대 경로면 프로젝트 루트(워크트리를 정했으면 그 워크트리 안의 프로젝트 루트) 기준이다. 루트 밖(심링크로 밖을\n가리키는 것 포함)은 거절한다. 폴더면 프로젝트만 연다. 없으면 프로젝트 창만.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "열 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. 창은 이 워크트리를 활성\n워크트리로 연다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "OpenedIn": {
+            "description": "요청이 열린 자리.",
+            "oneOf": [
+              {
+                "const": "existingWindow",
+                "description": "이미 열린 그 프로젝트 창(앞으로 가져오지 않았다).",
+                "type": "string"
+              },
+              {
+                "const": "newWindow",
+                "description": "새로 만든 그 프로젝트 창(활성화하지 않았다).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "openedIn": {
+            "$ref": "#/$defs/OpenedIn"
+          },
+          "path": {
+            "description": "연 파일의 실제 경로(절대). 파일 없이 프로젝트만 열었으면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "openedIn",
+          "path"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
       ],
       "tier": "read"
     },
