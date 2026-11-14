@@ -12,7 +12,9 @@
 //! - [`kv`]: Redis RPC(M3-22).
 //! - [`ssh_hosts`]: 연결 편집 다이얼로그의 `~/.ssh/config` 호스트 이름 목록(M3-14).
 //! - [`settings`]: 전역 설정의 `[db]` 읽기와 설정 창 「DB」 페이지 RPC(M3-20).
-//! - [`tools`]: MCP 툴 메서드(`db_connection_list` · `db_schema` — 16-m5-plan.md M5-06). 관문은 [`gate::db_grant_for_agent`].
+//! - [`tools`]: MCP 툴 메서드(`db_connection_list` · `db_schema` — 16-m5-plan.md M5-06, `db_query` — M5-07). 관문은
+//!   [`gate::db_grant_for_agent`].
+//! - [`script`]: 에이전트의 SQL 실행 파이프라인(`sql` · `file` 입력, 여러 문장, 감사 상세 — M5-07, `db_execute` M5-18 이 함께 쓴다).
 //!
 //! 모듈 배치의 주인은 M3-01 이다. 이후 행은 자기 모듈을 채우고, 메서드 등록 줄을 하나씩 더한다(14 「공유 부품의 주인」).
 
@@ -24,6 +26,7 @@ pub mod gate;
 pub mod kv;
 pub mod registry;
 pub mod schema;
+pub mod script;
 pub mod secret;
 pub mod session;
 pub mod settings;

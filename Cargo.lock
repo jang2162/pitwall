@@ -5376,6 +5376,7 @@ dependencies = [
  "pw-db-sql",
  "pw-db-types",
  "pw-diag",
+ "pw-fs",
  "pw-git",
  "pw-rpc",
  "pw-runtime",

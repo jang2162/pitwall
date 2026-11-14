@@ -7,22 +7,34 @@
 //!   (`crate::schema`)로 읽는다. `object` 가 없으면 한 단계의 목록(`kind` — DB · 스키마 · 객체 종류, 기본 `table`), 있으면 그 객체의
 //!   열(키 포함) · 인덱스 · FK, `detail` 이 `ddl` 이면 DDL 글. SQL 드라이버만 — Redis 연결이면 `unsupported`.
 //!
-//! 두 툴 모두 MCP 세션의 연결 범위만 받는다(`agent_grant` — 창 · Host 범위는 `notAgentSession`). UI 의 RPC(`db.connection.list` ·
+//! - `db_query` ← `db.tool.query`(M5-07): 조회만 도는 SQL 실행 — 입력은 `sql` 또는 `file`. 관문 [`db_grant_for_agent`] 를 지나
+//!   실행 파이프라인 [`crate::script`](여러 문장 · `file` 읽기 · 읽기 전용 트랜잭션 · 감사 상세)로 돈다. 조회가 아닌 문장이 하나라도
+//!   있으면 아무것도 돌리지 않고 거절한다(쓰기는 `db_execute` — M5-18). SQL 드라이버만.
+//!
+//! 툴 모두 MCP 세션의 연결 범위만 받는다(`agent_grant` — 창 · Host 범위는 `notAgentSession`). UI 의 RPC(`db.connection.list` ·
 //! `db.schema.*`)는 그대로 창 범위만 받는다.
 
 use std::sync::Arc;
 
 use pw_core::registry::agent::agent_grant;
+use pw_db_driver::budget::within;
+use pw_db_driver::{Budget, DbConnection, QueryCancel};
 use pw_db_types::{
-    ColumnInfo, DbError, DbErrorKind, DriverKind, ForeignKeyInfo, IndexInfo, ObjectKind,
+    CellLimit, ColumnInfo, DbError, DbErrorKind, DriverKind, ForeignKeyInfo, IndexInfo, ObjectKind,
     ObjectQuery, ObjectRef,
 };
 use pw_rpc::{Ctx, DEFAULT_LIST_LIMIT, Router, RpcError, rpc_method};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{DbConnectionConfig, DbConnectionState};
+use crate::execute::MAX_PAGE_ROWS;
 use crate::gate::{DbMarks, DbTarget, agent_view, db_grant_for_agent};
+use crate::gate::{on_classifier_thread, plan};
 use crate::schema::{Cached, Request, check_limit, check_object, check_text, slice, unexpected};
+use crate::script::{
+    CancelOnDrop, DEFAULT_MAX_ROWS, DbScriptError, DbScriptResult, ScriptInput, TOOL_CELL_BYTES,
+    audit_detail, fit_rows, read_script_file, refuse_non_queries, run_read_only,
+};
 use crate::session::{DbSessions, blocking, db_error};
 
 // --- db_connection_list ---------------------------------------------------------------------------------------------
@@ -269,6 +281,46 @@ pub struct DbToolSchema {
     pub next_cursor: Option<String>,
 }
 
+// --- db_query -------------------------------------------------------------------------------------------------------
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct DbToolQueryParams {
+    pub project_id: String,
+    /// 워크트리 꼭대기(절대 경로). 연결 설정과 `file` 을 그 워크트리에서 읽는다. 비우면 세션의 워크트리, 없으면 메인 체크아웃.
+    #[serde(default)]
+    pub worktree: Option<String>,
+    /// `db_connection_list` 의 연결 id.
+    pub connection_id: String,
+    /// 돌릴 SQL(문장 여럿 — 방언의 구분자로 나눈다). `file` 과 함께 줄 수 없다.
+    #[serde(default)]
+    pub sql: Option<String>,
+    /// SQL 파일 — 프로젝트 루트(워크트리를 줬으면 그 워크트리 안의 프로젝트 루트) 기준 경로. 루트 안의 UTF-8 일반 파일, 5 MiB 까지.
+    /// `sql` 과 함께 줄 수 없다.
+    #[serde(default)]
+    pub file: Option<String>,
+    /// 문장마다 돌려줄 행의 상한(1 ~ 10000, 기본 100). 쪽 단위가 아니다 — 넘으면 그 문장의 `truncated`.
+    #[serde(default)]
+    pub max_rows: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DbToolQuery {
+    /// 나눈 문장 수.
+    pub statements: u32,
+    /// 돈 문장마다 결과 하나(차례대로). 실패한 문장과 그 뒤 문장은 없다.
+    pub results: Vec<DbScriptResult>,
+    /// 문장이 실패했으면 그 문장과 오류. 그 뒤의 문장은 돌지 않았다.
+    pub error: Option<DbScriptError>,
+    /// `file` 을 줬으면 읽은 파일(루트 기준 경로).
+    pub file: Option<String>,
+    /// 감사 로그에 남는 상세 — 문장 수 · 가장 높은 등급 · 문장 해시(`file` 이면 경로와 내용 해시). SQL 원문 · 값은 없다.
+    pub audit: String,
+}
+
 rpc_method! {
     /// 이 프로젝트의 DB 연결 목록(비밀 없음): id · 이름 · 드라이버 · 대상(호스트 · 포트 · DB · SQLite 경로) · read-only · 프로덕션 ·
     /// 상태, 그리고 에이전트의 DB 툴이 지금 쓸 수 있는가(`usable`)와 그 까닭. 에이전트의 DB 툴은 사람이 이번 앱 실행에서 Pitwall 의
@@ -292,6 +344,23 @@ rpc_method! {
         tier: Read,
         roles: [Owner],
         mcp: { group: "db", name: "db_schema" },
+    }
+
+    /// 조회 SQL 실행(SQL 드라이버만 — PG · MySQL/MariaDB · SQLite). 입력은 `sql`(글) 또는 `file`(프로젝트 루트 기준 SQL 파일 경로 —
+    /// Pitwall 이 실행하는 그때 읽는다) 가운데 하나. 문장을 방언대로 나눠 읽기 전용 트랜잭션 하나에서 차례로 돌리고, 문장마다 결과
+    /// 하나(열 · 행 · `truncated` · 소요)를 돌려준다. **조회만 돈다** — 조회가 아닌 문장(쓰기 · DDL · `SET` · 트랜잭션 제어 ·
+    /// `ATTACH` · 읽지 못하는 글)이 하나라도 있으면 아무것도 돌리지 않고 거절한다(`notAQuery` — 쓰기는 `db_execute`). 문장 하나가
+    /// 실패하면 거기서 멈추고 그때까지의 결과와 `error`(문장 번호 · 줄)를 준다. 행은 문장마다 `maxRows`(기본 100), 셀은 4 KiB 에서
+    /// 잘린다(`truncated` 값). **다음 쪽은 없다** — 잘렸으면 WHERE · LIMIT 로 좁혀 다시 부른다(다시 부르면 다른 스냅숏이다).
+    /// 사람이 이번 앱 실행에서 Pitwall 의 DB 탐색기로 연 연결만 쓰고(`notOpenedByUser`), 프로덕션 표지가 있는 대상 — MySQL ·
+    /// MariaDB 는 같은 서버 · 사용자의 어느 DB 라도 — 은 쓰지 않는다(`productionBlocked`). 결과의 `audit` 은 감사 로그에 남는
+    /// 상세(문장 수 · 등급 · 해시)이고 에이전트에게도 보인다.
+    pub DbToolQueryMethod: "db.tool.query" {
+        params: DbToolQueryParams,
+        result: DbToolQuery,
+        tier: Read,
+        roles: [Owner],
+        mcp: { group: "db", name: "db_query" },
     }
 }
 
@@ -530,6 +599,158 @@ impl DbSessions {
     }
 }
 
+impl DbSessions {
+    /// `db_query`.
+    async fn tool_query(
+        self: &Arc<Self>,
+        ctx: &Ctx,
+        p: DbToolQueryParams,
+    ) -> Result<DbToolQuery, RpcError> {
+        check_text("worktree", p.worktree.as_deref())?;
+        let input = ScriptInput::of(p.sql, p.file)?;
+        let max_rows = p.max_rows.unwrap_or(DEFAULT_MAX_ROWS);
+        if max_rows == 0 || max_rows > MAX_PAGE_ROWS {
+            return Err(RpcError::invalid_params(format!(
+                "maxRows must be 1-{MAX_PAGE_ROWS}"
+            )));
+        }
+        // 관문(M5-06 의 입구)을 먼저 — 거절할 호출이면 파일도 읽지 않는다.
+        let (s, scope, project, worktree, id) = (
+            Arc::clone(self),
+            ctx.scope().clone(),
+            p.project_id.clone(),
+            p.worktree.clone(),
+            p.connection_id.clone(),
+        );
+        let grant = blocking(move || {
+            let agent = agent_grant(&scope, &s.connections.host()?.projects, &project)?;
+            db_grant_for_agent(&s, &agent, worktree.as_deref(), &id, None)
+        })
+        .await?;
+        let driver = grant
+            .agent_driver()
+            .and_then(|kind| self.drivers.get(kind.id()))
+            .ok_or_else(|| {
+                db_error(DbError::new(
+                    DbErrorKind::Unsupported,
+                    "the db driver of this connection is not installed",
+                ))
+            })?;
+        let dialect = match driver.dialect() {
+            Some(dialect) if driver.capabilities().sql => dialect,
+            _ => {
+                return Err(db_error(DbError::new(
+                    DbErrorKind::Unsupported,
+                    format!(
+                        "db_query runs SQL databases only; `{}` is a key-value store — use db_kv_get",
+                        p.connection_id
+                    ),
+                )));
+            }
+        };
+        // `file` 은 지금 한 번 읽고, 읽은 그 글을 분류하고 그 글을 돌린다 — 파일을 다시 열지 않는다.
+        let (source, file) = match input {
+            ScriptInput::Sql(sql) => (sql, None),
+            ScriptInput::File(path) => {
+                let (s, project, worktree) =
+                    (Arc::clone(self), p.project_id.clone(), p.worktree.clone());
+                let file = blocking(move || {
+                    read_script_file(
+                        &s.connections.host()?.projects,
+                        &project,
+                        worktree.as_deref(),
+                        &path,
+                    )
+                })
+                .await?;
+                (file.text.clone(), Some(file))
+            }
+        };
+        let text = source.clone();
+        let planned = on_classifier_thread(move || plan(dialect, &text, None)).await??;
+        let audit = audit_detail(dialect, &planned, file.as_ref());
+        // 연결을 열기 전에 거절한다(비밀도 읽지 않는다).
+        refuse_non_queries("db_query", &source, &planned, &audit)?;
+        let with_audit = |e: RpcError| with_audit(e, &audit);
+        let opened =
+            crate::connection::connect(self, &grant, p.worktree.as_deref(), &p.connection_id, None)
+                .await
+                .map_err(with_audit)?;
+        let tunnel = opened.tunnel;
+        let mut conn = match opened.connection {
+            DbConnection::Sql(conn) => conn,
+            other => {
+                let _ = other.close().await;
+                return Err(with_audit(RpcError::invalid_params(
+                    "this connection does not run SQL",
+                )));
+            }
+        };
+        if !opened.driver.capabilities.read_only_transaction {
+            let _ = conn.close().await;
+            return Err(with_audit(db_error(DbError::new(
+                DbErrorKind::Unsupported,
+                "this driver has no read-only transactions, so db_query cannot run on it",
+            ))));
+        }
+        let cell = CellLimit(TOOL_CELL_BYTES.min(self.cell_limit().0));
+        let cancel = QueryCancel::new(conn.interrupter(), Budget::PAGE.cancel_cleanup);
+        // 실행은 연결을 쥔 태스크에서 돈다 — 호출이 버려져도(취소 · 세션 끊김) 태스크가 드라이버 호출을 버리고 롤백한 뒤 닫는다.
+        let guard = CancelOnDrop::new(cancel.clone());
+        let run = {
+            let (source, planned) = (source.clone(), planned.clone());
+            tokio::spawn(async move {
+                // 터널은 연결을 닫을 때까지 쥔다.
+                let _tunnel = tunnel;
+                let ran =
+                    run_read_only(conn.as_mut(), &source, &planned, max_rows, cell, &cancel).await;
+                let _ = within(Budget::PAGE.cancel_cleanup, "rollback", conn.rollback()).await;
+                let _ = within(Budget::PAGE.connect, "close", conn.close()).await;
+                ran
+            })
+        };
+        let ran = run
+            .await
+            .map_err(|e| with_audit(RpcError::internal(e.to_string())))?;
+        guard.disarm();
+        let ran = ran.map_err(|e| with_audit(db_error(e)))?;
+        let mut result = DbToolQuery {
+            statements: u32::try_from(planned.len()).unwrap_or(u32::MAX),
+            results: ran.results,
+            error: ran.error,
+            file: file.map(|f| f.path),
+            audit,
+        };
+        // 응답 상한(결정 M5-D34) — 행을 뺀 결과의 크기를 먼저 센다.
+        let rows: Vec<Vec<pw_db_types::Row>> = result
+            .results
+            .iter_mut()
+            .map(|r| std::mem::take(&mut r.rows))
+            .collect();
+        let fixed = serde_json::to_string(&result).map_or(0, |s| s.len());
+        for (r, rows) in result.results.iter_mut().zip(rows) {
+            r.rows = rows;
+        }
+        fit_rows(&mut result.results, fixed);
+        Ok(result)
+    }
+}
+
+/// 오류 `data` 의 최상위 `audit` 에 감사 상세를 싣는다(`crates/pw-mcp` 머리 주석 「툴 메서드 규약」 — 세션이 감사 행으로 옮긴다).
+/// `data` 가 object 가 아니면(글 등) `{ message, audit }` 로 감싼다.
+fn with_audit(mut error: RpcError, audit: &str) -> RpcError {
+    let data = match error.data.take() {
+        Some(serde_json::Value::Object(mut map)) => {
+            map.insert("audit".into(), audit.into());
+            serde_json::Value::Object(map)
+        }
+        Some(other) => serde_json::json!({ "message": other, "audit": audit }),
+        None => serde_json::json!({ "audit": audit }),
+    };
+    error.data = Some(data);
+    error
+}
+
 /// 거절 오류의 `data.reason` → 까닭.
 fn unusable_of(error: &RpcError) -> DbToolUnusable {
     let reason = error
@@ -651,9 +872,16 @@ pub(crate) fn register(router: &mut Router, sessions: Arc<DbSessions>) {
                 }
             },
         )
-        .unary(DbToolSchemaMethod, move |ctx, p: DbToolSchemaParams| {
+        .unary(DbToolSchemaMethod, {
+            let sessions = Arc::clone(&sessions);
+            move |ctx, p: DbToolSchemaParams| {
+                let s = Arc::clone(&sessions);
+                async move { s.tool_schema(&ctx, p).await }
+            }
+        })
+        .unary(DbToolQueryMethod, move |ctx, p: DbToolQueryParams| {
             let s = Arc::clone(&sessions);
-            async move { s.tool_schema(&ctx, p).await }
+            async move { s.tool_query(&ctx, p).await }
         });
 }
 

@@ -19,6 +19,9 @@ pw-db-driver = { path = "../pw-db-driver" }
 # 실행 관문의 문장 나누기 · 위험도 분류 · 트랜잭션 제어 가려내기(M3-03 · M3-04 · M3-05).
 pw-db-sql = { path = "../pw-db-sql" }
 pw-db-types = { path = "../pw-db-types" }
+# `db_query` · `db_execute` 의 `file` 입력(16-m5-plan.md M5-07 ②): `fs.read` 와 같은 경로 판정(`pw_fs::scope::Roots` — 심링크로 루트
+# 밖이면 거절 · 일반 파일만)과 읽기(`pw_fs::read::read_whole`). pw-fs 는 pw-db 에 의존하지 않아 순환이 없다.
+pw-fs = { path = "../pw-fs" }
 pw-rpc = { path = "../pw-rpc" }
 pw-runtime = { path = "../pw-runtime" }
 schemars = { workspace = true }

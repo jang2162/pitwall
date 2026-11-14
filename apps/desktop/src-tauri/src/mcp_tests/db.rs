@@ -94,3 +94,109 @@ async fn db_tools_need_a_connection_the_user_opened_in_the_window() {
     );
     session.close().await;
 }
+
+/// `db_query`(16-m5-plan M5-07)를 진짜 세션으로: 그룹 `db` · 등급 `read`, 앱의 실 SQLite 로 `sql` · `file` 왕복(문장마다 결과
+/// 하나), 쓰기가 섞인 글은 `denied`(`permission_denied` — CLI 종료 3). 감사 행의 상세는 문장 수 · 등급 · 해시(`file` 이면 경로와
+/// 내용 해시)이고 SQL 원문의 문자열 리터럴은 감사 행 어디에도 없다 — 인자 요약은 글자열을 80자에서 자르므로 리터럴을 그 뒤에 둔다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn db_query_runs_sql_and_files_and_audits_hashes_not_sql() {
+    const { assert!(pw_db::script::RESPONSE_BUDGET < pw_mcp::server::MAX_RESPONSE_BYTES) };
+    let host = ToolHost::app();
+    let alpha = host.project("alpha");
+    host.host
+        .registry()
+        .unwrap()
+        .set_trust(&alpha, true)
+        .unwrap();
+    let root = host.base.join("work").join("alpha");
+    std::fs::write(root.join("app.db"), "").unwrap();
+    std::fs::create_dir_all(root.join(".pitwall/db")).unwrap();
+    std::fs::write(
+        root.join(".pitwall/db/lite.toml"),
+        "schema = 1\nname = \"lite\"\ndriver = \"sqlite\"\npath = \"app.db\"\n",
+    )
+    .unwrap();
+    let tool = host.tool("db_query");
+    assert_eq!((tool.group, tool.tier), ("db", pw_rpc::Tier::Read));
+    host.window_call(
+        &alpha,
+        "db.schema.objects",
+        serde_json::json!({ "projectId": alpha, "connectionId": "lite", "kind": "table", "limit": 10 }),
+    )
+    .await
+    .unwrap();
+    let session = host.session(SessionRequest::default()).await;
+    const LITERAL: &str = "literal-in-the-sql-5be1";
+    let padding = "x".repeat(100);
+    let sql = format!("SELECT '{padding}' AS pad; SELECT '{LITERAL}' AS v");
+    let ran = session
+        .call(
+            "db_query",
+            serde_json::json!({ "projectId": alpha, "connectionId": "lite", "sql": sql }),
+        )
+        .await;
+    assert_ne!(ran.is_error, Some(true), "{ran:?}");
+    let out = structured(&ran);
+    assert_eq!(out["results"].as_array().unwrap().len(), 2);
+    assert_eq!(out["results"][1]["rows"][0][0]["text"], LITERAL);
+
+    std::fs::create_dir_all(root.join("queries")).unwrap();
+    std::fs::write(
+        root.join("queries/report.sql"),
+        "SELECT 1 AS a;\nSELECT 2 AS b;\n",
+    )
+    .unwrap();
+    let from_file = structured(
+        &session
+            .call(
+                "db_query",
+                serde_json::json!({ "projectId": alpha, "connectionId": "lite", "file": "queries/report.sql" }),
+            )
+            .await,
+    );
+    assert_eq!(from_file["results"].as_array().unwrap().len(), 2);
+    assert_eq!(from_file["file"], "queries/report.sql");
+
+    let refused = session
+        .call(
+            "db_query",
+            serde_json::json!({ "projectId": alpha, "connectionId": "lite",
+                                "sql": format!("SELECT '{padding}'; DELETE FROM t WHERE v = '{LITERAL}'") }),
+        )
+        .await;
+    assert_eq!(refused.is_error, Some(true));
+    assert_eq!(
+        refused
+            .meta
+            .as_ref()
+            .and_then(|m| pw_mcp::marker::Mark::read(m)),
+        Some(pw_mcp::marker::Mark::denied(
+            pw_mcp::marker::Reason::PermissionDenied
+        )),
+    );
+    assert!(text(&refused).contains("db_execute"), "{}", text(&refused));
+
+    let rows = host.audit_rows(3);
+    let rows: Vec<_> = rows.iter().filter(|r| r.tool == "db_query").collect();
+    assert_eq!(
+        rows.iter().map(|r| r.outcome.as_str()).collect::<Vec<_>>(),
+        ["ok", "ok", "denied"]
+    );
+    let detail = |i: usize| rows[i].detail.clone().unwrap_or_default();
+    assert!(
+        detail(0).starts_with("statements=2 grade=read sql=sha256:"),
+        "{}",
+        detail(0)
+    );
+    assert!(
+        detail(1).contains(" file=queries/report.sql content=sha256:"),
+        "{}",
+        detail(1)
+    );
+    assert!(detail(2).contains("statements=2 grade="), "{}", detail(2));
+    for row in &rows {
+        let all = format!("{} {}", row.args, row.detail.clone().unwrap_or_default());
+        assert!(!all.contains(LITERAL), "{all}");
+    }
+    session.close().await;
+}

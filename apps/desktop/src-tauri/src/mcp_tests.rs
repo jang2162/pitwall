@@ -36,6 +36,7 @@ mod project;
 /// 앱 Host 가 내는 툴 전부. 이름순.
 const APP_TOOLS: &[&str] = &[
     "db_connection_list",
+    "db_query",
     "db_schema",
     "diagnostics",
     "git_blame",

@@ -267,6 +267,18 @@ export type UnaryMethods = {
 	 */
 	"db.tool.connectionList": { params: DbToolConnectionListParams; result: DbToolConnectionList };
 	/**
+	 * 조회 SQL 실행(SQL 드라이버만 — PG · MySQL/MariaDB · SQLite). 입력은 `sql`(글) 또는 `file`(프로젝트 루트 기준 SQL 파일 경로 —
+	 * Pitwall 이 실행하는 그때 읽는다) 가운데 하나. 문장을 방언대로 나눠 읽기 전용 트랜잭션 하나에서 차례로 돌리고, 문장마다 결과
+	 * 하나(열 · 행 · `truncated` · 소요)를 돌려준다. **조회만 돈다** — 조회가 아닌 문장(쓰기 · DDL · `SET` · 트랜잭션 제어 ·
+	 * `ATTACH` · 읽지 못하는 글)이 하나라도 있으면 아무것도 돌리지 않고 거절한다(`notAQuery` — 쓰기는 `db_execute`). 문장 하나가
+	 * 실패하면 거기서 멈추고 그때까지의 결과와 `error`(문장 번호 · 줄)를 준다. 행은 문장마다 `maxRows`(기본 100), 셀은 4 KiB 에서
+	 * 잘린다(`truncated` 값). **다음 쪽은 없다** — 잘렸으면 WHERE · LIMIT 로 좁혀 다시 부른다(다시 부르면 다른 스냅숏이다).
+	 * 사람이 이번 앱 실행에서 Pitwall 의 DB 탐색기로 연 연결만 쓰고(`notOpenedByUser`), 프로덕션 표지가 있는 대상 — MySQL ·
+	 * MariaDB 는 같은 서버 · 사용자의 어느 DB 라도 — 은 쓰지 않는다(`productionBlocked`). 결과의 `audit` 은 감사 로그에 남는
+	 * 상세(문장 수 · 등급 · 해시)이고 에이전트에게도 보인다.
+	 */
+	"db.tool.query": { params: DbToolQueryParams; result: DbToolQuery };
+	/**
 	 * DB 스키마 조회(SQL 드라이버만 — PG · MySQL/MariaDB · SQLite). `object` 가 없으면 한 단계의 목록 한 쪽(`kind`: `database` ·
 	 * `schema` · `table`(기본) · `view` 등 — 객체 목록은 `database` · `schema` 안에서, `filter` 로 거른다), 있으면 그 객체의 열(이름 ·
 	 * 타입 · null · 기본값 · 기본 키) · 인덱스 · FK, `detail: "ddl"` 이면 DDL 글. Pitwall 의 DB 탐색기와 같은 것을 본다. 사람이 이번
@@ -1174,6 +1186,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"db.sql.statementAt": {"name":"db.sql.statementAt","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlStatementAtParams","output":"SqlStatementAtResult","doc":" 커서(UTF-16 오프셋)의 「현재 문장」 — 빈 줄이 아니라 구분자 기준. 두 문장 사이면 앞 문장, 첫 문장 앞이면 첫 문장.\n 오프셋이 `sql` 의 길이를 넘으면 `INVALID_PARAMS`.\n","mcp":null,"fileScope":false},
 	"db.ssh.hosts": {"name":"db.ssh.hosts","kind":"unary","tier":"read","roles":["owner"],"params":"DbProjectParams","output":"DbSshHosts","doc":" `~/.ssh/config`(과 그 `Include`)의 `Host` 이름 — 와일드카드 · 부정 패턴이 없고 터널 목적지로 쓸 수 있는 것만. 다른 값은\n 읽지 않는다. 읽지 못하면 빈 목록. 그 프로젝트 창의 연결 + 신뢰한 프로젝트만.\n","mcp":null,"fileScope":false},
 	"db.tool.connectionList": {"name":"db.tool.connectionList","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolConnectionListParams","output":"DbToolConnectionList","doc":" 이 프로젝트의 DB 연결 목록(비밀 없음): id · 이름 · 드라이버 · 대상(호스트 · 포트 · DB · SQLite 경로) · read-only · 프로덕션 ·\n 상태, 그리고 에이전트의 DB 툴이 지금 쓸 수 있는가(`usable`)와 그 까닭. 에이전트의 DB 툴은 사람이 이번 앱 실행에서 Pitwall 의\n DB 탐색기로 연 연결만 쓰고(`notOpenedByUser`), 프로덕션 표지가 있는 연결은 쓰지 않는다(`productionBlocked`). 연결을 열지 않는다.\n","mcp":{"group":"db","name":"db_connection_list"},"fileScope":false},
+	"db.tool.query": {"name":"db.tool.query","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolQueryParams","output":"DbToolQuery","doc":" 조회 SQL 실행(SQL 드라이버만 — PG · MySQL/MariaDB · SQLite). 입력은 `sql`(글) 또는 `file`(프로젝트 루트 기준 SQL 파일 경로 —\n Pitwall 이 실행하는 그때 읽는다) 가운데 하나. 문장을 방언대로 나눠 읽기 전용 트랜잭션 하나에서 차례로 돌리고, 문장마다 결과\n 하나(열 · 행 · `truncated` · 소요)를 돌려준다. **조회만 돈다** — 조회가 아닌 문장(쓰기 · DDL · `SET` · 트랜잭션 제어 ·\n `ATTACH` · 읽지 못하는 글)이 하나라도 있으면 아무것도 돌리지 않고 거절한다(`notAQuery` — 쓰기는 `db_execute`). 문장 하나가\n 실패하면 거기서 멈추고 그때까지의 결과와 `error`(문장 번호 · 줄)를 준다. 행은 문장마다 `maxRows`(기본 100), 셀은 4 KiB 에서\n 잘린다(`truncated` 값). **다음 쪽은 없다** — 잘렸으면 WHERE · LIMIT 로 좁혀 다시 부른다(다시 부르면 다른 스냅숏이다).\n 사람이 이번 앱 실행에서 Pitwall 의 DB 탐색기로 연 연결만 쓰고(`notOpenedByUser`), 프로덕션 표지가 있는 대상 — MySQL ·\n MariaDB 는 같은 서버 · 사용자의 어느 DB 라도 — 은 쓰지 않는다(`productionBlocked`). 결과의 `audit` 은 감사 로그에 남는\n 상세(문장 수 · 등급 · 해시)이고 에이전트에게도 보인다.\n","mcp":{"group":"db","name":"db_query"},"fileScope":false},
 	"db.tool.schema": {"name":"db.tool.schema","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolSchemaParams","output":"DbToolSchema","doc":" DB 스키마 조회(SQL 드라이버만 — PG · MySQL/MariaDB · SQLite). `object` 가 없으면 한 단계의 목록 한 쪽(`kind`: `database` ·\n `schema` · `table`(기본) · `view` 등 — 객체 목록은 `database` · `schema` 안에서, `filter` 로 거른다), 있으면 그 객체의 열(이름 ·\n 타입 · null · 기본값 · 기본 키) · 인덱스 · FK, `detail: \"ddl\"` 이면 DDL 글. Pitwall 의 DB 탐색기와 같은 것을 본다. 사람이 이번\n 앱 실행에서 Pitwall 의 DB 탐색기로 연 연결만 쓰고(아니면 `notOpenedByUser` — 사람이 한 번 연 뒤 다시), 프로덕션 표지가 있는\n 연결은 쓰지 않는다. Redis 연결이면 `unsupported` — `db_kv_scan` 을 쓴다.\n","mcp":{"group":"db","name":"db_schema"},"fileScope":false},
 	"diag.collect": {"name":"diag.collect","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"DiagnosticsText","doc":" 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.\n 경로 · 비밀 · 홈 디렉터리 이름은 가린다.\n","mcp":null,"fileScope":false},
 	"ext.list": {"name":"ext.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ExtensionList","doc":" 등록된 확장과 읽는 중에 나온 진단.\n","mcp":null,"fileScope":false},
@@ -2481,6 +2494,34 @@ export type DbSchemaSchemasParams = {
 	limit?: number | null,
 };
 
+/**  실패한 문장. 그 뒤의 문장은 돌지 않았다. */
+export type DbScriptError = {
+	/**  몇 번째 문장인가(0 부터). */
+	index: number,
+	/**  그 문장이 시작하는 줄(1 부터). */
+	line: number,
+	/**  문장의 범위(`sql` 또는 파일 글 기준 UTF-16). */
+	range: SqlRange,
+	error: DbError,
+};
+
+/**  문장 하나의 결과. */
+export type DbScriptResult = {
+	/**  나눈 문장 가운데 몇 번째인가(0 부터 — `db.sql.split` 의 순서). */
+	index: number,
+	/**  문장이 시작하는 줄(1 부터 — `sql` 또는 파일 기준). */
+	line: number,
+	grade: RiskGrade,
+	/**  행을 돌려주는 문장의 열. 행이 없는 문장은 빈 목록이다. */
+	columns: ColumnMeta[],
+	rows: DbValue[][],
+	/**  바뀐 행 수(행이 없는 문장 — 드라이버가 알려 주면). */
+	rowsAffected: number | null,
+	/**  행 상한(`maxRows`)이나 응답 크기에서 끊었다 — 더 있었다. 다음 쪽은 없다(좁혀서 다시 부른다). */
+	truncated: boolean,
+	elapsedMs: number,
+};
+
 export type DbSecretClearParams = {
 	projectId: string,
 	connectionId: string,
@@ -2811,6 +2852,36 @@ export type DbToolConnectionState =
 "secretRequired" | 
 /**  사람의 확인이 필요하다 — 사람이 Pitwall 에서 확인한다. */
 "approvalRequired" | "ready";
+
+export type DbToolQuery = {
+	/**  나눈 문장 수. */
+	statements: number,
+	/**  돈 문장마다 결과 하나(차례대로). 실패한 문장과 그 뒤 문장은 없다. */
+	results: DbScriptResult[],
+	/**  문장이 실패했으면 그 문장과 오류. 그 뒤의 문장은 돌지 않았다. */
+	error: DbScriptError | null,
+	/**  `file` 을 줬으면 읽은 파일(루트 기준 경로). */
+	file: string | null,
+	/**  감사 로그에 남는 상세 — 문장 수 · 가장 높은 등급 · 문장 해시(`file` 이면 경로와 내용 해시). SQL 원문 · 값은 없다. */
+	audit: string,
+};
+
+export type DbToolQueryParams = {
+	projectId: string,
+	/**  워크트리 꼭대기(절대 경로). 연결 설정과 `file` 을 그 워크트리에서 읽는다. 비우면 세션의 워크트리, 없으면 메인 체크아웃. */
+	worktree?: string | null,
+	/**  `db_connection_list` 의 연결 id. */
+	connectionId: string,
+	/**  돌릴 SQL(문장 여럿 — 방언의 구분자로 나눈다). `file` 과 함께 줄 수 없다. */
+	sql?: string | null,
+	/**
+	 *  SQL 파일 — 프로젝트 루트(워크트리를 줬으면 그 워크트리 안의 프로젝트 루트) 기준 경로. 루트 안의 UTF-8 일반 파일, 5 MiB 까지.
+	 *  `sql` 과 함께 줄 수 없다.
+	 */
+	file?: string | null,
+	/**  문장마다 돌려줄 행의 상한(1 ~ 10000, 기본 100). 쪽 단위가 아니다 — 넘으면 그 문장의 `truncated`. */
+	maxRows?: number | null,
+};
 
 export type DbToolSchema = {
 	level: DbToolSchemaLevel,

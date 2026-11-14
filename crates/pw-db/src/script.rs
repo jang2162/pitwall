@@ -1,0 +1,578 @@
+//! 에이전트의 SQL 실행 파이프라인 — `db_query`(16-m5-plan.md M5-07)와 `db_execute`(M5-18)가 함께 쓴다(「공유 부품의 주인」).
+//! `docs/design/05-mcp.md` 「DB」 표와 그 아래 「`db_query` · `db_execute` 의 `file`」.
+//!
+//! 1. **출처**([`ScriptInput`]) — `sql`(글) 또는 `file`(SQL 파일 경로) 하나. 둘 다 있거나 둘 다 없으면 invalid params.
+//! 2. **`file` 읽기**([`read_script_file`]) — 프로젝트 루트 안의 파일만. 상대 경로는 프로젝트 루트 기준이고(부른 프로세스의 cwd 가
+//!    아니다) 워크트리가 정해진 호출이면 그 워크트리 안의 프로젝트 루트다(`pw_core::registry::path::worktree_root`). 판정은
+//!    `fs.read` 와 같은 함수다 — `pw_fs::scope::Roots::readable`(심링크를 끝까지 푼 실제 경로가 루트 안), 일반 파일만, 연 핸들을
+//!    다시 판정(`Roots::open_inside`). UTF-8, [`MAX_FILE_BYTES`](5 MiB — 06-roadmap.md 결정 D33)까지. **Host 가 실행하는 그때 한
+//!    번 읽고**, 읽은 그 글을 분류하고 그 글을 실행한다 — 파일을 다시 열지 않는다.
+//! 3. **분류** — 연결의 드라이버 방언으로 나누고 문장마다 매긴다(`crate::gate::plan` — 분류기는 Host 의 것 하나, 결정 D45). 조회만
+//!    받는 툴은 [`refuse_non_queries`] 로 조회가 아닌 문장이 하나라도 있으면 아무것도 돌리지 않고 거절한다. 판정은 `db.query.page`
+//!    와 같은 `Planned::is_strict_query` 다(세션 설정 · 트랜잭션 제어 · 분류기가 못 읽은 읽기 · 파싱 실패 · `tooLarge` 는 조회가
+//!    아니다 — SQLite 의 `ATTACH` 도 분류가 쓰기다).
+//! 4. **실행**([`run_read_only`]) — 새 연결의 읽기 전용 트랜잭션 하나(드라이버의 `begin { read_only }` — PG `BEGIN READ ONLY` ·
+//!    MySQL `START TRANSACTION READ ONLY` · SQLite `query_only`)에서 문장을 차례로 돌린다. 문장마다 결과 하나, 행 제한은 문장마다.
+//!    문장 하나가 실패하면 거기서 멈추고 그때까지의 결과와 오류(문장 번호 · 줄)를 돌려준다. 끝나면 롤백하고 연결을 닫는다.
+//! 5. **취소** — 실행은 연결을 쥔 태스크에서 돈다. 호출(핸들러 future)이 버려지면(MCP 취소 → `request.cancel`, 세션 끊김 —
+//!    05-mcp.md 「호출 취소」) [`CancelOnDrop`] 이 그 연결의 인터럽트를 보내고(`QueryCancel`), 태스크는 드라이버 호출을 버린 뒤
+//!    롤백하고 연결을 닫는다.
+//! 6. **값 · 크기** — 값은 RPC 타입(`DbValue`, 결정 D46 — 큰 정수 · decimal 은 문자열). 셀은 [`TOOL_CELL_BYTES`](4 KiB)에서 잘리고
+//!    `truncated` 값으로 표지가 남는다. 결과 전체가 [`RESPONSE_BUDGET`] 을 넘으면 뒤쪽 행부터 덜고 그 문장의 `truncated` 를 켠다
+//!    (결정 M5-D34). 다음 쪽은 없다 — 다시 부르면 다른 스냅숏이다.
+//! 7. **감사 상세**([`audit_detail`]) — 감사 로그의 인자 요약은 글자열을 80자에서 자르므로 SQL 원문이 남지 않는다. 대신 문장 수 ·
+//!    가장 높은 등급 · 문장 해시(`file` 이면 경로와 내용 해시)를 결과 · 오류 `data` 의 최상위 `audit` 글로 싣는다 — 세션이 그것을
+//!    감사 행의 상세 칸으로 옮긴다(`crates/pw-mcp` 머리 주석 「툴 메서드 규약」). SQL 원문 · 값 · 비밀은 넣지 않는다.
+
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+use pw_core::registry::Registry;
+use pw_core::registry::methods::rpc_error;
+use pw_core::registry::path::worktree_root;
+use pw_db_driver::budget::{Inactivity, within};
+use pw_db_driver::{Budget, QueryCancel, SqlConnection};
+use pw_db_sql::split::SqlRange;
+use pw_db_types::{
+    BeginOptions, CellLimit, ColumnMeta, DbError, DbErrorKind, ExecuteRequest, FetchLimit,
+    RiskGrade, Row, SqlDialect,
+};
+use pw_fs::scope::{Escaped, NotAFile, Roots};
+use pw_rpc::{JsNumber, RpcError, code as rpc_code};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use sha2::{Digest, Sha256};
+
+use crate::gate::{DbStatementClass, Planned, grade_of, statements_hash};
+
+/// `file` 의 크기 상한 — 편집 상한(06-roadmap.md 결정 D33, `pw_fs::limits::EDITABLE_MAX`)과 같다.
+pub const MAX_FILE_BYTES: u64 = pw_fs::limits::EDITABLE_MAX;
+/// 셀 하나의 상한(결정 M5-D34). 넘는 값은 앞부분과 원래 크기(`DbValue::Truncated`)로 온다.
+pub const TOOL_CELL_BYTES: usize = 4 * 1024;
+/// 문장마다 돌려주는 행의 기본 상한(결정 M5-D34). 상한은 `crate::execute::MAX_PAGE_ROWS`.
+pub const DEFAULT_MAX_ROWS: u32 = pw_rpc::DEFAULT_LIST_LIMIT;
+/// 툴 결과 JSON 의 예산(바이트). 세션의 응답 상한(`pw_mcp::server::MAX_RESPONSE_BYTES`, 256 KiB)에 열 · 봉투 · 이스케이프의 여유를
+/// 남긴 값이다 — 데스크톱 크레이트의 시험이 상한보다 작은지 본다.
+pub const RESPONSE_BUDGET: usize = 192 * 1024;
+
+/// 한 번에 읽는 몫.
+const FETCH: FetchLimit = FetchLimit {
+    max_rows: 1000,
+    max_bytes: 512 * 1024,
+};
+const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
+
+/// 툴 입력의 SQL 출처.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScriptInput {
+    Sql(String),
+    /// 프로젝트 루트 기준 경로(절대 경로면 그대로 — 루트 안이어야 한다).
+    File(String),
+}
+
+impl ScriptInput {
+    /// `sql` 과 `file` 가운데 꼭 하나.
+    pub fn of(sql: Option<String>, file: Option<String>) -> Result<Self, RpcError> {
+        match (sql, file) {
+            (Some(sql), None) => Ok(Self::Sql(sql)),
+            (None, Some(file)) => Ok(Self::File(file)),
+            (Some(_), Some(_)) => Err(RpcError::invalid_params(
+                "give either `sql` or `file`, not both",
+            )),
+            (None, None) => Err(RpcError::invalid_params("give `sql` or `file`")),
+        }
+    }
+}
+
+/// 읽은 SQL 파일.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptFile {
+    /// 루트 기준 경로(결과 · 감사 상세에 싣는다). 실제 경로가 루트 밖으로 보이지 않는다.
+    pub path: String,
+    /// 정규화한 실제 경로.
+    pub real: PathBuf,
+    /// 읽은 바이트(BOM 포함)의 SHA-256(hex).
+    pub content_hash: String,
+    /// 읽은 글(UTF-8 BOM 을 뗀 것). 분류 · 실행이 이것만 쓴다.
+    pub text: String,
+}
+
+/// `file` 을 읽는다(머리 주석 ②). 루트는 `worktree` 가 있으면 그 워크트리 안의 프로젝트 루트, 없으면 프로젝트의 주 루트다.
+/// 블로킹 — 블로킹 스레드에서 부른다.
+pub fn read_script_file(
+    projects: &Registry,
+    project_id: &str,
+    worktree: Option<&str>,
+    path: &str,
+) -> Result<ScriptFile, RpcError> {
+    let project = projects.get(project_id).map_err(rpc_error)?;
+    let root = match worktree {
+        Some(top) => worktree_root(project.root(), Path::new(top)).map_err(|_| {
+            RpcError::invalid_params(format!(
+                "`{top}` is not a worktree of project `{project_id}`"
+            ))
+        })?,
+        None => project.root().to_path_buf(),
+    };
+    let roots = Roots::confirmed([root.clone()]);
+    let given = Path::new(path);
+    let requested = if given.is_absolute() {
+        given.to_path_buf()
+    } else {
+        root.join(given)
+    };
+    let target = roots
+        .readable(&requested)
+        .map_err(|d| RpcError::invalid_params(format!("file: {d}")))?;
+    let real = target.real;
+    // `fs.read` 처럼 일반 파일만 연다 — FIFO 는 여는 것부터 막히고 장치는 여는 것만으로 일이 생길 수 있다. 링크를 따라가지 않고
+    // 본다(`real` 은 링크를 다 푼 경로). 그 뒤에 바뀌는 것은 `open_inside` 가 다시 본다.
+    let meta = fs::symlink_metadata(&real).map_err(|e| io_error(&real, e))?;
+    if meta.is_dir() {
+        return Err(RpcError::invalid_params(format!(
+            "file: `{}` is a folder",
+            real.display()
+        )));
+    }
+    if !meta.is_file() {
+        return Err(RpcError::invalid_params(format!(
+            "file: {}",
+            NotAFile(real.clone())
+        )));
+    }
+    let too_large = || {
+        RpcError::invalid_params(format!(
+            "file: `{}` is larger than {MAX_FILE_BYTES} bytes",
+            real.display()
+        ))
+    };
+    if meta.len() > MAX_FILE_BYTES {
+        return Err(too_large());
+    }
+    let snap = pw_fs::read::read_whole(&real, &|p| roots.open_inside(p))
+        .map_err(|e| io_error(&real, e))?;
+    // 판정과 읽기 사이에 자랐을 수 있다.
+    if snap.bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(too_large());
+    }
+    let body = snap.bytes.strip_prefix(UTF8_BOM).unwrap_or(&snap.bytes);
+    let text = std::str::from_utf8(body)
+        .map_err(|_| {
+            RpcError::invalid_params(format!("file: `{}` is not UTF-8 text", real.display()))
+        })?
+        .to_owned();
+    let shown = real
+        .strip_prefix(&root)
+        .map_or_else(|_| real.display().to_string(), |p| p.display().to_string());
+    Ok(ScriptFile {
+        path: shown,
+        content_hash: hex(&Sha256::digest(&snap.bytes)),
+        real,
+        text,
+    })
+}
+
+fn io_error(path: &Path, e: io::Error) -> RpcError {
+    if let Some(inner) = e.get_ref() {
+        if let Some(escaped) = inner.downcast_ref::<Escaped>() {
+            return RpcError::invalid_params(format!("file: {escaped}"));
+        }
+        if let Some(not_a_file) = inner.downcast_ref::<NotAFile>() {
+            return RpcError::invalid_params(format!("file: {not_a_file}"));
+        }
+    }
+    match e.kind() {
+        io::ErrorKind::NotFound => RpcError::new(
+            rpc_code::NOT_FOUND,
+            format!("file: `{}` does not exist", path.display()),
+        ),
+        _ => RpcError::invalid_params(format!("file: `{}`: {e}", path.display())),
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(out, "{b:02x}");
+    }
+    out
+}
+
+/// 등급의 이름(RPC 의 꼴 — `read` · `write` · `unboundedWrite` · `destructive`).
+fn grade_name(grade: RiskGrade) -> String {
+    serde_json::to_value(grade)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_else(|| format!("{grade:?}"))
+}
+
+/// 감사 상세(머리 주석 ⑦): `statements=<수> grade=<가장 높은 등급> sql=sha256:<문장 해시>`, `file` 이면 그 뒤에
+/// `file=<루트 기준 경로> content=sha256:<내용 해시>`. SQL 원문 · 값을 싣지 않는다. 문장 해시는 방언 · 문장 원문의 해시다
+/// (`crate::gate::statements_hash` — 세션에 묶지 않는다).
+pub(crate) fn audit_detail(
+    dialect: SqlDialect,
+    planned: &[Planned],
+    file: Option<&ScriptFile>,
+) -> String {
+    let mut detail = format!(
+        "statements={} grade={} sql=sha256:{}",
+        planned.len(),
+        grade_name(grade_of(planned)),
+        statements_hash(None, dialect, planned, &[])
+    );
+    if let Some(file) = file {
+        detail.push_str(&format!(
+            " file={} content=sha256:{}",
+            file.path, file.content_hash
+        ));
+    }
+    detail
+}
+
+/// 조회만 받는 툴의 판정(머리 주석 ③): 조회가 아닌 문장이 하나라도 있으면 `PERMISSION_DENIED`(`data.reason = "notAQuery"`,
+/// `data.statements` 는 그 문장들 — 번호 · 범위 · 등급 · 까닭, `data.audit` 는 감사 상세). 글에 첫 문장의 번호 · 줄 · 등급과
+/// 「쓰기는 `db_execute`」 를 적는다.
+pub(crate) fn refuse_non_queries(
+    tool: &str,
+    source: &str,
+    planned: &[Planned],
+    audit: &str,
+) -> Result<(), RpcError> {
+    let refused: Vec<DbStatementClass> = planned
+        .iter()
+        .filter(|s| !s.is_strict_query())
+        .map(Planned::strict_class)
+        .collect();
+    let Some(first) = refused.first() else {
+        return Ok(());
+    };
+    let message = format!(
+        "{tool} runs queries only; nothing ran: statement {} (line {}) is graded `{}`{} — run writes with db_execute",
+        first.index,
+        line_of(source, first.range),
+        grade_name(first.grade),
+        if refused.len() > 1 {
+            format!(" ({} statements are not queries)", refused.len())
+        } else {
+            String::new()
+        },
+    );
+    Err(
+        RpcError::new(rpc_code::PERMISSION_DENIED, message).with_data(json!({
+            "reason": "notAQuery",
+            "statements": refused,
+            "audit": audit,
+        })),
+    )
+}
+
+/// 범위의 시작 줄(1 부터). `range` 는 `source` 기준 UTF-16 오프셋이다.
+pub(crate) fn line_of(source: &str, range: SqlRange) -> u32 {
+    let mut utf16 = 0u32;
+    let mut line = 1u32;
+    for c in source.chars() {
+        if utf16 >= range.from {
+            break;
+        }
+        if c == '\n' {
+            line += 1;
+        }
+        utf16 += c.len_utf16() as u32;
+    }
+    line
+}
+
+/// 문장 하나의 결과.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DbScriptResult {
+    /// 나눈 문장 가운데 몇 번째인가(0 부터 — `db.sql.split` 의 순서).
+    pub index: u32,
+    /// 문장이 시작하는 줄(1 부터 — `sql` 또는 파일 기준).
+    pub line: u32,
+    pub grade: RiskGrade,
+    /// 행을 돌려주는 문장의 열. 행이 없는 문장은 빈 목록이다.
+    pub columns: Vec<ColumnMeta>,
+    pub rows: Vec<Row>,
+    /// 바뀐 행 수(행이 없는 문장 — 드라이버가 알려 주면).
+    #[specta(type = Option<JsNumber>)]
+    pub rows_affected: Option<u64>,
+    /// 행 상한(`maxRows`)이나 응답 크기에서 끊었다 — 더 있었다. 다음 쪽은 없다(좁혀서 다시 부른다).
+    pub truncated: bool,
+    #[specta(type = JsNumber)]
+    pub elapsed_ms: u64,
+}
+
+/// 실패한 문장. 그 뒤의 문장은 돌지 않았다.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DbScriptError {
+    /// 몇 번째 문장인가(0 부터).
+    pub index: u32,
+    /// 그 문장이 시작하는 줄(1 부터).
+    pub line: u32,
+    /// 문장의 범위(`sql` 또는 파일 글 기준 UTF-16).
+    pub range: SqlRange,
+    pub error: DbError,
+}
+
+/// 실행의 결과([`run_read_only`]).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Ran {
+    pub results: Vec<DbScriptResult>,
+    pub error: Option<DbScriptError>,
+}
+
+/// 핸들러 future 가 버려지면(호출 취소 · 세션 끊김) 실행을 멈춘다 — 그 연결의 인터럽트를 보낸다. 실행 태스크는 드라이버 호출을
+/// 버리고 롤백한 뒤 연결을 닫는다. 끝까지 기다린 호출은 [`CancelOnDrop::disarm`] 한다.
+pub(crate) struct CancelOnDrop(Option<QueryCancel>);
+
+impl CancelOnDrop {
+    pub fn new(cancel: QueryCancel) -> Self {
+        Self(Some(cancel))
+    }
+
+    pub fn disarm(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        let Some(cancel) = self.0.take() else {
+            return;
+        };
+        tracing::info!(target: "pw_db", "agent db call dropped; interrupting its statement");
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn(async move {
+                    let _ = cancel.cancel().await;
+                });
+            }
+            Err(_) => {
+                tracing::warn!(target: "pw_db", "no runtime to interrupt a dropped agent db call")
+            }
+        }
+    }
+}
+
+/// 읽기 전용 트랜잭션 하나에서 문장을 차례로 돌린다(머리 주석 ④). 트랜잭션을 열지 못하면 오류, 문장이 실패하면 그때까지의 결과와
+/// 그 오류. 끝난 뒤의 롤백 · 닫기는 부른 쪽이 한다. 드라이버 호출마다 `cancel` 과 비활동 타임아웃(`Budget::PAGE` — 30 s)을 건다.
+pub(crate) async fn run_read_only(
+    conn: &mut dyn SqlConnection,
+    source: &str,
+    planned: &[Planned],
+    max_rows: u32,
+    cell: CellLimit,
+    cancel: &QueryCancel,
+) -> Result<Ran, DbError> {
+    let mut inactivity = Inactivity::new(Budget::PAGE.inactivity);
+    let begun = cancel
+        .run(inactivity.guard(conn.begin(BeginOptions { read_only: true })))
+        .await;
+    interrupt_on_timeout(&begun, cancel).await;
+    begun?;
+    let mut ran = Ran {
+        results: Vec::new(),
+        error: None,
+    };
+    for statement in planned {
+        let started = Instant::now();
+        let line = line_of(source, statement.range);
+        match run_one(conn, statement, max_rows, cell, cancel, &mut inactivity).await {
+            Ok((columns, rows, rows_affected, truncated)) => ran.results.push(DbScriptResult {
+                index: statement.index,
+                line,
+                grade: statement.grade,
+                columns,
+                rows,
+                rows_affected,
+                truncated,
+                elapsed_ms: elapsed_ms(started),
+            }),
+            Err(error) => {
+                ran.error = Some(DbScriptError {
+                    index: statement.index,
+                    line,
+                    range: statement.range,
+                    error,
+                });
+                break;
+            }
+        }
+    }
+    Ok(ran)
+}
+
+type Rows = (Vec<ColumnMeta>, Vec<Row>, Option<u64>, bool);
+
+/// 문장 하나: 실행 → `max_rows` 까지 읽고 한 행을 더 읽어 넘는지 본다 → 넘으면 커서를 버린다.
+async fn run_one(
+    conn: &mut dyn SqlConnection,
+    statement: &Planned,
+    max_rows: u32,
+    cell: CellLimit,
+    cancel: &QueryCancel,
+    inactivity: &mut Inactivity,
+) -> Result<Rows, DbError> {
+    let mut request = ExecuteRequest::new(statement.text.clone(), RiskGrade::Read);
+    request.cell_limit = cell;
+    inactivity.rearm();
+    let started = cancel.run(inactivity.guard(conn.execute(request))).await;
+    interrupt_on_timeout(&started, cancel).await;
+    let started = started?;
+    if let Some(end) = started.end {
+        return Ok((started.columns, Vec::new(), end.rows_affected, false));
+    }
+    let limit = max_rows as usize;
+    let mut rows: Vec<Row> = Vec::new();
+    loop {
+        let room = limit + 1 - rows.len();
+        let batch = cancel
+            .run(inactivity.guard(conn.fetch(FetchLimit {
+                max_rows: room.min(FETCH.max_rows as usize) as u32,
+                max_bytes: FETCH.max_bytes,
+            })))
+            .await;
+        interrupt_on_timeout(&batch, cancel).await;
+        let batch = batch?;
+        let empty = batch.rows.is_empty();
+        rows.extend(batch.rows);
+        if rows.len() > limit {
+            rows.truncate(limit);
+            if batch.end.is_none() {
+                within(
+                    Budget::PAGE.cancel_cleanup,
+                    "discard",
+                    conn.discard_cursor(),
+                )
+                .await?;
+            }
+            return Ok((started.columns, rows, None, true));
+        }
+        if let Some(end) = batch.end {
+            return Ok((started.columns, rows, end.rows_affected, false));
+        }
+        if empty {
+            return Err(DbError::new(
+                DbErrorKind::Invalid,
+                "the driver returned no rows",
+            ));
+        }
+    }
+}
+
+/// 비활동 타임아웃이면 서버에서 도는 문장을 멈춘다(그대로 두면 롤백 · 닫기가 그 문장을 기다린다).
+async fn interrupt_on_timeout<T>(result: &Result<T, DbError>, cancel: &QueryCancel) {
+    if matches!(result, Err(e) if e.kind == DbErrorKind::Timeout) {
+        let _ = cancel.cancel().await;
+    }
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+/// 결과가 [`RESPONSE_BUDGET`] 안에 들게 행을 던다(머리 주석 ⑥). `fixed` 는 행을 뺀 결과의 크기(바이트)다. 앞 문장의 앞 행부터 채우고,
+/// 넘는 자리부터 그 문장과 뒤 문장들의 행을 버리며 `truncated` 를 켠다.
+pub(crate) fn fit_rows(results: &mut [DbScriptResult], fixed: usize) {
+    let mut used = fixed;
+    let mut full = false;
+    for result in results {
+        if full {
+            if !result.rows.is_empty() {
+                result.rows.clear();
+                result.truncated = true;
+            }
+            continue;
+        }
+        let mut keep = result.rows.len();
+        for (i, row) in result.rows.iter().enumerate() {
+            // 행 하나의 JSON 과 구분 쉼표.
+            let size = serde_json::to_string(row).map_or(usize::MAX, |s| s.len() + 1);
+            if used.saturating_add(size) > RESPONSE_BUDGET {
+                keep = i;
+                full = true;
+                break;
+            }
+            used += size;
+        }
+        if keep < result.rows.len() {
+            result.rows.truncate(keep);
+            result.truncated = true;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pw_db_types::DbValue;
+
+    #[test]
+    fn lines_count_from_one_in_utf16_offsets() {
+        let source = "select 1;\n-- 한글\nselect 2;\n\nselect 3";
+        let at = |needle: &str| {
+            let byte = source.find(needle).unwrap();
+            let from = source[..byte].encode_utf16().count() as u32;
+            line_of(source, SqlRange { from, to: from })
+        };
+        assert_eq!(at("select 1"), 1);
+        assert_eq!(at("select 2"), 3);
+        assert_eq!(at("select 3"), 5);
+    }
+
+    #[test]
+    fn input_is_sql_or_file_but_not_both() {
+        assert_eq!(
+            ScriptInput::of(Some("select 1".into()), None).unwrap(),
+            ScriptInput::Sql("select 1".into())
+        );
+        assert_eq!(
+            ScriptInput::of(None, Some("a.sql".into())).unwrap(),
+            ScriptInput::File("a.sql".into())
+        );
+        for (sql, file) in [(Some("x".to_owned()), Some("y".to_owned())), (None, None)] {
+            let e = ScriptInput::of(sql, file).unwrap_err();
+            assert_eq!(e.code, rpc_code::INVALID_PARAMS);
+        }
+    }
+
+    fn result(index: u32, rows: usize) -> DbScriptResult {
+        DbScriptResult {
+            index,
+            line: 1,
+            grade: RiskGrade::Read,
+            columns: Vec::new(),
+            rows: (0..rows)
+                .map(|_| vec![DbValue::Text("x".repeat(1000))])
+                .collect(),
+            rows_affected: None,
+            truncated: false,
+            elapsed_ms: 0,
+        }
+    }
+
+    #[test]
+    fn rows_are_dropped_from_the_back_to_fit_the_budget() {
+        let mut results = vec![result(0, 100), result(1, 100), result(2, 0)];
+        fit_rows(&mut results, 1000);
+        let total: usize = results
+            .iter()
+            .flat_map(|r| &r.rows)
+            .map(|r| serde_json::to_string(r).unwrap().len() + 1)
+            .sum();
+        assert!(total + 1000 <= RESPONSE_BUDGET);
+        assert_eq!(results[0].rows.len(), 100);
+        assert!(!results[0].truncated);
+        assert!(results[1].truncated);
+        assert!(results[1].rows.len() < 100 && !results[1].rows.is_empty());
+        assert!(
+            !results[2].truncated,
+            "a statement without rows lost nothing"
+        );
+    }
+}
