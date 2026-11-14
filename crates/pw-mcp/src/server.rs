@@ -52,6 +52,10 @@ pub const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 /// 다르게 둘 수 있다(`git_log` · `symbol_search` 50, `git_status` 200).
 pub use pw_rpc::DEFAULT_LIST_LIMIT;
 
+/// 툴 결과(object)나 오류 `data`(object)의 최상위에 이 키로 글을 실으면 감사 행의 상세 칸으로 간다(「툴 메서드 규약」 —
+/// `crates/pw-mcp` 머리 주석). 결과에 남으므로 에이전트에게도 보인다.
+pub const AUDIT: &str = "audit";
+
 /// 프로젝트 툴이 선택 입력으로 받는 워크트리 꼭대기 키(「체크아웃」). 비었으면 세션의 활성 워크트리로 채운다.
 pub const WORKTREE: &str = "worktree";
 
@@ -417,6 +421,7 @@ impl Session {
         {
             Ok(result) => {
                 let size = result.to_string().len();
+                let detail = audit_detail(&result);
                 if size > MAX_RESPONSE_BYTES {
                     let message = format!(
                         "the response is {size} bytes, over the {} KiB limit for one tool response; \
@@ -428,7 +433,7 @@ impl Session {
                         &args,
                         project_id,
                         Outcome::Error,
-                        Some(message.clone()),
+                        Some(with_detail(message.clone(), detail)),
                         Some(size),
                         started,
                     );
@@ -439,7 +444,7 @@ impl Session {
                     &args,
                     project_id,
                     Outcome::Ok,
-                    None,
+                    detail.map(str::to_owned),
                     Some(size),
                     started,
                 );
@@ -493,12 +498,26 @@ impl Session {
         } else {
             (error.to_string(), Mark::error(None))
         };
+        // 툴이 오류 `data` 에 감사 상세를 실었으면(「툴 메서드 규약」) 감사 행은 `data` 를 통째로 싣지 않고 오류 글 · 상세다 —
+        // `data` 에는 서버의 오류 글(값이 섞인다)이 실릴 수 있다.
+        let logged = match &error {
+            CallError::Rpc {
+                code,
+                message: rpc_message,
+                data,
+            } => match data.as_ref().and_then(audit_detail) {
+                Some(detail) if cancelled => with_detail(message.clone(), Some(detail)),
+                Some(detail) => with_detail(format!("{rpc_message} ({code})"), Some(detail)),
+                None => message.clone(),
+            },
+            _ => message.clone(),
+        };
         self.audit(
             name,
             args,
             project_id,
             mark.outcome,
-            Some(message.clone()),
+            Some(logged),
             None,
             started,
         );
@@ -610,6 +629,20 @@ impl Session {
         if self.inner.audit.send(AuditJob::Write(entry)).is_err() {
             tracing::warn!(tool, "cannot queue the mcp audit log entry");
         }
+    }
+}
+
+/// 툴이 결과(또는 오류 `data`) 최상위에 실은 감사 상세 글(`audit` — 「툴 메서드 규약」). 감사 행의 상세 칸으로 간다(길이는
+/// [`crate::audit::MAX_DETAIL`] 에서 잘린다).
+fn audit_detail(value: &Value) -> Option<&str> {
+    value.get(AUDIT).and_then(Value::as_str)
+}
+
+/// `message · detail`(상세가 없으면 `message`).
+fn with_detail(message: String, detail: Option<&str>) -> String {
+    match detail {
+        Some(detail) => format!("{message} · {detail}"),
+        None => message,
     }
 }
 

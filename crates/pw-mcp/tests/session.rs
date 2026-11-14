@@ -82,7 +82,13 @@ pub struct RefuseParams {
     pub code: i32,
     #[serde(default)]
     pub reason: Option<String>,
+    /// 오류 `data` 의 최상위 `audit`(감사 상세 — 「툴 메서드 규약」). 주면 `data` 에 [`DATA_ONLY`] 도 싣는다.
+    #[serde(default)]
+    pub audit: Option<String>,
 }
+
+/// 감사 상세를 실은 오류의 `data` 에만 있는 글 — 감사 행에 남지 않아야 한다.
+const DATA_ONLY: &str = "value-from-the-server-error-7f3a";
 
 #[derive(
     Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type, schemars::JsonSchema,
@@ -92,6 +98,9 @@ pub struct EchoParams {
     pub project_id: String,
     #[serde(default)]
     pub worktree: Option<String>,
+    /// 주면 결과의 최상위 `audit` 으로 돌아간다(감사 상세 — 「툴 메서드 규약」).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit: Option<String>,
 }
 
 /// 오래 도는 가짜 핸들러가 남기는 것: 시작했다, 끝나기 전에 버려졌다.
@@ -134,9 +143,12 @@ fn test_methods(probe: Probe) -> impl FnOnce(&mut Router) + 'static {
         });
         router.unary(TestRefuse, |_ctx, p: RefuseParams| async move {
             let error = RpcError::new(p.code, "refused");
-            Err::<(), _>(match p.reason {
-                Some(reason) => error.with_data(json!({ "reason": reason })),
-                None => error,
+            Err::<(), _>(match (p.reason, p.audit) {
+                (reason, Some(audit)) => error.with_data(
+                    json!({ "reason": reason, "audit": audit, "statements": [DATA_ONLY] }),
+                ),
+                (Some(reason), None) => error.with_data(json!({ "reason": reason })),
+                (None, None) => error,
             })
         });
     }
@@ -918,6 +930,89 @@ async fn an_oversized_response_becomes_a_narrow_the_request_error() {
         ("mcptest_big", "error")
     );
     assert_eq!(pw_mcp::server::MAX_RESPONSE_BYTES, 256 * 1024);
+    client.cancel().await.unwrap();
+    cancel.cancel();
+}
+
+/// 감사 상세(「툴 메서드 규약」, 16-m5-plan M5-07 ⑦): 결과의 최상위 `audit` 글은 성공 행의 상세로, 오류 `data` 의 `audit` 은
+/// 「오류 글 · 상세」 로 간다 — 그때 `data` 의 다른 것(서버 오류 글의 값)은 감사 행에 남지 않는다. 상세는 감사의 상한에서 잘린다.
+/// `audit` 이 없는 툴은 지금처럼 성공 행의 상세가 비고 오류 행은 오류 글(`data` 포함) 그대로다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_top_level_audit_text_goes_to_the_audit_detail() {
+    let (f, _) = fixture_with_test_tools();
+    let (client, _, cancel) = f.connect(SessionRequest::default()).await;
+    let ok = call(
+        &client,
+        "mcptest_echo",
+        json!({ "projectId": f.projects[0], "audit": "statements=2 grade=read" }),
+    )
+    .await;
+    assert_ne!(ok.is_error, Some(true));
+    assert_eq!(
+        ok.structured_content.as_ref().unwrap()["audit"],
+        "statements=2 grade=read",
+        "the agent sees it too"
+    );
+    let long = "a".repeat(2000);
+    call(
+        &client,
+        "mcptest_echo",
+        json!({ "projectId": f.projects[0], "audit": long }),
+    )
+    .await;
+    call(
+        &client,
+        "mcptest_echo",
+        json!({ "projectId": f.projects[0] }),
+    )
+    .await;
+    let denied = pw_rpc::code::PERMISSION_DENIED;
+    for (code, reason) in [(denied, Some("notAQuery")), (3003, None)] {
+        let failed = call(
+            &client,
+            "mcptest_refuse",
+            json!({ "code": code, "reason": reason, "audit": "statements=1 grade=write" }),
+        )
+        .await;
+        assert_eq!(failed.is_error, Some(true));
+    }
+    call(
+        &client,
+        "mcptest_refuse",
+        json!({ "code": 3003, "reason": "plain" }),
+    )
+    .await;
+    let rows = audit_rows(&f.paths.state, 6);
+    let details: Vec<Option<&str>> = rows.iter().map(|r| r.3.as_deref()).collect();
+    assert_eq!(details[0], Some("statements=2 grade=read"));
+    let clipped = details[1].unwrap();
+    assert!(
+        clipped.starts_with("aaa") && clipped.chars().count() <= pw_mcp::audit::MAX_DETAIL + 1,
+        "{} chars",
+        clipped.chars().count()
+    );
+    assert_eq!(
+        details[2], None,
+        "a tool without `audit` leaves the detail empty"
+    );
+    assert_eq!(
+        details[3],
+        Some(format!("refused ({denied}) · statements=1 grade=write").as_str())
+    );
+    assert_eq!(
+        details[4],
+        Some("refused (3003) · statements=1 grade=write")
+    );
+    for detail in &details[3..5] {
+        assert!(!detail.unwrap().contains(DATA_ONLY), "{detail:?}");
+    }
+    assert!(
+        details[5].unwrap().contains("plain"),
+        "without `audit` the error keeps its data: {:?}",
+        details[5]
+    );
+    let outcomes: Vec<&str> = rows.iter().map(|r| r.2.as_str()).collect();
+    assert_eq!(outcomes, ["ok", "ok", "ok", "denied", "error", "error"]);
     client.cancel().await.unwrap();
     cancel.cancel();
 }
