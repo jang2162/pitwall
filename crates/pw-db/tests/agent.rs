@@ -812,7 +812,7 @@ async fn on_mysql_a_production_database_marks_the_whole_server_for_that_user() {
         .unwrap();
     }
     let mut agent = f.connect(ConnectionScope::Agent);
-    let mut dev = |extra: Value| {
+    let dev = |extra: Value| {
         let mut params = json!({ "projectId": f.id, "connectionId": "dev" });
         params
             .as_object_mut()
