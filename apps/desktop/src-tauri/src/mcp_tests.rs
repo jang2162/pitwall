@@ -10,7 +10,7 @@
 //! 헤드리스 목록 단언은 앱 전용 툴(git — M5-05, DB — M5-06)이 생긴 뒤로 `mcp::services` 의 `routed_by` 를 가른다 — 빼면 헤드리스
 //! 목록에 앱 전용 툴이 섞여 [`mcp_tools_are_exactly_these`] 가 실패한다(M5-05 · M5-06 이 각각 빼 보고 확인했다).
 //!
-//! 툴 행의 왕복 시험은 하위 모듈에 둔다(`git` · `db` — 이 파일의 병합 충돌을 줄이려고).
+//! 툴 행의 왕복 시험은 하위 모듈에 둔다(`git` · `db` · `code` — 이 파일의 병합 충돌을 줄이려고).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -28,6 +28,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::mcp;
 
+mod code;
 mod db;
 mod git;
 
@@ -35,6 +36,7 @@ mod git;
 const APP_TOOLS: &[&str] = &[
     "db_connection_list",
     "db_schema",
+    "diagnostics",
     "git_blame",
     "git_branch_list",
     "git_diff",
@@ -42,6 +44,7 @@ const APP_TOOLS: &[&str] = &[
     "git_status",
     "project_info",
     "project_list",
+    "symbol_search",
 ];
 
 /// 헤드리스 Host(앱 없이 뜬 `pitwall mcp` · `pitwall tool`)가 내는 툴 — 코어 툴만(결정 M5-D3). [`APP_TOOLS`] 의 부분집합. 이름순.

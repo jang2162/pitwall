@@ -26408,6 +26408,246 @@
       ],
       "tier": "read"
     },
+    "index.tool.symbolSearch": {
+      "description": "Find symbols (functions, types, methods, fields, constants …) in a project by name. `query` is space-separated words\nthat must all match the symbol name, each fuzzily (its letters in order; case-sensitive only if the word has an\nuppercase letter); results are best match first. Narrow with `kinds`. Lines and columns start at 1; columns count\nUTF-16 code units. The index is a tree-sitter parse of the project files and exists only while the project is open\nin a Pitwall window: roots without one are listed in `unindexed` with a `hint` — open the project in Pitwall and call\nagain. Works in untrusted projects (nothing is run).",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "IndexSymbolKind": {
+            "description": "심볼 종류.",
+            "oneOf": [
+              {
+                "enum": [
+                  "module",
+                  "class",
+                  "struct",
+                  "interface",
+                  "trait",
+                  "enum",
+                  "enumMember",
+                  "typeAlias",
+                  "function",
+                  "method",
+                  "constructor",
+                  "field",
+                  "property",
+                  "constant",
+                  "variable",
+                  "macro"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "impl",
+                "description": "구현 블록(Rust 의 `impl`). 이름은 대상 타입이다. 그 안 메서드의 컨테이너가 되려고 잡는다 — 심볼 검색은 `kinds` 로 따로 고르지\n않으면 내지 않는다(같은 이름의 타입과 겹친다).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cursor": {
+            "default": null,
+            "description": "앞 쪽의 `nextCursor`. 비면 처음부터.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kinds": {
+            "default": null,
+            "description": "이 종류만. 없으면 `impl` 을 뺀 모든 종류.",
+            "items": {
+              "$ref": "#/$defs/IndexSymbolKind"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": null,
+            "description": "한 쪽의 심볼 수, 1 ~ 1000(기본 50).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "query": {
+            "description": "찾을 것. 공백으로 가른 낱말이 모두 심볼 이름에 맞아야 한다(낱말마다 퍼지 — 글자가 그 차례로 들면 맞는다. 낱말에 대문자가\n있을 때만 대소문자를 가린다). 비면 경로 · 위치 차례로 모든 심볼. 256 자까지.",
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "query"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "IndexSymbolKind": {
+            "description": "심볼 종류.",
+            "oneOf": [
+              {
+                "enum": [
+                  "module",
+                  "class",
+                  "struct",
+                  "interface",
+                  "trait",
+                  "enum",
+                  "enumMember",
+                  "typeAlias",
+                  "function",
+                  "method",
+                  "constructor",
+                  "field",
+                  "property",
+                  "constant",
+                  "variable",
+                  "macro"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "impl",
+                "description": "구현 블록(Rust 의 `impl`). 이름은 대상 타입이다. 그 안 메서드의 컨테이너가 되려고 잡는다 — 심볼 검색은 `kinds` 로 따로 고르지\n않으면 내지 않는다(같은 이름의 타입과 겹친다).",
+                "type": "string"
+              }
+            ]
+          },
+          "SymbolSearchToolMatch": {
+            "description": "맞는 심볼 하나. 줄 · 열은 1 부터, 열은 UTF-16 코드 단위.",
+            "properties": {
+              "column": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "container": {
+                "description": "바깥 심볼의 이름(클래스 안 메서드의 클래스 등).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "endLine": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "$ref": "#/$defs/IndexSymbolKind"
+              },
+              "language": {
+                "description": "언어 id(`rust` · `typescript` …).",
+                "type": "string"
+              },
+              "line": {
+                "description": "이름이 있는 줄 · 열.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "path": {
+                "description": "파일의 절대 경로.",
+                "type": "string"
+              },
+              "relative": {
+                "description": "프로젝트 루트 기준 상대 경로(`/` 구분).",
+                "type": "string"
+              },
+              "startLine": {
+                "description": "정의 전체의 첫 줄 · 끝 줄.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "name",
+              "kind",
+              "container",
+              "path",
+              "relative",
+              "language",
+              "line",
+              "column",
+              "startLine",
+              "endLine"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "hint": {
+            "description": "`unindexed` 가 있을 때 할 일(영어 한 줄).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "matched": {
+            "description": "맞은 심볼 수(모든 쪽을 합친 것).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "nextCursor": {
+            "description": "다음 쪽을 부를 `cursor`. 마지막 쪽이면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "symbols": {
+            "description": "잘 맞는 차례(같으면 짧은 이름 · 경로 · 위치 차례).",
+            "items": {
+              "$ref": "#/$defs/SymbolSearchToolMatch"
+            },
+            "type": "array"
+          },
+          "unindexed": {
+            "description": "색인이 없어 찾지 않은 루트(절대 경로). 비어 있지 않으면 결과가 모자랄 수 있다 — `hint`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "symbols",
+          "matched",
+          "nextCursor",
+          "unindexed",
+          "hint"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "keymap.get": {
       "description": "키맵 기여 하나의 파일 텍스트. 없는 id 면 invalid params 오류다.",
       "kind": "unary",
@@ -32197,6 +32437,566 @@
           "server",
           "staleVersion",
           "truncated"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "lsp.tool.diagnostics": {
+      "description": "Language server diagnostics (errors, warnings, hints) for a project, one page at a time: files in path order, each\nfile's diagnostics most severe first. Filter by one file (`path`, absolute or relative to the project root) and by\n`minSeverity`. Lines and columns start at 1; columns count UTF-16 code units. Only what the language servers have\npublished on their own: servers run while the project is open in a Pitwall window (they start when a file of that\nlanguage is opened there), and many servers only report files that are open in the editor, so files nobody opened\nmay be missing — an empty list is not proof the project builds. `servers` tells \"no problems\" apart from \"no server\nyet / still starting / still indexing\" (a `progress` means more diagnostics may come). This tool never starts a\nserver. An untrusted project runs no language servers: the result is empty with `unavailable.reason = \"untrusted\"`.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "LspSeverity": {
+            "description": "심각도. 차례는 오류가 먼저다(작을수록 심하다 — LSP 의 수와 같은 차례).",
+            "enum": [
+              "error",
+              "warning",
+              "information",
+              "hint"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cursor": {
+            "default": null,
+            "description": "앞 쪽의 `nextCursor`. 비면 처음부터.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": null,
+            "description": "한 쪽의 진단 수, 1 ~ 5000(기본 100).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "minSeverity": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LspSeverity"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "이 심각도와 그보다 심한 것만(`warning` 이면 오류 · 경고)."
+          },
+          "path": {
+            "default": null,
+            "description": "이 파일만. 절대 경로나 프로젝트 루트(워크트리면 그 안의 프로젝트 루트) 기준 상대 경로(`src/lib.rs`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DiagnosticsToolFile": {
+            "description": "파일 하나의 진단.",
+            "properties": {
+              "diagnostics": {
+                "items": {
+                  "$ref": "#/$defs/DiagnosticsToolItem"
+                },
+                "type": "array"
+              },
+              "path": {
+                "description": "절대 경로.",
+                "type": "string"
+              },
+              "truncated": {
+                "description": "이 파일의 진단이 상한에 걸려 일부만 있다.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "path",
+              "diagnostics",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          "DiagnosticsToolItem": {
+            "description": "진단 하나. 줄 · 열은 1 부터, 열은 UTF-16 코드 단위.",
+            "properties": {
+              "code": {
+                "description": "진단 코드(`E0308` 등).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "codeHref": {
+                "description": "코드 설명 링크.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "column": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "endColumn": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "endLine": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              },
+              "related": {
+                "description": "관련된 다른 자리.",
+                "items": {
+                  "$ref": "#/$defs/DiagnosticsToolRelated"
+                },
+                "type": "array"
+              },
+              "server": {
+                "description": "낸 언어 서버 id(`servers[].server`).",
+                "type": "string"
+              },
+              "severity": {
+                "$ref": "#/$defs/LspSeverity"
+              },
+              "source": {
+                "description": "진단을 낸 도구(`rustc` · `ts` 등 — 서버가 알린 것).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tags": {
+                "description": "`unnecessary`(쓰이지 않는 코드) · `deprecated`.",
+                "items": {
+                  "$ref": "#/$defs/LspDiagnosticTag"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "severity",
+              "line",
+              "column",
+              "endLine",
+              "endColumn",
+              "message",
+              "code",
+              "source",
+              "server",
+              "codeHref",
+              "tags",
+              "related"
+            ],
+            "type": "object"
+          },
+          "DiagnosticsToolRelated": {
+            "description": "진단의 관련 정보. 줄 · 열은 1 부터.",
+            "properties": {
+              "column": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "description": "파일이면 그 절대 경로.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "uri": {
+                "description": "파일이 아니면(`path` 가 없으면) 서버가 준 URI.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "uri",
+              "line",
+              "column",
+              "message"
+            ],
+            "type": "object"
+          },
+          "DiagnosticsUnavailable": {
+            "description": "진단을 볼 수 없는 까닭.",
+            "properties": {
+              "message": {
+                "description": "사람이 할 일을 담은 한 줄(영어).",
+                "type": "string"
+              },
+              "reason": {
+                "$ref": "#/$defs/DiagnosticsUnavailableReason"
+              }
+            },
+            "required": [
+              "reason",
+              "message"
+            ],
+            "type": "object"
+          },
+          "DiagnosticsUnavailableReason": {
+            "oneOf": [
+              {
+                "const": "untrusted",
+                "description": "프로젝트를 신뢰하지 않아 언어 서버가 뜨지 않는다.",
+                "type": "string"
+              }
+            ]
+          },
+          "LspDiagnosticTag": {
+            "description": "진단 꼬리표.",
+            "oneOf": [
+              {
+                "const": "unnecessary",
+                "description": "쓰이지 않는 코드(흐리게).",
+                "type": "string"
+              },
+              {
+                "const": "deprecated",
+                "description": "낡은 것(취소선).",
+                "type": "string"
+              }
+            ]
+          },
+          "LspInstanceState": {
+            "description": "인스턴스의 상태.",
+            "oneOf": [
+              {
+                "description": "띄우는 중(`initialize` 를 기다림 · 죽은 뒤 물러남 재기동을 기다림).",
+                "properties": {
+                  "kind": {
+                    "const": "starting",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "답한다.",
+                "properties": {
+                  "kind": {
+                    "const": "ready",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "설정 · 정의가 바뀌었다 — 다시 시작해야 새 값이 든다. 서버는 그대로 답한다.",
+                "properties": {
+                  "kind": {
+                    "const": "restartNeeded",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "런타임 환경이 바뀌었다(`runtime.changed`) — 다시 시작을 권한다. 서버는 그대로 답한다(저절로 다시 띄우지 않는다).",
+                "properties": {
+                  "kind": {
+                    "const": "restartSuggested",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "3분 안에 5번 죽어 멈췄다 — `lsp.server.restart` 로만 다시 띄운다.",
+                "properties": {
+                  "kind": {
+                    "const": "crashed",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "사람이 멈췄다(`lsp.server.stop`).",
+                "properties": {
+                  "kind": {
+                    "const": "stopped",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "프로젝트를 신뢰하지 않아 띄우지 않는다(결정 M4-D8).",
+                "properties": {
+                  "kind": {
+                    "const": "untrusted",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "실행 파일을 찾지 못했다 — 설치를 제안한다(M4-17).",
+                "properties": {
+                  "kind": {
+                    "const": "notInstalled",
+                    "type": "string"
+                  },
+                  "mason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "mason"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "서버를 돌릴 런타임(`requires`)을 찾지 못했다(결정 M4-D6). `tool` 은 `node` · `python` · `java`, `needed` 는 판 범위.",
+                "properties": {
+                  "kind": {
+                    "const": "runtimeMissing",
+                    "type": "string"
+                  },
+                  "needed": {
+                    "type": "string"
+                  },
+                  "tool": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "tool",
+                  "needed"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "설정에서 껐다(`[lsp.<id>] enabled = false`).",
+                "properties": {
+                  "kind": {
+                    "const": "disabled",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "띄우지 못했다(설정 경로가 틀림 · 실행 실패 등 — 까닭).",
+                "properties": {
+                  "kind": {
+                    "const": "failed",
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "message"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "LspInstanceStatus": {
+            "description": "서버 인스턴스 하나 — (프로젝트, 워크트리, 서버, 작업 공간 루트)마다 하나(결정 M4-D11).",
+            "properties": {
+              "progress": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/LspProgress"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "서버가 알린 진행(`$/progress`) 중 가장 최근 것. 같은 진행이 `Task` 로도 나간다."
+              },
+              "root": {
+                "description": "작업 공간 루트(실제 경로 — 워크트리마다 다르다). `lsp.server.restart` · `stop` 은 이것과 그 창의 활성 워크트리로 고른다.",
+                "type": "string"
+              },
+              "server": {
+                "description": "서버 id(`[contributes.language_servers.<id>]`).",
+                "type": "string"
+              },
+              "state": {
+                "$ref": "#/$defs/LspInstanceState"
+              }
+            },
+            "required": [
+              "server",
+              "root",
+              "state",
+              "progress"
+            ],
+            "type": "object"
+          },
+          "LspProgress": {
+            "description": "서버의 진행 하나(`$/progress` 의 `WorkDoneProgress`).",
+            "properties": {
+              "message": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "percentage": {
+                "description": "0 ~ 100. 서버가 모르면 없다.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "message",
+              "percentage"
+            ],
+            "type": "object"
+          },
+          "LspSeverity": {
+            "description": "심각도. 차례는 오류가 먼저다(작을수록 심하다 — LSP 의 수와 같은 차례).",
+            "enum": [
+              "error",
+              "warning",
+              "information",
+              "hint"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "files": {
+            "description": "경로 차례로 파일들. 파일 안은 심각도(오류 먼저) · 위치 차례. 한 파일의 진단이 두 쪽에 걸칠 수 있다.",
+            "items": {
+              "$ref": "#/$defs/DiagnosticsToolFile"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "description": "다음 쪽을 부를 `cursor`. 마지막 쪽이면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "servers": {
+            "description": "이 프로젝트(워크트리)의 언어 서버 인스턴스와 상태 — 빈 목록이 「오류 없음」 인지 「서버가 아직 없다 · 준비 중이다」 인지 가른다.\n비어 있으면 띄운 서버가 없다(Pitwall 창에서 그 언어의 파일을 열면 뜬다). `state.kind` 가 `ready` 가 아니면 답하지 않는 중이고,\n`progress` 가 있으면 서버가 색인 · 검사 중이라 진단이 더 올 수 있다.",
+            "items": {
+              "$ref": "#/$defs/LspInstanceStatus"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "서버가 진단을 쏟아부어 상한(파일당 1000 · 프로젝트 10만)에서 잘렸다 — 심한 것부터 남겼다.",
+            "type": "boolean"
+          },
+          "unavailable": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DiagnosticsUnavailable"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "진단을 볼 수 없는 까닭(그러면 `files` 는 비어 있다)."
+          }
+        },
+        "required": [
+          "servers",
+          "files",
+          "nextCursor",
+          "truncated",
+          "unavailable"
         ],
         "type": "object"
       },

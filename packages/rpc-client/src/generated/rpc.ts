@@ -603,6 +603,15 @@ export type UnaryMethods = {
 	 */
 	"index.symbols.search": { params: IndexSymbolSearchParams; result: IndexSymbolSearch };
 	/**
+	 * Find symbols (functions, types, methods, fields, constants …) in a project by name. `query` is space-separated words
+	 * that must all match the symbol name, each fuzzily (its letters in order; case-sensitive only if the word has an
+	 * uppercase letter); results are best match first. Narrow with `kinds`. Lines and columns start at 1; columns count
+	 * UTF-16 code units. The index is a tree-sitter parse of the project files and exists only while the project is open
+	 * in a Pitwall window: roots without one are listed in `unindexed` with a `hint` — open the project in Pitwall and call
+	 * again. Works in untrusted projects (nothing is run).
+	 */
+	"index.tool.symbolSearch": { params: SymbolSearchToolParams; result: SymbolSearchToolResult };
+	/**
 	 * 키맵 기여 하나의 파일 텍스트. 없는 id 면 invalid params 오류다.
 	 */
 	"keymap.get": { params: KeymapGetParams; result: KeymapFile };
@@ -780,6 +789,17 @@ export type UnaryMethods = {
 	 * 문서 · 다른 연결의 문서는 not found. 서버를 띄우지 않는다.
 	 */
 	"lsp.symbols.document": { params: LspSymbolsDocumentParams; result: LspDocumentSymbols };
+	/**
+	 * Language server diagnostics (errors, warnings, hints) for a project, one page at a time: files in path order, each
+	 * file's diagnostics most severe first. Filter by one file (`path`, absolute or relative to the project root) and by
+	 * `minSeverity`. Lines and columns start at 1; columns count UTF-16 code units. Only what the language servers have
+	 * published on their own: servers run while the project is open in a Pitwall window (they start when a file of that
+	 * language is opened there), and many servers only report files that are open in the editor, so files nobody opened
+	 * may be missing — an empty list is not proof the project builds. `servers` tells "no problems" apart from "no server
+	 * yet / still starting / still indexing" (a `progress` means more diagnostics may come). This tool never starts a
+	 * server. An untrusted project runs no language servers: the result is empty with `unavailable.reason = "untrusted"`.
+	 */
+	"lsp.tool.diagnostics": { params: DiagnosticsToolParams; result: DiagnosticsToolResult };
 	/**
 	 * 타입 정의로(`textDocument/typeDefinition`).
 	 */
@@ -1218,6 +1238,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"index.file.symbols": {"name":"index.file.symbols","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"IndexFileSymbolsParams","output":"IndexFileSymbols","doc":" 파일 하나의 심볼(아웃라인 · 파일 구조 팝업의 대체 — 언어 서버가 없거나 준비 전 · 미신뢰일 때, M4-10). `text` 를 주면 그\n 내용을, 아니면 색인에 있는 것을(없으면 디스크에서 읽어) 쓴다.\n","mcp":null,"fileScope":false},
 	"index.status": {"name":"index.status","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"IndexStatusParams","output":"IndexStatus","doc":" 프로젝트의 루트마다 심볼 색인 상태. 기다리지 않는다.\n","mcp":null,"fileScope":false},
 	"index.symbols.search": {"name":"index.symbols.search","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"IndexSymbolSearchParams","output":"IndexSymbolSearch","doc":" 프로젝트의 심볼(함수 · 타입 · 메서드 …)을 이름으로 퍼지 매칭한다(심볼로 이동 · 클래스로 이동 · Search Everywhere 의 심볼 탭 —\n M4-16). 색인은 창이 `fs.watch` 로 보는 루트마다 메모리에 있고 파일 변경을 따라간다(`pw_index` 머리 주석). 처음 만드는 중이면 다\n 만들 때까지 기다리고, 그 작업이 취소되면 `CANCELLED` 다. 미신뢰 프로젝트에서도 돈다(코드를 돌리지 않는다 — 결정 M4-D8).\n","mcp":null,"fileScope":false},
+	"index.tool.symbolSearch": {"name":"index.tool.symbolSearch","kind":"unary","tier":"read","roles":["owner"],"params":"SymbolSearchToolParams","output":"SymbolSearchToolResult","doc":" Find symbols (functions, types, methods, fields, constants …) in a project by name. `query` is space-separated words\n that must all match the symbol name, each fuzzily (its letters in order; case-sensitive only if the word has an\n uppercase letter); results are best match first. Narrow with `kinds`. Lines and columns start at 1; columns count\n UTF-16 code units. The index is a tree-sitter parse of the project files and exists only while the project is open\n in a Pitwall window: roots without one are listed in `unindexed` with a `hint` — open the project in Pitwall and call\n again. Works in untrusted projects (nothing is run).\n","mcp":{"group":"code","name":"symbol_search"},"fileScope":false},
 	"keymap.get": {"name":"keymap.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"KeymapGetParams","output":"KeymapFile","doc":" 키맵 기여 하나의 파일 텍스트. 없는 id 면 invalid params 오류다.\n","mcp":null,"fileScope":true},
 	"keymap.list": {"name":"keymap.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"KeymapList","doc":" 등록된 키맵 기여(베이스 키맵 · 바인딩 묶음) 목록.\n","mcp":null,"fileScope":true},
 	"lang.detect": {"name":"lang.detect","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"LangDetectParams","output":"LangDetectResult","doc":" 파일들의 언어와 벤더 · 생성 · 문서 여부. 판별 순서는 `pw_lang` 크레이트 머리 주석. 상대 경로 · 모르는 프로젝트 ·\n 그 프로젝트의 워크트리가 아닌 `worktree` · [`MAX_FILES`] 를 넘는 파일 수는 invalid params 다.\n","mcp":null,"fileScope":true},
@@ -1256,6 +1277,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lsp.status.document": {"name":"lsp.status.document","kind":"unary","tier":"read","roles":["owner"],"params":"LspDocumentStatusParams","output":"LspDocumentStatus","doc":" 문서 하나를 맡는 서버와 그 인스턴스 상태(상태바 `lsp` 항목 · 설치 배너). 서버를 띄우지 않는다. 그 프로젝트 창의 연결만.\n","mcp":null,"fileScope":false},
 	"lsp.status.get": {"name":"lsp.status.get","kind":"unary","tier":"read","roles":["owner"],"params":"LspStatusGetParams","output":"LspStatus","doc":" 그 프로젝트의 서버 인스턴스 상태. 바뀔 때마다 `lsp.status` 이벤트로도 나간다. 그 프로젝트 창의 연결만(다른 연결은\n permission denied).\n","mcp":null,"fileScope":false},
 	"lsp.symbols.document": {"name":"lsp.symbols.document","kind":"unary","tier":"read","roles":["owner"],"params":"LspSymbolsDocumentParams","output":"LspDocumentSymbols","doc":" 문서의 심볼(구조 툴 윈도우 · 파일 구조 팝업 — M4-10). 서버의 계층 · 평면 답을 평면 목록 + 부모 색인으로 바꾼다(위치는\n UTF-16 오프셋). 맡을 서버가 없으면(서버 없음 · 준비 전 · 미신뢰) `5001` — 웹뷰는 `index.file.symbols` 로 대신한다. 없는\n 문서 · 다른 연결의 문서는 not found. 서버를 띄우지 않는다.\n","mcp":null,"fileScope":false},
+	"lsp.tool.diagnostics": {"name":"lsp.tool.diagnostics","kind":"unary","tier":"read","roles":["owner"],"params":"DiagnosticsToolParams","output":"DiagnosticsToolResult","doc":" Language server diagnostics (errors, warnings, hints) for a project, one page at a time: files in path order, each\n file's diagnostics most severe first. Filter by one file (`path`, absolute or relative to the project root) and by\n `minSeverity`. Lines and columns start at 1; columns count UTF-16 code units. Only what the language servers have\n published on their own: servers run while the project is open in a Pitwall window (they start when a file of that\n language is opened there), and many servers only report files that are open in the editor, so files nobody opened\n may be missing — an empty list is not proof the project builds. `servers` tells \"no problems\" apart from \"no server\n yet / still starting / still indexing\" (a `progress` means more diagnostics may come). This tool never starts a\n server. An untrusted project runs no language servers: the result is empty with `unavailable.reason = \"untrusted\"`.\n","mcp":{"group":"code","name":"diagnostics"},"fileScope":false},
 	"lsp.typeDefinition": {"name":"lsp.typeDefinition","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspLocationsResult","doc":" 타입 정의로(`textDocument/typeDefinition`).\n","mcp":null,"fileScope":false},
 	"lsp.workspaceSymbol": {"name":"lsp.workspaceSymbol","kind":"unary","tier":"read","roles":["owner"],"params":"LspWorkspaceSymbolParams","output":"LspWorkspaceSymbols","doc":" 프로젝트의 언어 서버들에 `workspace/symbol` 을 묻는다(심볼로 이동 · 클래스로 이동 · SE 「심볼」 탭 — M4-16). 이 창이 문서를 연\n 떠 있는 서버에만 묻고 서버를 띄우지 않는다. 루트 밖 위치는 읽기 토큰과 함께(결정 M4-D13). 미신뢰면 untrusted.\n","mcp":null,"fileScope":false},
 	"openWith.list": {"name":"openWith.list","kind":"unary","tier":"read","roles":["owner"],"params":"OpenWithListParams","output":"OpenWithList","doc":" 이 OS 에서 쓸 수 있는 외부 도구와 기본 도구(04 F8-1 · F8-4). 「다음에서 열기」 팝업이 쓴다.\n","mcp":null,"fileScope":false},
@@ -2938,6 +2960,90 @@ export type DiagnosticsText = {
 	/**  경로 · 비밀 · 홈 디렉터리 이름을 가린 텍스트. 이슈 제보에 그대로 붙여 넣을 수 있다. */
 	text: string,
 };
+
+/**  파일 하나의 진단. */
+export type DiagnosticsToolFile = {
+	/**  절대 경로. */
+	path: string,
+	diagnostics: DiagnosticsToolItem[],
+	/**  이 파일의 진단이 상한에 걸려 일부만 있다. */
+	truncated: boolean,
+};
+
+/**  진단 하나. 줄 · 열은 1 부터, 열은 UTF-16 코드 단위. */
+export type DiagnosticsToolItem = {
+	severity: LspSeverity,
+	line: number,
+	column: number,
+	endLine: number,
+	endColumn: number,
+	message: string,
+	/**  진단 코드(`E0308` 등). */
+	code: string | null,
+	/**  진단을 낸 도구(`rustc` · `ts` 등 — 서버가 알린 것). */
+	source: string | null,
+	/**  낸 언어 서버 id(`servers[].server`). */
+	server: string,
+	/**  코드 설명 링크. */
+	codeHref: string | null,
+	/**  `unnecessary`(쓰이지 않는 코드) · `deprecated`. */
+	tags: LspDiagnosticTag[],
+	/**  관련된 다른 자리. */
+	related: DiagnosticsToolRelated[],
+};
+
+export type DiagnosticsToolParams = {
+	projectId: string,
+	/**  볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. */
+	worktree?: string | null,
+	/**  이 파일만. 절대 경로나 프로젝트 루트(워크트리면 그 안의 프로젝트 루트) 기준 상대 경로(`src/lib.rs`). */
+	path?: string | null,
+	/**  이 심각도와 그보다 심한 것만(`warning` 이면 오류 · 경고). */
+	minSeverity?: LspSeverity | null,
+	/**  앞 쪽의 `nextCursor`. 비면 처음부터. */
+	cursor?: string | null,
+	/**  한 쪽의 진단 수, 1 ~ 5000(기본 100). */
+	limit?: number | null,
+};
+
+/**  진단의 관련 정보. 줄 · 열은 1 부터. */
+export type DiagnosticsToolRelated = {
+	/**  파일이면 그 절대 경로. */
+	path: string | null,
+	/**  파일이 아니면(`path` 가 없으면) 서버가 준 URI. */
+	uri: string | null,
+	line: number,
+	column: number,
+	message: string,
+};
+
+export type DiagnosticsToolResult = {
+	/**
+	 *  이 프로젝트(워크트리)의 언어 서버 인스턴스와 상태 — 빈 목록이 「오류 없음」 인지 「서버가 아직 없다 · 준비 중이다」 인지 가른다.
+	 *  비어 있으면 띄운 서버가 없다(Pitwall 창에서 그 언어의 파일을 열면 뜬다). `state.kind` 가 `ready` 가 아니면 답하지 않는 중이고,
+	 *  `progress` 가 있으면 서버가 색인 · 검사 중이라 진단이 더 올 수 있다.
+	 */
+	servers: LspInstanceStatus[],
+	/**  경로 차례로 파일들. 파일 안은 심각도(오류 먼저) · 위치 차례. 한 파일의 진단이 두 쪽에 걸칠 수 있다. */
+	files: DiagnosticsToolFile[],
+	/**  다음 쪽을 부를 `cursor`. 마지막 쪽이면 `null`. */
+	nextCursor: string | null,
+	/**  서버가 진단을 쏟아부어 상한(파일당 1000 · 프로젝트 10만)에서 잘렸다 — 심한 것부터 남겼다. */
+	truncated: boolean,
+	/**  진단을 볼 수 없는 까닭(그러면 `files` 는 비어 있다). */
+	unavailable: DiagnosticsUnavailable | null,
+};
+
+/**  진단을 볼 수 없는 까닭. */
+export type DiagnosticsUnavailable = {
+	reason: DiagnosticsUnavailableReason,
+	/**  사람이 할 일을 담은 한 줄(영어). */
+	message: string,
+};
+
+export type DiagnosticsUnavailableReason = 
+/**  프로젝트를 신뢰하지 않아 언어 서버가 뜨지 않는다. */
+"untrusted";
 
 export type DiffFile = {
 	status: FileStatus,
@@ -7222,6 +7328,56 @@ export type SubscribeParams = {
 
 export type Subscribed = {
 	subscriptionId: number,
+};
+
+/**  맞는 심볼 하나. 줄 · 열은 1 부터, 열은 UTF-16 코드 단위. */
+export type SymbolSearchToolMatch = {
+	name: string,
+	kind: IndexSymbolKind,
+	/**  바깥 심볼의 이름(클래스 안 메서드의 클래스 등). */
+	container: string | null,
+	/**  파일의 절대 경로. */
+	path: string,
+	/**  프로젝트 루트 기준 상대 경로(`/` 구분). */
+	relative: string,
+	/**  언어 id(`rust` · `typescript` …). */
+	language: string,
+	/**  이름이 있는 줄 · 열. */
+	line: number,
+	column: number,
+	/**  정의 전체의 첫 줄 · 끝 줄. */
+	startLine: number,
+	endLine: number,
+};
+
+export type SymbolSearchToolParams = {
+	projectId: string,
+	/**  볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. */
+	worktree?: string | null,
+	/**
+	 *  찾을 것. 공백으로 가른 낱말이 모두 심볼 이름에 맞아야 한다(낱말마다 퍼지 — 글자가 그 차례로 들면 맞는다. 낱말에 대문자가
+	 *  있을 때만 대소문자를 가린다). 비면 경로 · 위치 차례로 모든 심볼. 256 자까지.
+	 */
+	query: string,
+	/**  이 종류만. 없으면 `impl` 을 뺀 모든 종류. */
+	kinds?: IndexSymbolKind[] | null,
+	/**  앞 쪽의 `nextCursor`. 비면 처음부터. */
+	cursor?: string | null,
+	/**  한 쪽의 심볼 수, 1 ~ 1000(기본 50). */
+	limit?: number | null,
+};
+
+export type SymbolSearchToolResult = {
+	/**  잘 맞는 차례(같으면 짧은 이름 · 경로 · 위치 차례). */
+	symbols: SymbolSearchToolMatch[],
+	/**  맞은 심볼 수(모든 쪽을 합친 것). */
+	matched: number,
+	/**  다음 쪽을 부를 `cursor`. 마지막 쪽이면 `null`. */
+	nextCursor: string | null,
+	/**  색인이 없어 찾지 않은 루트(절대 경로). 비어 있지 않으면 결과가 모자랄 수 있다 — `hint`. */
+	unindexed: string[],
+	/**  `unindexed` 가 있을 때 할 일(영어 한 줄). */
+	hint: string | null,
 };
 
 export type SyntaxCloseParams = {
