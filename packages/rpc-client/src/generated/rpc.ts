@@ -517,7 +517,7 @@ export type UnaryMethods = {
 	"git.tag.create": { params: GitTagCreateParams; result: GitTagResult };
 	/**
 	 * 파일 한 리비전(없으면 HEAD)의 줄 범위(`startLine` ~ `endLine`, 한 번에 500줄까지)를 마지막으로 바꾼 커밋 · 작성자 · 시각 ·
-	 * 제목. 범위가 파일 밖이거나 그 리비전에 파일이 없으면 invalid params.
+	 * 제목. 범위가 파일 밖이거나 그 리비전에 파일이 없으면 invalid params. 응답 크기 상한에 닿으면 `truncated` 와 `nextLine`.
 	 */
 	"git.tool.blame": { params: GitBlameToolParams; result: GitBlameToolResult };
 	/**
@@ -1185,7 +1185,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.stash.push": {"name":"git.stash.push","kind":"unary","tier":"write","roles":["owner"],"params":"GitStashPushParams","output":"GitStashPushResult","doc":" stash 를 만든다(`git stash push`) — 메시지 · untracked 포함을 고른다. 작업 트리 전체가 바뀌므로 미저장 문서를 먼저 확인한다.\n","mcp":null,"fileScope":false},
 	"git.status": {"name":"git.status","kind":"unary","tier":"read","roles":["owner"],"params":"GitStatusParams","output":"GitStatus","doc":" 작업 트리 상태(gix): HEAD↔index · index↔작업 트리 · untracked(파일마다) · 충돌 · 스테이징한 이름 바뀜. 경로는 저장소 작업\n 트리 기준(`/`). `paths` 를 주면 그 경로만 다시 본다. 저장소가 없으면 `workTree: null`. 큰 저장소의 전체 status 는 작업으로\n 돌고, 작업을 취소하면 cancelled 오류다.\n","mcp":null,"fileScope":false},
 	"git.tag.create": {"name":"git.tag.create","kind":"unary","tier":"write","roles":["owner"],"params":"GitTagCreateParams","output":"GitTagResult","doc":" 태그를 만든다(`git tag`, 메시지가 있으면 주석 태그).\n","mcp":null,"fileScope":false},
-	"git.tool.blame": {"name":"git.tool.blame","kind":"unary","tier":"read","roles":["owner"],"params":"GitBlameToolParams","output":"GitBlameToolResult","doc":" 파일 한 리비전(없으면 HEAD)의 줄 범위(`startLine` ~ `endLine`, 한 번에 500줄까지)를 마지막으로 바꾼 커밋 · 작성자 · 시각 ·\n 제목. 범위가 파일 밖이거나 그 리비전에 파일이 없으면 invalid params.\n","mcp":{"group":"git","name":"git_blame"},"fileScope":false},
+	"git.tool.blame": {"name":"git.tool.blame","kind":"unary","tier":"read","roles":["owner"],"params":"GitBlameToolParams","output":"GitBlameToolResult","doc":" 파일 한 리비전(없으면 HEAD)의 줄 범위(`startLine` ~ `endLine`, 한 번에 500줄까지)를 마지막으로 바꾼 커밋 · 작성자 · 시각 ·\n 제목. 범위가 파일 밖이거나 그 리비전에 파일이 없으면 invalid params. 응답 크기 상한에 닿으면 `truncated` 와 `nextLine`.\n","mcp":{"group":"git","name":"git_blame"},"fileScope":false},
 	"git.tool.branchList": {"name":"git.tool.branchList","kind":"unary","tier":"read","roles":["owner"],"params":"GitBranchListToolParams","output":"GitBranchListToolResult","doc":" 프로젝트 git 저장소의 로컬 · 원격 브랜치(이름 · 해시 · upstream 과 ahead/behind · HEAD 여부). 태그는 `includeTags`.\n","mcp":{"group":"git","name":"git_branch_list"},"fileScope":false},
 	"git.tool.diff": {"name":"git.tool.diff","kind":"unary","tier":"read","roles":["owner"],"params":"GitDiffToolParams","output":"GitDiffToolResult","doc":" 두 쪽(커밋 · index · 작업 트리)의 diff. 기본은 바뀐 파일 목록(상태 · 경로 · 더한 · 뺀 줄 수), `detail` 이나 `path` 를\n 주면 hunk 를 unified diff 로 싣는다. 응답 크기 상한에 닿으면 `truncated`. 저장소가 없으면 invalid params.\n","mcp":{"group":"git","name":"git_diff"},"fileScope":false},
 	"git.tool.log": {"name":"git.tool.log","kind":"unary","tier":"read","roles":["owner"],"params":"GitLogToolParams","output":"GitLogToolResult","doc":" 커밋 로그의 한 쪽: 커밋마다 해시 · 부모 · 작성자 · 작성 시각 · 제목 · 가리키는 ref(본문은 `detail`). 시작은 `branch`(없으면\n HEAD), 필터는 작성자 · 메시지 · 기간 · 경로. 저장소가 없거나 HEAD 에 아직 커밋이 없으면 빈 쪽이다.\n","mcp":{"group":"git","name":"git_log"},"fileScope":false},
@@ -3299,8 +3299,12 @@ export type GitBlameToolResult = {
 	engine: BlameEngine,
 	/**  파일 안에서 옮긴 줄을 원래 커밋으로 돌렸는가. */
 	moves: boolean,
-	/**  묻은 줄 범위를 덮는 범위들(줄 순서, 겹치지 않는다). */
+	/**  묻은 줄 범위를 덮는 범위들(줄 순서, 겹치지 않는다). `truncated` 면 앞쪽만. */
 	ranges: GitBlameToolRange[],
+	/**  응답 크기 상한에 닿아 `nextLine` 부터를 싣지 못했다 — `startLine` 을 그 줄로 다시 부른다. */
+	truncated: boolean,
+	/**  `truncated` 일 때 싣지 못한 첫 줄. 아니면 `null`. */
+	nextLine: number | null,
 };
 
 export type GitBlob = {

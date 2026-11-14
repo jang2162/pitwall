@@ -22989,7 +22989,7 @@
       "tier": "write"
     },
     "git.tool.blame": {
-      "description": "파일 한 리비전(없으면 HEAD)의 줄 범위(`startLine` ~ `endLine`, 한 번에 500줄까지)를 마지막으로 바꾼 커밋 · 작성자 · 시각 ·\n제목. 범위가 파일 밖이거나 그 리비전에 파일이 없으면 invalid params.",
+      "description": "파일 한 리비전(없으면 HEAD)의 줄 범위(`startLine` ~ `endLine`, 한 번에 500줄까지)를 마지막으로 바꾼 커밋 · 작성자 · 시각 ·\n제목. 범위가 파일 밖이거나 그 리비전에 파일이 없으면 invalid params. 응답 크기 상한에 닿으면 `truncated` 와 `nextLine`.",
       "kind": "unary",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -23125,12 +23125,25 @@
             "description": "파일 안에서 옮긴 줄을 원래 커밋으로 돌렸는가.",
             "type": "boolean"
           },
+          "nextLine": {
+            "description": "`truncated` 일 때 싣지 못한 첫 줄. 아니면 `null`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "ranges": {
-            "description": "묻은 줄 범위를 덮는 범위들(줄 순서, 겹치지 않는다).",
+            "description": "묻은 줄 범위를 덮는 범위들(줄 순서, 겹치지 않는다). `truncated` 면 앞쪽만.",
             "items": {
               "$ref": "#/$defs/GitBlameToolRange"
             },
             "type": "array"
+          },
+          "truncated": {
+            "description": "응답 크기 상한에 닿아 `nextLine` 부터를 싣지 못했다 — `startLine` 을 그 줄로 다시 부른다.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -23138,7 +23151,9 @@
           "lines",
           "engine",
           "moves",
-          "ranges"
+          "ranges",
+          "truncated",
+          "nextLine"
         ],
         "type": "object"
       },
