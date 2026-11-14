@@ -181,7 +181,7 @@ fn headless_mcp_serves_read_tools_over_clean_stdio() {
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(names, ["project_info", "project_list"]);
+    assert_eq!(names, ["project_info", "project_list", "settings_get"]);
 
     let list = mcp.call(
         3,

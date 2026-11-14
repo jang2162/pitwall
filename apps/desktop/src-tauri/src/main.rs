@@ -13,6 +13,7 @@ use pw_open_with::{HostParts, OpenWith};
 use pw_runtime::{LoginShell, Runtime, RuntimeHost};
 use tauri::Manager as _;
 
+mod agent_open;
 mod app_commands;
 mod cli;
 mod clipboard;
@@ -41,10 +42,9 @@ mod windows;
 /// 데스크톱 프로세스 안의 Host 의 id. 프론트엔드가 프로젝트 없이 연결할 때 이 id 로 고른다(src/App.tsx 의 `LOCAL_HOST`).
 const LOCAL_HOST_ID: &str = "local";
 
-/// 앱이 쓰는 LocalHost. 생성물과 등록된 메서드를 맞춰 보는 테스트도 이것을 쓴다.
-/// UI 언어(`i18n`)는 Host 를 만든 뒤 그 전역 설정을 붙인다.
-/// 파일 서비스(`fs`)는 Finder 드롭 들여오기(drop_import.rs)도 쓰므로 부르는 쪽이 만든다.
-/// git askpass(`askpass`)도 부르는 쪽이 만든다 — 주 인스턴스가 된 뒤(setup)에 그 소켓을 연다.
+/// 시험이 쓰는 앱의 LocalHost — [`local_host_with`] 에 여는 쪽이 붙지 않은 열기 요청 자리를 준 것이다(`project_open` 은 목록에
+/// 있고, 부르면 「앱이 아직 준비되지 않았다」 로 끝난다). 생성물과 등록된 메서드를 맞춰 보는 시험도 이것을 쓴다.
+#[cfg(test)]
 fn local_host(
     paths: AppPaths,
     diagnostics: Arc<Diagnostics>,
@@ -52,6 +52,31 @@ fn local_host(
     i18n: Arc<I18n>,
     fs: Arc<Fs>,
     askpass: pw_git::write::Askpass,
+) -> LocalHost {
+    local_host_with(
+        paths,
+        diagnostics,
+        extensions,
+        i18n,
+        fs,
+        askpass,
+        pw_core::open::OpenRequests::default(),
+    )
+}
+
+/// 앱이 쓰는 LocalHost.
+/// UI 언어(`i18n`)는 Host 를 만든 뒤 그 전역 설정을 붙인다.
+/// 파일 서비스(`fs`)는 Finder 드롭 들여오기(drop_import.rs)도 쓰므로 부르는 쪽이 만든다.
+/// git askpass(`askpass`)도 부르는 쪽이 만든다 — 주 인스턴스가 된 뒤(setup)에 그 소켓을 연다.
+/// 열기 요청 자리(`open_requests`, 에이전트의 `project_open`)도 부르는 쪽이 만든다 — 창을 여는 쪽(agent_open.rs)은 setup 에서 붙인다.
+fn local_host_with(
+    paths: AppPaths,
+    diagnostics: Arc<Diagnostics>,
+    extensions: Arc<Registry>,
+    i18n: Arc<I18n>,
+    fs: Arc<Fs>,
+    askpass: pw_git::write::Askpass,
+    open_requests: pw_core::open::OpenRequests,
 ) -> LocalHost {
     let methods = Arc::clone(&i18n);
     // 앱이 띄우는 프로세스의 환경. 로그인 셸은 처음 쓸 때 돈다 — 시작을 늦추지 않는다.
@@ -156,6 +181,7 @@ fn local_host(
     let db_session_methods = Arc::clone(&db_sessions);
     let host = LocalHost::builder(LOCAL_HOST_ID)
         .config(paths)
+        .open_requests(open_requests)
         .methods(move |router| pw_diag::methods::register(router, diagnostics))
         .methods(move |router| pw_ext::methods::register(router, extensions))
         .methods(move |router| pw_i18n::methods::register(router, methods))
@@ -511,13 +537,15 @@ fn main() {
     let i18n = i18n::init(&extensions);
     let fs = Arc::new(Fs::new());
     let askpass = pw_git::write::Askpass::default();
-    let host = Arc::new(local_host(
+    let open_requests = pw_core::open::OpenRequests::default();
+    let host = Arc::new(local_host_with(
         paths.clone(),
         Arc::clone(&diagnostics),
         extensions,
         Arc::clone(&i18n),
         Arc::clone(&fs),
         askpass.clone(),
+        open_requests.clone(),
     ));
     // 「활성 기능」은 지금 Host 가 처리하는 메서드의 모듈 이름이다. 확장 · 설정 기능이 들어오면 그것으로 바꾼다.
     diagnostics.set_features(
@@ -592,6 +620,10 @@ fn main() {
                 launch::invocation_from_env(),
             );
             perf::watch_parent(app.handle());
+            // 에이전트의 `project_open` 은 이제부터 창을 연다(앞으로 가져오지 않는다 — agent_open.rs).
+            open_requests.attach(Arc::new(agent_open::WindowOpener::new(
+                app.handle().clone(),
+            )));
             update::on_startup(app.handle(), auto_update);
             // 주 인스턴스만 MCP 소켓을 연다(떼어 띄우기 전의 프로세스 · 두 번째 실행은 여기 오지 않는다).
             #[cfg(unix)]

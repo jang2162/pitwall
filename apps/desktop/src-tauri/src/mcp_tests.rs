@@ -10,7 +10,7 @@
 //! 헤드리스 목록 단언은 앱 전용 툴(git — M5-05, DB — M5-06)이 생긴 뒤로 `mcp::services` 의 `routed_by` 를 가른다 — 빼면 헤드리스
 //! 목록에 앱 전용 툴이 섞여 [`mcp_tools_are_exactly_these`] 가 실패한다(M5-05 · M5-06 이 각각 빼 보고 확인했다).
 //!
-//! 툴 행의 왕복 시험은 하위 모듈에 둔다(`git` · `db` · `code` — 이 파일의 병합 충돌을 줄이려고).
+//! 툴 행의 왕복 시험은 하위 모듈에 둔다(`git` · `db` · `code` · `project` — 이 파일의 병합 충돌을 줄이려고).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -31,6 +31,7 @@ use crate::mcp;
 mod code;
 mod db;
 mod git;
+mod project;
 
 /// 앱 Host 가 내는 툴 전부. 이름순.
 const APP_TOOLS: &[&str] = &[
@@ -42,13 +43,16 @@ const APP_TOOLS: &[&str] = &[
     "git_diff",
     "git_log",
     "git_status",
+    "open_with_list",
     "project_info",
     "project_list",
+    "project_open",
+    "settings_get",
     "symbol_search",
 ];
 
 /// 헤드리스 Host(앱 없이 뜬 `pitwall mcp` · `pitwall tool`)가 내는 툴 — 코어 툴만(결정 M5-D3). [`APP_TOOLS`] 의 부분집합. 이름순.
-const HEADLESS_TOOLS: &[&str] = &["project_info", "project_list"];
+const HEADLESS_TOOLS: &[&str] = &["project_info", "project_list", "settings_get"];
 
 /// 프로젝트 툴 가운데 선택 입력 `worktree` 가 없어도 되는 것 — 체크아웃을 보지 않고 프로젝트 레코드만 읽는 툴. 받기만 하고 쓰지 않는
 /// 입력은 에이전트를 속이므로 달지 않는다(16-m5-plan 결정 M5-D15 의 예외, 메인 판정 2026-11-13). 툴마다 까닭을 적는다.

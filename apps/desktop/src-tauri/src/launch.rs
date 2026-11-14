@@ -170,6 +170,17 @@ pub fn open_project<R: Runtime>(
     project_id: &str,
     open: &ProjectOpen,
 ) -> Result<(), String> {
+    open_project_as(app, project_id, open, windows::Activation::Front).map(drop)
+}
+
+/// [`open_project`] 에 창 활성화([`windows::Activation`])를 고른 것. 에이전트의 `project_open`(agent_open.rs)이
+/// [`windows::Activation::Background`] 로 부른다. 돌려주는 `bool` 은 창을 새로 만들었는가.
+pub fn open_project_as<R: Runtime>(
+    app: &AppHandle<R>,
+    project_id: &str,
+    open: &ProjectOpen,
+    activation: windows::Activation,
+) -> Result<bool, String> {
     let launch = app.state::<Launch>();
     let registry = launch
         .registry
@@ -182,13 +193,20 @@ pub fn open_project<R: Runtime>(
     if let Some(ipc) = app.try_state::<crate::ipc::IpcState>() {
         ipc.bind_local_project(project_id);
     }
-    windows::open_project(app, project_id, &open).map_err(|e| e.to_string())?;
+    let (_, created) =
+        windows::open_project_as(app, project_id, &open, activation).map_err(|e| e.to_string())?;
     // 읽기 전용 레지스트리 등으로 기록하지 못해도 창은 열렸다.
     if let Err(e) = registry.mark_opened(project_id) {
         tracing::warn!(project_id, %e, "cannot record the project as opened");
     }
-    tracing::info!(project_id, ?open, "project window opened");
-    Ok(())
+    tracing::info!(
+        project_id,
+        ?open,
+        ?activation,
+        created,
+        "project window opened"
+    );
+    Ok(created)
 }
 
 fn request_find_project<R: Runtime>(app: &AppHandle<R>, request: FindProjectRequest) {

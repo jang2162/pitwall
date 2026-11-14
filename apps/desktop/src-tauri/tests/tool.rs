@@ -137,7 +137,11 @@ fn headless_tool_writes_only_results_to_stdout() {
         .lines()
         .map(|l| l.split_whitespace().next().unwrap())
         .collect();
-    assert_eq!(names, ["project_info", "project_list"], "{stdout}");
+    assert_eq!(
+        names,
+        ["project_info", "project_list", "settings_get"],
+        "{stdout}"
+    );
     for line in stdout.lines() {
         assert_eq!(line.split_whitespace().nth(1), Some("read"), "{line}");
     }

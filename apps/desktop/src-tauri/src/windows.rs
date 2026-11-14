@@ -245,21 +245,45 @@ pub async fn open_settings_window<R: Runtime>(app: AppHandle<R>) -> Result<(), S
     open_settings(&app).map(drop).map_err(|e| e.to_string())
 }
 
-/// 프로젝트 창을 연다. `open` 은 그 창의 [`PendingOpens`] 큐에 넣는다. 창이 이미 있으면 앞으로 가져오고
-/// [`PROJECT_OPEN_EVENT`] 로 알린다. 없으면 `?window=project&project=<id>` 창을 만든다(창은 마운트할 때 큐를 꺼낸다).
-/// 프로젝트가 레지스트리에 있는지는 부르는 쪽이 본다(`launch::open_project`).
+/// [`open_project_as`] 의 [`Activation::Front`]. 앱의 길은 `launch::open_project_as` 를 지난다 — 이것은 시험의 줄임이다.
+#[cfg(test)]
 pub fn open_project<R: Runtime>(
     app: &AppHandle<R>,
     project_id: &str,
     open: &ProjectOpen,
 ) -> tauri::Result<WebviewWindow<R>> {
+    open_project_as(app, project_id, open, Activation::Front).map(|(window, _)| window)
+}
+
+/// 창을 열 때 사람의 화면을 어떻게 다루나.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Activation {
+    /// 열린 창은 앞으로 가져오고 새 창은 포커스를 받는다 — 사람이 부른 열기(`pitwall <path>`, 웰컴 창, 프로젝트 스위처).
+    Front,
+    /// 앞으로 가져오지 않는다: 열린 창은 그대로 두고 큐에만 넣고, 새 창은 포커스 없이 만든다(macOS 는 `orderFront` 만 — 앱을
+    /// 활성화하지 않아 키보드 포커스는 사람이 쓰던 앱에 남는다). 에이전트의 `project_open`(16-m5-plan 결정 M5-D24).
+    Background,
+}
+
+/// 프로젝트 창을 연다. `open` 은 그 창의 [`PendingOpens`] 큐에 넣는다. 창이 이미 있으면 [`PROJECT_OPEN_EVENT`] 로 알린다
+/// ([`Activation::Front`] 면 앞으로 가져온다). 없으면 `?window=project&project=<id>` 창을 만든다(창은 마운트할 때 큐를 꺼낸다).
+/// 프로젝트가 레지스트리에 있는지는 부르는 쪽이 본다(`launch::open_project_as`). 돌려주는 `bool` 은 창을 새로 만들었는가.
+pub fn open_project_as<R: Runtime>(
+    app: &AppHandle<R>,
+    project_id: &str,
+    open: &ProjectOpen,
+    activation: Activation,
+) -> tauri::Result<(WebviewWindow<R>, bool)> {
     let label = project_label(project_id);
     let pending = app.state::<PendingOpens>();
     let _opening = pending
         .opening
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
-    let existing = focus(app, &label)?;
+    let existing = match activation {
+        Activation::Front => focus(app, &label)?,
+        Activation::Background => app.get_webview_window(&label),
+    };
     #[cfg(test)]
     tests::after_focus_check();
     if let Some(window) = existing {
@@ -267,17 +291,23 @@ pub fn open_project<R: Runtime>(
             pending.push(&label, open.clone());
             app.emit_to(EventTarget::webview_window(&label), PROJECT_OPEN_EVENT, ())?;
         }
-        return Ok(window);
+        return Ok((window, false));
     }
     pending.reset(&label, (!open.is_empty()).then(|| open.clone()));
     let mut query = vec![("project", project_id)];
     query.extend(crate::perf::project_query(app));
-    build_at(
+    let title = WindowKind::Project
+        .title(&localizer(app))
+        .unwrap_or_default();
+    build_titled(
         app,
         WindowKind::Project,
         &label,
         WindowKind::Project.url_with(&query),
+        &title,
+        activation == Activation::Front,
     )
+    .map(|window| (window, true))
 }
 
 const FILE_LABEL_PREFIX: &str = "file-";
@@ -368,6 +398,7 @@ pub fn open_file<R: Runtime>(
         &label,
         WindowKind::File.url_with(&[("path", &path)]),
         &file_window_title(file),
+        true,
     );
     if built.is_err() {
         windows.forget(&label);
@@ -414,7 +445,7 @@ fn build_at<R: Runtime>(
     url: WebviewUrl,
 ) -> tauri::Result<WebviewWindow<R>> {
     let title = kind.title(&localizer(app)).unwrap_or_default();
-    build_titled(app, kind, label, url, &title)
+    build_titled(app, kind, label, url, &title, true)
 }
 
 fn build_titled<R: Runtime>(
@@ -423,11 +454,17 @@ fn build_titled<R: Runtime>(
     label: &str,
     url: WebviewUrl,
     title: &str,
+    focused: bool,
 ) -> tauri::Result<WebviewWindow<R>> {
     let (width, height) = kind.inner_size();
+    #[cfg(test)]
+    tests::built(label, focused);
     let builder = WebviewWindowBuilder::new(app, label, url)
         .title(title)
         .inner_size(width, height)
+        // 끄면 창(과 웹뷰)이 포커스 없이 만들어진다 — tao 가 `makeKeyAndOrderFront` 대신 `orderFront` 만 부르고 앱을 활성화하지
+        // 않는다(macOS. Windows 는 활성화 없이 보이기). 켜면 기본값과 같다.
+        .focused(focused)
         // 웹뷰 설정으로 끌 수 있는 기본 동작은 여기서 끈다. 설정이 없는 것은 src/webview-guards.ts 가 막는다.
         // - 줌: Windows 는 WebView2 의 IsZoomControlEnabled·IsPinchZoomEnabled 가 꺼진다.
         //   macOS·Linux 는 true 일 때만 줌 폴리필을 넣고, WKWebView 의 핀치 확대(allowsMagnification)는 기본이 꺼짐이다.
@@ -451,7 +488,7 @@ fn build_titled<R: Runtime>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::{Arc, Condvar};
     use std::time::Duration;
 
@@ -474,12 +511,39 @@ mod tests {
         static FOCUSED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
     }
 
+    /// 모든 스레드에서 [`focus`] 가 앞으로 가져온 창의 label. 블로킹 스레드에서 창을 여는 길(에이전트의 `project_open`)을 보는
+    /// 시험이 쓴다 — 시험마다 다른 label 로 거른다(시험은 나란히 돈다).
+    static FOCUSED_ANYWHERE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    /// 모든 스레드에서 [`build_titled`] 가 만든 창의 label 과, 포커스를 받게 만들었는가. mock 런타임은 포커스를 기억하지 않는다.
+    static BUILT: Mutex<Vec<(String, bool)>> = Mutex::new(Vec::new());
+
     pub(super) fn focused(label: &str) {
         FOCUSED.with(|f| f.borrow_mut().push(label.to_owned()));
+        FOCUSED_ANYWHERE.lock().unwrap().push(label.to_owned());
     }
 
     fn take_focused() -> Vec<String> {
         FOCUSED.with(|f| std::mem::take(&mut *f.borrow_mut()))
+    }
+
+    /// 그 label 의 창을 앞으로 가져온 적이 있는가(어느 스레드에서든).
+    pub(crate) fn was_focused(label: &str) -> bool {
+        FOCUSED_ANYWHERE.lock().unwrap().iter().any(|l| l == label)
+    }
+
+    pub(super) fn built(label: &str, focused: bool) {
+        BUILT.lock().unwrap().push((label.to_owned(), focused));
+    }
+
+    /// 그 label 로 만든 창마다 포커스를 받게 만들었는가(만든 순서).
+    pub(crate) fn built_focus(label: &str) -> Vec<bool> {
+        BUILT
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(l, _)| l == label)
+            .map(|(_, focused)| *focused)
+            .collect()
     }
 
     #[test]
@@ -647,6 +711,51 @@ mod tests {
             [],
             "빈 요청은 큐에 넣지 않는다"
         );
+    }
+
+    /// 에이전트의 열기(결정 M5-D24): 새 창은 포커스 없이 만들고, 열린 창은 앞으로 가져오지 않고 큐에만 넣는다. 사람의 열기는
+    /// 포커스를 받는 창을 만든다.
+    #[test]
+    fn a_background_open_never_brings_a_window_forward() {
+        let app = app();
+        let (window, created) = open_project_as(
+            app.handle(),
+            "bg-aaaa",
+            &file("/p/a.rs", Some(1)),
+            Activation::Background,
+        )
+        .unwrap();
+        assert!(created);
+        assert_eq!(
+            built_focus("project-bg-aaaa"),
+            [false],
+            "포커스 없이 만든다"
+        );
+        let (again, created) = open_project_as(
+            app.handle(),
+            "bg-aaaa",
+            &file("/p/b.rs", Some(2)),
+            Activation::Background,
+        )
+        .unwrap();
+        assert!(!created);
+        assert_eq!(again.label(), window.label());
+        assert!(
+            !was_focused("project-bg-aaaa"),
+            "열린 창을 앞으로 가져오지 않는다"
+        );
+        assert_eq!(
+            built_focus("project-bg-aaaa"),
+            [false],
+            "새로 만들지 않았다"
+        );
+        assert_eq!(
+            take(app.handle(), &window),
+            [file("/p/a.rs", Some(1)), file("/p/b.rs", Some(2))]
+        );
+
+        open_project(app.handle(), "fg-aaaa", &ProjectOpen::default()).unwrap();
+        assert_eq!(built_focus("project-fg-aaaa"), [true]);
     }
 
     #[test]
