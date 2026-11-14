@@ -133,6 +133,18 @@
 | `symbol_search` | 워크스페이스 심볼 검색 | read |
 | `find_references` / `goto_definition` | 위치 기반 조회 — v1.0 전이다(M5 에 없다 — 06-roadmap.md 결정 D59) | read |
 
+**지금 구현**(16-m5-plan M5-08): 툴 메서드 둘 — `diagnostics` 는 `crates/pw-lsp/src/tools.rs`(`lsp.tool.diagnostics`), `symbol_search` 는 `crates/pw-index/src/tools.rs`(`index.tool.symbolSearch`). 둘 다 `read` · 그룹 `code` 이고 UI 의 RPC 와 같은 함수를 부른다. 앱의 Host 만 처리한다 — 헤드리스 `tools/list` 에는 없다(결정 M5-D3). 위치는 둘 다 줄 · 열 1 부터이고 열은 UTF-16 코드 단위다(밑의 RPC 는 LSP 와 같은 0 부터).
+
+| 툴 | 밑의 함수 | 입력(`projectId` · `worktree?` 말고) | 결과 |
+|---|---|---|---|
+| `diagnostics` | `lsp.diagnostics.list` 의 저장소(`DiagnosticStore::list`), 서버 요약은 `lsp.status.get` 의 함수(워크트리로 거른 것) | `path?`(절대 경로나 프로젝트 루트 기준 상대 경로) · `minSeverity?`(`error` · `warning` · `information` · `hint` — 그것과 더 심한 것) · `cursor?` · `limit?`(1~5000, 기본 100) | `servers`(인스턴스마다 서버 id · 루트 · 상태 · 진행 — 「오류 없음」 과 「서버가 아직 없다 · 준비 중 · 색인 중」 을 가른다), 경로 차례의 파일마다 진단(심각도 · 줄 · 열 · 끝 줄 · 끝 열 · 메시지 · 코드 · 출처 · 서버 · 설명 링크 · 꼬리표 · 관련 자리), `nextCursor`, 상한에 잘렸으면 `truncated`, 미신뢰면 빈 목록과 `unavailable`(`reason: "untrusted"`) |
+| `symbol_search` | `index.symbols.search`(`SymbolIndex::search`) | `query`(공백으로 가른 낱말마다 퍼지) · `kinds?`(없으면 `impl` 을 뺀 모든 종류) · `cursor?` · `limit?`(1~1000, 기본 50) | 잘 맞는 차례로 심볼마다 이름 · 종류 · 컨테이너 · 경로 · 상대 경로 · 언어 · 이름의 줄 · 열 · 정의의 첫 줄 · 끝 줄(화면용 일치 위치 · 점수는 뺀다), 맞은 수 `matched`, `nextCursor`, 색인이 없는 루트 `unindexed` 와 그때의 `hint`(「Pitwall 에서 프로젝트를 열어라」) |
+
+- **관문**: 둘 다 먼저 `agent_grant`(MCP 세션의 연결 범위 · 레지스트리에 있는 프로젝트)를 지난다. UI 의 `lsp.diagnostics.list` · `lsp.status.get` 은 그 프로젝트 창의 연결만 받는다(`exec_grant`) — 툴은 그 관문을 빌리지 않는다. 창 · Host 범위의 호출자는 `PERMISSION_DENIED`(`notAgentSession`), 없는 프로젝트는 그 관문의 invalid params 그대로다
+- **서버 · 색인을 만들지 않는다**(결정 M5-D18 · D52 — 미신뢰 · 창 범위 규칙): `diagnostics` 는 그 프로젝트 창이 띄운 언어 서버가 스스로 보낸 진단을 읽기만 한다. 창이 없으면 빈 서버 요약과 빈 목록이다. 열지 않은 파일 전체의 진단 수집은 없다(15-m4-plan.md 「M4 에서 하지 않는 것」) — 툴 설명에 그 한계를 적는다. 미신뢰 프로젝트는 서버가 뜨지 않으므로 빈 목록과 까닭이다. `symbol_search` 의 색인은 창이 `fs.watch` 로 보는 루트에만 있다 — 창이 없으면 `unindexed` 와 `hint` 다. 파싱만 하므로 미신뢰 프로젝트에서도 찾는다(15-m4-plan.md 결정 M4-D8)
+- **쪽**: 둘 다 툴 규약의 `cursor` · `limit` · `nextCursor` 다. `symbol_search` 의 커서는 불투명 글자이고 안에 다음 쪽의 시작 자리(`index.symbols.search` 의 `offset`)가 든다 — 입력에 `offset` 을 두지 않는다(16-m5-plan M5-08 ② 메인 판정 2026-11-14)
+- **응답 크기**: 툴은 결과 JSON 192 KiB(`pw_lsp::tools::RESPONSE_BUDGET` · `pw_index::tools::RESPONSE_BUDGET`, 세션 상한 256 KiB 아래) 안에서 끊고 그 자리부터 `nextCursor` 로 잇는다. `diagnostics` 는 서버만 되돌려 받는 값(`data`) · 받은 길 · 문서 버전을 싣지 않는다
+
 ### 외부 도구
 | 툴 | 설명 | 권한 |
 |---|---|---|
