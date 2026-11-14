@@ -1383,6 +1383,59 @@ mod tool {
         }
     }
 
+    /// 응답 예산(리뷰 F1): 심볼 하나가 무거우면(깊은 경로 · 긴 이름) `limit` 1000 보다 먼저 [`crate::tools::RESPONSE_BUDGET`] 에서
+    /// 끊고, 그 자리부터 다음 쪽이 빠짐 · 겹침 없이 이어진다.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_page_stops_at_the_response_budget_and_resumes_there() {
+        let f = Fixture::new();
+        let deep = format!("src/{}", ["deeply_nested_folder_name"; 6].join("/"));
+        let pad = "x".repeat(60);
+        let count = 1200;
+        let files: Vec<(String, String)> = (0..count / 100)
+            .map(|n| {
+                let text: String = (0..100)
+                    .map(|i| format!("pub fn budget_{:04}_{pad}() {{}}\n", n * 100 + i))
+                    .collect();
+                (format!("{deep}/f{n:02}.rs"), text)
+            })
+            .collect();
+        let files: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(p, t)| (p.as_str(), t.as_str()))
+            .collect();
+        let (id, _root, _lease) = indexed(&f, "heavy", &files).await;
+        let mut seen = Vec::new();
+        let mut cursor = Value::Null;
+        let mut sizes = Vec::new();
+        loop {
+            let page = call(
+                &f,
+                json!({ "projectId": id, "query": "budget", "limit": 1000, "cursor": cursor }),
+            )
+            .await
+            .unwrap();
+            let size = serde_json::to_vec(&page).unwrap().len();
+            assert!(size <= crate::tools::RESPONSE_BUDGET + 1024, "{size}");
+            sizes.push((page["symbols"].as_array().unwrap().len(), size));
+            seen.extend(found(&page).into_iter().map(|(n, _)| n));
+            cursor = page["nextCursor"].clone();
+            if cursor.is_null() {
+                break;
+            }
+            assert!(sizes.len() < 20, "{sizes:?}");
+        }
+        assert!(
+            sizes[0].0 < 1000,
+            "the budget never cut the first page: {sizes:?}"
+        );
+        let mut sorted = seen.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), seen.len(), "a symbol came twice: {sizes:?}");
+        let want: Vec<String> = (0..count).map(|i| format!("budget_{i:04}_{pad}")).collect();
+        assert_eq!(sorted, want);
+    }
+
     /// 관문은 `agent_grant` 다: 창 · Host 의 연결은 툴을 부르지 못하고(`notAgentSession`), 없는 프로젝트는 그 관문의 오류 그대로
     /// (invalid params).
     #[tokio::test(flavor = "multi_thread")]
