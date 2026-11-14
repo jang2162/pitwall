@@ -33,6 +33,11 @@ pub const MAX_DETAIL: usize = 512;
 /// 값을 지우는 키의 단어와 그 자리의 글. 정본은 `pw_core::secret` 이다(설정 조회 툴 `settings_get` 과 한 벌).
 pub use pw_core::secret::{REDACTED, SECRET_WORDS};
 
+/// 값 대신 글자 수만 남기는 「원문 키」의 단어(키를 camelCase · `_` · `-` 로 가른 단어 하나가 이것과 같으면, 소문자로 견준다). SQL
+/// 원문은 짧으면 리터럴 값까지 통째로 남으므로 남기지 않는다 — `db_query` · `db_execute` 는 감사 상세에 문장 해시를 따로 남긴다
+/// (16-m5-plan.md M5-07 리뷰 F1). 비밀 키이기도 하면 [`REDACTED`] 가 앞선다(글자 수도 남기지 않는다).
+pub const CONTENT_WORDS: &[&str] = &["sql"];
+
 /// 버전 `i` → `i + 1`.
 const MIGRATIONS: &[&str] = &["CREATE TABLE calls (
          id          INTEGER PRIMARY KEY,
@@ -216,8 +221,10 @@ fn insert(conn: &mut Connection, e: &Entry) -> rusqlite::Result<()> {
 ///
 /// 1. 키를 단어로 갈라(camelCase · `_` · `-`) [`SECRET_WORDS`] 의 단어가 있으면 값을 [`REDACTED`] 로 바꾼다(`apiKey`,
 ///    `db_password`, `authToken`). 값의 종류와 상관없이 통째로 바꾼다.
-/// 2. 글자열은 [`MAX_STRING`] 글자까지, 배열은 [`MAX_ITEMS`] 개까지(나머지는 개수만), 깊이는 [`MAX_DEPTH`] 까지.
-/// 3. 결과 JSON 이 [`MAX_SUMMARY`] 바이트를 넘으면 자르고 `…` 를 붙인다.
+/// 2. 비밀이 아닌 키 가운데 단어에 [`CONTENT_WORDS`] 가 있으면(`sql`) 값 대신 `[<글자 수> chars]` 를 남긴다(글자열이 아니면
+///    `[not shown]`).
+/// 3. 글자열은 [`MAX_STRING`] 글자까지, 배열은 [`MAX_ITEMS`] 개까지(나머지는 개수만), 깊이는 [`MAX_DEPTH`] 까지.
+/// 4. 결과 JSON 이 [`MAX_SUMMARY`] 바이트를 넘으면 자르고 `…` 를 붙인다.
 ///
 /// 키 이름으로 못 거르는 비밀(값 안의 토큰)은 남을 수 있다. 그래서 비밀을 인자로 받는 툴을 만들지 않는다는 설계 규칙
 /// (`db_connection_upsert` 는 비밀번호를 툴 인자로 받지 않는다)이 첫 번째 방어선이고, 이것은 두 번째다.
@@ -258,6 +265,11 @@ fn summarize_value(value: &Value, depth: usize) -> Value {
                 .map(|(k, v)| {
                     let v = if secret_key(k) {
                         Value::String(REDACTED.into())
+                    } else if content_key(k) {
+                        Value::String(match v {
+                            Value::String(text) => format!("[{} chars]", text.chars().count()),
+                            _ => "[not shown]".to_owned(),
+                        })
                     } else {
                         summarize_value(v, depth + 1)
                     };
@@ -267,6 +279,27 @@ fn summarize_value(value: &Value, depth: usize) -> Value {
         ),
         other => other.clone(),
     }
+}
+
+/// 키를 단어로 갈랐을 때(camelCase · 영숫자 아닌 글자) [`CONTENT_WORDS`] 의 단어가 있는가.
+fn content_key(key: &str) -> bool {
+    let mut words: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut previous_lower = false;
+    for c in key.chars() {
+        if !c.is_alphanumeric() {
+            words.extend((!current.is_empty()).then(|| std::mem::take(&mut current)));
+            previous_lower = false;
+            continue;
+        }
+        if c.is_uppercase() && previous_lower && !current.is_empty() {
+            words.push(std::mem::take(&mut current));
+        }
+        previous_lower = c.is_lowercase() || c.is_ascii_digit();
+        current.extend(c.to_lowercase());
+    }
+    words.extend((!current.is_empty()).then_some(current));
+    words.iter().any(|w| CONTENT_WORDS.contains(&w.as_str()))
 }
 
 fn truncate(s: &str) -> String {
@@ -317,6 +350,38 @@ mod tests {
                 "monkey": "banana",
             })
         );
+    }
+
+    /// 원문 키(`CONTENT_WORDS` — `sql`)는 짧아도 값 대신 글자 수만 남는다(16-m5-plan.md M5-07 리뷰 F1). 비밀 키이기도 하면
+    /// `[redacted]` 가 앞선다. 단어로 견준다 — `mysql` · `sqlite` 처럼 한 단어 안에 든 것은 아니다.
+    #[test]
+    fn content_keys_keep_only_their_length_and_secrets_win() {
+        let sql = "SELECT * FROM users WHERE ssn = '123-45-6789'";
+        let summary: Value = serde_json::from_str(&summarize(&json!({
+            "sql": sql,
+            "nested": {"rawSql": "x"},
+            "sql_lines": ["SELECT 1"],
+            "sqlToken": "secret-and-content",
+            "SQL_PASSWORD": "pw",
+            "mysql": "kept",
+            "sqlite": "kept",
+            "file": "queries/a.sql",
+        })))
+        .unwrap();
+        assert_eq!(
+            summary,
+            json!({
+                "sql": format!("[{} chars]", sql.chars().count()),
+                "nested": {"rawSql": "[1 chars]"},
+                "sql_lines": "[not shown]",
+                "sqlToken": REDACTED,
+                "SQL_PASSWORD": REDACTED,
+                "mysql": "kept",
+                "sqlite": "kept",
+                "file": "queries/a.sql",
+            })
+        );
+        assert!(!summarize(&json!({ "sql": sql })).contains("123-45-6789"));
     }
 
     #[test]

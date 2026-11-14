@@ -97,7 +97,8 @@ async fn db_tools_need_a_connection_the_user_opened_in_the_window() {
 
 /// `db_query`(16-m5-plan M5-07)를 진짜 세션으로: 그룹 `db` · 등급 `read`, 앱의 실 SQLite 로 `sql` · `file` 왕복(문장마다 결과
 /// 하나), 쓰기가 섞인 글은 `denied`(`permission_denied` — CLI 종료 3). 감사 행의 상세는 문장 수 · 등급 · 해시(`file` 이면 경로와
-/// 내용 해시)이고 SQL 원문의 문자열 리터럴은 감사 행 어디에도 없다 — 인자 요약은 글자열을 80자에서 자르므로 리터럴을 그 뒤에 둔다.
+/// 내용 해시)이고 SQL 원문의 문자열 리터럴은 감사 행 어디에도 없다 — 리터럴을 글 맨 앞(인자 요약의 80자 안)에 둬도 `sql` 은 원문 키라
+/// 글자 수만 남는다(리뷰 F1, `pw_mcp::audit::CONTENT_WORDS`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn db_query_runs_sql_and_files_and_audits_hashes_not_sql() {
     const { assert!(pw_db::script::RESPONSE_BUDGET < pw_mcp::server::MAX_RESPONSE_BYTES) };
@@ -127,8 +128,7 @@ async fn db_query_runs_sql_and_files_and_audits_hashes_not_sql() {
     .unwrap();
     let session = host.session(SessionRequest::default()).await;
     const LITERAL: &str = "literal-in-the-sql-5be1";
-    let padding = "x".repeat(100);
-    let sql = format!("SELECT '{padding}' AS pad; SELECT '{LITERAL}' AS v");
+    let sql = format!("SELECT 1 AS pad; SELECT '{LITERAL}' AS v");
     let ran = session
         .call(
             "db_query",
@@ -161,7 +161,7 @@ async fn db_query_runs_sql_and_files_and_audits_hashes_not_sql() {
         .call(
             "db_query",
             serde_json::json!({ "projectId": alpha, "connectionId": "lite",
-                                "sql": format!("SELECT '{padding}'; DELETE FROM t WHERE v = '{LITERAL}'") }),
+                                "sql": format!("SELECT 1; DELETE FROM t WHERE v = '{LITERAL}'") }),
         )
         .await;
     assert_eq!(refused.is_error, Some(true));
@@ -197,6 +197,11 @@ async fn db_query_runs_sql_and_files_and_audits_hashes_not_sql() {
     for row in &rows {
         let all = format!("{} {}", row.args, row.detail.clone().unwrap_or_default());
         assert!(!all.contains(LITERAL), "{all}");
+        assert!(
+            !row.args.contains("SELECT"),
+            "the SQL text is not in the argument summary: {}",
+            row.args
+        );
     }
     session.close().await;
 }
