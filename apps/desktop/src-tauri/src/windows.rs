@@ -464,6 +464,9 @@ fn build_titled<R: Runtime>(
         .inner_size(width, height)
         // 끄면 창(과 웹뷰)이 포커스 없이 만들어진다 — tao 가 `makeKeyAndOrderFront` 대신 `orderFront` 만 부르고 앱을 활성화하지
         // 않는다(macOS. Windows 는 활성화 없이 보이기). 켜면 기본값과 같다.
+        // **이 줄은 시험이 지키지 않는다** — mock 런타임은 포커스를 모르고, 시험(`tests::built_focus`)은 이 함수에 들어온 인자만
+        // 기록한다. `.focused(true)` 로 바꿔도 시험은 통과한다. 지키는 것은 손 확인이다(16-m5-plan M5-09 의 「손으로」 — 다른 앱이
+        // 앞에 있는 채 `pitwall tool project_open` 을 부르고 앞 앱이 그대로인지 본다).
         .focused(focused)
         // 웹뷰 설정으로 끌 수 있는 기본 동작은 여기서 끈다. 설정이 없는 것은 src/webview-guards.ts 가 막는다.
         // - 줌: Windows 는 WebView2 의 IsZoomControlEnabled·IsPinchZoomEnabled 가 꺼진다.

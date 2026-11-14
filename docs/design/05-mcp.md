@@ -51,7 +51,7 @@
 **지금 구현**(16-m5-plan M5-09):
 
 - `settings_get`(← 툴 메서드 `config.tool.get`, `crates/pw-core/src/config/tool.rs`, 코어 툴 — 헤드리스에도 있다): `{ projectId?, worktree?, key? }`. 부를 때마다 파일을 디스크에 쓰지 않고 새로 읽는다(`ConfigSource::without_writes` — 구버전 파일을 마이그레이션해 쓰거나 `.backup/` 을 만들지 않는다). `projectId` 가 없으면(`null`) 전역 설정, 있으면 전역 위에 그 프로젝트 설정(`project.toml` · `project.local.toml`)을 얹은 값이다 — 세션에 프로젝트가 있으면 키를 빼면 세션 프로젝트이므로 전역만 보려면 `null` 을 준다. 결과는 값 하나(테이블이 아닌 것)마다 점 키(`mcp.preset`, 점 · 공백이 든 키 이름은 큰따옴표) · 값 · 이긴 레이어(`builtin` · `global` · `shared` · `personal` — 개인 전용 프로젝트의 `project.toml` 은 `personal`) · 가렸는가와, 읽은 파일 목록이다. `key` 는 점 키 단위 접두로 좁힌다. 키 이름이 비밀을 가리키는 값은 `[redacted]` 로 가린다(`pw_core::secret` — 감사 로그 인자 요약과 같은 한 벌, 배열 안 테이블의 키까지). 그 밖의 값(실행 파일을 정하는 `[git] path` · `[open_with.tools]` · `[lsp.<id>]` 의 명령 포함)은 파일 그대로다 — 에이전트가 파일을 직접 읽는 것과 같은 범위(메인 판정 2026-11-14). 파일을 읽지 못하면 그 파일 경로만 알리고 파서의 오류 글(문제 줄의 값을 인용한다)은 싣지 않는다
-- `project_open`(← 툴 메서드 `project.tool.open`, `crates/pw-core/src/open.rs`, 앱 Host 만 — Host 를 만들 때 「열기 요청」 자리 `pw_core::open::OpenRequests` 를 받은 Host 에만 붙는다): `{ projectId, worktree?, path?, line?, column? }`. Host 가 관문(`agent_grant`) · 경로(프로젝트 루트 안 — 상대 경로는 루트 기준, 판정은 `fs.*` 와 같은 정규화로 심링크를 푼 실제 경로, 밖이면 invalid params) · 빈도를 보고, 데스크톱(`apps/desktop/src-tauri/src/agent_open.rs`)이 `pitwall <path>` 와 같은 길(창별 보류 큐 · `project://open`)로 연다 — 다른 점은 창을 앞으로 가져오지 않는 것이다. 새 창은 Tauri 의 `focused(false)` 로 만든다(macOS 는 tao 가 `makeKeyAndOrderFront` 대신 `orderFront` 만 부르고 앱을 활성화하지 않는다 — 키보드 포커스는 사람이 쓰던 앱에 남고, 창은 그 위에 보일 수 있다). 결과는 `openedIn`(`existingWindow` · `newWindow`)과 연 파일의 실제 경로. **빈도**: Host 연결(MCP 세션 하나, `pitwall tool` 호출 하나)마다 10초에 5번(`pw_core::open::RATE_LIMIT` · `RATE_WINDOW` — 출발값), 넘으면 `PERMISSION_DENIED`(`data.reason = "rateLimited"`, `retryAfterMs`) — 결과 표지 `rate_limited`. 세는 것은 여는 데까지 간 호출이다. 헤드리스에는 없어 CLI 는 `needs_app`(종료 3)으로 가른다
+- `project_open`(← 툴 메서드 `project.tool.open`, `crates/pw-core/src/open.rs`, 앱 Host 만 — Host 를 만들 때 「열기 요청」 자리 `pw_core::open::OpenRequests` 를 받은 Host 에만 붙는다): `{ projectId, worktree?, path?, line?, column? }`. Host 가 관문(`agent_grant`) · 경로(프로젝트 루트 안 — 상대 경로는 루트 기준, 판정은 `fs.*` 와 같은 정규화로 심링크를 푼 실제 경로, 밖이면 invalid params) · 빈도를 보고, 데스크톱(`apps/desktop/src-tauri/src/agent_open.rs`)이 `pitwall <path>` 와 같은 길(창별 보류 큐 · `project://open`)로 연다 — 다른 점은 창을 앞으로 가져오지 않는 것이다. 새 창은 Tauri 의 `focused(false)` 로 만든다(macOS 는 tao 가 `makeKeyAndOrderFront` 대신 `orderFront` 만 부르고 앱을 활성화하지 않는다 — 키보드 포커스는 사람이 쓰던 앱에 남고, 창은 그 위에 보일 수 있다). 결과는 `openedIn`(`existingWindow` · `newWindow`)과 연 파일의 실제 경로. **빈도**: Host 전체에 한 벌 — 그 Host 의 에이전트 호출(MCP 세션 · `pitwall tool` 전부)을 합쳐 10초에 5번(`pw_core::open::RATE_LIMIT` · `RATE_WINDOW` — 출발값), 넘으면 `PERMISSION_DENIED`(`data.reason = "rateLimited"`, `retryAfterMs`) — 결과 표지 `rate_limited`. 메인 판정 2026-11-14: Host 전체 한도, `pitwall tool` 이 호출마다 새 세션이라서(세션마다 세면 셸 반복 한 줄로 풀린다) — 세션별 한도는 따로 두지 않는다. 세는 것은 여는 데까지 간 호출이다(입력이 틀렸거나 앱이 아직 창을 열 수 없어 거절한 호출은 세지 않는다). 사람의 열기와 같이 최근 연 순서(레지스트리의 `opened_at`)를 갱신한다. 헤드리스에는 없어 CLI 는 `needs_app`(종료 3)으로 가른다
 
 ### 실행 구성 (M6 — 실행 기능과 함께 제공)
 | 툴 | 설명 | 권한 |
@@ -155,7 +155,7 @@
 |---|---|---|
 | `open_with_list` / `open_with_upsert` | 외부 도구 템플릿 관리 | read / write |
 
-`*` UI에 영향을 주지만 비파괴 → 승인 불필요. 창을 앞으로 가져오지 않는다 — 그 프로젝트 창이 열려 있으면 탭만 열고, 없으면 활성화하지 않고 만든다. 세션마다 호출 빈도를 묶는다(16-m5-plan 결정 M5-D24)
+`*` UI에 영향을 주지만 비파괴 → 승인 불필요. 창을 앞으로 가져오지 않는다 — 그 프로젝트 창이 열려 있으면 탭만 열고, 없으면 활성화하지 않고 만든다. Host 전체로 호출 빈도를 묶는다(16-m5-plan 결정 M5-D24 · 메인 판정 2026-11-14 — `pitwall tool` 이 호출마다 새 세션이라 세션마다 세지 않는다)
 
 **지금 구현**(16-m5-plan M5-09): `open_with_list`(← `openWith.list` 에 `mcp: true` — 이름 · 등급 · 입력 꼴이 이 표와 같다): 도구 id · 이름 · 기여한 확장 · 파일까지 여는가 · 설정 형식 오류와 기본 도구. 실행 명령은 싣지 않는다. 앱 Host 만(그룹 `open_with`). MCP 세션이 부르면 로그인 셸 환경을 미리 가져오지 않는다(창의 팝업만 곧 실행한다). `open_with_upsert` 는 아직 없다
 
@@ -204,7 +204,7 @@
   | `not_opened_by_user` | `denied` | 사람이 이번 앱 실행에서 Pitwall 의 DB 탐색기로 그 연결(같은 대상)을 연 적이 없다(`data.reason = "notOpenedByUser"`) | DB 툴의 관문(16-m5-plan M5-06 — 「DB」 의 「에이전트의 DB 연결」) |
   | `untrusted` | `denied` | 프로젝트를 신뢰하지 않았다(`data.reason = "untrusted"`) | DB 툴의 관문 |
   | `production_blocked` | `denied` | 프로덕션 표지가 있는 DB 대상이다(`data.reason = "productionBlocked"`) | DB 툴의 관문 |
-  | `rate_limited` | `denied` | 세션마다의 호출 빈도를 넘었다 — 잠시 뒤 다시 부른다(`data.reason = "rateLimited"`) | `project_open`(16-m5-plan M5-09 — 「프로젝트」 표 아래 「지금 구현」) |
+  | `rate_limited` | `denied` | Host 전체의 호출 빈도를 넘었다 — 잠시 뒤 다시 부른다(`data.reason = "rateLimited"`) | `project_open`(16-m5-plan M5-09 — 「프로젝트」 표 아래 「지금 구현」) |
 
   **툴의 Host RPC 가 `PERMISSION_DENIED` 로 답하면 결과는 `denied` 다**(메인 판정 — 16-m5-plan M5-06): 까닭은 `data.reason`(camelCase)을 위 표의 코드로 옮긴 것이고(대응은 `pw_mcp::marker::Reason::of_permission_denied` 한 곳), 모르거나 없으면 `permission_denied` 다. 거절 까닭을 더하는 행은 `Reason` 과 그 대응에 한 줄씩 더하고 이 표에 한 줄을 더한다. `PERMISSION_DENIED` 가 아닌 오류(비밀 · 확인이 필요하다는 DB 의 3101 · 3102 등)는 `error` 다. 까닭이 없는 `error` 는 툴(Host RPC)이 실패한 것이다
 - **응답 크기**: 툴 응답 한 건은 직렬화한 결과 JSON 256 KiB 까지(`pw_mcp::server::MAX_RESPONSE_BYTES`), 목록 툴의 `limit` 기본은 100(`DEFAULT_LIST_LIMIT` — `git_log` · `symbol_search` 50, `git_status` 200. 16-m5-plan 결정 M5-D34, 수는 출발값). 툴 메서드는 넘지 않게 자르고(`truncated` 와 다음 `cursor`), 그래도 넘은 응답은 세션이 결과 대신 「범위를 좁혀라」 오류(까닭 `too_large`)로 바꾼다. 재는 것은 Host RPC 의 결과 값이다 — object 결과는 `structuredContent` 와 `content` 의 텍스트로 두 번 실려 나가므로 클라이언트가 받는 글은 그 두 배를 넘을 수 있다. 감사 행은 결과 `error` 이고 크기 열에 넘은 크기를 남긴다
