@@ -163,27 +163,20 @@ fn headless_tool_writes_only_results_to_stdout() {
     );
 }
 
-/// 감사 로그의 툴 이름들(오래된 것부터). `want` 개가 될 때까지 기다린다 — 기록은 응답 뒤에 따로 끝난다.
-fn audit_tools(paths: &AppPaths, want: usize) -> Vec<String> {
+/// 감사 로그의 툴 이름들(오래된 것부터). 기다리지 않는다 — `pitwall tool` 은 세션의 감사 기록을 다 쓴 뒤에 끝나므로(`pw_mcp::serve`)
+/// 프로세스가 끝났으면 그 호출의 행은 이미 있다. 파일 · 표가 없으면(기록하던 중에 프로세스가 끝났다) 그 오류로 실패한다.
+fn audit_tools(paths: &AppPaths) -> Vec<String> {
     let file = paths.state.join("mcp").join("audit.db");
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let tools: Vec<String> = rusqlite::Connection::open_with_flags(
-            &file,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .ok()
-        .and_then(|conn| {
-            let mut stmt = conn.prepare("SELECT tool FROM calls ORDER BY id").ok()?;
-            let rows = stmt.query_map([], |r| r.get(0)).ok()?;
-            Some(rows.map(Result::unwrap).collect())
-        })
-        .unwrap_or_default();
-        if tools.len() >= want || Instant::now() > deadline {
-            return tools;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    let conn =
+        rusqlite::Connection::open_with_flags(&file, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+    let mut stmt = conn
+        .prepare("SELECT tool FROM calls ORDER BY id")
+        .unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+    stmt.query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
 }
 
 /// 앱이 있어야 하는 툴(git — 링크된 카탈로그에는 있고 헤드리스 Host 는 처리하지 않는다)을 앱 없이 부르면 부르지 않고 3 과
@@ -194,10 +187,11 @@ fn an_app_tool_without_the_app_is_refused_without_calling() {
     let (_tmp, dir, paths) = workspace();
     let alpha = dir.join("work").join("alpha");
 
-    // 감사 로그가 생기도록 먼저 코어 툴을 하나 부른다.
-    let (code, _, stderr) = tool(&dir, &["project_list"], &alpha);
+    // 감사 로그가 생기도록 먼저 코어 툴을 하나 부른다. 프로젝트 밖에서 부른다 — `serve` 가 감사 기록을 기다리지 않으면 프로세스가
+    // 쓰는 도중에 끝나 행 · 표가 없는데, 이 경합을 프로젝트 안에서 부를 때보다 자주 잡았다(되돌려 본 결과 — 경합이라 늘 잡지는 못한다).
+    let (code, _, stderr) = tool(&dir, &["project_list"], &dir);
     assert_eq!(code, Some(0), "stderr: {stderr}");
-    assert_eq!(audit_tools(&paths, 1), ["project_list"]);
+    assert_eq!(audit_tools(&paths), ["project_list"]);
 
     let (code, stdout, stderr) = tool(&dir, &["git_status"], &alpha);
     assert_eq!((code, stdout.as_str()), (Some(3), ""), "stderr: {stderr}");
@@ -206,8 +200,7 @@ fn an_app_tool_without_the_app_is_refused_without_calling() {
         "{stderr}"
     );
     // 부르지 않았다 — 거절도 서버가 하지 않았으니 감사 행이 늘지 않는다.
-    std::thread::sleep(Duration::from_millis(300));
-    assert_eq!(audit_tools(&paths, 2), ["project_list"]);
+    assert_eq!(audit_tools(&paths), ["project_list"]);
 }
 
 #[cfg(unix)]

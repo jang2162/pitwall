@@ -128,7 +128,10 @@ impl std::fmt::Display for ServeError {
 
 impl std::error::Error for ServeError {}
 
-/// 세션 하나를 끝까지 돌린다. 클라이언트가 끊거나 `cancel` 이 취소되면 끝난다.
+/// 세션 하나를 끝까지 돌린다. 클라이언트가 끊거나 `cancel` 이 취소되면 끝난다. 돌아오기 전에 그때까지 큐에 넣은 감사 기록이 다
+/// 쓰일 때까지 기다린다 — 쓰기 스레드([`audit_writer`])는 따로 돌아, 기다리지 않으면 세션 하나로 끝나는 프로세스(`pitwall tool` 의
+/// 헤드리스 세션)가 기록을 쓰는 도중에 끝나 행을 잃는다. 클라이언트가 응답을 받은 호출은 응답 전에 큐에 들어가므로 모두 쓰인다.
+/// 연결이 끊긴 뒤에도 도는 핸들러(05-mcp.md 「호출 취소」)의 기록은 이 기다림에 들지 않는다.
 pub async fn serve<R, W>(
     services: Arc<Services>,
     request: SessionRequest,
@@ -143,12 +146,14 @@ where
     let session_cancel = cancel.child_token();
     let _stop = session_cancel.clone().drop_guard();
     let session = Session::open(services, &request, session_cancel.clone()).await?;
+    let audit = session.inner.audit.clone();
     let running = session
         .serve_with_ct(io, session_cancel.clone())
         .await
         .map_err(|e| ServeError::Initialize(e.to_string()))?;
     let result = running.waiting().await;
     tracing::debug!(?result, "mcp session ended");
+    flush_audit(&audit).await;
     Ok(())
 }
 
@@ -175,20 +180,42 @@ struct Inner {
     cancel: CancellationToken,
     client_info: Mutex<Option<String>>,
     /// 감사 기록 큐([`audit_writer`]). 세션의 호출 순서대로 쓰인다.
-    audit: std::sync::mpsc::Sender<Entry>,
+    audit: std::sync::mpsc::Sender<AuditJob>,
+}
+
+/// 감사 쓰기 스레드가 받는 일.
+enum AuditJob {
+    Write(Entry),
+    /// 앞서 받은 기록을 다 썼으면 알린다([`flush_audit`]).
+    Flush(tokio::sync::oneshot::Sender<()>),
+}
+
+/// 지금까지 `audit` 에 넣은 기록이 다 쓰일 때까지 기다린다(큐는 차례대로 처리된다). 쓰기 스레드가 없으면 곧바로 돌아온다.
+async fn flush_audit(audit: &std::sync::mpsc::Sender<AuditJob>) {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    if audit.send(AuditJob::Flush(tx)).is_ok() {
+        let _ = rx.await;
+    }
 }
 
 /// 세션 하나의 감사 기록을 **받은 순서대로** 쓰는 스레드를 띄우고 그 큐를 돌려준다. 호출마다 `spawn_blocking` 으로 쓰면 blocking
 /// 풀의 스레드 배정과 잠금 획득 순서에 보장이 없어 행 순서(`id`)가 호출 순서와 갈린다. 응답은 큐에 넣기만 하고 기록을 기다리지
-/// 않는다. 세션이 끝나 큐의 송신 쪽이 모두 버려지면 남은 기록을 쓰고 스레드가 끝난다.
-fn audit_writer(log: Arc<AuditLog>, session: &str) -> std::sync::mpsc::Sender<Entry> {
-    let (tx, rx) = std::sync::mpsc::channel::<Entry>();
+/// 않는다 — 세션이 끝날 때 [`serve`] 가 [`flush_audit`] 로 기다린다. 큐의 송신 쪽이 모두 버려지면 남은 기록을 쓰고 스레드가 끝난다.
+fn audit_writer(log: Arc<AuditLog>, session: &str) -> std::sync::mpsc::Sender<AuditJob> {
+    let (tx, rx) = std::sync::mpsc::channel::<AuditJob>();
     let spawned = std::thread::Builder::new()
         .name("mcp-audit".to_owned())
         .spawn(move || {
-            for entry in rx {
-                if let Err(e) = log.record(&entry) {
-                    tracing::warn!(%e, tool = entry.tool, "cannot write the mcp audit log");
+            for job in rx {
+                match job {
+                    AuditJob::Write(entry) => {
+                        if let Err(e) = log.record(&entry) {
+                            tracing::warn!(%e, tool = entry.tool, "cannot write the mcp audit log");
+                        }
+                    }
+                    AuditJob::Flush(done) => {
+                        let _ = done.send(());
+                    }
                 }
             }
         });
@@ -580,8 +607,8 @@ impl Session {
             duration: started.elapsed(),
         };
         // 응답을 기다리게 하지 않는다 — 큐에 넣기만 한다. 기록 실패는 경고로만 남는다(audit 머리 주석).
-        if let Err(e) = self.inner.audit.send(entry) {
-            tracing::warn!(tool = e.0.tool, "cannot queue the mcp audit log entry");
+        if self.inner.audit.send(AuditJob::Write(entry)).is_err() {
+            tracing::warn!(tool, "cannot queue the mcp audit log entry");
         }
     }
 }
