@@ -22,7 +22,8 @@
 //! 없어 서버가 다시 보낼 때까지 `truncated` 로 남는다.
 //!
 //! **내보내기** — 이벤트 [`TOPIC_DIAGNOSTICS`](경로가 바뀔 때마다 그 경로의 모든 서버 진단 — 프로젝트 범위), RPC
-//! `lsp.diagnostics.list`(쪽 단위 · 입력 struct — M5 의 `diagnostics` 툴이 될 꼴, 결정 M4-D21 — `mcp: true` 는 달지 않는다) ·
+//! `lsp.diagnostics.list`(쪽 단위 · 입력 struct — 결정 M4-D21, `mcp` 는 달지 않는다. MCP 툴 `diagnostics` 는 같은 저장소를 읽는
+//! 툴 메서드다 — `crate::tools`, M5-08) ·
 //! `lsp.diagnostics.counts`. 위치는 LSP 그대로(줄 · UTF-16 열, 0 부터) — 웹뷰의 오프셋과 같은 단위다.
 //!
 //! **잠금 차례**: 저장소 잠금 → 관리자 잠금만 있다(관리자는 자기 잠금을 쥔 채 이 모듈을 부르지 않는다 — `on_synced` 의 받는 쪽은
@@ -205,7 +206,7 @@ pub struct LspDiagnosticsEvent {
     pub truncated: bool,
 }
 
-/// `lsp.diagnostics.list` 의 입력(M5 의 `diagnostics` 툴이 될 꼴 — 결정 M4-D21).
+/// `lsp.diagnostics.list` 의 입력(결정 M4-D21 — MCP 툴 `diagnostics` 의 입력은 `crate::tools::DiagnosticsToolParams`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LspDiagnosticsListParams {
@@ -418,7 +419,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// 워크트리 글을 견줄 꼴로(끝의 `/` 를 뗀다).
-fn normalize_worktree(worktree: Option<&str>) -> Option<String> {
+pub(crate) fn normalize_worktree(worktree: Option<&str>) -> Option<String> {
     worktree.map(|w| {
         let trimmed = w.trim_end_matches('/');
         if trimmed.is_empty() { w } else { trimmed }.to_owned()
@@ -426,7 +427,7 @@ fn normalize_worktree(worktree: Option<&str>) -> Option<String> {
 }
 
 /// 경로의 `.` · `..` 를 글자로 접는다(디스크를 보지 않는다 — 링크는 풀지 않는다).
-fn lexical(path: &Path) -> PathBuf {
+pub(crate) fn lexical(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {
@@ -1087,8 +1088,7 @@ impl DiagnosticStore {
         let (after_path, skip) = match &params.cursor {
             None => (None, 0),
             Some(cursor) => {
-                let (path, skip): (String, usize) = serde_json::from_str(cursor)
-                    .map_err(|_| RpcError::invalid_params("unreadable cursor"))?;
+                let (path, skip) = parse_list_cursor(cursor)?;
                 (Some(path), skip)
             }
         };
@@ -1108,6 +1108,8 @@ impl DiagnosticStore {
         let mut files = Vec::new();
         let mut taken = 0;
         let mut next_cursor = None;
+        // 쪽이 파일 끝에서 딱 찼을 때 그 자리 — 뒤에 실을 파일이 있으면 다음 쪽의 커서가 된다.
+        let mut full = None;
         let start = after_path
             .clone()
             .map_or(std::ops::Bound::Unbounded, std::ops::Bound::Included);
@@ -1132,6 +1134,11 @@ impl DiagnosticStore {
             if from >= items.len() && !(from == 0 && truncated) {
                 continue;
             }
+            // 앞 파일까지 쪽이 찼다 — 실을 것이 남아 있을 때만 다음 쪽이 있다(마지막 쪽의 커서는 없다).
+            if taken == limit {
+                next_cursor = full;
+                break;
+            }
             let room = limit - taken;
             let end = (from + room).min(items.len());
             taken += end - from;
@@ -1141,12 +1148,11 @@ impl DiagnosticStore {
                 truncated,
             });
             if end < items.len() {
-                next_cursor = Some(serde_json::to_string(&(path, end)).unwrap_or_default());
+                next_cursor = Some(list_cursor(path, end));
                 break;
             }
             if taken == limit {
-                next_cursor = Some(serde_json::to_string(&(path, end)).unwrap_or_default());
-                break;
+                full = Some(list_cursor(path, end));
             }
         }
         Ok(LspDiagnosticsList {
@@ -1202,6 +1208,16 @@ impl DiagnosticStore {
             })
             .unwrap_or_default()
     }
+}
+
+/// `lsp.diagnostics.list` 의 커서: 경로와 그 파일의 (거른 뒤) 진단 목록에서 다음 쪽이 시작할 자리.
+pub(crate) fn list_cursor(path: &str, index: usize) -> String {
+    serde_json::to_string(&(path, index)).unwrap_or_default()
+}
+
+/// [`list_cursor`] 를 푼다. 못 읽으면 invalid params.
+pub(crate) fn parse_list_cursor(cursor: &str) -> Result<(String, usize), RpcError> {
+    serde_json::from_str(cursor).map_err(|_| RpcError::invalid_params("unreadable cursor"))
 }
 
 /// 다듬은 진단 → LSP `Diagnostic`(코드 액션 요청의 문맥 — M4-12. 웹뷰의 `lspDiagnostic` 과 같은 꼴).
