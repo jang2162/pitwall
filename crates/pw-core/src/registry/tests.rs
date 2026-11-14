@@ -1157,6 +1157,13 @@ fn a_worktree_project_follows_the_main_repository_trust() {
         main_project.id
     );
     assert_eq!(f.registry.trust(&other.id).unwrap().owner_id, other.id);
+    // 같은 판정을 공개 함수로 묻는다(에이전트의 DB 관문이 메인 체크아웃의 연결 설정을 읽는다 — 16-m5-plan 결정 M5-D37).
+    let main_of = |id: &str| f.registry.main_repository_of(id).unwrap().map(|p| p.id);
+    assert_eq!(main_of(&wt_project.id), Some(main_project.id.clone()));
+    assert_eq!(main_of(&wt_sub.id), Some(main_project.id.clone()));
+    assert_eq!(main_of(&main_project.id), None);
+    assert_eq!(main_of(&other.id), None);
+    assert!(f.registry.main_repository_of("nope").is_err());
 
     // 워크트리 창이 먼저 물었으면 메인 창은 묻지 않는다.
     assert!(f.registry.claim_trust_prompt(&wt_project.id).unwrap());
@@ -1195,6 +1202,7 @@ fn a_worktree_project_without_its_main_repository_owns_its_trust() {
         f.registry.trust(&wt_project.id).unwrap().owner_id,
         wt_project.id
     );
+    assert_eq!(f.registry.main_repository_of(&wt_project.id).unwrap(), None);
     f.registry.set_trust(&wt_project.id, true).unwrap();
     assert!(f.registry.is_trusted(&wt_project.id));
 }

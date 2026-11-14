@@ -137,6 +137,18 @@ impl Registry {
             .collect())
     }
 
+    /// `id` 가 연결 워크트리를 따로 등록한 프로젝트면 그 저장소의 메인 체크아웃 쪽 등록 프로젝트 — 신뢰가 따르는 프로젝트(
+    /// [`Self::set_trust`] 가 쓰는 행의 주인)다. 아니면 `None`. 에이전트의 DB 관문이 「그 저장소의 메인 체크아웃」 의 연결 설정을
+    /// 읽는 데 쓴다(16-m5-plan.md 결정 M5-D37). 워크트리 판정은 디스크(`.git` 파일)를 읽는다.
+    pub fn main_repository_of(&self, id: &str) -> Result<Option<Project>, RegistryError> {
+        let projects = self.read(|conn| load(conn, None))?;
+        let project = projects
+            .iter()
+            .find(|p| p.id == id)
+            .ok_or_else(|| RegistryError::NotFound(id.to_owned()))?;
+        Ok(main_repository_project(project, &projects).cloned())
+    }
+
     /// 신뢰를 가진 프로젝트의 id. 워크트리 판정은 디스크(`.git` 파일)를 읽으므로 DB 잠금 밖에서 한다.
     fn trust_owner(&self, id: &str) -> Result<String, RegistryError> {
         let projects = self.read(|conn| load(conn, None))?;
