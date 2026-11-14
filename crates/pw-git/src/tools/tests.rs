@@ -612,3 +612,202 @@ async fn untrusted_projects_run_no_process_through_the_tools() {
     assert_eq!(got.engine, BlameEngine::Git);
     assert!(marks(&marks_dir).contains(&"git".to_owned()));
 }
+
+/// 예산으로 끊는 길(결정 M5-D34): 잘린 쪽은 예산 안이고, 끊은 자리의 다음 표지로 이어 부르면 빠짐 · 겹침 없이 전부가 온다.
+fn within_budget(value: &impl Serialize) {
+    let size = serde_json::to_vec(value).unwrap().len();
+    assert!(size <= RESPONSE_BUDGET + 1024, "{size}");
+}
+
+/// `detail` 의 긴 본문으로 쪽이 예산에 닿으면 그 쪽의 마지막 커밋이 커서다 — 엔진의 커서(`limit` 개 뒤)를 그대로 내면 뒤 커밋이
+/// 조용히 빠진다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn git_log_cut_at_the_budget_continues_from_the_last_commit_it_sent() {
+    let r = TestRepo::new();
+    let body = "b".repeat(15_000);
+    for i in 0..30 {
+        r.git(&[
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            &format!("c{i}"),
+            "-m",
+            &body,
+        ]);
+    }
+    let t = Tools::new("");
+    let id = t.fx.project(r.root());
+    let mut cursor = Value::Null;
+    let mut sizes = Vec::new();
+    let mut seen = Vec::new();
+    loop {
+        let page: Value = t
+            .call(
+                "git.tool.log",
+                json!({"projectId": id, "detail": true, "limit": 50, "cursor": cursor}),
+            )
+            .await
+            .unwrap();
+        within_budget(&page);
+        let page: GitLogToolResult = serde_json::from_value(page).unwrap();
+        sizes.push(page.commits.len());
+        seen.extend(page.commits.iter().map(|c| c.subject.clone()));
+        assert!(
+            page.commits
+                .iter()
+                .all(|c| c.body.as_deref() == Some(body.as_str()))
+        );
+        match page.next_cursor {
+            Some(c) => {
+                assert_eq!(Some(&c), page.commits.last().map(|c| &c.hash));
+                cursor = json!(c);
+            }
+            None => break,
+        }
+    }
+    assert!(
+        sizes.len() > 1 && sizes[0] < 30,
+        "the budget cut the page: {sizes:?}"
+    );
+    let expected: Vec<String> = (0..30).rev().map(|i| format!("c{i}")).collect();
+    assert_eq!(seen, expected);
+}
+
+/// 긴 경로의 파일이 많으면 `limit` 전에 예산에서 끊기고, 커서로 이어 부르면 전부가 한 번씩 온다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn git_status_cut_at_the_budget_continues_by_cursor() {
+    let r = TestRepo::with_commit();
+    let dir = format!("{}/{}", "d".repeat(240), "e".repeat(240));
+    let names: Vec<String> = (0..300)
+        .map(|i| format!("{dir}/{i:03}{}", "f".repeat(240)))
+        .collect();
+    for name in &names {
+        r.write(name, "x\n");
+    }
+    let t = Tools::new("");
+    let id = t.fx.project(r.root());
+    let mut cursor = Value::Null;
+    let mut sizes = Vec::new();
+    let mut seen = Vec::new();
+    loop {
+        let page: Value = t
+            .call(
+                "git.tool.status",
+                json!({"projectId": id, "limit": 1000, "cursor": cursor}),
+            )
+            .await
+            .unwrap();
+        within_budget(&page);
+        let page: GitStatusToolResult = serde_json::from_value(page).unwrap();
+        assert_eq!(page.summary.untracked, 300);
+        sizes.push(page.files.len());
+        seen.extend(page.files.into_iter().map(|f| f.path));
+        match page.next_cursor {
+            Some(c) => {
+                assert_eq!(Some(&c), seen.last());
+                cursor = json!(c);
+            }
+            None => break,
+        }
+    }
+    assert!(
+        sizes.len() > 1 && sizes[0] < 300,
+        "the budget cut the page: {sizes:?}"
+    );
+    assert_eq!(seen, names);
+}
+
+/// 브랜치가 많으면 예산 안의 앞쪽만 싣고 `truncated` — 뒤의 목록(태그)도 싣지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn git_branch_list_cut_at_the_budget_says_truncated() {
+    use std::io::Write as _;
+
+    let r = TestRepo::with_commit();
+    let head = r.head();
+    let mut update = r
+        .command_in(r.root())
+        .args(["update-ref", "--stdin"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = update.stdin.take().unwrap();
+    for i in 0..600 {
+        writeln!(stdin, "create refs/heads/{i:03}{} {head}", "n".repeat(180)).unwrap();
+    }
+    drop(stdin);
+    assert!(update.wait().unwrap().success());
+    r.git(&["tag", "v1"]);
+    let t = Tools::new("");
+    let id = t.fx.project(r.root());
+    let got: Value = t
+        .call(
+            "git.tool.branchList",
+            json!({"projectId": id, "includeTags": true}),
+        )
+        .await
+        .unwrap();
+    within_budget(&got);
+    let got: GitBranchListToolResult = serde_json::from_value(got).unwrap();
+    assert!(got.truncated);
+    assert!(
+        (1..600).contains(&got.branches.len()),
+        "{}",
+        got.branches.len()
+    );
+    assert_eq!(
+        got.tags,
+        Some(Vec::new()),
+        "a cut list carries nothing after it"
+    );
+}
+
+/// 줄마다 다른 커밋(긴 제목)이면 500줄 안에서도 예산에 닿는다 — 앞쪽만 싣고 `truncated` · `nextLine`, 그 줄부터 이어 부르면
+/// 빈틈없이 덮는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn git_blame_cut_at_the_budget_says_where_to_continue() {
+    const LINES: u32 = 200;
+    let r = TestRepo::new();
+    let mut lines: Vec<String> = (0..LINES).map(|i| format!("line {i}")).collect();
+    let text = |lines: &[String]| lines.iter().map(|l| format!("{l}\n")).collect::<String>();
+    r.commit_file("f.txt", &text(&lines), "add");
+    for i in 0..LINES as usize {
+        lines[i] = format!("changed {i}");
+        r.write("f.txt", &text(&lines));
+        r.git(&[
+            "commit",
+            "--quiet",
+            "-am",
+            &format!("{i:03} {}", "s".repeat(1000)),
+        ]);
+    }
+    let t = Tools::new("");
+    let id = t.fx.project(r.root());
+    let mut start = 1;
+    let mut covered = Vec::new();
+    let mut calls = 0;
+    loop {
+        calls += 1;
+        let got: Value = t
+            .call(
+                "git.tool.blame",
+                json!({"projectId": id, "path": "f.txt", "startLine": start, "endLine": LINES}),
+            )
+            .await
+            .unwrap();
+        within_budget(&got);
+        let got: GitBlameToolResult = serde_json::from_value(got).unwrap();
+        covered.extend(got.ranges.iter().map(|r| (r.start_line, r.end_line)));
+        assert_eq!(got.truncated, got.next_line.is_some());
+        match got.next_line {
+            Some(next) => {
+                assert_eq!(next, got.ranges.last().unwrap().end_line + 1);
+                start = next;
+            }
+            None => break,
+        }
+    }
+    assert!(calls > 1, "the budget cut the answer");
+    let expected: Vec<(u32, u32)> = (1..=LINES).map(|l| (l, l)).collect();
+    assert_eq!(covered, expected);
+}
