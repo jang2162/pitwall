@@ -763,3 +763,302 @@ async fn choosing_a_production_database_through_another_connection_is_refused() 
         "productionBlocked",
     );
 }
+
+// --- 리뷰 반영(M5-06 리뷰): 관문 우회 둘과 기록 · 재확인 자리의 구분력 -----------------------------------------------------
+
+const MY_PROD: &str = "schema = 1\nname = \"prod\"\ndriver = \"mysql\"\nhost = \"db.example\"\ndatabase = \"prod_db\"\nuser = \"root\"\nproduction = true\n";
+const MY_DEV: &str = "schema = 1\nname = \"dev\"\ndriver = \"mysql\"\nhost = \"db.example\"\ndatabase = \"dev_db\"\nuser = \"root\"\n";
+
+/// MySQL 계열 가짜 드라이버(스키마 단계 없음, 한 연결로 여러 DB)를 둔 Host.
+fn mysql_env() -> (Fixture, FakeDriver) {
+    let caps = Capabilities {
+        schemas: false,
+        ..FakeDriver::full_capabilities()
+    };
+    let my = FakeDriver::named_with("mysql", SqlDialect::Mysql, caps);
+    let mut drivers = pw_db::DriverRegistry::new();
+    drivers.register(Arc::new(my.clone())).unwrap();
+    let f = Fixture::build(true, |router, connections| {
+        pw_db::register(
+            router,
+            Arc::new(DbSessions::new(Arc::clone(connections), drivers)),
+        );
+    });
+    my.set_objects(vec![table("users")]);
+    (f, my)
+}
+
+/// MySQL · MariaDB 는 표지의 열쇠에서 DB 이름을 뺀다(결정 M5-D37 — 메인 판정): 같은 서버 · 같은 사용자의 다른 DB 가 프로덕션이면
+/// 사람이 연 dev 연결도 거절된다 — `database` 로 고르든, `object` 의 점 이름(`prod_db.users`)으로 고르든, DDL 이든. 사용자가 다르면
+/// 다른 대상이다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn on_mysql_a_production_database_marks_the_whole_server_for_that_user() {
+    let (f, _my) = mysql_env();
+    f.write_db("prod.toml", MY_PROD);
+    f.write_db("dev.toml", MY_DEV);
+    f.write_db(
+        "other.toml",
+        &MY_DEV
+            .replace("name = \"dev\"", "name = \"other\"")
+            .replace("user = \"root\"", "user = \"reader\""),
+    );
+    let mut w = f.window();
+    for id in ["dev", "other"] {
+        w.call(
+            "db.schema.objects",
+            json!({ "projectId": f.id, "connectionId": id, "kind": "table", "limit": 10 }),
+        )
+        .await
+        .unwrap();
+    }
+    let mut agent = f.connect(ConnectionScope::Agent);
+    let mut dev = |extra: Value| {
+        let mut params = json!({ "projectId": f.id, "connectionId": "dev" });
+        params
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        params
+    };
+    // 이 호출이 실제로 읽을 DB 를 모두 관문에 넘긴다 — `object` 의 점 이름에서 나온 DB 도(리뷰가 재현한 우회 둘).
+    refused(
+        agent
+            .call("db.tool.schema", dev(json!({ "object": "prod_db.users" })))
+            .await,
+        "productionBlocked",
+    );
+    refused(
+        agent
+            .call(
+                "db.tool.schema",
+                dev(json!({ "object": "prod_db.users", "detail": "ddl" })),
+            )
+            .await,
+        "productionBlocked",
+    );
+    refused(
+        agent
+            .call(
+                "db.tool.schema",
+                dev(json!({ "database": "prod_db", "object": "users" })),
+            )
+            .await,
+        "productionBlocked",
+    );
+    // 서버 단위 표지 — dev 의 DB 만 읽어도 거절된다.
+    refused(
+        agent.call("db.tool.schema", dev(json!({}))).await,
+        "productionBlocked",
+    );
+    let list = agent
+        .call("db.tool.connectionList", json!({ "projectId": f.id }))
+        .await
+        .unwrap();
+    assert_eq!(entry(&list, "dev")["production"], true);
+    agent
+        .call(
+            "db.tool.schema",
+            json!({ "projectId": f.id, "connectionId": "other" }),
+        )
+        .await
+        .unwrap();
+}
+
+/// 연결 워크트리를 따로 등록한 프로젝트에서도 「그 저장소의 메인 체크아웃」(신뢰가 따르는 메인 저장소 프로젝트의 주 루트)의 연결
+/// 설정을 읽어 표지를 더한다 — 메인의 프로덕션 대상을 워크트리의 표지 없는 새 연결로 가리키면 거절되고 목록이 프로덕션으로 보인다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_registered_worktree_project_reads_the_main_repository_marks() {
+    let e = env(true);
+    e.f.write_db("prod.toml", PROD);
+    let wt = fake_worktree(&e.f.root, &e.f.base.join("p1-wt"));
+    std::fs::create_dir_all(wt.join(".pitwall/db")).unwrap();
+    std::fs::write(wt.join(".pitwall/db/sneaky.toml"), SNEAKY).unwrap();
+    let wt_id =
+        e.f.projects
+            .create(pw_core::registry::NewProject {
+                root: wt.clone(),
+                ..pw_core::registry::NewProject::default()
+            })
+            .unwrap()
+            .id;
+    assert!(
+        e.f.projects.is_trusted(&wt_id),
+        "trust follows the main repository"
+    );
+    let mut w = e.f.connect(ConnectionScope::Project(wt_id.clone()));
+    w.call(
+        "db.schema.objects",
+        json!({ "projectId": wt_id, "connectionId": "sneaky", "kind": "table", "limit": 10 }),
+    )
+    .await
+    .unwrap();
+    let mut agent = e.agent();
+    let list = agent
+        .call("db.tool.connectionList", json!({ "projectId": wt_id }))
+        .await
+        .unwrap();
+    assert_eq!(entry(&list, "sneaky")["production"], true);
+    refused(
+        agent
+            .call(
+                "db.tool.schema",
+                json!({ "projectId": wt_id, "connectionId": "sneaky" }),
+            )
+            .await,
+        "productionBlocked",
+    );
+}
+
+/// (C) 판정과 열기 사이에 연결 설정의 대상을 바꾸면 열지 않는다: `object` 는 메타데이터를 세 번 읽는다 — 첫 읽기를 붙잡은 사이 설정을
+/// 다른 대상으로 바꾸면 그 호출은 `notOpenedByUser` 로 끝나고 새 대상으로는 연결이 가지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_target_changed_between_the_gate_and_the_open_is_not_opened() {
+    let e = env(true);
+    e.human_opens("dev", None).await;
+    let mut agent = e.agent();
+    e.pg.hold_metadata(true);
+    agent.session.handle_value(json!({
+        "jsonrpc": "2.0", "id": 900, "method": "db.tool.schema",
+        "params": { "projectId": e.f.id, "connectionId": "dev", "object": "public.users" },
+    }));
+    for _ in 0..500 {
+        if e.pg.count(&FakeCall::Metadata("columns")) == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(e.pg.count(&FakeCall::Metadata("columns")), 1, "held");
+    e.f.edit_db("dev.toml", "localhost", "elsewhere.example");
+    e.pg.hold_metadata(false);
+    refused(agent.response(900).await, "notOpenedByUser");
+    assert!(
+        e.pg.connect_specs()
+            .iter()
+            .all(|s| !format!("{:?}", s.target).contains("elsewhere.example")),
+        "no connection to the new target"
+    );
+}
+
+/// (F) 저장 전 초안의 연결 테스트는 「사람이 연 연결」 로 세지 않는다 — 초안의 대상으로 파일을 고쳐도 `notOpenedByUser`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_draft_connection_test_is_not_an_open() {
+    let e = env(true);
+    let mut w = e.f.window();
+    w.call(
+        "db.connection.test",
+        json!({ "projectId": e.f.id, "connectionId": "dev",
+                "draft": { "name": "dev", "driver": "postgres", "host": "draft.example", "database": "app" } }),
+    )
+    .await
+    .unwrap();
+    e.f.edit_db("dev.toml", "localhost", "draft.example");
+    let mut agent = e.agent();
+    refused(
+        e.schema(&mut agent, "dev", None, json!({})).await,
+        "notOpenedByUser",
+    );
+    // 저장한 연결의 테스트는 연 것이다.
+    w.call(
+        "db.connection.test",
+        json!({ "projectId": e.f.id, "connectionId": "dev" }),
+    )
+    .await
+    .unwrap();
+    e.schema(&mut agent, "dev", None, json!({})).await.unwrap();
+}
+
+/// (N) 여는 데 실패한 연결은 「사람이 연 연결」 이 아니다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_open_is_not_recorded() {
+    let e = env(true);
+    e.pg.fail_connect(pw_db_types::DbError::new(
+        pw_db_types::DbErrorKind::Disconnected,
+        "connection refused",
+    ));
+    let mut w = e.f.window();
+    w.call(
+        "db.schema.objects",
+        json!({ "projectId": e.f.id, "connectionId": "dev", "kind": "table", "limit": 10 }),
+    )
+    .await
+    .unwrap_err();
+    let mut agent = e.agent();
+    refused(
+        e.schema(&mut agent, "dev", None, json!({})).await,
+        "notOpenedByUser",
+    );
+}
+
+/// (G) SQLite 의 대상은 파일의 실제 경로다 — 워크트리에서 메인의 프로덕션 SQLite 파일을 가리키는 링크 경로의 표지 없는 새 연결도
+/// 프로덕션이다.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_linked_sqlite_path_is_the_same_target() {
+    let mut drivers = pw_db::DriverRegistry::new();
+    drivers
+        .register(Arc::new(pw_db_driver_sqlite::SqliteDriver::new()))
+        .unwrap();
+    let f = Fixture::build(true, |router, connections| {
+        pw_db::register(
+            router,
+            Arc::new(DbSessions::new(Arc::clone(connections), drivers)),
+        );
+    });
+    std::fs::write(f.root.join("app.db"), "").unwrap();
+    f.write_db(
+        "prod.toml",
+        "schema = 1\nname = \"prod\"\ndriver = \"sqlite\"\npath = \"app.db\"\nproduction = true\n",
+    );
+    let wt = fake_worktree(&f.root, &f.base.join("p1-wt"));
+    std::os::unix::fs::symlink(f.root.join("app.db"), wt.join("link.db")).unwrap();
+    std::fs::create_dir_all(wt.join(".pitwall/db")).unwrap();
+    std::fs::write(
+        wt.join(".pitwall/db/sneaky.toml"),
+        "schema = 1\nname = \"sneaky\"\ndriver = \"sqlite\"\npath = \"link.db\"\n",
+    )
+    .unwrap();
+    let wt = wt.to_string_lossy().into_owned();
+    let mut w = f.window();
+    w.call(
+        "db.schema.objects",
+        json!({ "projectId": f.id, "worktree": wt, "connectionId": "sneaky", "kind": "table", "limit": 10 }),
+    )
+    .await
+    .unwrap();
+    let mut agent = f.connect(ConnectionScope::Agent);
+    refused(
+        agent
+            .call(
+                "db.tool.schema",
+                json!({ "projectId": f.id, "worktree": wt, "connectionId": "sneaky" }),
+            )
+            .await,
+        "productionBlocked",
+    );
+}
+
+/// 틀린 연결 설정의 까닭 글(serde 오류)은 값을 싣는다 — 목록의 `message` · 관문의 오류는 값 없는 안내 글이다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn invalid_settings_do_not_echo_their_values() {
+    let e = env(true);
+    e.f.write_db(
+        "oops.toml",
+        "schema = 1\nname = \"oops\"\ndriver = \"postgres\"\nhost = \"localhost\"\npassword = \"plain-secret-in-a-file\"\n",
+    );
+    let mut agent = e.agent();
+    let list = e.list(&mut agent, None).await;
+    let oops = entry(&list, "oops");
+    assert_eq!(oops["state"], "invalid");
+    assert!(
+        !list.to_string().contains("plain-secret-in-a-file"),
+        "{list}"
+    );
+    let error = e
+        .schema(&mut agent, "oops", None, json!({}))
+        .await
+        .unwrap_err();
+    assert!(
+        !format!("{error:?}").contains("plain-secret-in-a-file"),
+        "{error:?}"
+    );
+}

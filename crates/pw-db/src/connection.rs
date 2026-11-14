@@ -88,7 +88,7 @@ pub async fn connect_with(
         c.resolve(&trusted, &id)
     })
     .await?;
-    let target = DbTarget::of(&resolved.config, &resolved.root);
+    let target = DbTarget::of_resolved(&resolved);
     grant.check_agent_use(worktree, Some(connection_id), &target)?;
     let config = resolved.config.clone();
     let (info, connection, server, tunnel) =
@@ -251,7 +251,7 @@ impl DbSessions {
             }
         })
         .await?;
-        let target = DbTarget::of(&resolved.config, &resolved.root);
+        let target = DbTarget::of_resolved(&resolved);
         // 에이전트의 증거는 저장한 연결(초안이 아닌 것)에만 쓰인다 — 초안이면 연결 id 가 없는 것으로 본다.
         grant.check_agent_use(worktree.as_deref(), saved.as_deref(), &target)?;
         let (info, connection, server, tunnel) =

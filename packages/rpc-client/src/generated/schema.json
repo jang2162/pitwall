@@ -12488,7 +12488,7 @@
                 "type": "string"
               },
               "message": {
-                "description": "설정이 틀렸으면 그 까닭.",
+                "description": "설정이 틀렸으면 그 안내 글(값을 싣지 않는다 — 까닭은 Pitwall 에서 본다).",
                 "type": [
                   "string",
                   "null"
@@ -12639,7 +12639,7 @@
             "type": "array"
           },
           "problem": {
-            "description": "프로젝트 설정을 읽지 못한 까닭(그러면 목록이 비어 있다).",
+            "description": "프로젝트 설정을 읽지 못했으면 그 안내 글(그러면 목록이 비어 있다. 값을 싣지 않는다).",
             "type": [
               "string",
               "null"

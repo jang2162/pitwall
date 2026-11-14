@@ -40,7 +40,9 @@
 //! - **표지**([`DbMarks`]): `Connections` 가 연결 설정을 읽어 올리는 자리(`load` · `refresh` — 목록 · 열기 · 툴 호출, 어느
 //!   워크트리의 것이든)에서 연결마다 프로덕션 · read-only 표지를 그 **푼 대상**([`DbTarget`])에 묶어 더한다. 연결 id 와 무관하고
 //!   사람이 열었는지와도 무관하다. 조여지기만 한다 — 설정에서 지워도, 표지 없는 새 연결 id 로 같은 대상을 가리켜도 남는다.
-//!   대상만 열쇠다(프로젝트를 가리지 않는다 — 같은 대상은 같은 데이터다).
+//!   대상만 열쇠다(프로젝트를 가리지 않는다 — 같은 대상은 같은 데이터다). 한 연결로 다른 DB 를 읽을 수 있는 드라이버(MySQL ·
+//!   MariaDB)는 열쇠에서 DB 이름을 뺀다(`DbTarget::mark_key` — 메인 판정 2026-11-14). 에이전트 호출은 그 저장소의 메인
+//!   체크아웃(등록 워크트리면 메인 저장소 프로젝트의 주 루트)의 연결 설정도 읽는다.
 
 use std::fmt::Write as _;
 
@@ -470,7 +472,9 @@ pub use agent::{
     AgentBinding, DbMarks, DbTarget, NOT_OPENED_BY_USER, PRODUCTION_BLOCKED, db_grant_for_agent,
     not_opened_by_user, production_blocked,
 };
-pub(crate) use agent::{MarkMemory, OpenedMemory, agent_view, judge_for_agent};
+pub(crate) use agent::{
+    MarkMemory, OpenedMemory, UNREADABLE_SETTINGS, agent_view, invalid_settings, judge_for_agent,
+};
 
 #[cfg(test)]
 mod tests;

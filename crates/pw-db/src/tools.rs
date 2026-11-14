@@ -98,7 +98,7 @@ pub struct DbToolConnection {
     pub usable: bool,
     /// 쓸 수 없는 까닭(`usable` 이 참이면 `null`).
     pub unusable_reason: Option<DbToolUnusable>,
-    /// 설정이 틀렸으면 그 까닭.
+    /// 설정이 틀렸으면 그 안내 글(값을 싣지 않는다 — 까닭은 Pitwall 에서 본다).
     pub message: Option<String>,
 }
 
@@ -110,7 +110,7 @@ pub struct DbToolConnectionList {
     /// id 순.
     pub connections: Vec<DbToolConnection>,
     pub trusted: bool,
-    /// 프로젝트 설정을 읽지 못한 까닭(그러면 목록이 비어 있다).
+    /// 프로젝트 설정을 읽지 못했으면 그 안내 글(그러면 목록이 비어 있다. 값을 싣지 않는다).
     pub problem: Option<String>,
 }
 
@@ -313,11 +313,11 @@ impl DbSessions {
         };
         let list = match &loaded.connections {
             Ok(list) => list,
-            Err(problem) => {
+            Err(_) => {
                 return Ok(DbToolConnectionList {
                     connections: Vec::new(),
                     trusted,
-                    problem: Some(problem.clone()),
+                    problem: Some(crate::gate::UNREADABLE_SETTINGS.to_owned()),
                 });
             }
         };
@@ -327,9 +327,11 @@ impl DbSessions {
                 let entry = c.entry(&loaded, connection, approvals.as_ref());
                 let (state, message) = match &entry.state {
                     DbConnectionState::Untrusted => (DbToolConnectionState::Untrusted, None),
-                    DbConnectionState::Invalid { message } => {
-                        (DbToolConnectionState::Invalid, Some(message.clone()))
-                    }
+                    // 까닭 글(serde 오류)은 값을 싣는다 — 툴 응답 · 감사 로그로 내보내지 않는다.
+                    DbConnectionState::Invalid { .. } => (
+                        DbToolConnectionState::Invalid,
+                        Some(crate::gate::invalid_settings(&connection.id)),
+                    ),
                     DbConnectionState::SecretRequired { .. } => {
                         (DbToolConnectionState::SecretRequired, None)
                     }
@@ -393,20 +395,23 @@ impl DbSessions {
             check_text(what, value.as_deref())?;
         }
         let limit = check_limit(p.limit.unwrap_or(DEFAULT_LIST_LIMIT))?;
-        let (s, scope, project, worktree, id, database) = (
-            Arc::clone(self),
-            ctx.scope().clone(),
-            p.project_id.clone(),
-            p.worktree.clone(),
-            p.connection_id.clone(),
-            p.database.clone(),
-        );
-        let grant = blocking(move || {
-            let agent = agent_grant(&scope, &s.connections.host()?.projects, &project)?;
-            db_grant_for_agent(&s, &agent, worktree.as_deref(), &id, database.as_deref())
-        })
-        .await?;
-        let driver = grant
+        // 이 호출이 실제로 읽을 DB 마다 관문을 지난다(메인 판정 — 객체 목록 · `database` 입력, 그리고 `object` 의 점 이름에서
+        // 나온 DB). 표지는 그 DB 의 대상에서도 본다.
+        let gate = |database: Option<String>| {
+            let (s, scope, project, worktree, id) = (
+                Arc::clone(self),
+                ctx.scope().clone(),
+                p.project_id.clone(),
+                p.worktree.clone(),
+                p.connection_id.clone(),
+            );
+            blocking(move || {
+                let agent = agent_grant(&scope, &s.connections.host()?.projects, &project)?;
+                db_grant_for_agent(&s, &agent, worktree.as_deref(), &id, database.as_deref())
+            })
+        };
+        let first = gate(p.database.clone()).await?;
+        let driver = first
             .agent_driver()
             .and_then(|kind| self.drivers.get(kind.id()))
             .ok_or_else(|| {
@@ -425,9 +430,24 @@ impl DbSessions {
                 ),
             )));
         }
+        let object = p.object.as_deref().map(|object| {
+            object_ref(
+                object,
+                p.database.clone(),
+                p.schema.clone(),
+                caps.schemas,
+                caps.multiple_databases,
+            )
+        });
+        let grant = match object.as_ref().and_then(|o| o.database.clone()) {
+            Some(database) if Some(&database) != p.database.as_ref() => {
+                gate(Some(database)).await?
+            }
+            _ => first,
+        };
         let worktree = p.worktree.as_deref();
         let meta = |request| self.meta(ctx, &grant, worktree, &p.connection_id, request);
-        let Some(object) = &p.object else {
+        let Some(object) = object else {
             let kind = p.kind.unwrap_or(DbToolSchemaKind::Table);
             return match kind.object_kind() {
                 None if kind == DbToolSchemaKind::Database => {
@@ -481,13 +501,6 @@ impl DbSessions {
                 }
             };
         };
-        let object = object_ref(
-            object,
-            p.database.clone(),
-            p.schema.clone(),
-            caps.schemas,
-            caps.multiple_databases,
-        );
         check_object(&object)?;
         let mut result = list(DbToolSchemaLevel::Object, Vec::new(), None);
         result.object = Some(object.clone());

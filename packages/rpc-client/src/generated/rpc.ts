@@ -2742,7 +2742,7 @@ export type DbToolConnection = {
 	usable: boolean,
 	/**  쓸 수 없는 까닭(`usable` 이 참이면 `null`). */
 	unusableReason: DbToolUnusable | null,
-	/**  설정이 틀렸으면 그 까닭. */
+	/**  설정이 틀렸으면 그 안내 글(값을 싣지 않는다 — 까닭은 Pitwall 에서 본다). */
 	message: string | null,
 };
 
@@ -2750,7 +2750,7 @@ export type DbToolConnectionList = {
 	/**  id 순. */
 	connections: DbToolConnection[],
 	trusted: boolean,
-	/**  프로젝트 설정을 읽지 못한 까닭(그러면 목록이 비어 있다). */
+	/**  프로젝트 설정을 읽지 못했으면 그 안내 글(그러면 목록이 비어 있다. 값을 싣지 않는다). */
 	problem: string | null,
 };
 

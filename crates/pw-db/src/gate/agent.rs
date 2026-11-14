@@ -20,10 +20,11 @@ pub const NOT_OPENED_BY_USER: &str = "notOpenedByUser";
 /// `data.reason`: 프로덕션 표지가 있는 대상이다(`[mcp.policy] production` 의 `block` — `ask` 갈래는 M5-18).
 pub const PRODUCTION_BLOCKED: &str = "productionBlocked";
 
-/// 푼 대상 — 「사람이 연 연결」 과 표지의 열쇠. 드라이버 · 호스트 · 포트(적지 않았으면 드라이버 기본) · DB · 사용자 · 터널 목적지,
-/// SQLite 면 파일의 실제 경로(링크를 끝까지 푼 것 — 워크트리마다 상대 경로가 다른 파일을 가리킨다). 호스트는 소문자로 맞춘다
-/// (DNS 이름은 대소문자를 가리지 않는다 — `DB.example.com` 으로 표지를 비껴가지 못하게). TLS 설정은 넣지 않는다 — 같은 서버 · DB 를
-/// `sslmode` 만 바꿔 가리켜 표지를 비껴가지 못하게(TLS 의 확인은 `crate::trust` 가 따로 본다).
+/// 푼 대상 — 「사람이 연 연결」 의 열쇠(표지의 열쇠는 [`DbTarget::mark_key`]). 드라이버 · 호스트 · 포트(적지 않았으면 드라이버
+/// 기본) · DB · 사용자 · 터널 목적지, SQLite 면 파일의 실제 경로(링크를 끝까지 푼 것 — 워크트리마다 상대 경로가 다른 파일을
+/// 가리킨다). 호스트는 소문자로 맞춘다(DNS 이름은 대소문자를 가리지 않는다 — `DB.example.com` 으로 표지를 비껴가지 못하게). TLS
+/// 설정은 넣지 않는다 — 같은 서버 · DB 를 `sslmode` 만 바꿔 가리켜 표지를 비껴가지 못하게(TLS 의 확인은 `crate::trust` 가 따로 본다).
+/// 남는 한계: 호스트 별칭(`localhost` · `127.0.0.1`), 터널 목적지의 다른 표기, DB 이름의 대소문자는 다른 대상으로 본다.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DbTarget {
     pub driver: DriverKind,
@@ -58,6 +59,30 @@ impl DbTarget {
             user: config.user.clone(),
             tunnel: config.ssh_tunnel.as_ref().map(|t| t.host_ref.clone()),
             file,
+        }
+    }
+
+    /// 푼 연결의 대상. SQLite 는 신뢰 판정이 드라이버에 넘길 실제 경로(`spec` 의 파일)로 만든다 — 판정한 경로와 견주는 경로가
+    /// 갈리지 않게(그 사이에 링크를 바꿔 끼워도).
+    pub(crate) fn of_resolved(resolved: &crate::trust::ResolvedConnection) -> Self {
+        let mut target = Self::of(&resolved.config, &resolved.root);
+        if let pw_db_types::Target::File { path } = &resolved.spec.target {
+            target.file = Some(path.clone());
+        }
+        target
+    }
+
+    /// 표지의 열쇠(결정 M5-D37 — 메인 판정 2026-11-14). 한 연결로 다른 DB 를 읽을 수 있는 드라이버(MySQL · MariaDB — 드라이버 id
+    /// `mysql`)는 DB 이름을 뺀다: 그 서버의 어느 DB 가 프로덕션이면 그 서버 · 사용자로 가는 에이전트 호출은 모두 프로덕션이다
+    /// (`db_query` 가 SQL 글 안의 `other_db.t` 를 지킬 수 없다). PG 는 DB 이름을 둔다(한 연결이 다른 DB 를 읽지 못한다). SQLite 는
+    /// 파일이 열쇠다(`ATTACH` 는 실행 분류의 몫 — M5-07).
+    pub fn mark_key(&self) -> Self {
+        match self.driver {
+            DriverKind::Mysql => Self {
+                database: None,
+                ..self.clone()
+            },
+            _ => self.clone(),
         }
     }
 
@@ -107,7 +132,7 @@ impl MarkMemory {
         let seen: Vec<(DbTarget, DbMarks)> = list
             .iter()
             .filter_map(|c| c.config.as_ref().ok())
-            .map(|config| (DbTarget::of(config, root), DbMarks::of(config)))
+            .map(|config| (DbTarget::of(config, root).mark_key(), DbMarks::of(config)))
             .filter(|(_, marks)| *marks != DbMarks::default())
             .collect();
         if seen.is_empty() {
@@ -122,7 +147,10 @@ impl MarkMemory {
 
     /// 그 대상에서 본 가장 엄한 표지(본 적 없으면 표지 없음).
     pub fn get(&self, target: &DbTarget) -> DbMarks {
-        lock(&self.0).get(target).copied().unwrap_or_default()
+        lock(&self.0)
+            .get(&target.mark_key())
+            .copied()
+            .unwrap_or_default()
     }
 }
 
@@ -187,22 +215,44 @@ pub fn production_blocked(project_id: &str, connection_id: &str) -> RpcError {
     }))
 }
 
-/// 에이전트의 DB 툴 호출이 읽는 연결 설정: 그 프로젝트 메인 체크아웃의 것(표지를 더하려고 — 결정 M5-D37)과 호출의 워크트리의 것.
-/// 돌려주는 것은 호출의 워크트리의 것이다. 메인 체크아웃의 설정을 읽지 못하면(깨진 파일 등) 그 표지는 더하지 못하고 넘어간다 —
-/// 앞서 이번 실행에서 읽힌 표지는 기억에 남아 있다. 블로킹이다.
+/// 에이전트의 DB 툴 호출이 읽는 연결 설정: **그 저장소의 메인 체크아웃**의 것(표지를 더하려고 — 결정 M5-D37)과 호출의 워크트리의
+/// 것. 메인 체크아웃은 그 프로젝트의 주 루트이고, 연결 워크트리를 따로 등록한 프로젝트면 신뢰가 따르는 메인 저장소 프로젝트
+/// (`Registry::main_repository_of`)의 주 루트도 읽는다. 돌려주는 것은 호출의 워크트리의 것이다. 메인 체크아웃의 설정을 읽지 못하면
+/// (깨진 파일 등) 그 표지는 더하지 못하고 넘어간다 — 앞서 이번 실행에서 읽힌 표지는 기억에 남아 있다. 블로킹이다.
 pub(crate) fn agent_view(
     sessions: &DbSessions,
     project_id: &str,
     worktree: Option<&str>,
 ) -> Result<Loaded, RpcError> {
     let connections = &sessions.connections;
-    if worktree.is_some()
-        && let Err(e) = connections.load(project_id, None)
-    {
-        tracing::info!(target: "pw_db", project = project_id, %e, "cannot read the main checkout's db connections for agent marks");
+    let main_repository = connections
+        .host()?
+        .projects
+        .main_repository_of(project_id)
+        .ok()
+        .flatten()
+        .map(|p| p.id);
+    let mains = worktree
+        .is_some()
+        .then(|| project_id.to_owned())
+        .into_iter()
+        .chain(main_repository);
+    for main in mains {
+        if let Err(e) = connections.load(&main, None) {
+            tracing::info!(target: "pw_db", project = %main, %e, "cannot read the main checkout's db connections for agent marks");
+        }
     }
     connections.load(project_id, worktree)
 }
+
+/// 틀린 연결 설정의 까닭(serde 오류 글)은 툴 응답 · 감사 로그로 내보내지 않는다 — 사람이 실수로 적은 비밀 값이 그 글에 실린다.
+pub(crate) fn invalid_settings(connection_id: &str) -> String {
+    format!("db connection `{connection_id}` has invalid settings; open it in Pitwall to see why")
+}
+
+/// 프로젝트 설정을 읽지 못한 까닭도 같다(설정 계층의 오류 글은 파일 줄을 싣는다).
+pub(crate) const UNREADABLE_SETTINGS: &str =
+    "cannot read the project's settings files; open the project in Pitwall to see why";
 
 /// 연결 하나에 대한 에이전트의 판정(신뢰 게이트는 부른 쪽이 지났다). `database` 는 호출이 설정의 DB 대신 고른 DB — 그 대상의
 /// 표지도 본다.
@@ -213,9 +263,10 @@ pub(crate) fn judge_for_agent(
     database: Option<&str>,
 ) -> Result<AgentBinding, RpcError> {
     let project_id = loaded.project.id.as_str();
-    let config = connection.config.as_ref().map_err(|e| {
-        RpcError::invalid_params(format!("db connection `{}` is invalid: {e}", connection.id))
-    })?;
+    let config = connection
+        .config
+        .as_ref()
+        .map_err(|_| RpcError::invalid_params(invalid_settings(&connection.id)))?;
     let target = DbTarget::of(config, &loaded.root);
     let marks_memory = &sessions.connections.marks;
     let mut marks = DbMarks::of(config).tighten(marks_memory.get(&target));
@@ -258,10 +309,8 @@ pub fn db_grant_for_agent(
     let project_id = agent.project_id();
     sessions.connections.trust_gate(project_id, worktree)?;
     let loaded = agent_view(sessions, project_id, worktree)?;
-    if let Err(problem) = &loaded.connections {
-        return Err(RpcError::internal(format!(
-            "cannot read the project config: {problem}"
-        )));
+    if loaded.connections.is_err() {
+        return Err(RpcError::internal(UNREADABLE_SETTINGS));
     }
     let connection = loaded
         .get(connection_id)
