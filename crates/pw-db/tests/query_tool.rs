@@ -84,7 +84,12 @@ const MY_DEV: &str = "schema = 1\nname = \"my dev\"\ndriver = \"mysql\"\nhost = 
 const MY_PROD: &str = "schema = 1\nname = \"my prod\"\ndriver = \"mysql\"\nhost = \"db.example\"\ndatabase = \"app\"\nuser = \"app\"\nproduction = true\n";
 
 fn env() -> Env {
-    let pg = FakeDriver::named("postgres", SqlDialect::Postgres);
+    env_with(FakeDriver::full_capabilities())
+}
+
+/// 가짜 PG 의 지원 플래그를 고른 [`env`].
+fn env_with(pg_capabilities: Capabilities) -> Env {
+    let pg = FakeDriver::named_with("postgres", SqlDialect::Postgres, pg_capabilities);
     let my = FakeDriver::named("mysql", SqlDialect::Mysql);
     let hook: Hook = Arc::default();
     let mut drivers = pw_db::DriverRegistry::new();
@@ -263,6 +268,12 @@ async fn a_write_among_queries_refuses_everything_before_the_driver() {
         // 부작용 함수를 부르는 조회(분류기의 표 — `nextval` · `pg_sleep` …)도 조회가 아니다.
         ("SELECT nextval('ids')", 0, "write"),
         ("SELECT pg_sleep(600)", 0, "write"),
+        // 리뷰 B1: pg_surgery 는 읽기 전용 트랜잭션 안에서 행을 지운다 — 분류가 막는다.
+        (
+            "SELECT heap_force_kill('users'::regclass, ARRAY['(0,1)']::tid[])",
+            0,
+            "unboundedWrite",
+        ),
     ];
     for (sql, index, grade) in cases {
         let result = e.query(&mut agent, "dev", json!({ "sql": sql })).await;
@@ -624,10 +635,51 @@ async fn cells_and_the_whole_response_are_capped() {
     assert_eq!(first["truncated"], true);
     let kept = first["rows"].as_array().unwrap().len();
     assert!(kept > 10 && kept < 1000, "{kept}");
-    // 예산을 다 쓴 뒤의 문장은 행을 잃고 `truncated` 다(열은 남는다).
-    assert_eq!(out["results"][1]["rows"], json!([]));
-    assert_eq!(out["results"][1]["truncated"], true);
-    assert_eq!(out["results"][1]["columns"][0]["name"], "a");
+    // 예산을 다 쓴 뒤의 문장은 돌지 않고 `notRun` 으로 남는다.
+    assert_eq!(out["results"].as_array().unwrap().len(), 1, "{size}");
+    assert_eq!(
+        out["notRun"],
+        json!({ "index": 1, "line": 1, "count": 1, "reason": "responseBudget" })
+    );
+}
+
+/// 응답 예산은 행을 읽는 그때 센다(리뷰 B2): 넓은 행 × 많은 행이라도 드라이버가 읽는 행은 예산 몫(+ 한 묶음)에 머물고, 그 문장의
+/// 커서를 버린 뒤 뒤 문장은 드라이버에 가지 않는다(`notRun`). 행을 다 모은 뒤 자르면 1만 행을 다 읽는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wide_rows_stop_reading_at_the_response_budget() {
+    let e = env();
+    let wide: Vec<_> = (0..100)
+        .map(|i| pw_db_driver::fake::column(&format!("c{i}"), "text"))
+        .collect();
+    e.pg.respond("FROM wide", FakeResponse::rows(10_000).with_columns(wide));
+    e.human_opens("dev").await;
+    let tool = e.connects() as u32;
+    let mut agent = e.agent();
+    let out = e
+        .query(
+            &mut agent,
+            "dev",
+            json!({ "sql": "SELECT * FROM wide; SELECT * FROM after_wide", "maxRows": 10_000 }),
+        )
+        .await
+        .unwrap();
+    let kept = out["results"][0]["rows"].as_array().unwrap().len();
+    assert_eq!(out["results"][0]["truncated"], true);
+    assert!(kept > 10, "{kept}");
+    assert!(out.to_string().len() <= RESPONSE_BUDGET);
+    let read = e.pg.rows_read();
+    assert!(read < 1_000, "the driver read {read} rows for {kept} kept");
+    assert_eq!(out["notRun"]["index"], 1);
+    assert_eq!(out["notRun"]["reason"], "responseBudget");
+    let calls = e.pg.calls_of(tool);
+    assert!(
+        calls.contains(&FakeCall::DiscardCursor { drained: false }),
+        "{calls:?}"
+    );
+    assert!(
+        !e.executed().iter().any(|s| s.contains("after_wide")),
+        "the statement after the budget did not run"
+    );
 }
 
 /// 둘째 문장이 실패하면 거기서 멈추고 첫 결과와 오류(문장 번호 · 줄 · 범위)를 돌려준다. 셋째 문장은 돌지 않는다.
@@ -817,6 +869,132 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+/// 리뷰 F2 — M1: 읽기 전용 트랜잭션이 없는 드라이버면 연결은 열어도 문장을 하나도 보내지 않고 `unsupported` 다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_driver_without_read_only_transactions_runs_nothing() {
+    let mut caps = FakeDriver::full_capabilities();
+    caps.read_only_transaction = false;
+    let e = env_with(caps);
+    e.human_opens("dev").await;
+    let mut agent = e.agent();
+    let error = e
+        .query(&mut agent, "dev", json!({ "sql": "SELECT * FROM users" }))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, pw_db::gate::code::DB_ERROR, "{error:?}");
+    let data = error.data.unwrap();
+    assert_eq!(data["error"]["kind"], "unsupported");
+    assert!(
+        data["audit"].as_str().unwrap().starts_with("statements=1"),
+        "{data}"
+    );
+    assert_eq!(e.executed(), Vec::<String>::new());
+}
+
+/// 리뷰 F2 — M2: 등급은 조회인데 분류기가 서버의 다른 읽기를 읽지 못한 글(MySQL 의 백슬래시 · `INTO OUTFILE`)은 `is_strict_query` 가
+/// 거른다 — 등급만 보면 지나간다. 실은 문장은 파괴 · `unparsed`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_query_the_classifier_could_not_fully_read_is_refused() {
+    let e = env();
+    e.f.write_db("my_dev.toml", MY_DEV);
+    e.human_opens("my_dev").await;
+    let mut agent = e.agent();
+    let sql = r#"SELECT * FROM t WHERE name = 'a\' OR id = 1 INTO OUTFILE "/tmp/x" -- '"#;
+    let error = refused(
+        &e.query(&mut agent, "my_dev", json!({ "sql": sql })).await,
+        "notAQuery",
+    );
+    let class = &error.data.unwrap()["statements"][0];
+    assert_eq!(class["grade"], "destructive");
+    assert_eq!(class["reasons"], json!(["unparsed"]));
+    assert_eq!(e.my.count(&FakeCall::Execute(sql.to_owned())), 0);
+}
+
+/// 리뷰 F2 — M3: 정확히 5 MiB 인 파일은 돈다(상한은 그 크기까지 받는다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_file_of_exactly_the_size_limit_runs() {
+    let e = env();
+    e.human_opens("dev").await;
+    let mut agent = e.agent();
+    let mut exact = b"SELECT 1;".to_vec();
+    exact.resize(MAX_FILE_BYTES as usize, b' ');
+    e.file("q/exact.sql", &exact);
+    let out = e
+        .query(&mut agent, "dev", json!({ "file": "q/exact.sql" }))
+        .await
+        .unwrap();
+    assert_eq!(out["error"], Value::Null, "{out}");
+    assert_eq!(e.executed().last().unwrap(), "SELECT 1");
+}
+
+/// 리뷰 F2 — M5 · M15: 정확히 `maxRows` 행이면 `truncated` 가 아니다. 넘으면 `truncated` 이고 커서를 버린다(서버에서 남은 행을 멈춘다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exactly_max_rows_is_not_truncated_and_more_discards_the_cursor() {
+    let e = env();
+    e.pg.respond("FROM seven", FakeResponse::rows(7));
+    e.pg.respond("FROM eight", FakeResponse::rows(20));
+    e.human_opens("dev").await;
+    let tool = e.connects() as u32;
+    let mut agent = e.agent();
+    let out = e
+        .query(
+            &mut agent,
+            "dev",
+            json!({ "sql": "SELECT * FROM seven", "maxRows": 7 }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out["results"][0]["rows"].as_array().unwrap().len(), 7);
+    assert_eq!(out["results"][0]["truncated"], false);
+    assert!(
+        !e.pg
+            .calls_of(tool)
+            .contains(&FakeCall::DiscardCursor { drained: false })
+    );
+    let tool = e.connects() as u32;
+    let out = e
+        .query(
+            &mut agent,
+            "dev",
+            json!({ "sql": "SELECT * FROM eight", "maxRows": 7 }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out["results"][0]["rows"].as_array().unwrap().len(), 7);
+    assert_eq!(out["results"][0]["truncated"], true);
+    let calls = e.pg.calls_of(tool);
+    let discard = calls
+        .iter()
+        .position(|c| *c == FakeCall::DiscardCursor { drained: false });
+    let rollback = calls.iter().position(|c| *c == FakeCall::Rollback);
+    assert!(
+        matches!((discard, rollback), (Some(d), Some(r)) if d < r),
+        "{calls:?}"
+    );
+}
+
+/// 리뷰 R4(M10): 연결이 실패한 오류에도 감사 상세(`data.audit`)가 실린다 — 세션이 감사 행의 상세로 옮긴다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_connection_failure_carries_the_audit_detail() {
+    let e = env();
+    e.human_opens("dev").await;
+    e.pg.fail_connect(DbError::new(DbErrorKind::Connect, "connection refused"));
+    let mut agent = e.agent();
+    let error = e
+        .query(&mut agent, "dev", json!({ "sql": "SELECT 1; SELECT 2" }))
+        .await
+        .unwrap_err();
+    let audit = error
+        .data
+        .as_ref()
+        .and_then(|d| d["audit"].as_str())
+        .unwrap_or_default();
+    assert!(
+        audit.starts_with("statements=2 grade=read sql=sha256:"),
+        "{error:?}"
+    );
 }
 
 /// 창의 실행 스트림으로 돌리고, 확인을 물으면 확인해 다시 돌린다(`tests/schema.rs` 와 같다).

@@ -324,6 +324,83 @@ pub struct DbScriptError {
 pub(crate) struct Ran {
     pub results: Vec<DbScriptResult>,
     pub error: Option<DbScriptError>,
+    pub not_run: Option<DbScriptNotRun>,
+}
+
+/// 응답 예산 때문에 돌리지 않은 문장들(머리 주석 ⑥): `index` 부터 끝까지 `count` 개.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct DbScriptNotRun {
+    /// 돌리지 않은 첫 문장의 번호(0 부터).
+    pub index: u32,
+    /// 그 문장이 시작하는 줄(1 부터).
+    pub line: u32,
+    /// 돌리지 않은 문장 수(`index` 부터 끝까지).
+    pub count: u32,
+    pub reason: DbScriptNotRunReason,
+}
+
+/// 문장을 돌리지 않은 까닭.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum DbScriptNotRunReason {
+    /// 앞 문장들의 행이 응답 예산([`RESPONSE_BUDGET`])을 다 썼다.
+    ResponseBudget,
+}
+
+/// 응답 예산의 셈(머리 주석 ⑥): 행을 읽는 그때 그 행의 JSON 크기를 더한다. 넘는 순간 그 문장을 끊고 뒤 문장을 돌리지 않는다 —
+/// 행을 다 모은 뒤 자르면 넓은 행 × 많은 행이 그만큼 메모리에 쌓인다(M5-07 리뷰 B2).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ResponseRoom {
+    used: usize,
+    limit: usize,
+}
+
+impl ResponseRoom {
+    /// `fixed` 는 행 · 문장 결과를 뺀 응답의 크기(감사 상세 · 파일 경로 · 오류 몫의 여유 포함).
+    pub fn new(fixed: usize) -> Self {
+        Self {
+            used: fixed,
+            limit: RESPONSE_BUDGET,
+        }
+    }
+
+    fn left(&self) -> usize {
+        self.limit.saturating_sub(self.used)
+    }
+
+    /// `size` 바이트를 쓸 수 있으면 쓴다.
+    fn take(&mut self, size: usize) -> bool {
+        if size > self.left() {
+            return false;
+        }
+        self.used += size;
+        true
+    }
+}
+
+/// 행 하나가 응답에서 차지하는 크기(JSON 과 구분 쉼표).
+fn row_size(row: &Row) -> usize {
+    serde_json::to_string(row).map_or(usize::MAX, |s| s.len() + 1)
+}
+
+/// 문장 결과 하나의 행을 뺀 크기(소요 · 영향 행 수 자리의 여유 포함).
+fn result_overhead(columns: &[ColumnMeta], index: u32, grade: RiskGrade) -> usize {
+    let empty = DbScriptResult {
+        index,
+        line: u32::MAX,
+        grade,
+        columns: columns.to_vec(),
+        rows: Vec::new(),
+        rows_affected: Some(u64::MAX),
+        truncated: false,
+        elapsed_ms: u64::MAX,
+    };
+    serde_json::to_string(&empty).map_or(usize::MAX, |s| s.len() + 1)
 }
 
 /// 핸들러 future 가 버려지면(호출 취소 · 세션 끊김) 실행을 멈춘다 — 그 연결의 인터럽트를 보낸다. 실행 태스크는 드라이버 호출을
@@ -368,6 +445,7 @@ pub(crate) async fn run_read_only(
     max_rows: u32,
     cell: CellLimit,
     cancel: &QueryCancel,
+    room: &mut ResponseRoom,
 ) -> Result<Ran, DbError> {
     let mut inactivity = Inactivity::new(Budget::PAGE.inactivity);
     let begun = cancel
@@ -378,21 +456,45 @@ pub(crate) async fn run_read_only(
     let mut ran = Ran {
         results: Vec::new(),
         error: None,
+        not_run: None,
     };
-    for statement in planned {
+    for (at, statement) in planned.iter().enumerate() {
         let started = Instant::now();
         let line = line_of(source, statement.range);
-        match run_one(conn, statement, max_rows, cell, cancel, &mut inactivity).await {
-            Ok((columns, rows, rows_affected, truncated)) => ran.results.push(DbScriptResult {
-                index: statement.index,
-                line,
-                grade: statement.grade,
-                columns,
-                rows,
-                rows_affected,
-                truncated,
-                elapsed_ms: elapsed_ms(started),
-            }),
+        match run_one(
+            conn,
+            statement,
+            max_rows,
+            cell,
+            cancel,
+            &mut inactivity,
+            room,
+        )
+        .await
+        {
+            Ok(out) => {
+                ran.results.push(DbScriptResult {
+                    index: statement.index,
+                    line,
+                    grade: statement.grade,
+                    columns: out.columns,
+                    rows: out.rows,
+                    rows_affected: out.rows_affected,
+                    truncated: out.truncated,
+                    elapsed_ms: elapsed_ms(started),
+                });
+                if out.budget_spent
+                    && let Some(next) = planned.get(at + 1)
+                {
+                    ran.not_run = Some(DbScriptNotRun {
+                        index: next.index,
+                        line: line_of(source, next.range),
+                        count: u32::try_from(planned.len() - at - 1).unwrap_or(u32::MAX),
+                        reason: DbScriptNotRunReason::ResponseBudget,
+                    });
+                    break;
+                }
+            }
             Err(error) => {
                 ran.error = Some(DbScriptError {
                     index: statement.index,
@@ -407,9 +509,18 @@ pub(crate) async fn run_read_only(
     Ok(ran)
 }
 
-type Rows = (Vec<ColumnMeta>, Vec<Row>, Option<u64>, bool);
+/// 문장 하나의 결과.
+struct StatementRows {
+    columns: Vec<ColumnMeta>,
+    rows: Vec<Row>,
+    rows_affected: Option<u64>,
+    truncated: bool,
+    /// 응답 예산을 다 썼다 — 뒤 문장은 돌리지 않는다.
+    budget_spent: bool,
+}
 
-/// 문장 하나: 실행 → `max_rows` 까지 읽고 한 행을 더 읽어 넘는지 본다 → 넘으면 커서를 버린다.
+/// 문장 하나: 실행 → 행을 읽는 그때 응답 예산(`room`)에 더하며 `max_rows` 까지 읽고, 한 행을 더 읽어 넘는지 본다 → 넘거나 예산이
+/// 다하면 커서를 버린다. 한 번에 읽는 몫도 남은 예산으로 줄인다 — 드라이버가 읽는 양이 예산 몫(+ 한 묶음)에 머문다.
 async fn run_one(
     conn: &mut dyn SqlConnection,
     statement: &Planned,
@@ -417,32 +528,70 @@ async fn run_one(
     cell: CellLimit,
     cancel: &QueryCancel,
     inactivity: &mut Inactivity,
-) -> Result<Rows, DbError> {
+    room: &mut ResponseRoom,
+) -> Result<StatementRows, DbError> {
     let mut request = ExecuteRequest::new(statement.text.clone(), RiskGrade::Read);
     request.cell_limit = cell;
     inactivity.rearm();
     let started = cancel.run(inactivity.guard(conn.execute(request))).await;
     interrupt_on_timeout(&started, cancel).await;
     let started = started?;
+    let mut out = StatementRows {
+        columns: started.columns,
+        rows: Vec::new(),
+        rows_affected: None,
+        truncated: false,
+        budget_spent: false,
+    };
+    // 결과 하나(열 포함)가 들어갈 자리도 없으면 행 없이 끊는다.
+    let header = result_overhead(&out.columns, statement.index, statement.grade);
+    if !room.take(header) {
+        out.budget_spent = true;
+        out.truncated = started.end.is_none();
+        if started.end.is_none() {
+            within(
+                Budget::PAGE.cancel_cleanup,
+                "discard",
+                conn.discard_cursor(),
+            )
+            .await?;
+        }
+        out.rows_affected = started.end.and_then(|e| e.rows_affected);
+        return Ok(out);
+    }
     if let Some(end) = started.end {
-        return Ok((started.columns, Vec::new(), end.rows_affected, false));
+        out.rows_affected = end.rows_affected;
+        return Ok(out);
     }
     let limit = max_rows as usize;
-    let mut rows: Vec<Row> = Vec::new();
     loop {
-        let room = limit + 1 - rows.len();
+        let wanted = limit + 1 - out.rows.len();
         let batch = cancel
             .run(inactivity.guard(conn.fetch(FetchLimit {
-                max_rows: room.min(FETCH.max_rows as usize) as u32,
-                max_bytes: FETCH.max_bytes,
+                max_rows: wanted.min(FETCH.max_rows as usize) as u32,
+                max_bytes: (FETCH.max_bytes as usize).min(room.left().max(1)) as u32,
             })))
             .await;
         interrupt_on_timeout(&batch, cancel).await;
         let batch = batch?;
         let empty = batch.rows.is_empty();
-        rows.extend(batch.rows);
-        if rows.len() > limit {
-            rows.truncate(limit);
+        let mut stop = false;
+        for row in batch.rows {
+            if out.rows.len() == limit {
+                // `max_rows` 를 넘는 행이 있었다.
+                out.truncated = true;
+                stop = true;
+                break;
+            }
+            if !room.take(row_size(&row)) {
+                out.truncated = true;
+                out.budget_spent = true;
+                stop = true;
+                break;
+            }
+            out.rows.push(row);
+        }
+        if stop {
             if batch.end.is_none() {
                 within(
                     Budget::PAGE.cancel_cleanup,
@@ -451,10 +600,11 @@ async fn run_one(
                 )
                 .await?;
             }
-            return Ok((started.columns, rows, None, true));
+            return Ok(out);
         }
         if let Some(end) = batch.end {
-            return Ok((started.columns, rows, end.rows_affected, false));
+            out.rows_affected = end.rows_affected;
+            return Ok(out);
         }
         if empty {
             return Err(DbError::new(

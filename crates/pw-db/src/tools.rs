@@ -32,8 +32,9 @@ use crate::gate::{DbMarks, DbTarget, agent_view, db_grant_for_agent};
 use crate::gate::{on_classifier_thread, plan};
 use crate::schema::{Cached, Request, check_limit, check_object, check_text, slice, unexpected};
 use crate::script::{
-    CancelOnDrop, DEFAULT_MAX_ROWS, DbScriptError, DbScriptResult, ScriptInput, TOOL_CELL_BYTES,
-    audit_detail, fit_rows, read_script_file, refuse_non_queries, run_read_only,
+    CancelOnDrop, DEFAULT_MAX_ROWS, DbScriptError, DbScriptNotRun, DbScriptNotRunReason,
+    DbScriptResult, ResponseRoom, ScriptInput, TOOL_CELL_BYTES, audit_detail, fit_rows,
+    read_script_file, refuse_non_queries, run_read_only,
 };
 use crate::session::{DbSessions, blocking, db_error};
 
@@ -315,6 +316,9 @@ pub struct DbToolQuery {
     pub results: Vec<DbScriptResult>,
     /// 문장이 실패했으면 그 문장과 오류. 그 뒤의 문장은 돌지 않았다.
     pub error: Option<DbScriptError>,
+    /// 응답 예산을 다 써서 돌리지 않은 문장들(`index` 부터 끝까지 `count` 개, `reason: "responseBudget"`). 그 앞 문장은 `truncated`
+    /// 다. 좁혀서(행 · 열을 줄여) 다시 부르거나 그 문장만 따로 부른다.
+    pub not_run: Option<DbScriptNotRun>,
     /// `file` 을 줬으면 읽은 파일(루트 기준 경로).
     pub file: Option<String>,
     /// 감사 로그에 남는 상세 — 문장 수 · 가장 높은 등급 · 문장 해시(`file` 이면 경로와 내용 해시). SQL 원문 · 값은 없다.
@@ -351,7 +355,9 @@ rpc_method! {
     /// 하나(열 · 행 · `truncated` · 소요)를 돌려준다. **조회만 돈다** — 조회가 아닌 문장(쓰기 · DDL · `SET` · 트랜잭션 제어 ·
     /// `ATTACH` · 읽지 못하는 글)이 하나라도 있으면 아무것도 돌리지 않고 거절한다(`notAQuery` — 쓰기는 `db_execute`). 문장 하나가
     /// 실패하면 거기서 멈추고 그때까지의 결과와 `error`(문장 번호 · 줄)를 준다. 행은 문장마다 `maxRows`(기본 100), 셀은 4 KiB 에서
-    /// 잘린다(`truncated` 값). **다음 쪽은 없다** — 잘렸으면 WHERE · LIMIT 로 좁혀 다시 부른다(다시 부르면 다른 스냅숏이다).
+    /// 잘린다(`truncated` 값). 응답 전체는 약 192 KiB 까지 — 행을 읽다 그만큼 차면 그 문장은 `truncated` 이고 뒤 문장은 돌리지 않고
+    /// `notRun`(`index` 부터 `count` 개, `reason: "responseBudget"`)으로 알린다. **다음 쪽은 없다** — 잘렸으면 WHERE · LIMIT · 열을
+    /// 좁혀 다시 부른다(다시 부르면 다른 스냅숏이다).
     /// 사람이 이번 앱 실행에서 Pitwall 의 DB 탐색기로 연 연결만 쓰고(`notOpenedByUser`), 프로덕션 표지가 있는 대상 — MySQL ·
     /// MariaDB 는 같은 서버 · 사용자의 어느 DB 라도 — 은 쓰지 않는다(`productionBlocked`). 결과의 `audit` 은 감사 로그에 남는
     /// 상세(문장 수 · 등급 · 해시)이고 에이전트에게도 보인다.
@@ -694,6 +700,26 @@ impl DbSessions {
             ))));
         }
         let cell = CellLimit(TOOL_CELL_BYTES.min(self.cell_limit().0));
+        let file_path = file.map(|f| f.path);
+        // 응답 예산(결정 M5-D34 · 리뷰 B2): 행을 읽는 그때 센다. 고정 몫은 결과의 틀(파일 경로 · 감사 상세 · 「돌리지 않음」 표지)과
+        // 실패한 문장의 오류 몫이다.
+        let mut room = ResponseRoom::new(
+            serde_json::to_string(&DbToolQuery {
+                statements: u32::MAX,
+                results: Vec::new(),
+                error: None,
+                not_run: Some(DbScriptNotRun {
+                    index: u32::MAX,
+                    line: u32::MAX,
+                    count: u32::MAX,
+                    reason: DbScriptNotRunReason::ResponseBudget,
+                }),
+                file: file_path.clone(),
+                audit: audit.clone(),
+            })
+            .map_or(0, |s| s.len())
+                + ERROR_ROOM,
+        );
         let cancel = QueryCancel::new(conn.interrupter(), Budget::PAGE.cancel_cleanup);
         // 실행은 연결을 쥔 태스크에서 돈다 — 호출이 버려져도(취소 · 세션 끊김) 태스크가 드라이버 호출을 버리고 롤백한 뒤 닫는다.
         let guard = CancelOnDrop::new(cancel.clone());
@@ -702,8 +728,16 @@ impl DbSessions {
             tokio::spawn(async move {
                 // 터널은 연결을 닫을 때까지 쥔다.
                 let _tunnel = tunnel;
-                let ran =
-                    run_read_only(conn.as_mut(), &source, &planned, max_rows, cell, &cancel).await;
+                let ran = run_read_only(
+                    conn.as_mut(),
+                    &source,
+                    &planned,
+                    max_rows,
+                    cell,
+                    &cancel,
+                    &mut room,
+                )
+                .await;
                 let _ = within(Budget::PAGE.cancel_cleanup, "rollback", conn.rollback()).await;
                 let _ = within(Budget::PAGE.connect, "close", conn.close()).await;
                 ran
@@ -718,10 +752,11 @@ impl DbSessions {
             statements: u32::try_from(planned.len()).unwrap_or(u32::MAX),
             results: ran.results,
             error: ran.error,
-            file: file.map(|f| f.path),
+            not_run: ran.not_run,
+            file: file_path,
             audit,
         };
-        // 응답 상한(결정 M5-D34) — 행을 뺀 결과의 크기를 먼저 센다.
+        // 겹방어: 실행 중의 셈이 오류 몫을 넘는 오류 글 등으로 어긋났으면 행을 마저 던다.
         let rows: Vec<Vec<pw_db_types::Row>> = result
             .results
             .iter_mut()
@@ -735,6 +770,9 @@ impl DbSessions {
         Ok(result)
     }
 }
+
+/// 실패한 문장의 오류(서버 글 · 범위)에 남겨 두는 응답 예산의 몫.
+const ERROR_ROOM: usize = 8 * 1024;
 
 /// 오류 `data` 의 최상위 `audit` 에 감사 상세를 싣는다(`crates/pw-mcp` 머리 주석 「툴 메서드 규약」 — 세션이 감사 행으로 옮긴다).
 /// `data` 가 object 가 아니면(글 등) `{ message, audit }` 로 감싼다.
