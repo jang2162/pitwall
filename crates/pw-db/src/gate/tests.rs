@@ -384,3 +384,30 @@ fn targets_ignore_host_case_default_ports_and_tls() {
     let c = target(json!({ "name": "c", "driver": "postgres", "host": "db.example", "user": "x" }));
     assert_ne!(a, c, "another user is another target");
 }
+
+/// MySQL · MariaDB 의 표지 열쇠는 DB 이름만 뺀다 — 터널 목적지 · 사용자가 다르면 다른 열쇠다(메인 판정 2026-11-14). PG 는 DB 를 둔다.
+#[test]
+fn mysql_mark_keys_drop_only_the_database() {
+    let target = |value: serde_json::Value| {
+        agent::DbTarget::of(
+            &crate::config::from_file_value(&value).unwrap(),
+            std::path::Path::new("/r"),
+        )
+    };
+    let my = |db: &str, tunnel: &str, user: &str| {
+        target(
+            json!({ "name": "m", "driver": "mysql", "host": "db.example", "database": db,
+                       "user": user, "ssh_tunnel": { "host_ref": tunnel } }),
+        )
+    };
+    let base = my("app", "bastion-a", "root");
+    assert_eq!(base.mark_key(), my("other", "bastion-a", "root").mark_key());
+    assert_ne!(base.mark_key(), my("app", "bastion-b", "root").mark_key());
+    assert_ne!(base.mark_key(), my("app", "bastion-a", "reader").mark_key());
+    // 「사람이 연 연결」 의 열쇠(대상 전체)는 DB 도 본다.
+    assert_ne!(base, my("other", "bastion-a", "root"));
+    let pg = |db: &str| {
+        target(json!({ "name": "p", "driver": "postgres", "host": "db.example", "database": db }))
+    };
+    assert_ne!(pg("app").mark_key(), pg("other").mark_key());
+}

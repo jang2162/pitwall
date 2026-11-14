@@ -1062,3 +1062,27 @@ async fn invalid_settings_do_not_echo_their_values() {
         "{error:?}"
     );
 }
+
+/// 「사람이 연 연결」 의 열쇠는 푼 대상 전체다(표지의 열쇠와 달리 MySQL 에서도 DB 이름을 뺀 서버 단위가 아니다 — 메인 판정): 사람이
+/// 연 dev 의 설정 DB 를 같은 서버의 다른 DB 로 바꾸면 연 적 없는 연결이다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn on_mysql_the_opened_record_still_keys_on_the_database() {
+    let (f, _my) = mysql_env();
+    f.write_db("dev.toml", MY_DEV);
+    let mut w = f.window();
+    w.call(
+        "db.schema.objects",
+        json!({ "projectId": f.id, "connectionId": "dev", "kind": "table", "limit": 10 }),
+    )
+    .await
+    .unwrap();
+    let mut agent = f.connect(ConnectionScope::Agent);
+    let call = json!({ "projectId": f.id, "connectionId": "dev" });
+    agent.call("db.tool.schema", call.clone()).await.unwrap();
+    f.edit_db(
+        "dev.toml",
+        "database = \"dev_db\"",
+        "database = \"other_db\"",
+    );
+    refused(agent.call("db.tool.schema", call).await, "notOpenedByUser");
+}

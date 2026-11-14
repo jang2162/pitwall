@@ -397,6 +397,8 @@ impl DbSessions {
         let limit = check_limit(p.limit.unwrap_or(DEFAULT_LIST_LIMIT))?;
         // 이 호출이 실제로 읽을 DB 마다 관문을 지난다(메인 판정 — 객체 목록 · `database` 입력, 그리고 `object` 의 점 이름에서
         // 나온 DB). 표지는 그 DB 의 대상에서도 본다.
+        // 지금 드라이버로는 두 번째 관문이 첫 관문과 같은 판정이다 — 점 이름으로 DB 를 고르는 드라이버는 MySQL · MariaDB 뿐이고 그
+        // 표지 열쇠는 DB 이름을 뺀다. DB 를 열쇠에 두면서 점 이름으로 DB 를 고르는 드라이버가 생기면 그때 갈린다(이중 방어).
         let gate = |database: Option<String>| {
             let (s, scope, project, worktree, id) = (
                 Arc::clone(self),
