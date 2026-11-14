@@ -35378,7 +35378,7 @@
       "tier": "read"
     },
     "project.tool.open": {
-      "description": "Pitwall 앱에서 프로젝트 · 파일 · 줄을 연다. 창을 앞으로 가져오지 않는다 — 그 프로젝트 창이 열려 있으면 그 안에 탭만 열고,\n없으면 활성화하지 않고 창을 만든다. `path` 는 프로젝트 루트 안만(상대 경로는 루트 기준). 세션마다 10초에 5번까지\n(넘으면 `rateLimited`). 앱이 실행 중이어야 한다.",
+      "description": "Pitwall 앱에서 프로젝트 · 파일 · 줄을 연다. 창을 앞으로 가져오지 않는다 — 그 프로젝트 창이 열려 있으면 그 안에 탭만 열고,\n없으면 활성화하지 않고 창을 만든다. `path` 는 프로젝트 루트 안만(상대 경로는 루트 기준). 모든 에이전트\n호출을 합쳐 10초에 5번까지(넘으면 `rateLimited`). 앱이 실행 중이어야 한다.",
       "kind": "unary",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",

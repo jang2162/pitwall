@@ -50,7 +50,7 @@ pub enum Reason {
     Untrusted,
     /// (거절) 프로덕션 표지가 있는 DB 대상이다(M5-06 — `data.reason = "productionBlocked"`).
     ProductionBlocked,
-    /// (거절) 세션마다의 호출 빈도를 넘었다(16-m5-plan M5-09 — `project_open`, `data.reason = "rateLimited"`). 잠시 뒤 다시 부른다.
+    /// (거절) Host 전체의 호출 빈도를 넘었다(16-m5-plan M5-09 — `project_open`, `data.reason = "rateLimited"`). 잠시 뒤 다시 부른다.
     RateLimited,
 }
 

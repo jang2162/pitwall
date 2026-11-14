@@ -177,9 +177,24 @@ async fn the_sixth_call_within_ten_seconds_is_rate_limited() {
     assert_eq!(e["data"]["reason"], "rateLimited", "{e}");
     assert!(e["data"]["retryAfterMs"].as_u64().unwrap() <= 10_000, "{e}");
     assert_eq!(f.opener.taken().len(), RATE_LIMIT, "여섯째는 열지 않았다");
-    // 세션마다 센다 — 다른 MCP 세션은 그대로 연다.
-    let mut other = Conn::open(&f.host, agent()).await;
-    other.call(json!({ "projectId": f.id })).await.unwrap();
+}
+
+/// 한도는 Host 전체에 한 벌이다 — 호출마다 새 세션으로 와도(`pitwall tool` 의 꼴) 여섯째는 거절이다(메인 판정 2026-11-14).
+#[tokio::test]
+async fn the_limit_is_shared_by_every_session_of_the_host() {
+    let f = fixture();
+    for _ in 0..RATE_LIMIT {
+        let mut conn = Conn::open(&f.host, agent()).await;
+        conn.call(json!({ "projectId": f.id })).await.unwrap();
+    }
+    let mut sixth = Conn::open(&f.host, agent()).await;
+    let e = sixth.call(json!({ "projectId": f.id })).await.unwrap_err();
+    assert_eq!(e["data"]["reason"], "rateLimited", "{e}");
+    assert_eq!(
+        f.opener.taken().len(),
+        RATE_LIMIT,
+        "새 세션의 여섯째도 열지 않았다"
+    );
 }
 
 #[test]
@@ -187,18 +202,15 @@ fn the_rate_limit_frees_up_after_the_window() {
     let mut limiter = RateLimiter::default();
     let start = Instant::now();
     for i in 0..RATE_LIMIT {
-        limiter
-            .take(1, start + Duration::from_secs(i as u64))
-            .unwrap();
+        limiter.take(start + Duration::from_secs(i as u64)).unwrap();
     }
-    let wait = limiter.take(1, start + Duration::from_secs(9)).unwrap_err();
+    let wait = limiter.take(start + Duration::from_secs(9)).unwrap_err();
     assert_eq!(
         wait,
         Duration::from_secs(1),
         "가장 오래된 호출이 창을 벗어날 때까지"
     );
-    assert!(limiter.take(2, start + Duration::from_secs(9)).is_ok());
-    assert!(limiter.take(1, start + RATE_WINDOW).is_ok());
+    assert!(limiter.take(start + RATE_WINDOW).is_ok());
 }
 
 #[tokio::test]
@@ -248,8 +260,11 @@ async fn a_host_without_an_attached_opener_refuses_and_a_headless_host_has_no_me
         .unwrap()
         .id;
     let mut conn = Conn::open(&host, agent()).await;
-    let e = conn.call(json!({ "projectId": id })).await.unwrap_err();
-    assert_eq!(e["code"], code::INTERNAL_ERROR, "{e}");
+    // 열지 못한 호출은 한도에 세지 않는다 — 여섯째도 「준비되지 않았다」 다.
+    for _ in 0..=RATE_LIMIT {
+        let e = conn.call(json!({ "projectId": id })).await.unwrap_err();
+        assert_eq!(e["code"], code::INTERNAL_ERROR, "{e}");
+    }
 
     let headless = LocalHost::builder("local")
         .config(AppPaths::under(&tmp.path().join("app")))

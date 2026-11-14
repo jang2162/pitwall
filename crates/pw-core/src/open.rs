@@ -11,16 +11,18 @@
 //!   관문은 그대로다 — 미신뢰 프로젝트의 창은 제한 모드다.
 //! - **경로**: 프로젝트 루트(워크트리를 주면 그 워크트리 안의 프로젝트 루트) 안만. 상대 경로는 그 루트 기준이다. 판정은 `fs.*` 와
 //!   같다 — 레지스트리의 정규화([`crate::registry::path::normalize`])로 심링크를 푼 실제 경로가 루트 안이어야 한다.
-//! - **빈도 제한**: 세션(Host 연결 — MCP 세션 하나, `pitwall tool` 호출 하나)마다 [`RATE_WINDOW`] 에 [`RATE_LIMIT`] 번. 넘으면
-//!   `PERMISSION_DENIED`(`data.reason = "rateLimited"`, 결과 표지 `rate_limited`). 에이전트가 탭 · 창을 수십 개 여는 것을 막는다.
-//!   세는 것은 여는 데까지 간 호출이다(입력이 틀려 거절한 호출은 세지 않는다). 값은 출발값이다.
+//! - **빈도 제한**: Host 전체에 한 벌 — 이 Host 의 모든 에이전트 호출(MCP 세션 · `pitwall tool` 전부)을 합쳐 [`RATE_WINDOW`] 에
+//!   [`RATE_LIMIT`] 번. 넘으면 `PERMISSION_DENIED`(`data.reason = "rateLimited"`, 결과 표지 `rate_limited`). 에이전트가 탭 · 창을
+//!   수십 개 여는 것을 막는다. 세션마다 세지 않는다 — `pitwall tool` 은 호출마다 새 세션이라 세션 한도는 셸 반복 한 줄로 풀린다
+//!   (메인 판정 2026-11-14, 16-m5-plan M5-09). 세는 것은 여는 데까지 간 호출이다(입력이 틀렸거나 앱이 아직 창을 열 수 없어 거절한
+//!   호출은 세지 않는다). 값은 출발값이다.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
-use pw_rpc::{ConnectionScope, Router, RpcError, SessionId, code, rpc_method};
+use pw_rpc::{ConnectionScope, Router, RpcError, code, rpc_method};
 use serde::{Deserialize, Serialize};
 
 use crate::registry::Registry;
@@ -29,7 +31,7 @@ use crate::registry::path::{WorktreeRootError, normalize, worktree_root};
 
 /// 빈도 제한의 창.
 pub const RATE_WINDOW: Duration = Duration::from_secs(10);
-/// [`RATE_WINDOW`] 안에 세션 하나가 열 수 있는 횟수.
+/// [`RATE_WINDOW`] 안에 이 Host 의 에이전트 호출을 모두 합쳐 열 수 있는 횟수.
 pub const RATE_LIMIT: usize = 5;
 
 #[derive(
@@ -78,8 +80,8 @@ pub struct ProjectOpenToolResult {
 
 rpc_method! {
     /// Pitwall 앱에서 프로젝트 · 파일 · 줄을 연다. 창을 앞으로 가져오지 않는다 — 그 프로젝트 창이 열려 있으면 그 안에 탭만 열고,
-    /// 없으면 활성화하지 않고 창을 만든다. `path` 는 프로젝트 루트 안만(상대 경로는 루트 기준). 세션마다 10초에 5번까지
-    /// (넘으면 `rateLimited`). 앱이 실행 중이어야 한다.
+    /// 없으면 활성화하지 않고 창을 만든다. `path` 는 프로젝트 루트 안만(상대 경로는 루트 기준). 모든 에이전트
+    /// 호출을 합쳐 10초에 5번까지(넘으면 `rateLimited`). 앱이 실행 중이어야 한다.
     pub ProjectOpenTool: "project.tool.open" {
         params: ProjectOpenToolParams,
         result: ProjectOpenToolResult,
@@ -112,7 +114,7 @@ pub trait Opener: Send + Sync + 'static {
 #[derive(Clone, Default)]
 pub struct OpenRequests {
     opener: Arc<OnceLock<Arc<dyn Opener>>>,
-    calls: Arc<Mutex<RateLimiter<SessionId>>>,
+    calls: Arc<Mutex<RateLimiter>>,
 }
 
 impl OpenRequests {
@@ -122,38 +124,27 @@ impl OpenRequests {
     }
 }
 
-/// 세션마다의 빈도 셈.
-struct RateLimiter<K> {
-    calls: HashMap<K, VecDeque<Instant>>,
+/// Host 전체의 빈도 셈: 지난 [`RATE_WINDOW`] 안에 연 시각들.
+#[derive(Default)]
+struct RateLimiter {
+    calls: VecDeque<Instant>,
 }
 
-impl<K> Default for RateLimiter<K> {
-    fn default() -> Self {
-        Self {
-            calls: HashMap::new(),
+impl RateLimiter {
+    /// 지금 하나 더 열 수 있으면 세고 `Ok`, 아니면 다시 될 때까지 남은 시간.
+    fn take(&mut self, now: Instant) -> Result<(), Duration> {
+        while self
+            .calls
+            .front()
+            .is_some_and(|t| now.duration_since(*t) >= RATE_WINDOW)
+        {
+            self.calls.pop_front();
         }
-    }
-}
-
-impl<K: std::hash::Hash + Eq> RateLimiter<K> {
-    /// `key` 가 지금 하나 더 열 수 있으면 세고 `Ok`, 아니면 다시 될 때까지 남은 시간.
-    fn take(&mut self, key: K, now: Instant) -> Result<(), Duration> {
-        // 다른 세션의 지난 기록도 함께 걷는다 — 끝난 세션의 자리가 쌓이지 않게.
-        self.calls.retain(|_, times| {
-            while times
-                .front()
-                .is_some_and(|t| now.duration_since(*t) >= RATE_WINDOW)
-            {
-                times.pop_front();
-            }
-            !times.is_empty()
-        });
-        let times = self.calls.entry(key).or_default();
-        if times.len() >= RATE_LIMIT {
-            let oldest = times.front().copied().unwrap_or(now);
+        if self.calls.len() >= RATE_LIMIT {
+            let oldest = self.calls.front().copied().unwrap_or(now);
             return Err(RATE_WINDOW.saturating_sub(now.duration_since(oldest)));
         }
-        times.push_back(now);
+        self.calls.push_back(now);
         Ok(())
     }
 }
@@ -164,19 +155,19 @@ pub fn register(router: &mut Router, requests: OpenRequests, registry: Registry)
         ProjectOpenTool,
         move |ctx, params: ProjectOpenToolParams| {
             let (requests, registry) = (requests.clone(), registry.clone());
-            let (scope, session) = (ctx.scope().clone(), ctx.session());
+            let scope = ctx.scope().clone();
             async move {
                 tokio::task::spawn_blocking(move || {
                     let request = prepare(&scope, &registry, &params)?;
+                    let opener = requests.opener.get().ok_or_else(|| {
+                        RpcError::internal("the Pitwall app is not ready to open windows yet")
+                    })?;
                     requests
                         .calls
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
-                        .take(session, Instant::now())
+                        .take(Instant::now())
                         .map_err(rate_limited)?;
-                    let opener = requests.opener.get().ok_or_else(|| {
-                        RpcError::internal("the Pitwall app is not ready to open windows yet")
-                    })?;
                     let opened_in = opener.open(&request).map_err(RpcError::internal)?;
                     Ok(ProjectOpenToolResult {
                         opened_in,
@@ -259,7 +250,7 @@ fn rate_limited(retry_after: Duration) -> RpcError {
     RpcError::new(
         code::PERMISSION_DENIED,
         format!(
-            "project_open is rate limited: at most {RATE_LIMIT} calls per {} seconds per session",
+            "project_open is rate limited: at most {RATE_LIMIT} calls per {} seconds for all agents together",
             RATE_WINDOW.as_secs()
         ),
     )

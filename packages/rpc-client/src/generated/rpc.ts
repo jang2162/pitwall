@@ -915,8 +915,8 @@ export type UnaryMethods = {
 	"project.storage": { params: null; result: StorageStatus };
 	/**
 	 * Pitwall 앱에서 프로젝트 · 파일 · 줄을 연다. 창을 앞으로 가져오지 않는다 — 그 프로젝트 창이 열려 있으면 그 안에 탭만 열고,
-	 * 없으면 활성화하지 않고 창을 만든다. `path` 는 프로젝트 루트 안만(상대 경로는 루트 기준). 세션마다 10초에 5번까지
-	 * (넘으면 `rateLimited`). 앱이 실행 중이어야 한다.
+	 * 없으면 활성화하지 않고 창을 만든다. `path` 는 프로젝트 루트 안만(상대 경로는 루트 기준). 모든 에이전트
+	 * 호출을 합쳐 10초에 5번까지(넘으면 `rateLimited`). 앱이 실행 중이어야 한다.
 	 */
 	"project.tool.open": { params: ProjectOpenToolParams; result: ProjectOpenToolResult };
 	/**
@@ -1315,7 +1315,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"project.state.get": {"name":"project.state.get","kind":"unary","tier":"read","roles":["owner"],"params":"ProjectScopedParams","output":"ProjectState","doc":" 프로젝트 창의 상태(`$DATA/projects/<id>/state.json`). 없거나 읽지 못했으면 `state: null`(읽지 못한 이유는 `problem`).\n 레지스트리에 없는 id 면 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"project.state.set": {"name":"project.state.set","kind":"unary","tier":"write","roles":["owner"],"params":"SetProjectStateParams","output":"()","doc":" 프로젝트 창의 상태를 통째로 바꾼다. 원자적으로 쓰고, JSON 객체가 아니거나 1 MiB 를 넘으면 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"project.storage": {"name":"project.storage","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"StorageStatus","doc":" 레지스트리 파일(`$DATA/state.db`)의 상태. `readOnly` · `memory` 면 쓰기 메서드가 오류로 거절된다 — 웰컴 화면은 정상이 아니면\n `reason` 을 배너로 보여 준다.\n","mcp":null,"fileScope":false},
-	"project.tool.open": {"name":"project.tool.open","kind":"unary","tier":"read","roles":["owner"],"params":"ProjectOpenToolParams","output":"ProjectOpenToolResult","doc":" Pitwall 앱에서 프로젝트 · 파일 · 줄을 연다. 창을 앞으로 가져오지 않는다 — 그 프로젝트 창이 열려 있으면 그 안에 탭만 열고,\n 없으면 활성화하지 않고 창을 만든다. `path` 는 프로젝트 루트 안만(상대 경로는 루트 기준). 세션마다 10초에 5번까지\n (넘으면 `rateLimited`). 앱이 실행 중이어야 한다.\n","mcp":{"group":"project","name":"project_open"},"fileScope":false},
+	"project.tool.open": {"name":"project.tool.open","kind":"unary","tier":"read","roles":["owner"],"params":"ProjectOpenToolParams","output":"ProjectOpenToolResult","doc":" Pitwall 앱에서 프로젝트 · 파일 · 줄을 연다. 창을 앞으로 가져오지 않는다 — 그 프로젝트 창이 열려 있으면 그 안에 탭만 열고,\n 없으면 활성화하지 않고 창을 만든다. `path` 는 프로젝트 루트 안만(상대 경로는 루트 기준). 모든 에이전트\n 호출을 합쳐 10초에 5번까지(넘으면 `rateLimited`). 앱이 실행 중이어야 한다.\n","mcp":{"group":"project","name":"project_open"},"fileScope":false},
 	"project.trust": {"name":"project.trust","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ProjectIdParams","output":"ProjectTrust","doc":" 프로젝트의 신뢰. 워크트리 프로젝트는 메인 저장소 프로젝트의 신뢰를 따른다(`ownerId`). 없는 id 면 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"project.update": {"name":"project.update","kind":"unary","tier":"write","roles":["owner"],"params":"UpdateProjectParams","output":"Project","doc":" 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.\n","mcp":null,"fileScope":false},
 	"runtime.get": {"name":"runtime.get","kind":"unary","tier":"read","roles":["owner"],"params":"RuntimeGetParams","output":"RuntimeInfo","doc":" 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.\n","mcp":null,"fileScope":false},

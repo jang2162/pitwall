@@ -256,18 +256,21 @@ async fn an_untrusted_projects_new_window_does_not_start_providers_or_servers() 
     assert_eq!(refused.data.unwrap()["reason"], "untrusted");
 }
 
-/// 세션마다 10초에 5번 — 여섯째는 거절이고 결과 표지가 `denied` · `rate_limited`(CLI 종료 3), 감사 행은 `denied` 다.
+/// 앱 전체로 10초에 5번 — 호출마다 새 MCP 세션이어도(`pitwall tool` 의 꼴) 여섯째는 거절이고 결과 표지가 `denied` ·
+/// `rate_limited`(CLI 종료 3), 감사 행은 `denied` 다(메인 판정 2026-11-14 — Host 전체 한도).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_sixth_project_open_within_ten_seconds_is_rate_limited() {
     let w = WindowHost::new();
     let id = w.tools.project("m5-09-rate");
-    let session = w.tools.session(SessionRequest::default()).await;
     for _ in 0..pw_core::open::RATE_LIMIT {
+        let session = w.tools.session(SessionRequest::default()).await;
         let ok = session
             .call("project_open", json!({ "projectId": id }))
             .await;
         assert_ne!(ok.is_error, Some(true), "{ok:?}");
+        session.close().await;
     }
+    let session = w.tools.session(SessionRequest::default()).await;
     let sixth = session
         .call("project_open", json!({ "projectId": id }))
         .await;
@@ -277,8 +280,14 @@ async fn the_sixth_project_open_within_ten_seconds_is_rate_limited() {
         Some(Mark::denied(Reason::RateLimited)),
         "{sixth:?}"
     );
+    // 세션마다 감사 기록 스레드가 따로라 행의 순서는 세션 순서와 다를 수 있다 — 결과별 수로 본다.
     let rows = w.tools.audit_rows(pw_core::open::RATE_LIMIT + 1);
-    assert_eq!(rows.last().unwrap().outcome, "denied");
+    let denied = rows.iter().filter(|r| r.outcome == "denied").count();
+    assert_eq!(
+        (rows.len(), denied),
+        (pw_core::open::RATE_LIMIT + 1, 1),
+        "{rows:?}"
+    );
     session.close().await;
 }
 
