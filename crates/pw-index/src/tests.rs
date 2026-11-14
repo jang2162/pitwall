@@ -1187,3 +1187,223 @@ async fn a_late_suspension_does_not_stop_a_reopened_root() {
     assert_eq!(*entry.phase.borrow(), Phase::Building);
     assert!(!entry.state().suspended);
 }
+
+/// MCP 툴 `symbol_search`(16-m5-plan.md M5-08 ②). 앱처럼 `methods::register` 로 붙인 라우터를 MCP 세션의 호출자
+/// (`Caller::agent`)로 부른다. 이름 · 그룹 · 등급 · 스키마는 진짜 MCP 세션으로 데스크톱 크레이트의 `mcp_tests::code` 가 본다.
+mod tool {
+    use pw_rpc::{Caller, ConnectionScope, EventHub, Outbound, Role, Router, Session, code};
+    use serde_json::{Value, json};
+
+    use super::*;
+
+    const TOOL: &str = "index.tool.symbolSearch";
+
+    async fn call_as(f: &Fixture, caller: Caller, params: Value) -> Result<Value, RpcError> {
+        let mut router = Router::new();
+        crate::methods::register(&mut router, f.symbols.clone());
+        let (session, mut rx) = Session::new(Arc::new(router), EventHub::new(), caller);
+        session.handle_value(json!({"jsonrpc": "2.0", "id": 1, "method": TOOL, "params": params}));
+        let out: Outbound = tokio::time::timeout(Duration::from_secs(30), rx.recv())
+            .await
+            .expect("an outbound message")
+            .expect("open channel");
+        out.into_response().unwrap().result_as()
+    }
+
+    async fn call(f: &Fixture, params: Value) -> Result<Value, RpcError> {
+        call_as(f, Caller::agent(Role::Owner), params).await
+    }
+
+    fn found(result: &Value) -> Vec<(String, String)> {
+        result["symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| {
+                (
+                    s["name"].as_str().unwrap().to_owned(),
+                    s["kind"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    /// 감시하는 프로젝트를 만들고 색인이 다 될 때까지 기다린다.
+    async fn indexed(f: &Fixture, name: &str, files: &[(&str, &str)]) -> (String, PathBuf, Lease) {
+        let (id, root) = f.repo(name);
+        for (rel, text) in files {
+            write(&root.join(rel), text);
+        }
+        let lease = f.open(&id);
+        f.ready(&id, &root).await;
+        (id, root, lease)
+    }
+
+    const WIDGET: &str = "pub struct Widget;\nimpl Widget {\n    pub fn render(&self) {}\n}\npub fn render_all() {}\n";
+
+    /// 완료 기준: 픽스처 저장소에서 이름으로 찾고 `kinds` 로 거른다. 위치는 1 부터, 화면용 칸(일치 위치 · 점수)은 없다.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn finds_by_name_and_filters_by_kind() {
+        let f = Fixture::new();
+        let (id, root, _lease) = indexed(&f, "app", &[("src/lib.rs", WIDGET)]).await;
+        let result = call(&f, json!({ "projectId": id, "query": "render" }))
+            .await
+            .unwrap();
+        let mut got = found(&result);
+        got.sort();
+        assert_eq!(
+            got,
+            [
+                ("render".to_owned(), "method".to_owned()),
+                ("render_all".to_owned(), "function".to_owned()),
+            ],
+            "{result}"
+        );
+        let method = result["symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["name"] == "render")
+            .unwrap();
+        assert_eq!(method["container"], "Widget");
+        assert_eq!(method["relative"], "src/lib.rs");
+        assert_eq!(method["path"], json!(root.join("src/lib.rs")));
+        assert_eq!(method["language"], "rust");
+        // `    pub fn render` — 이름은 3째 줄 12째 열(1 부터).
+        assert_eq!(
+            (&method["line"], &method["column"]),
+            (&json!(3), &json!(12))
+        );
+        assert_eq!(
+            (&method["startLine"], &method["endLine"]),
+            (&json!(3), &json!(3))
+        );
+        assert!(method.get("positions").is_none() && method.get("score").is_none());
+        assert_eq!(result["matched"], 2);
+        assert_eq!(result["nextCursor"], Value::Null);
+        assert_eq!(result["unindexed"], json!([]));
+        assert_eq!(result["hint"], Value::Null);
+
+        let functions = call(
+            &f,
+            json!({ "projectId": id, "query": "render", "kinds": ["function"] }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            found(&functions),
+            [("render_all".to_owned(), "function".to_owned())]
+        );
+        let types = call(
+            &f,
+            json!({ "projectId": id, "query": "Widget", "kinds": ["struct"] }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(found(&types), [("Widget".to_owned(), "struct".to_owned())]);
+    }
+
+    /// 완료 기준: 미신뢰 프로젝트에서도 찾는다(파싱만 한다 — 결정 M4-D8).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_untrusted_project_is_searched() {
+        let f = Fixture::new();
+        let (id, _root, _lease) = indexed(&f, "cloned", &[("src/lib.rs", WIDGET)]).await;
+        f.projects.set_trust(&id, false).unwrap();
+        assert!(!f.projects.is_trusted(&id));
+        let result = call(
+            &f,
+            json!({ "projectId": id, "query": "Widget", "kinds": ["struct"] }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(found(&result), [("Widget".to_owned(), "struct".to_owned())]);
+    }
+
+    /// 완료 기준: 감시하지 않는(창이 열려 있지 않은) 프로젝트는 `unindexed` 와 「Pitwall 에서 열어라」. 툴이 색인을 만들지 않는다.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unwatched_project_is_unindexed_with_a_hint() {
+        let f = Fixture::new();
+        let (id, root) = f.repo("closed");
+        write(&root.join("src/lib.rs"), WIDGET);
+        let result = call(&f, json!({ "projectId": id, "query": "Widget" }))
+            .await
+            .unwrap();
+        assert_eq!(result["symbols"], json!([]));
+        assert_eq!(result["unindexed"], json!([root]));
+        assert!(
+            result["hint"]
+                .as_str()
+                .unwrap()
+                .contains("open the project in Pitwall"),
+            "{result}"
+        );
+        assert!(f.index_tasks(&id).is_empty());
+    }
+
+    /// 쪽: 기본 50, `cursor` 로 빠짐 · 겹침 없이 이어지고 마지막 쪽의 `nextCursor` 는 `null`. 못 읽는 커서 · 범위 밖 `limit` 은
+    /// invalid params.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pages_follow_the_cursor() {
+        let f = Fixture::new();
+        let mut text = String::new();
+        for i in 0..60 {
+            text.push_str(&format!("pub fn item_{i:02}() {{}}\n"));
+        }
+        let (id, _root, _lease) = indexed(&f, "many", &[("src/lib.rs", &text)]).await;
+        let first = call(&f, json!({ "projectId": id, "query": "item" }))
+            .await
+            .unwrap();
+        assert_eq!(first["symbols"].as_array().unwrap().len(), 50);
+        assert_eq!(first["matched"], 60);
+        let mut seen: Vec<String> = found(&first).into_iter().map(|(n, _)| n).collect();
+        let mut cursor = first["nextCursor"].clone();
+        assert!(cursor.is_string(), "{first}");
+        while !cursor.is_null() {
+            let page = call(
+                &f,
+                json!({ "projectId": id, "query": "item", "limit": 7, "cursor": cursor }),
+            )
+            .await
+            .unwrap();
+            seen.extend(found(&page).into_iter().map(|(n, _)| n));
+            cursor = page["nextCursor"].clone();
+            assert!(seen.len() <= 60);
+        }
+        seen.sort();
+        let want: Vec<String> = (0..60).map(|i| format!("item_{i:02}")).collect();
+        assert_eq!(seen, want);
+        for bad in [
+            json!({ "projectId": id, "query": "item", "cursor": "12" }),
+            json!({ "projectId": id, "query": "item", "cursor": "" }),
+            json!({ "projectId": id, "query": "item", "limit": 0 }),
+            json!({ "projectId": id, "query": "item", "limit": 1001 }),
+        ] {
+            let e = call(&f, bad.clone()).await.unwrap_err();
+            assert_eq!(e.code, code::INVALID_PARAMS, "{bad}");
+        }
+    }
+
+    /// 관문은 `agent_grant` 다: 창 · Host 의 연결은 툴을 부르지 못하고(`notAgentSession`), 없는 프로젝트는 그 관문의 오류 그대로
+    /// (invalid params).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn only_an_mcp_session_calls_the_tool() {
+        let f = Fixture::new();
+        let (id, _root, _lease) = indexed(&f, "app", &[("src/lib.rs", WIDGET)]).await;
+        for scope in [ConnectionScope::Project(id.clone()), ConnectionScope::Host] {
+            let caller = Caller {
+                role: Role::Owner,
+                scope,
+                window: None,
+            };
+            let e = call_as(&f, caller, json!({ "projectId": id, "query": "Widget" }))
+                .await
+                .unwrap_err();
+            assert_eq!(e.code, code::PERMISSION_DENIED);
+            assert_eq!(e.data.unwrap()["reason"], "notAgentSession");
+        }
+        let e = call(&f, json!({ "projectId": "nope", "query": "Widget" }))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, code::INVALID_PARAMS);
+    }
+}

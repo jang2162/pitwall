@@ -119,6 +119,14 @@ impl Fs {
         let _ = self.projects.set(projects);
     }
 
+    /// 붙인 프로젝트 레지스트리 — 툴 메서드가 `agent_grant`(`pw_core::registry::agent`)에 넘길 레지스트리를 얻는 자리다(M5-08 의
+    /// `symbol_search`). 붙지 않았으면 오류.
+    pub fn projects(&self) -> Result<&Projects, RpcError> {
+        self.projects.get().ok_or_else(|| {
+            RpcError::internal("the file system service is not attached to a project registry")
+        })
+    }
+
     /// 프로젝트의 등록 루트와, `worktree` 가 있으면 그 워크트리 안의 프로젝트 루트. 지금 다른 실제 경로로 풀리는 루트는 뺀다
     /// ([`Roots::confirmed`]).
     pub fn roots(&self, project_id: &str, worktree: Option<&str>) -> Result<Roots, RpcError> {

@@ -1,5 +1,5 @@
-//! RPC(tier Read): `index.symbols.search` · `index.file.symbols` · `index.status`. 입력은 struct, 결과는 쪽 단위다 — M5 의
-//! `symbol_search` 툴(05-mcp.md)이 될 꼴이다(결정 M4-D21 — M4 에서는 `mcp: true` 를 달지 않는다).
+//! RPC(tier Read): `index.symbols.search` · `index.file.symbols` · `index.status`. 입력은 struct, 결과는 쪽 단위다(결정 M4-D21 —
+//! 이 RPC 에는 `mcp` 를 달지 않는다). MCP 툴 `symbol_search` 는 같은 함수를 부르는 툴 메서드다(`crate::tools`, M5-08).
 
 use pw_rpc::{Router, rpc_method};
 use serde::{Deserialize, Serialize};
@@ -244,8 +244,9 @@ rpc_method! {
     }
 }
 
-/// `index.*` 를 붙인다.
+/// `index.*` 와 MCP 툴 `symbol_search`(`crate::tools`)를 붙인다.
 pub fn register(router: &mut Router, index: SymbolIndex) {
+    crate::tools::register(router, index.clone());
     let search = index.clone();
     router.unary(
         IndexSymbolsSearchMethod,

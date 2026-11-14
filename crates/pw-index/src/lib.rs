@@ -16,12 +16,14 @@
 //!   다시 만들면(`rescan` 등) 모든 파일의 크기 · 수정 시각을 다시 보고 달라진 것만 다시 파싱한다.
 //! - **신뢰**: 파싱만 하고 프로젝트 코드를 돌리지 않으므로 미신뢰 프로젝트에서도 돈다(결정 M4-D8).
 //! - 결과의 위치는 줄(0 부터) · UTF-16 글자다([`extract`]). 매칭은 [`search`].
+//! - MCP 툴 `symbol_search`(16-m5-plan.md M5-08)는 [`tools`] — 같은 [`SymbolIndex::search`] 를 부른다.
 
 pub mod extract;
 pub mod kind;
 pub mod lang;
 pub mod methods;
 mod search;
+pub mod tools;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
