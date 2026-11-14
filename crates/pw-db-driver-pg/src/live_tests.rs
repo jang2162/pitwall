@@ -500,6 +500,20 @@ async fn live_pg_side_effect_functions_that_pass_a_read_only_transaction() {
         "SELECT pg_create_physical_replication_slot('pw_live_probe_drop')",
     )
     .await;
+    for extension in ["pg_surgery", "pg_prewarm", "pg_buffercache", "pg_trgm"] {
+        run(
+            &mut conn,
+            &format!("CREATE EXTENSION IF NOT EXISTS {extension}"),
+        )
+        .await;
+    }
+    run(&mut conn, "DROP TABLE IF EXISTS pw_live_probe_surgery").await;
+    run(&mut conn, "CREATE TABLE pw_live_probe_surgery (id int)").await;
+    run(
+        &mut conn,
+        "INSERT INTO pw_live_probe_surgery VALUES (1), (2), (3)",
+    )
+    .await;
     let probes = [
         format!("SELECT pg_cancel_backend({victim_pid})"),
         "SELECT pg_reload_conf()".to_owned(),
@@ -524,6 +538,15 @@ async fn live_pg_side_effect_functions_that_pass_a_read_only_transaction() {
         "SELECT pg_promote()".to_owned(),
         "SELECT pg_stat_reset_shared('bgwriter')".to_owned(),
         format!("SELECT pg_log_backend_memory_contexts({own_pid})"),
+        // M5-07 리뷰 B1 · contrib 다시 훑기(`pw_db_sql::risk` 의 `SERVER_ADMIN_FUNCTIONS` 머리 주석). 확장은 위에서 만들고 끝에 지운다.
+        "SELECT heap_force_freeze('pw_live_probe_surgery'::regclass, ARRAY['(0,2)']::tid[])"
+            .to_owned(),
+        "SELECT heap_force_kill('pw_live_probe_surgery'::regclass, ARRAY['(0,1)']::tid[])"
+            .to_owned(),
+        "SELECT autoprewarm_dump_now()".to_owned(),
+        "SELECT pg_buffercache_evict(1)".to_owned(),
+        "SELECT pg_nextoid('pg_class', 'oid', 'pg_class_oid_index')".to_owned(),
+        "SELECT set_limit(0.2)".to_owned(),
         "SELECT pg_logical_emit_message(true, 'pw', 'x')".to_owned(),
         "SELECT pg_ls_dir('.')".to_owned(),
         "SELECT pg_stat_file('postgresql.conf')".to_owned(),
@@ -626,6 +649,12 @@ async fn live_pg_side_effect_functions_that_pass_a_read_only_transaction() {
     for extension in ["dblink", "tablefunc", "xml2"] {
         run(&mut conn, &format!("DROP EXTENSION IF EXISTS {extension}")).await;
     }
+    // `heap_force_kill` 은 롤백으로 돌아오지 않는다(MVCC 밖의 페이지 수정) — 3행에서 1행이 사라졌다.
+    let surviving = count(&mut conn, "SELECT count(*) FROM pw_live_probe_surgery").await;
+    run(&mut conn, "DROP TABLE pw_live_probe_surgery").await;
+    for extension in ["pg_surgery", "pg_prewarm", "pg_buffercache", "pg_trgm"] {
+        run(&mut conn, &format!("DROP EXTENSION IF EXISTS {extension}")).await;
+    }
     probe_cleanup(&mut conn).await;
     for (function, outcome) in &table {
         println!("{function:40} {outcome}");
@@ -652,6 +681,12 @@ async fn live_pg_side_effect_functions_that_pass_a_read_only_transaction() {
         "pg_ls_dir",
         "pg_stat_file",
         "pg_current_xact_id",
+        "heap_force_freeze",
+        "heap_force_kill",
+        "autoprewarm_dump_now",
+        "pg_buffercache_evict",
+        "pg_nextoid",
+        "set_limit",
         "query_to_xml",
         "query_to_xmlschema",
         "query_to_xml_and_xmlschema",
@@ -677,6 +712,10 @@ async fn live_pg_side_effect_functions_that_pass_a_read_only_transaction() {
     ] {
         assert_eq!(outcome(name), "55000", "{name}");
     }
+    assert_eq!(
+        surviving, 2,
+        "heap_force_kill removed a row inside a read-only transaction"
+    );
     // adminpack 은 PG 17 에 없다.
     assert_eq!(outcome("pg_file_write"), "42883");
     // 치웠다.

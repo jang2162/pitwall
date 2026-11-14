@@ -3,7 +3,7 @@
 //! `RESET MASTER` · `PURGE BINARY LOGS` 류(M-C).
 
 use pw_db_types::RiskGrade::{self, Destructive, UnboundedWrite, Write};
-use pw_db_types::SqlDialect::{self, Mysql, Postgres};
+use pw_db_types::SqlDialect::{self, Mysql, Postgres, Sqlite};
 
 use crate::risk::RiskReason::{self, *};
 use crate::risk::{Classification, classify_statement};
@@ -297,9 +297,49 @@ fn built_in_functions_that_change_server_state_outside_the_live_table() {
         "SELECT pg_prewarm('t')",
         "SELECT pg_truncate_visibility_map('t')",
         "SELECT binary_upgrade_set_next_pg_type_oid(1)",
+        // M5-07 리뷰 B1 · contrib 다시 훑기(`SERVER_ADMIN_FUNCTIONS` 머리 주석).
+        "SELECT heap_force_kill('t'::regclass, ARRAY['(0,1)']::tid[])",
+        "SELECT public.heap_force_freeze('t'::regclass, ARRAY['(0,1)']::tid[])",
+        "SELECT autoprewarm_dump_now()",
+        "SELECT autoprewarm_start_worker()",
+        "SELECT pg_buffercache_evict(1)",
+        "SELECT * FROM pg_buffercache_evict_relation('t')",
+        "SELECT pg_buffercache_evict_all()",
+        "SELECT pg_nextoid('pg_class', 'oid', 'pg_class_oid_index')",
+        "SELECT pg_stop_making_pinned_objects()",
     ] {
         expect(Postgres, sql, UnboundedWrite, &[ServerAdmin]);
     }
+    for sql in [
+        "SELECT asynchronous_connection_failover_add_source('ch', 'h', 3306, '', 50)",
+        "SELECT asynchronous_connection_failover_delete_managed('ch', 'g')",
+        "SELECT asynchronous_connection_failover_reset()",
+        "SELECT group_replication_set_as_primary('uuid')",
+        "SELECT version_tokens_set('a=1')",
+        "SELECT keyring_key_remove('k', 'u')",
+        "SELECT audit_log_rotate()",
+        "SELECT set_firewall_mode('u@h', 'OFF')",
+    ] {
+        expect(Mysql, sql, UnboundedWrite, &[ServerAdmin]);
+    }
+    expect(
+        Postgres,
+        "SELECT set_limit(0.1)",
+        Write,
+        &[SideEffectFunction],
+    );
+    expect(
+        Mysql,
+        "SELECT service_get_write_locks('ns', 'l', 1)",
+        Write,
+        &[SideEffectFunction],
+    );
+    expect(
+        Sqlite,
+        "SELECT fts3_tokenizer('t', x'00')",
+        Write,
+        &[SideEffectFunction],
+    );
     // 같은 꼴의 이름을 가진 읽기 함수(PG 17.6 `pg_proc` 에서 훑은 25개 가운데 상태를 바꾸지 않는 것).
     for sql in [
         "SELECT pg_stat_get_bgwriter_buf_written_clean()",

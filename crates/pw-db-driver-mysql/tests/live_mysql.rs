@@ -198,6 +198,52 @@ async fn live_mysql_read_only_transaction_refuses_an_insert() {
         .unwrap();
 }
 
+/// 시험이 더한 비동기 장애 조치 원본의 수.
+async fn failover_rows(admin: &mut mysql_async::Conn) -> Option<u64> {
+    admin
+        .query_first(
+            "SELECT COUNT(*) FROM performance_schema.replication_asynchronous_connection_failover \
+             WHERE channel_name = 'pw_live_probe'",
+        )
+        .await
+        .unwrap()
+}
+
+/// 분류기가 관리 함수로 막는 MySQL 내장 함수가 `START TRANSACTION READ ONLY` 를 지나는 것(16-m5-plan.md M5-07 리뷰 B1 의 훑기 —
+/// `pw_db_sql::risk` 의 `SERVER_ADMIN_FUNCTION_PREFIXES`): `asynchronous_connection_failover_*` 가 읽기 전용 안에서 복제 설정을 더하고
+/// 지운다. MariaDB 에는 그 함수가 없다(1305). 더한 것은 이 시험이 지운다.
+#[tokio::test]
+async fn live_mysql_failover_functions_pass_a_read_only_transaction() {
+    let (mut conn, version) = open(SslMode::Disable).await;
+    let mut admin = admin().await;
+    let probe = |sql: &str| ExecuteRequest::new(sql.to_owned(), RiskGrade::Write);
+    let add = "SELECT asynchronous_connection_failover_add_source('pw_live_probe', '127.0.0.9', 3306, '', 50)";
+    let delete = "SELECT asynchronous_connection_failover_delete_source('pw_live_probe', '127.0.0.9', 3306, '')";
+    conn.begin(BeginOptions { read_only: true }).await.unwrap();
+    let added = conn.execute(probe(add)).await;
+    if is_mariadb(&version) {
+        let error = added.unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("1305"), "{error:?}");
+        conn.rollback().await.unwrap();
+        conn.close().await.unwrap();
+        return;
+    }
+    added.unwrap();
+    conn.fetch(FetchLimit::rows(10)).await.unwrap();
+    conn.rollback().await.unwrap();
+    assert_eq!(
+        failover_rows(&mut admin).await,
+        Some(1),
+        "the rollback did not undo it"
+    );
+    conn.begin(BeginOptions { read_only: true }).await.unwrap();
+    conn.execute(probe(delete)).await.unwrap();
+    conn.fetch(FetchLimit::rows(10)).await.unwrap();
+    conn.rollback().await.unwrap();
+    assert_eq!(failover_rows(&mut admin).await, Some(0));
+    conn.close().await.unwrap();
+}
+
 /// ⑤ 값 표 — 텍스트 프로토콜(바인드 없음)과 바이너리 프로토콜(바인드 있음)이 같은 값을 낸다.
 #[tokio::test]
 async fn live_mysql_values_follow_the_value_rules() {

@@ -789,6 +789,36 @@ fn classify_set_expr(expr: &SetExpr, dialect: SqlDialect, found: &mut Found) {
 /// 같은 계열(소스 판단), adminpack `pg_file_*` 은 PG 17 에서 빠졌지만 16 이하에 있다. live 표 밖에서 더한 것(M3-03 재리뷰 M-A):
 /// 인덱스를 고치는 `brin_*` · `gin_clean_pending_list`, `pg_import_system_collations` · `pg_log_standby_snapshot` 은 PG 17.6 에서
 /// `BEGIN READ ONLY` 를 지나는 것을 확인했고, 나머지(옛 · 새 판의 백업 · 통계 함수, 확장 함수)는 문서 · 소스 판단이다.
+///
+/// **훑은 범위와 방법**(16-m5-plan.md M5-07 리뷰 B1 회차, 2026-11-14) — 이 목록 · [`SIDE_EFFECT_FUNCTIONS`] ·
+/// [`SQL_TEXT_FUNCTIONS`] 와 그 접두사가 아래를 덮는다:
+///
+/// - **PG 17.6**(`postgres:17.6` 이미지 — CI 와 같은 판): `pg_available_extensions` 의 contrib 45개를 한 DB 에 모두 `CREATE
+///   EXTENSION` 하고, 확장에 딸린 함수와 `pg_catalog` 의 함수 가운데 휘발성(`provolatile = 'v'`)인 437개를 골랐다(안정 · 불변 함수는
+///   선언상 쓰지 않는다 — C 함수가 선언을 어기면 이 훑기도 놓친다). 그 가운데 이 분류기가 조회로 매기는 249개를 인자 타입에 맞춘 값으로
+///   `BEGIN READ ONLY` 안에서 하나씩 불렀다(201개 — 나머지 48개는 `internal` 인자 · 트리거 · 핸들러라 SQL 로 부를 수 없다). 지나간
+///   115개를 하나씩 보고, 세션 밖(데이터 · 파일 · 서버 상태 · 다른 서버)을 바꾸는 것을 더했다: pg_surgery `heap_force_kill` ·
+///   `heap_force_freeze`(행을 롤백 없이 지우거나 얼린다 — 실제로 3행 → 1행), pg_prewarm `autoprewarm_dump_now`(데이터 폴더에 파일을
+///   쓴다) · `autoprewarm_start_worker`(백그라운드 작업자를 띄운다), pg_buffercache `pg_buffercache_evict` 류(공유 버퍼를 비운다 —
+///   접두사), 내장 `pg_nextoid`(OID 카운터를 되돌릴 수 없이 올린다) · `pg_stop_making_pinned_objects`(initdb 전용 — 같은 무리), pg_trgm
+///   `set_limit`(세션 설정 — [`SIDE_EFFECT_FUNCTIONS`]). 인자 오류로 끝난 것도 이름 · 소스로 봤다(amcheck · pageinspect ·
+///   pgstattuple · pg_walinspect 는 읽기). 다른 서버로 나가는 것: dblink 는 [`SQL_TEXT_FUNCTION_PREFIXES`] 가 막는다. **postgres_fdw 의
+///   외부 표는 막지 못한다** — `SELECT * FROM 외부표` 는 원격 서버에서 읽기 전용이 아닌 트랜잭션으로 돌아, 원격의 뷰 · 함수가 쓰면
+///   (원격 `nextval` 을 부르는 뷰로 확인했다) 쓰기가 남는다. 분류기는 표가 외부 표인지 모른다(file_fdw 의 `program` 외부 표도 같다
+///   — 둘 다 만드는 데 사람의 권한이 든다). 05-mcp.md 「DB」 의 한계 문장.
+/// - **MySQL 8.4.6 · MariaDB 11.8.3**: 도움말 표(`mysql.help_topic`)의 함수 이름 488 · 445개를 인자 0 ~ 3개로 `START TRANSACTION READ
+///   ONLY` 안에서 불렀고(지나간 223 · 264개를 하나씩 봤다), `information_schema.routines`(sys 스키마의 함수 22 · 22개 — 프로시저는
+///   `CALL` 이라 이미 쓰기다)도 봤다. 도움말에 없는 MySQL 내장 함수 `asynchronous_connection_failover_*` 가 읽기 전용 안에서 복제
+///   설정을 더하고 지우는 것을 확인했다(접두사). 이미지에 없는 플러그인 · 컴포넌트의 함수(group replication · version tokens ·
+///   keyring_udf · enterprise audit · firewall · locking service)는 문서 판단으로 더했다. 나머지 쓰는 함수(`GET_LOCK` 류 · `SLEEP` ·
+///   `BENCHMARK` · `LOAD_FILE`)는 이미 있다. 기다리기만 하는 `*_POS_WAIT` · `WAIT_FOR_EXECUTED_GTID_SET`, 세션 안의 `LAST_INSERT_ID(n)`,
+///   서버 카운터만 올리는 `UUID_SHORT` 는 넣지 않았다. MariaDB 의 `NEXTVAL` · `NEXT VALUE FOR` 는 분류가 이미 쓰기이고 서버도 읽기
+///   전용에서 막는다(1792).
+/// - **SQLite**(드라이버의 번들 판): `pragma_function_list` 의 스칼라 함수 150개를 `query_only` 트랜잭션 안에서 불렀다. 파일 · 행을 바꾼
+///   것은 없다. `load_extension` · 2인자 `fts3_tokenizer` 는 드라이버 설정이 막지만(「not authorized」 · 「fts3tokenize disabled」) 겹방어로
+///   목록에 둔다. 셸의 `readfile` · `writefile` 은 라이브러리에 없다.
+///
+/// **한계**: 이 판정은 알려진 함수 목록이다. 사람이 설치한 contrib 밖 확장의 C 함수가 읽기 전용 트랜잭션을 우회하면 막지 못한다.
 const SERVER_ADMIN_FUNCTIONS: &[&str] = &[
     // 다른 세션을 끊는다
     "pg_terminate_backend",
@@ -835,6 +865,27 @@ const SERVER_ADMIN_FUNCTIONS: &[&str] = &[
     "pg_stat_statements_reset",
     "pg_prewarm",
     "pg_truncate_visibility_map",
+    // pg_surgery: 행을 롤백 없이 지우거나 얼린다(MVCC 밖의 페이지 수정 — M5-07 리뷰 B1)
+    "heap_force_kill",
+    "heap_force_freeze",
+    // pg_prewarm: 데이터 폴더에 파일을 쓴다 · 백그라운드 작업자를 띄운다
+    "autoprewarm_dump_now",
+    "autoprewarm_start_worker",
+    // OID 카운터를 올린다(pg_upgrade · initdb 전용 — 되돌릴 수 없다)
+    "pg_nextoid",
+    "pg_stop_making_pinned_objects",
+    // MySQL 플러그인 · 컴포넌트(문서 판단 — 이미지에 없다): 방화벽 · 버전 토큰 · keyring_udf
+    "set_firewall_mode",
+    "mysql_firewall_flush_status",
+    "version_tokens_set",
+    "version_tokens_edit",
+    "version_tokens_delete",
+    "version_tokens_lock_shared",
+    "version_tokens_lock_exclusive",
+    "version_tokens_unlock",
+    "keyring_key_store",
+    "keyring_key_remove",
+    "keyring_key_generate",
     // adminpack: 서버 파일을 쓴다
     "pg_file_write",
     "pg_file_rename",
@@ -844,7 +895,8 @@ const SERVER_ADMIN_FUNCTIONS: &[&str] = &[
 
 /// 이 접두사로 시작하는 이름도 관리 함수다: `pg_replication_origin_*`(복제 원점 만들기 · 지우기 · 진행), `pg_stat_reset*`(통계 지우기),
 /// `pg_logical_slot_*`(`get` 은 슬롯의 변경을 소비한다 — `peek` 은 소비하지 않지만 같은 디코딩을 돌린다), `brin_summarize*` ·
-/// `brin_desummarize*`(BRIN 인덱스를 고친다), `binary_upgrade_*`(pg_upgrade 전용, 카탈로그를 고친다).
+/// `brin_desummarize*`(BRIN 인덱스를 고친다), `binary_upgrade_*`(pg_upgrade 전용, 카탈로그를 고친다), `pg_buffercache_evict*`(공유
+/// 버퍼), MySQL `asynchronous_connection_failover_*` · `group_replication_*` · `audit_log_*`(아래 「훑은 범위」 — [`SERVER_ADMIN_FUNCTIONS`]).
 ///
 /// 같은 꼴(이름에 `_get_changes` · `summarize` · `clean` · `advance` · `reset` · `peek`)을 PG 17.6 `pg_proc` 에서 훑었다(M3-03 마지막
 /// 회차) — 그 25개 가운데 상태를 바꾸는 것은 모두 이 목록 · 접두사에 있고, 남은 것(`pg_stat_get_*_clean` · `*_stat_reset_time` ·
@@ -856,6 +908,14 @@ const SERVER_ADMIN_FUNCTION_PREFIXES: &[&str] = &[
     "brin_summarize",
     "brin_desummarize",
     "binary_upgrade_",
+    // pg_buffercache: 공유 버퍼를 비운다(`_relation` · `_all` 은 PG 18)
+    "pg_buffercache_evict",
+    // MySQL 8.0.22+ 내장: 비동기 복제 장애 조치 원본을 더하고 지운다(8.4.6 의 `START TRANSACTION READ ONLY` 안에서 확인)
+    "asynchronous_connection_failover_",
+    // MySQL group replication 플러그인(문서 판단): 주 서버 · 모드 · 동시성 · 동작 바꾸기
+    "group_replication_",
+    // MySQL Enterprise audit(문서 판단): 필터 · 계정 · 로그 회전
+    "audit_log_",
 ];
 
 /// 조회를 쓰기로 만드는 부작용 함수(이름 견주기는 [`SERVER_ADMIN_FUNCTIONS`] 와 같다). DBX 의 `SIDE_EFFECT_SELECT_FUNCTIONS`
@@ -879,8 +939,16 @@ const SIDE_EFFECT_FUNCTIONS: &[&str] = &[
     "release_all_locks",
     "benchmark",
     "load_file",
+    // pg_trgm: 세션 설정(`pg_trgm.similarity_threshold`)을 바꾼다 — `set_config` 와 같다
+    "set_limit",
+    // MySQL locking service(문서 판단): `GET_LOCK` 과 같은 잠금
+    "service_get_read_locks",
+    "service_get_write_locks",
+    "service_release_locks",
     // SQLite
     "load_extension",
+    // 2인자 꼴은 토크나이저 포인터를 등록한다(드라이버 설정이 막지만 겹방어)
+    "fts3_tokenizer",
 ];
 
 /// 이 접두사로 시작하는 이름도 부작용 함수다: `pg_sleep` · `pg_sleep_for` · `pg_sleep_until`, `pg_advisory_lock` 류와
