@@ -123,7 +123,7 @@
 | `git_status` | `git.status` · `git.refs` · `git.repo` | `paths?` · `cursor?` · `limit?`(1~1000, 기본 200) | 요약(`head` · `upstream`(ahead/behind) · 진행 중 작업 · 스테이징 · 미스테이징 · untracked · 충돌 파일 수 — 쪽이 아니라 전체의 수)과 바뀐 파일의 한 쪽(경로순), `nextCursor`(그 쪽의 마지막 경로) |
 | `git_log` | `git.logPage` | `branch?`(없으면 HEAD — `git log` 와 같다) · `author?` · `message?`(둘 다 대소문자를 가리지 않는 글자 그대로) · `since?` · `until?`(git `--since` 꼴 — `2026-01-31` · `2 weeks ago` · `@<유닉스 초>`) · `paths?` · `detail?` · `cursor?` · `limit?`(1~500, 기본 50) | 커밋마다 해시 · 부모 · 작성자 · 작성 시각 · 제목 · 가리키는 ref 이름, `detail` 이면 본문(16 K 글자에서 자름). 그래프 레인은 싣지 않는다. HEAD 에 커밋이 없으면 빈 쪽 |
 | `git_diff` | `git.diff` | `from?` · `to?`(`git.diff` 의 쪽 — 없으면 작업 트리, 즉 `git diff`) · `path?` · `detail?` · `ignoreWhitespace?` | 바뀐 파일(상태 · 경로 · 더한 · 뺀 줄 수 · 바이너리 · 너무 큼 · 생성 파일). `detail` 이나 `path` 면 파일마다 `patch`(unified diff 글). 예산을 넘으면 그 파일부터 `patch` 를 빼고 `truncated`, 목록도 넘으면 `omittedFiles` |
-| `git_blame` | `git.blame`(스트림)의 엔진 | `path` · `rev?` · `startLine` · `endLine`(한 번에 500줄까지) | 범위마다(줄 순서, 같은 커밋이 이어지면 합친다) 커밋 · 그 커밋에서의 경로 · 작성자 · 작성 시각 · 제목, 그리고 blame 한 커밋 · 파일 줄 수 · 엔진. 파일 밖 범위 · 그 리비전에 없는 파일은 invalid params |
+| `git_blame` | `git.blame`(스트림)의 엔진 | `path` · `rev?` · `startLine` · `endLine`(한 번에 500줄까지) | 범위마다(줄 순서, 같은 커밋이 이어지면 합친다) 커밋 · 그 커밋에서의 경로 · 작성자 · 작성 시각 · 제목, 그리고 blame 한 커밋 · 파일 줄 수 · 엔진. 예산을 넘으면 앞쪽만 싣고 `truncated` 와 싣지 못한 첫 줄 `nextLine`(그 줄을 `startLine` 으로 다시 부른다). 파일 밖 범위 · 그 리비전에 없는 파일은 invalid params |
 | `git_branch_list` | `git.refs` | `includeTags?` | 로컬 브랜치(이름 · 해시 · HEAD 여부 · upstream 과 ahead/behind) · 원격 브랜치, `includeTags` 면 태그. 예산을 넘으면 `truncated` |
 
 ### 코드 인텔리전스
@@ -185,7 +185,7 @@
   까닭이 없는 `error` 는 툴(Host RPC)이 실패한 것이다
 - **응답 크기**: 툴 응답 한 건은 직렬화한 결과 JSON 256 KiB 까지(`pw_mcp::server::MAX_RESPONSE_BYTES`), 목록 툴의 `limit` 기본은 100(`DEFAULT_LIST_LIMIT` — `git_log` · `symbol_search` 50, `git_status` 200. 16-m5-plan 결정 M5-D34, 수는 출발값). 툴 메서드는 넘지 않게 자르고(`truncated` 와 다음 `cursor`), 그래도 넘은 응답은 세션이 결과 대신 「범위를 좁혀라」 오류(까닭 `too_large`)로 바꾼다. 재는 것은 Host RPC 의 결과 값이다 — object 결과는 `structuredContent` 와 `content` 의 텍스트로 두 번 실려 나가므로 클라이언트가 받는 글은 그 두 배를 넘을 수 있다. 감사 행은 결과 `error` 이고 크기 열에 넘은 크기를 남긴다
 - **프로젝트 지정**: 입력에 `projectId` 가 있으면 프로젝트 툴이다. 세션에 프로젝트가 있으면(`--project` · cwd) `projectId` 를 필수에서 빼고 빠지면 서버가 채운다. 입력에 `worktree` 가 있고 비었으면(없음 · `null` · 빈 글자열) 세션의 활성 워크트리 꼭대기(`project.resolve` 의 `worktree.top`)로 채운다(세션을 연 경로가 미등록 워크트리 안일 때 — Orca 워크트리 안의 에이전트가 메인 체크아웃이 아니라 자기 워크트리를 본다). 준 값은 덮지 않고, 호출이 세션 프로젝트가 아닌 `projectId` 를 겨누면 채우지 않는다 — 세션의 워크트리는 세션 프로젝트의 것이다
-- **지금 툴**: `project_list`(← `project.list`), `project_info`(← `project.info`: 프로젝트 · 루트 폴더 유무 · 빌드 파일 · 빌드 파일에서 짐작한 언어 · 설정 폴더와 그 안의 설정 파일 id. 설정 내용은 읽지 않는다 — 읽으면 구버전 파일의 마이그레이션이 따라와 조회 툴이 저장소를 고친다)
+- **지금 툴**: `project_list`(← `project.list`), `project_info`(← `project.info`: 프로젝트 · 루트 폴더 유무 · 빌드 파일 · 빌드 파일에서 짐작한 언어 · 설정 폴더와 그 안의 설정 파일 id. 설정 내용은 읽지 않는다 — 읽으면 구버전 파일의 마이그레이션이 따라와 조회 툴이 저장소를 고친다), `git_status` · `git_log` · `git_diff` · `git_blame` · `git_branch_list`(← `git.tool.*` 툴 메서드, 앱 Host 만 — 「Git」 절)
 - MCP 메시지(툴 설명 · 오류)는 번역하지 않는다
 
 ## 3. 권한 모델
