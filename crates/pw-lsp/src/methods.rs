@@ -305,8 +305,8 @@ pw_rpc::rpc_type!(LspStatus);
 mod tests {
     use pw_rpc::{MethodInfo, Tier};
 
-    /// 완료 기준 ⑪: 서버를 띄울 수 있는 메서드는 tier exec, 보내기 · 읽기만 하는 메서드는 tier read. 어느 것도 MCP 툴 · 파일 창
-    /// 메서드가 아니다(결정 M4-D21).
+    /// 완료 기준 ⑪: 서버를 띄울 수 있는 메서드는 tier exec, 보내기 · 읽기만 하는 메서드는 tier read. 어느 것도 파일 창 메서드가
+    /// 아니고, MCP 툴은 툴 메서드 `lsp.tool.diagnostics`(M5-08 — 서버를 띄우지 않고 진단을 읽기만 한다) 하나다(결정 M4-D21).
     #[test]
     fn the_launching_methods_are_declared_exec() {
         let tiers: Vec<(&str, Tier, bool, bool)> = pw_rpc::methods()
@@ -353,6 +353,7 @@ mod tests {
                 ("lsp.status.document", Tier::Read, false, false),
                 ("lsp.status.get", Tier::Read, false, false),
                 ("lsp.symbols.document", Tier::Read, false, false),
+                ("lsp.tool.diagnostics", Tier::Read, true, false),
                 ("lsp.typeDefinition", Tier::Read, false, false),
                 ("lsp.workspaceSymbol", Tier::Read, false, false),
             ]

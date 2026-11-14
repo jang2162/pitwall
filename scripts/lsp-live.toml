@@ -4,8 +4,9 @@
 #
 # [floors]: 서버마다 그 필터(`test(/(^|::)live_lsp_<서버>_/)`)가 고른 시험 수의 하한. 0 이어도 필터가 0개를 고르면 실패한다
 #   (`--no-tests=fail`). 값은 M4-18 이 정했다 — rust-analyzer · typescript-language-server · basedpyright · jdtls · kotlin-lsp 는 10 이상
-#   (앞의 둘은 기능 행이 더한 시험 수 그대로), ruff 는 진단 · 포맷 · 코드 액션 3(정의 · 완성 · rename 이 없는 서버다). 하한은 실제로
-#   도는 수다(리뷰 L4 — 하한이 실제보다 낮으면 그 차이만큼 시험이 조용히 빠질 수 있다). 시험을 더하면 하한도 함께 올린다.
+#   (앞의 둘은 기능 행이 더한 시험 수 그대로 — rust-analyzer 는 M5-08 의 `diagnostics` 툴 시험 하나를 더해 15), ruff 는 진단 · 포맷 ·
+#   코드 액션 3(정의 · 완성 · rename 이 없는 서버다). 하한은 실제로 도는 수다(리뷰 L4 — 하한이 실제보다 낮으면 그 차이만큼 시험이
+#   조용히 빠질 수 있다). 시험을 더하면 하한도 함께 올린다.
 # [capabilities]: 서버가 `initialize` 에 알려야 하는 정적 능력 칸(ServerCapabilities 의 키). 알리지 않으면 initialize 시험이 실패한다.
 #   능력 하나마다 그 능력의 live 시험이 하나 있다(crates/pw-lsp/tests/live_matrix.rs · 기능 행의 live_*.rs) — 그 시험도 먼저 문서의
 #   능력 칸(`lsp.document.capabilities` — 정적 능력과 동적 등록)에 그 능력이 있는지 본다. 진단은 서버가 보내는 알림이라 칸이 없다
@@ -18,7 +19,7 @@
 # (15 「공유 부품의 주인」 — 표에서 능력을 빼는 변경은 리뷰에서 사람이 본다).
 
 [floors]
-rust_analyzer = 14
+rust_analyzer = 15
 typescript_language_server = 16
 basedpyright = 11
 ruff = 4

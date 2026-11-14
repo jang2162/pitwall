@@ -21,7 +21,7 @@ mod live {
     use pw_lsp::live::LiveServer;
     use serde_json::{Value, json};
 
-    use super::common::env::{Env, EnvOptions};
+    use super::common::env::{Conn, Env, EnvOptions};
 
     pub fn copy_dir(from: &Path, to: &Path) {
         std::fs::create_dir_all(to).unwrap();
@@ -55,7 +55,16 @@ mod live {
             })
     }
 
+    /// [`type_error`] 가 연 그대로: 환경, 그 파일을 연 창의 연결(쥐는 동안 서버가 산다), 앵커의 (줄, UTF-16 열 — 0 부터).
+    pub struct Opened {
+        pub env: Env,
+        pub win: Conn,
+        pub line: u64,
+        pub column: u64,
+    }
+
     /// `file` 을 열고 앵커 자리의 오류(길이 `width`)를 기다린다. `pulled` 면 서버 자체 진단(`source == server`)도 온 것을 본다.
+    /// 창은 닫지 않고 돌려준다 — 받는 쪽이 더 볼 것을 본 뒤 닫는다.
     pub async fn type_error(
         server: LiveServer,
         fixture: &str,
@@ -63,7 +72,7 @@ mod live {
         language: &str,
         width: u64,
         pulled: Option<&str>,
-    ) {
+    ) -> Opened {
         let env = Env::new(EnvOptions {
             // cargo · node 를 찾도록 시험 프로세스의 환경을 넘긴다.
             isolated_shell: false,
@@ -153,14 +162,19 @@ mod live {
             .await
             .unwrap();
         assert!(counts["error"].as_u64().unwrap() >= 1, "{counts}");
-        win.session.close();
+        Opened {
+            env,
+            win,
+            line,
+            column,
+        }
     }
 }
 
 #[cfg(pw_live_lsp_rust_analyzer)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn live_lsp_rust_analyzer_diagnostics() {
-    live::type_error(
+    let opened = live::type_error(
         pw_lsp::live::LiveServer::RustAnalyzer,
         "rust",
         "src/m4_06_diagnostics.rs",
@@ -169,6 +183,52 @@ async fn live_lsp_rust_analyzer_diagnostics() {
         Some("rust-analyzer"),
     )
     .await;
+    opened.win.session.close();
+}
+
+/// MCP 툴 `diagnostics`(16-m5-plan.md M5-08 live): 창이 rust-analyzer 로 연 파일의 타입 오류를 MCP 세션의 연결이 상대 경로로 골라
+/// 줄 · 열 1 부터로 읽고, 서버 요약에 rust-analyzer 가 준비된 것으로 있다.
+#[cfg(pw_live_lsp_rust_analyzer)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_lsp_rust_analyzer_diagnostics_tool() {
+    use pw_rpc::ConnectionScope;
+    use serde_json::json;
+
+    let opened = live::type_error(
+        pw_lsp::live::LiveServer::RustAnalyzer,
+        "rust",
+        "src/m4_06_diagnostics.rs",
+        "Rust",
+        7,
+        Some("rust-analyzer"),
+    )
+    .await;
+    let env = &opened.env;
+    let mut agent = env.connect(ConnectionScope::Agent);
+    let page = agent
+        .call(
+            "lsp.tool.diagnostics",
+            json!({ "projectId": env.id, "path": "src/m4_06_diagnostics.rs", "minSeverity": "error" }),
+        )
+        .await
+        .unwrap();
+    eprintln!("diagnostics tool: {page}");
+    let errors = page["files"][0]["diagnostics"].as_array().unwrap();
+    assert!(
+        errors.iter().any(|d| d["line"] == opened.line + 1
+            && d["column"] == opened.column + 1
+            && d["endColumn"] == opened.column + 1 + 7),
+        "{page}"
+    );
+    assert!(errors.iter().all(|d| d["severity"] == "error"), "{page}");
+    let servers = page["servers"].as_array().unwrap();
+    assert!(
+        servers
+            .iter()
+            .any(|s| s["server"] == "rust-analyzer" && s["state"]["kind"] == "ready"),
+        "{page}"
+    );
+    opened.win.session.close();
 }
 
 #[cfg(pw_live_lsp_typescript_language_server)]
@@ -182,7 +242,10 @@ async fn live_lsp_typescript_language_server_diagnostics() {
         5,
         None,
     )
-    .await;
+    .await
+    .win
+    .session
+    .close();
 }
 
 /// `⌥↩`(진단 없이 — Host 가 진단 저장으로 채운다)과 「빠른 수정」(팝업이 버전 모름 `null` 로 준 진단) 모두 TS 의 빠른 수정을 받는다.

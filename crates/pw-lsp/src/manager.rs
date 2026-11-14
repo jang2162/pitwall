@@ -1893,6 +1893,23 @@ impl LspManager {
         }
     }
 
+    /// 그 프로젝트 · 워크트리(`None` 이면 메인 체크아웃)의 인스턴스 상태 — [`Self::status`] 를 워크트리로 거른 것(`diagnostics`
+    /// 툴의 서버 요약, `crate::tools`). 워크트리는 끝의 `/` 를 떼고 견준다(진단 저장소와 같다).
+    pub(crate) fn status_in(
+        &self,
+        project_id: &str,
+        worktree: Option<&str>,
+    ) -> Vec<LspInstanceStatus> {
+        let want = crate::diagnostics::normalize_worktree(worktree);
+        lock(&self.inner.state)
+            .instances
+            .iter()
+            .filter(|(k, _)| k.project_id == project_id)
+            .filter(|(k, _)| crate::diagnostics::normalize_worktree(k.worktree.as_deref()) == want)
+            .map(|(k, i)| status_of(k, i))
+            .collect()
+    }
+
     /// 인스턴스의 서버 pid(시험 · 진단).
     pub fn pids(&self, project_id: &str) -> Vec<u32> {
         self.pids_of(project_id, None)
