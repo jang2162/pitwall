@@ -21,7 +21,7 @@
 
 - **앱 쪽**: 주 인스턴스가 시작하면 로컬 소켓을 연다. 세션 · 툴 · 감사 로그는 앱 안에서 돈다. 네트워크 포트는 열지 않는다
 - **`pitwall mcp`**: 그 소켓이 있으면 붙어서 stdio 줄을 그대로 잇는 프록시다. 소켓이 없거나 받지 않으면 **헤드리스** — 같은 프로세스에 `LocalHost` 를 만들어 stdio 로 직접 서비스한다. 앱을 띄우지 않는다
-  - 헤드리스는 레지스트리를 **읽기만** 한다: 파일이 없으면 빈 목록, 손상 · 마이그레이션이 필요한 파일도 건드리지 않고 빈 목록이다(복구 · 마이그레이션은 레지스트리를 소유한 앱의 일). 헤드리스에는 **코어 툴만** 있다(「툴 레지스트리」 의 「세션의 툴은 그 Host 가 처리하는 것만」) — `project_list` · `project_info`, 그리고 `settings_get`(아직 없다 — 16-m5-plan M5-09). 승인 경로가 없으므로 그 가운데 `read` 툴만 성공한다. 그 밖의 툴(git · DB · 코드)은 앱이 실행 중이어야 한다 — 연 연결 · 승인 창 · 언어 서버 · 심볼 색인이 앱에 있다(06-roadmap.md 결정 D61)
+  - 헤드리스는 레지스트리를 **읽기만** 한다: 파일이 없으면 빈 목록, 손상 · 마이그레이션이 필요한 파일도 건드리지 않고 빈 목록이다(복구 · 마이그레이션은 레지스트리를 소유한 앱의 일). 헤드리스에는 **코어 툴만** 있다(「툴 레지스트리」 의 「세션의 툴은 그 Host 가 처리하는 것만」) — `project_list` · `project_info` · `settings_get`. 승인 경로가 없으므로 그 가운데 `read` 툴만 성공한다. 그 밖의 툴(git · DB · 코드)은 앱이 실행 중이어야 한다 — 연 연결 · 승인 창 · 언어 서버 · 심볼 색인이 앱에 있다(06-roadmap.md 결정 D61)
     - 연결은 쓰기 가능한 플래그(파일은 만들지 않는다)로 열고 질의를 `query_only` 로 막는다. state.db 가 WAL 이라(03 「state.db」) `SQLITE_OPEN_READ_ONLY` 로 열면 앱이 꺼져 있을 때 `-wal` · `-shm` 을 만들고 닫으며 지우지 못해 남긴다. 쓸 수 있는 연결은 열려 있는 동안만 둘을 두고 마지막으로 닫힐 때 걷는다. 앱이 비정상 종료로 남긴 `-wal` 이 있으면 닫히며 그 내용(이미 커밋된 쓰기)을 파일에 옮긴다. 쓸 수 없는 폴더면 읽기 전용 · `immutable` 연결로 연다
   - Windows 는 소켓이 아직 없어 언제나 헤드리스다
   - **헤드리스로 시작한 뒤 앱이 뜨면** 그 뒤의 요청을 앱으로 넘긴다: 헤드리스 세션이 `tools/list` · `tools/call` 을 받을 때 소켓을 다시 보고, 앱이 받으면 넘겨 붙고 `tools/list_changed` 를 보낸다. 에이전트 클라이언트는 세션을 시작할 때 `pitwall mcp` 를 띄우므로 앱보다 에이전트를 먼저 켜는 순서가 흔하다. 아직 없다(16-m5-plan M5-20) — 지금 `pitwall mcp` 는 시작할 때 한 번만 앱을 찾는다. 넘겨 붙기가 들어오기 전까지는 헤드리스 세션의 서버 안내문(`instructions`)이 「앱이 꺼져 있어 코어 툴만 있다. 앱을 켠 뒤 MCP 서버를 다시 시작하면 나머지가 나온다」 를 알린다(`pw_mcp::server::HEADLESS_NOTICE`). 앱 세션에는 싣지 않는다. 헤드리스인지는 연결 방식(stdio · 소켓 · 프로세스 안 duplex)이 아니라 세션을 서비스하는 Host 의 성질이다 — 세션을 만드는 쪽이 `pw_mcp::Services` 의 `host_kind`(`HostKind::App` · `HostKind::Headless`, 기본값 없음)로 알린다. `write` 이상 거절의 까닭 `headless_write` 도 이것으로 가른다
@@ -47,6 +47,11 @@
 | `project_open` | UI에서 프로젝트/파일/라인 열기 | read* |
 | `settings_get` | 설정 키 조회(전역 · 프로젝트 — 디스크에 쓰지 않고 읽는다) | read |
 | `settings_set` | 설정 키 변경 — M5 에 없다. 설정 UI(04 F11-6)가 설정 키 표를 만들 때 함께 온다(06-roadmap.md 결정 D59) | write |
+
+**지금 구현**(16-m5-plan M5-09):
+
+- `settings_get`(← 툴 메서드 `config.tool.get`, `crates/pw-core/src/config/tool.rs`, 코어 툴 — 헤드리스에도 있다): `{ projectId?, worktree?, key? }`. 부를 때마다 파일을 디스크에 쓰지 않고 새로 읽는다(`ConfigSource::without_writes` — 구버전 파일을 마이그레이션해 쓰거나 `.backup/` 을 만들지 않는다). `projectId` 가 없으면(`null`) 전역 설정, 있으면 전역 위에 그 프로젝트 설정(`project.toml` · `project.local.toml`)을 얹은 값이다 — 세션에 프로젝트가 있으면 키를 빼면 세션 프로젝트이므로 전역만 보려면 `null` 을 준다. 결과는 값 하나(테이블이 아닌 것)마다 점 키(`mcp.preset`, 점 · 공백이 든 키 이름은 큰따옴표) · 값 · 이긴 레이어(`builtin` · `global` · `shared` · `personal` — 개인 전용 프로젝트의 `project.toml` 은 `personal`) · 가렸는가와, 읽은 파일 목록이다. `key` 는 점 키 단위 접두로 좁힌다. 키 이름이 비밀을 가리키는 값은 `[redacted]` 로 가린다(`pw_core::secret` — 감사 로그 인자 요약과 같은 한 벌, 배열 안 테이블의 키까지). 그 밖의 값(실행 파일을 정하는 `[git] path` · `[open_with.tools]` · `[lsp.<id>]` 의 명령 포함)은 파일 그대로다 — 에이전트가 파일을 직접 읽는 것과 같은 범위(메인 판정 2026-11-14). 파일을 읽지 못하면 그 파일 경로만 알리고 파서의 오류 글(문제 줄의 값을 인용한다)은 싣지 않는다
+- `project_open`(← 툴 메서드 `project.tool.open`, `crates/pw-core/src/open.rs`, 앱 Host 만 — Host 를 만들 때 「열기 요청」 자리 `pw_core::open::OpenRequests` 를 받은 Host 에만 붙는다): `{ projectId, worktree?, path?, line?, column? }`. Host 가 관문(`agent_grant`) · 경로(프로젝트 루트 안 — 상대 경로는 루트 기준, 판정은 `fs.*` 와 같은 정규화로 심링크를 푼 실제 경로, 밖이면 invalid params) · 빈도를 보고, 데스크톱(`apps/desktop/src-tauri/src/agent_open.rs`)이 `pitwall <path>` 와 같은 길(창별 보류 큐 · `project://open`)로 연다 — 다른 점은 창을 앞으로 가져오지 않는 것이다. 새 창은 Tauri 의 `focused(false)` 로 만든다(macOS 는 tao 가 `makeKeyAndOrderFront` 대신 `orderFront` 만 부르고 앱을 활성화하지 않는다 — 키보드 포커스는 사람이 쓰던 앱에 남고, 창은 그 위에 보일 수 있다). 결과는 `openedIn`(`existingWindow` · `newWindow`)과 연 파일의 실제 경로. **빈도**: Host 연결(MCP 세션 하나, `pitwall tool` 호출 하나)마다 10초에 5번(`pw_core::open::RATE_LIMIT` · `RATE_WINDOW` — 출발값), 넘으면 `PERMISSION_DENIED`(`data.reason = "rateLimited"`, `retryAfterMs`) — 결과 표지 `rate_limited`. 세는 것은 여는 데까지 간 호출이다. 헤드리스에는 없어 CLI 는 `needs_app`(종료 3)으로 가른다
 
 ### 실행 구성 (M6 — 실행 기능과 함께 제공)
 | 툴 | 설명 | 권한 |
@@ -152,6 +157,8 @@
 
 `*` UI에 영향을 주지만 비파괴 → 승인 불필요. 창을 앞으로 가져오지 않는다 — 그 프로젝트 창이 열려 있으면 탭만 열고, 없으면 활성화하지 않고 만든다. 세션마다 호출 빈도를 묶는다(16-m5-plan 결정 M5-D24)
 
+**지금 구현**(16-m5-plan M5-09): `open_with_list`(← `openWith.list` 에 `mcp: true` — 이름 · 등급 · 입력 꼴이 이 표와 같다): 도구 id · 이름 · 기여한 확장 · 파일까지 여는가 · 설정 형식 오류와 기본 도구. 실행 명령은 싣지 않는다. 앱 Host 만(그룹 `open_with`). MCP 세션이 부르면 로그인 셸 환경을 미리 가져오지 않는다(창의 팝업만 곧 실행한다). `open_with_upsert` 는 아직 없다
+
 ### 체크아웃 (M7 — 원격과 함께 제공)
 
 한 프로젝트의 체크아웃이 여러 머신에 있을 때(08-remote-mobile.md 「프로젝트와 체크아웃 (D57)」) 에이전트가 대상을 고른다.
@@ -197,11 +204,12 @@
   | `not_opened_by_user` | `denied` | 사람이 이번 앱 실행에서 Pitwall 의 DB 탐색기로 그 연결(같은 대상)을 연 적이 없다(`data.reason = "notOpenedByUser"`) | DB 툴의 관문(16-m5-plan M5-06 — 「DB」 의 「에이전트의 DB 연결」) |
   | `untrusted` | `denied` | 프로젝트를 신뢰하지 않았다(`data.reason = "untrusted"`) | DB 툴의 관문 |
   | `production_blocked` | `denied` | 프로덕션 표지가 있는 DB 대상이다(`data.reason = "productionBlocked"`) | DB 툴의 관문 |
+  | `rate_limited` | `denied` | 세션마다의 호출 빈도를 넘었다 — 잠시 뒤 다시 부른다(`data.reason = "rateLimited"`) | `project_open`(16-m5-plan M5-09 — 「프로젝트」 표 아래 「지금 구현」) |
 
   **툴의 Host RPC 가 `PERMISSION_DENIED` 로 답하면 결과는 `denied` 다**(메인 판정 — 16-m5-plan M5-06): 까닭은 `data.reason`(camelCase)을 위 표의 코드로 옮긴 것이고(대응은 `pw_mcp::marker::Reason::of_permission_denied` 한 곳), 모르거나 없으면 `permission_denied` 다. 거절 까닭을 더하는 행은 `Reason` 과 그 대응에 한 줄씩 더하고 이 표에 한 줄을 더한다. `PERMISSION_DENIED` 가 아닌 오류(비밀 · 확인이 필요하다는 DB 의 3101 · 3102 등)는 `error` 다. 까닭이 없는 `error` 는 툴(Host RPC)이 실패한 것이다
 - **응답 크기**: 툴 응답 한 건은 직렬화한 결과 JSON 256 KiB 까지(`pw_mcp::server::MAX_RESPONSE_BYTES`), 목록 툴의 `limit` 기본은 100(`DEFAULT_LIST_LIMIT` — `git_log` · `symbol_search` 50, `git_status` 200. 16-m5-plan 결정 M5-D34, 수는 출발값). 툴 메서드는 넘지 않게 자르고(`truncated` 와 다음 `cursor`), 그래도 넘은 응답은 세션이 결과 대신 「범위를 좁혀라」 오류(까닭 `too_large`)로 바꾼다. 재는 것은 Host RPC 의 결과 값이다 — object 결과는 `structuredContent` 와 `content` 의 텍스트로 두 번 실려 나가므로 클라이언트가 받는 글은 그 두 배를 넘을 수 있다. 감사 행은 결과 `error` 이고 크기 열에 넘은 크기를 남긴다
 - **프로젝트 지정**: 입력에 `projectId` 가 있으면 프로젝트 툴이다. 세션에 프로젝트가 있으면(`--project` · cwd) `projectId` 를 필수에서 빼고 빠지면 서버가 채운다. 입력에 `worktree` 가 있고 비었으면(없음 · `null` · 빈 글자열) 세션의 활성 워크트리 꼭대기(`project.resolve` 의 `worktree.top`)로 채운다(세션을 연 경로가 미등록 워크트리 안일 때 — Orca 워크트리 안의 에이전트가 메인 체크아웃이 아니라 자기 워크트리를 본다). 준 값은 덮지 않고, 호출이 세션 프로젝트가 아닌 `projectId` 를 겨누면 채우지 않는다 — 세션의 워크트리는 세션 프로젝트의 것이다
-- **지금 툴**: `project_list`(← `project.list`), `project_info`(← `project.info`: 프로젝트 · 루트 폴더 유무 · 빌드 파일 · 빌드 파일에서 짐작한 언어 · 설정 폴더와 그 안의 설정 파일 id. 설정 내용은 읽지 않는다 — 읽으면 구버전 파일의 마이그레이션이 따라와 조회 툴이 저장소를 고친다), `git_status` · `git_log` · `git_diff` · `git_blame` · `git_branch_list`(← `git.tool.*` 툴 메서드, 앱 Host 만 — 「Git」 절), `db_connection_list`(← 툴 메서드 `db.tool.connectionList`) · `db_schema`(← 툴 메서드 `db.tool.schema` — 둘 다 앱 Host 만, 「DB」)
+- **지금 툴**: `project_list`(← `project.list`), `project_info`(← `project.info`: 프로젝트 · 루트 폴더 유무 · 빌드 파일 · 빌드 파일에서 짐작한 언어 · 설정 폴더와 그 안의 설정 파일 id. 설정 내용은 읽지 않는다 — 읽으면 구버전 파일의 마이그레이션이 따라와 조회 툴이 저장소를 고친다), `git_status` · `git_log` · `git_diff` · `git_blame` · `git_branch_list`(← `git.tool.*` 툴 메서드, 앱 Host 만 — 「Git」 절), `db_connection_list`(← 툴 메서드 `db.tool.connectionList`) · `db_schema`(← 툴 메서드 `db.tool.schema` — 둘 다 앱 Host 만, 「DB」), `settings_get`(← 툴 메서드 `config.tool.get`, 코어 툴) · `open_with_list`(← `openWith.list`, 앱 Host 만) · `project_open`(← 툴 메서드 `project.tool.open`, 앱 Host 만 — 「프로젝트」 · 「외부 도구」 표 아래 「지금 구현」)
 - MCP 메시지(툴 설명 · 오류)는 번역하지 않는다
 
 ## 3. 권한 모델
