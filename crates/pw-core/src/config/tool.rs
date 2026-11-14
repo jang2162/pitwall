@@ -237,8 +237,9 @@ fn collect(
     }
 }
 
-/// 레이어들을 아래부터 병합한 값을 키마다 펼치고, 그 키를 마지막으로 정한 레이어를 붙인다. 병합 규칙([`merge`])과 같게 센다 —
-/// 위 레이어의 스칼라 · 배열은 아래의 같은 자리(그 아래 테이블 포함)를 통째로 이기고, 테이블끼리는 키별로 섞인다.
+/// 레이어들을 아래부터 병합한 값([`merge`])을 키마다 펼치고, 그 키(잎)를 마지막으로 정한 레이어를 붙인다. 병합된 값에 남은 잎은
+/// 그 자리를 잎으로 정한 레이어 가운데 가장 위의 것에서 왔다 — 더 위의 레이어가 조상을 스칼라로 덮었으면 그 잎은 병합된 값에 없고,
+/// 테이블로 덮었으면 키별로 섞여 그 잎은 그대로다.
 fn entries(
     layers: &[(SettingLayer, Map<String, Value>)],
     filter: Option<&str>,
@@ -288,14 +289,8 @@ fn provenance(
     for (key, value) in map {
         prefix.push(key.clone());
         match value {
-            Value::Object(inner) => {
-                // 아래 레이어가 이 자리에 둔 스칼라는 테이블로 바뀐다(병합은 테이블이 통째로 이긴다).
-                from.remove(prefix.as_slice());
-                provenance(inner, layer, prefix, from);
-            }
+            Value::Object(inner) => provenance(inner, layer, prefix, from),
             _ => {
-                // 아래 레이어가 이 자리에 둔 테이블은 통째로 진다.
-                from.retain(|path, _| !(path.len() > prefix.len() && path.starts_with(prefix)));
                 from.insert(prefix.clone(), layer);
             }
         }
