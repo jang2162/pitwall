@@ -14,6 +14,8 @@
 //!   2026-11-14, 16-m5-plan 결정 M5-D9 곁).
 //! - 설정 파일을 읽지 못한 까닭(TOML 파싱 오류)은 응답에 싣지 않는다 — 파서의 오류 글은 문제 줄의 값을 인용한다. 어느 파일인지만
 //!   알린다.
+//!   읽기는 설정 폴더 전체(`run/*` · `db/*` 포함 — [`ConfigSource::load_layered`])라, 싣지 않는 파일 하나가 깨져도 호출이
+//!   실패한다(그 파일을 알린다). 설정 창 · `config.get` 과 같은 「일부만 반영된 설정을 만들지 않는다」 규칙이다.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

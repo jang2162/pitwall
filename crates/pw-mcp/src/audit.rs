@@ -298,6 +298,8 @@ mod tests {
             "apiKey": "sk-123",
             "db_password": {"nested": true},
             "X-Auth-Token": "t",
+            "APIToken": "t2",
+            "api_keys": ["k"],
             "keymap": "default",
             "monkey": "banana",
         })))
@@ -309,6 +311,8 @@ mod tests {
                 "apiKey": REDACTED,
                 "db_password": REDACTED,
                 "X-Auth-Token": REDACTED,
+                "APIToken": REDACTED,
+                "api_keys": REDACTED,
                 "keymap": "default",
                 "monkey": "banana",
             })

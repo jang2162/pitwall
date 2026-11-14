@@ -206,7 +206,7 @@ fn key_narrows_to_that_table_or_key() {
 fn secret_keys_are_redacted() {
     let f = fixture(ConfigMode::Repository);
     f.global(
-        "schema = 1\n[db]\napi_token = \"sk-1\"\nmax_rows = 10\n[[hooks]]\nname = \"x\"\npassword = \"p\"\n",
+        "schema = 1\n[db]\napi_token = \"sk-1\"\nmax_rows = 10\n[[hooks]]\nname = \"x\"\npassword = \"p\"\n[auth]\nuser = \"u1\"\n",
     );
     let result = f.get(false, None);
     let token = entry(&result, "db.api_token").unwrap();
@@ -219,8 +219,14 @@ fn secret_keys_are_redacted() {
     let hooks = entry(&result, "hooks").unwrap();
     assert!(hooks.redacted);
     assert_eq!(hooks.value, json!([{ "name": "x", "password": REDACTED }]));
+    // 잎 이름은 평범해도 위 표 이름이 비밀 단어면 가린다.
+    let user = entry(&result, "auth.user").unwrap();
+    assert_eq!((user.value.clone(), user.redacted), (json!(REDACTED), true));
     let all = serde_json::to_string(&result).unwrap();
-    assert!(!all.contains("sk-1") && !all.contains("\"p\""), "{all}");
+    assert!(
+        !all.contains("sk-1") && !all.contains("\"p\"") && !all.contains("u1"),
+        "{all}"
+    );
 }
 
 /// 파싱 오류의 글(문제 줄의 값을 인용한다)은 싣지 않고 파일만 알린다.
@@ -281,4 +287,70 @@ fn only_an_mcp_session_may_call_it_and_worktree_needs_a_project() {
     )
     .unwrap_err();
     assert_eq!(e.code, code::INVALID_PARAMS, "agent_grant 의 오류 그대로");
+}
+
+/// 실제 git 워크트리와 같은 모양(`.git` 파일 → `<main>/.git/worktrees/wt` + `commondir`) — `config::source` 시험과 같다.
+fn fake_worktree(base: &Path) -> (PathBuf, PathBuf) {
+    let main = base.join("main");
+    let wt = base.join("wt");
+    let admin = main.join(".git/worktrees/wt");
+    fs::create_dir_all(&admin).unwrap();
+    fs::create_dir_all(&wt).unwrap();
+    fs::write(admin.join("commondir"), "../..\n").unwrap();
+    fs::write(wt.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+    fs::write(
+        admin.join("gitdir"),
+        format!("{}\n", wt.join(".git").display()),
+    )
+    .unwrap();
+    (main, wt)
+}
+
+/// `worktree` 를 주면 그 워크트리의 커밋된 `.pitwall/project.toml` 을 읽는다(브랜치마다 다를 수 있다). 비면 메인 체크아웃이고,
+/// 그 프로젝트의 워크트리가 아니면 거절한다.
+#[test]
+fn worktree_reads_that_checkouts_project_settings() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = normalize(tmp.path()).unwrap();
+    let (main, wt) = fake_worktree(&base);
+    write(
+        &main.join(".pitwall/project.toml"),
+        "schema = 1\n[mcp]\npreset = \"main\"\n",
+    );
+    write(
+        &wt.join(".pitwall/project.toml"),
+        "schema = 1\n[mcp]\npreset = \"wt\"\n",
+    );
+    let paths = AppPaths::under(&base.join("app"));
+    let registry = Registry::new(paths.clone(), None, EventBus::new(DEFAULT_CAPACITY));
+    let id = registry
+        .create(NewProject {
+            root: main.clone(),
+            ..NewProject::default()
+        })
+        .unwrap()
+        .id;
+    let get = |worktree: Option<&Path>| {
+        settings_get(
+            &ConnectionScope::Agent,
+            &paths,
+            &registry,
+            &SettingsGetToolParams {
+                project_id: Some(id.clone()),
+                worktree: worktree.map(|w| w.display().to_string()),
+                key: Some("mcp.preset".into()),
+            },
+        )
+    };
+    assert_eq!(
+        value_and_layer(&get(Some(&wt)).unwrap(), "mcp.preset"),
+        (json!("wt"), SettingLayer::Shared)
+    );
+    assert_eq!(
+        value_and_layer(&get(None).unwrap(), "mcp.preset"),
+        (json!("main"), SettingLayer::Shared)
+    );
+    let other = base.join("elsewhere");
+    fs::create_dir_all(&other).unwrap();
+    assert_eq!(get(Some(&other)).unwrap_err().code, code::INVALID_PARAMS);
 }
