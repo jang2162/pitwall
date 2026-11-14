@@ -40,7 +40,8 @@ pub const RESPONSE_BUDGET: usize = 192 * 1024;
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsToolParams {
     pub project_id: String,
-    /// 볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃.
+    /// 볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. 그 프로젝트의 워크트리가
+    /// 아니면 invalid params.
     #[serde(default)]
     pub worktree: Option<String>,
     /// 이 파일만. 절대 경로나 프로젝트 루트(워크트리면 그 안의 프로젝트 루트) 기준 상대 경로(`src/lib.rs`).
@@ -191,10 +192,11 @@ async fn call(
         let path = params.path.clone();
         blocking(move || {
             let grant = agent_grant(&scope, &projects, &project_id)?;
+            // 워크트리는 늘 검증한다 — 그 프로젝트의 것이 아니면 빈 결과(「서버가 아직 없다」 로 읽힌다) 대신 invalid params
+            // (`symbol_search` · `lsp_grant` 와 같은 규칙).
+            let root = project_root(&grant, worktree.as_deref())?;
             let trusted = projects.is_trusted(&project_id);
-            let path = path
-                .map(|p| file_path(&grant, worktree.as_deref(), &p))
-                .transpose()?;
+            let path = path.map(|p| file_path(&root, &p));
             Ok((grant, trusted, path))
         })
         .await?
@@ -276,25 +278,32 @@ fn take(budget: &mut usize, value: &impl Serialize) -> bool {
 
 /// 툴의 `path` → 저장소의 경로 열쇠(서버가 보낸 URI 를 글자로 접은 절대 경로 — 서버의 작업 공간 루트는 실제 경로라 그 아래다).
 /// 상대 경로는 프로젝트 루트(워크트리면 그 안의 프로젝트 루트)의 실제 경로 아래로 놓는다. 디스크에 있으면 링크를 푼 실제 경로로.
-fn file_path(grant: &AgentGrant, worktree: Option<&str>, path: &str) -> Result<String, RpcError> {
+fn file_path(root: &Path, path: &str) -> String {
     let given = Path::new(path);
     let joined: PathBuf = if given.is_absolute() {
         given.to_path_buf()
     } else {
-        let project = grant.project();
-        let root = match worktree {
-            None => project.root().to_path_buf(),
-            Some(top) => worktree_root(project.root(), Path::new(top)).map_err(|_| {
-                RpcError::invalid_params(format!(
-                    "`{top}` is not a worktree of project `{}`",
-                    project.id
-                ))
-            })?,
-        };
-        real_path(&root).unwrap_or(root).join(given)
+        real_path(root)
+            .unwrap_or_else(|| root.to_path_buf())
+            .join(given)
     };
     let resolved = real_path(&joined).unwrap_or_else(|| lexical(&joined));
-    Ok(resolved.to_string_lossy().into_owned())
+    resolved.to_string_lossy().into_owned()
+}
+
+/// 프로젝트 루트(워크트리를 주면 그 워크트리 안의 프로젝트 루트). 그 프로젝트의 워크트리가 아니면(상대 경로 · 다른 저장소 · 없는
+/// 폴더) invalid params.
+fn project_root(grant: &AgentGrant, worktree: Option<&str>) -> Result<PathBuf, RpcError> {
+    let project = grant.project();
+    match worktree {
+        None => Ok(project.root().to_path_buf()),
+        Some(top) => worktree_root(project.root(), Path::new(top)).map_err(|_| {
+            RpcError::invalid_params(format!(
+                "`{top}` is not a worktree of project `{}`",
+                project.id
+            ))
+        }),
+    }
 }
 
 /// 저장소의 진단(0 부터) → 툴의 진단(1 부터).

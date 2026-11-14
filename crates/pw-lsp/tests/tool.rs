@@ -423,3 +423,91 @@ async fn a_page_stops_at_the_response_budget_and_resumes_there() {
     let want: Vec<String> = (0..count).map(|i| format!("{i:03}")).collect();
     assert_eq!(seen, want);
 }
+
+fn git(dir: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "init.defaultBranch=main",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+}
+
+/// 워크트리: 서버 요약과 목록은 그 워크트리의 것만이다 — 메인 체크아웃 창이 띄운 서버 · 진단은 워크트리를 준 호출에 보이지 않고,
+/// 워크트리 창이 띄운 서버는 메인 체크아웃 호출에 보이지 않는다(리뷰 F2). 그 프로젝트의 워크트리가 아닌 `worktree`(없는 폴더 ·
+/// 상대 경로 · 다른 프로젝트의 루트)는 빈 결과가 아니라 invalid params 다(리뷰 R1 — `symbol_search` 와 같은 규칙).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_summary_and_list_belong_to_the_given_worktree() {
+    let env = Env::new(EnvOptions::default());
+    let (_win, a, _b) = two_files(&env).await;
+    git(&env.root, &["init", "-q"]);
+    git(&env.root, &["add", "src"]);
+    git(&env.root, &["commit", "-q", "-m", "init"]);
+    git(&env.root, &["worktree", "add", "-q", ".worktrees/w"]);
+    let top = env.root.join(".worktrees/w");
+    let mut agent = agent(&env);
+
+    let page = agent
+        .call(TOOL, json!({ "projectId": env.id, "worktree": top }))
+        .await
+        .unwrap();
+    assert_eq!(page["servers"], json!([]), "{page}");
+    assert_eq!(page["files"], json!([]), "{page}");
+
+    // 워크트리 창이 같은 언어의 파일을 열면 그 워크트리의 인스턴스가 따로 선다. 가짜 서버는 메인 체크아웃 경로로 발행하므로 그
+    // 인스턴스의 루트 밖이라 버려진다 — 워크트리의 목록은 비고 서버만 있다.
+    let mut wt = env.window();
+    wt.call(
+        "lsp.document.open",
+        json!({
+            "projectId": env.id,
+            "worktree": top,
+            "path": top.join("src/a.rs"),
+            "language": "Rust",
+            "version": 0,
+            "text": "a\nb\nc\nd\n",
+        }),
+    )
+    .await
+    .unwrap();
+    let page = agent
+        .call(TOOL, json!({ "projectId": env.id, "worktree": top }))
+        .await
+        .unwrap();
+    let servers = page["servers"].as_array().unwrap();
+    assert_eq!(servers.len(), 1, "{page}");
+    assert_eq!(servers[0]["root"], json!(top), "{page}");
+    assert_eq!(page["files"], json!([]), "{page}");
+
+    let main = agent
+        .call(TOOL, json!({ "projectId": env.id }))
+        .await
+        .unwrap();
+    let servers = main["servers"].as_array().unwrap();
+    assert_eq!(servers.len(), 1, "{main}");
+    assert_eq!(servers[0]["root"], json!(env.root), "{main}");
+    assert_eq!(main["files"][0]["path"], json!(a), "{main}");
+
+    let other_root = env.base.join("p2");
+    for bad in [
+        json!("/elsewhere"),
+        json!(".worktrees/w"),
+        json!(other_root),
+    ] {
+        let e = agent
+            .call(TOOL, json!({ "projectId": env.id, "worktree": bad }))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, code::INVALID_PARAMS, "{bad}: {e:?}");
+    }
+}

@@ -26485,7 +26485,7 @@
           },
           "worktree": {
             "default": null,
-            "description": "볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃.",
+            "description": "볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. 그 프로젝트의 워크트리가\n아니면 invalid params.",
             "type": [
               "string",
               "null"
@@ -32506,7 +32506,7 @@
           },
           "worktree": {
             "default": null,
-            "description": "볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃.",
+            "description": "볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. 그 프로젝트의 워크트리가\n아니면 invalid params.",
             "type": [
               "string",
               "null"

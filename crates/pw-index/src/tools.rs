@@ -35,7 +35,8 @@ const CURSOR_PREFIX: &str = "o:";
 #[serde(rename_all = "camelCase")]
 pub struct SymbolSearchToolParams {
     pub project_id: String,
-    /// 볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃.
+    /// 볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. 그 프로젝트의 워크트리가
+    /// 아니면 invalid params.
     #[serde(default)]
     pub worktree: Option<String>,
     /// 찾을 것. 공백으로 가른 낱말이 모두 심볼 이름에 맞아야 한다(낱말마다 퍼지 — 글자가 그 차례로 들면 맞는다. 낱말에 대문자가
