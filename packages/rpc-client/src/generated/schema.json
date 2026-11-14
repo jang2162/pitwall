@@ -28573,7 +28573,7 @@
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`lsp.diagnostics.list` 의 입력(M5 의 `diagnostics` 툴이 될 꼴 — 결정 M4-D21).",
+        "description": "`lsp.diagnostics.list` 의 입력(결정 M4-D21 — MCP 툴 `diagnostics` 는 같은 저장소를 읽는 툴 메서드 `lsp.tool.diagnostics` 다).",
         "properties": {
           "cursor": {
             "default": null,

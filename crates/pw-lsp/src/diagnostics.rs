@@ -206,7 +206,7 @@ pub struct LspDiagnosticsEvent {
     pub truncated: bool,
 }
 
-/// `lsp.diagnostics.list` 의 입력(결정 M4-D21 — MCP 툴 `diagnostics` 의 입력은 `crate::tools::DiagnosticsToolParams`).
+/// `lsp.diagnostics.list` 의 입력(결정 M4-D21 — MCP 툴 `diagnostics` 는 같은 저장소를 읽는 툴 메서드 `lsp.tool.diagnostics` 다).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LspDiagnosticsListParams {

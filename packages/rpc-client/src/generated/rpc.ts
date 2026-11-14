@@ -5775,7 +5775,7 @@ export type LspDiagnosticsList = {
 	truncated: boolean,
 };
 
-/**  `lsp.diagnostics.list` 의 입력(M5 의 `diagnostics` 툴이 될 꼴 — 결정 M4-D21). */
+/**  `lsp.diagnostics.list` 의 입력(결정 M4-D21 — MCP 툴 `diagnostics` 는 같은 저장소를 읽는 툴 메서드 `lsp.tool.diagnostics` 다). */
 export type LspDiagnosticsListParams = {
 	projectId: string,
 	/**  활성 워크트리(없으면 메인 체크아웃). */
