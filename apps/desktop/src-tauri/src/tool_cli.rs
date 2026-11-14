@@ -63,6 +63,10 @@ pub mod exit {
     pub const INTERRUPTED: i32 = 128 + 2;
 }
 
+/// 이 세션에 노출되지 않은 툴의 안내. 이 실행 파일에는 링크됐지만 세션 목록에 없는 툴이다 — 노출 설정이 껐거나, 붙은 앱이 다른
+/// 버전이라 그 툴이 없다.
+const NOT_EXPOSED: &str = "is not exposed in this session (turned off in the [mcp] settings, or not in this version of the Pitwall app)";
+
 /// `write` 이상 툴의 답이 이만큼 오지 않으면 승인을 기다리는 중일 수 있다고 stderr 에 한 줄 쓴다(승인 경로는 16-m5-plan M5-12).
 const APPROVAL_NOTE_AFTER: Duration = Duration::from_secs(1);
 
@@ -122,15 +126,23 @@ pub fn parse(args: &[OsString]) -> Result<Invocation, String> {
     let mut project = None;
     let mut rest = Vec::new();
     let mut iter = args.iter();
+    // 툴 이름 뒤 `--<이름> <값>` 의 값 자리는 가로채지 않는다 — `--message --project` 의 `--project` 는 값이다.
+    let mut value_next = false;
     while let Some(arg) = iter.next() {
         let text = arg
             .to_str()
             .ok_or_else(|| format!("argument {arg:?} is not UTF-8"))?;
+        if value_next {
+            value_next = false;
+            rest.push(text.to_owned());
+            continue;
+        }
         let value = if text == "--project" {
             PathBuf::from(iter.next().ok_or("--project needs a path")?)
         } else if let Some(value) = text.strip_prefix("--project=") {
             PathBuf::from(value)
         } else {
+            value_next = !rest.is_empty() && takes_value(text);
             rest.push(text.to_owned());
             continue;
         };
@@ -158,9 +170,21 @@ fn is_help(arg: &str) -> bool {
     arg == "--help" || arg == "-h"
 }
 
+/// 플래그 이름 자리의 인자가 다음 인자를 값으로 받는가: `=` 없는 `--<이름>`(도움말 빼고).
+fn takes_value(arg: &str) -> bool {
+    arg.len() > 2 && arg.starts_with("--") && !arg.contains('=') && !is_help(arg)
+}
+
 fn tool_action(tool: &str, args: &[String]) -> Result<Action, String> {
-    if args.iter().any(|a| is_help(a)) {
-        return Ok(Action::ToolHelp(tool.to_owned()));
+    // 도움말은 플래그 이름 자리에서만 본다 — `--pattern -h` 의 `-h` 는 값이다.
+    let mut names = args.iter();
+    while let Some(arg) = names.next() {
+        if is_help(arg) {
+            return Ok(Action::ToolHelp(tool.to_owned()));
+        }
+        if takes_value(arg) {
+            names.next();
+        }
     }
     let mut input = None;
     let mut flags: Vec<(String, String)> = Vec::new();
@@ -546,7 +570,7 @@ async fn act(
                     tool,
                     "needs the Pitwall app: start the Pitwall app to call it",
                 ),
-                Found::Unlisted(tool) => (tool, "is turned off in the [mcp] settings"),
+                Found::Unlisted(tool) => (tool, NOT_EXPOSED),
                 Found::Unknown => return unknown(name, err),
             };
             help(
@@ -818,10 +842,7 @@ async fn call_tool(
                     reason,
                 }) => {
                     if reason == Some(Reason::NotExposed) {
-                        let _ = writeln!(
-                            err,
-                            "pitwall tool: `{name}` is turned off in the [mcp] settings"
-                        );
+                        let _ = writeln!(err, "pitwall tool: `{name}` {NOT_EXPOSED}");
                     } else {
                         let _ = writeln!(err, "pitwall tool: {}", e.message);
                     }

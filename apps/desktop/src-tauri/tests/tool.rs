@@ -163,6 +163,53 @@ fn headless_tool_writes_only_results_to_stdout() {
     );
 }
 
+/// 감사 로그의 툴 이름들(오래된 것부터). `want` 개가 될 때까지 기다린다 — 기록은 응답 뒤에 따로 끝난다.
+fn audit_tools(paths: &AppPaths, want: usize) -> Vec<String> {
+    let file = paths.state.join("mcp").join("audit.db");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let tools: Vec<String> = rusqlite::Connection::open_with_flags(
+            &file,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .ok()
+        .and_then(|conn| {
+            let mut stmt = conn.prepare("SELECT tool FROM calls ORDER BY id").ok()?;
+            let rows = stmt.query_map([], |r| r.get(0)).ok()?;
+            Some(rows.map(Result::unwrap).collect())
+        })
+        .unwrap_or_default();
+        if tools.len() >= want || Instant::now() > deadline {
+            return tools;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// 앱이 있어야 하는 툴(git — 링크된 카탈로그에는 있고 헤드리스 Host 는 처리하지 않는다)을 앱 없이 부르면 부르지 않고 3 과
+/// 「앱을 켜라」 다(결정 M5-D3). `run` 이 판정에 넘기는 헤드리스 카탈로그가 실제 헤드리스 세션의 것인지를 지킨다 — 링크된
+/// 카탈로그를 넘기면 그 툴을 불러 서버의 `not_exposed`(「설정이 껐다」)와 `denied` 감사 행이 된다.
+#[test]
+fn an_app_tool_without_the_app_is_refused_without_calling() {
+    let (_tmp, dir, paths) = workspace();
+    let alpha = dir.join("work").join("alpha");
+
+    // 감사 로그가 생기도록 먼저 코어 툴을 하나 부른다.
+    let (code, _, stderr) = tool(&dir, &["project_list"], &alpha);
+    assert_eq!(code, Some(0), "stderr: {stderr}");
+    assert_eq!(audit_tools(&paths, 1), ["project_list"]);
+
+    let (code, stdout, stderr) = tool(&dir, &["git_status"], &alpha);
+    assert_eq!((code, stdout.as_str()), (Some(3), ""), "stderr: {stderr}");
+    assert!(
+        stderr.contains("needs the Pitwall app; start the Pitwall app and try again"),
+        "{stderr}"
+    );
+    // 부르지 않았다 — 거절도 서버가 하지 않았으니 감사 행이 늘지 않는다.
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(audit_tools(&paths, 2), ["project_list"]);
+}
+
 #[cfg(unix)]
 mod app {
     use std::sync::Arc;

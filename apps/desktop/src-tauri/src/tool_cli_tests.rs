@@ -72,6 +72,36 @@ fn the_argument_table() {
         action(&["t", "--input={\"a\":1}", "--a", "2"]),
         call("t", Some(Input::Json("{\"a\":1}".into())), &[("a", "2")])
     );
+    // 플래그 다음 자리는 값이다 — `--help` · `-h` · `--project` · `--input` 처럼 보여도 가로채지 않는다.
+    assert_eq!(
+        action(&["t", "--project-id", "--help"]),
+        call("t", None, &[("project-id", "--help")])
+    );
+    assert_eq!(
+        action(&["t", "--pattern", "-h", "--x=1"]),
+        call("t", None, &[("pattern", "-h"), ("x", "1")])
+    );
+    assert_eq!(
+        action(&["t", "--a", "1", "--help"]),
+        Action::ToolHelp("t".into()),
+        "이름 자리의 `--help` 는 도움말이다"
+    );
+    assert_eq!(
+        action(&["t", "--x=--help", "-h"]),
+        Action::ToolHelp("t".into())
+    );
+    assert_eq!(
+        action(&["t", "--input", "--help"]),
+        call("t", Some(Input::Json("--help".into())), &[])
+    );
+    let message = parsed(&["t", "--message", "--project", "--project", "/p"]).unwrap();
+    assert_eq!(
+        (message.project, message.action),
+        (
+            Some(PathBuf::from("/p")),
+            call("t", None, &[("message", "--project")])
+        )
+    );
     // 사용법 오류: 모르는 옵션 · 값 없는 플래그 · 두 번 준 플래그 · 툴 뒤의 위치 인자.
     for bad in [
         &["--verbose"][..],
@@ -608,6 +638,11 @@ async fn an_app_tool_without_the_app_exits_3_without_calling() {
     let (code, out, err) = f.run(&["cli_app_only"]).await;
     assert_eq!((code, out.as_str()), (exit::DENIED, ""), "{err}");
     assert!(err.contains("start the Pitwall app and try again"), "{err}");
+    // 부르지 않았다 — 감사 행은 그 뒤 성공한 호출 하나뿐이다(서버가 거절했다면 `denied` 행이 남는다).
+    assert_eq!(f.run(&["project_list"]).await.0, exit::OK);
+    let rows = f.audit(1);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].0, "project_list");
     // 도움말은 보인다 — 앱이 있어야 한다는 줄과 함께.
     let (code, out, _) = f.run(&["cli_app_only", "--help"]).await;
     assert_eq!(code, exit::OK);
