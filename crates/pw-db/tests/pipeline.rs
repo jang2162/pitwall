@@ -727,11 +727,17 @@ async fn closing_the_window_closes_its_sessions() {
     let kept = e.open(&mut keep, "dev").await;
     assert_eq!(e.sessions.session_count(), 3);
     drop(w);
+    // 세션은 표에서 먼저 빠지고 그 뒤에 드라이버 연결을 닫는다(`close_session`) — 수가 줄어든 것만 보고 세면 닫기 전일 수 있다.
+    // 드라이버의 닫기까지 기다린다.
     let deadline = Instant::now() + Duration::from_secs(2);
-    while e.sessions.session_count() > 1 {
+    while e.sessions.session_count() > 1
+        || e.pg.count(&FakeCall::Close) == 0
+        || e.my.count(&FakeCall::Close) == 0
+    {
         assert!(Instant::now() < deadline, "sessions left open");
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+    assert_eq!(e.sessions.session_count(), 1);
     assert_eq!(e.pg.count(&FakeCall::Close), 1);
     assert_eq!(e.my.count(&FakeCall::Close), 1);
     run(&mut keep, exec(&kept, "SELECT 1")).await.unwrap();
