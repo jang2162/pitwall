@@ -872,6 +872,12 @@ export type UnaryMethods = {
 	 */
 	"lsp.workspaceSymbol": { params: LspWorkspaceSymbolParams; result: LspWorkspaceSymbols };
 	/**
+	 * 그 프로젝트의 감사 행을 모두 지운다(「에이전트 활동」 패널의 「기록 지우기」 — 화면이 확인을 받은 뒤 부른다). 그 프로젝트
+	 * 창의 연결만 부른다(`project.state.set` 과 같은 판정). 지운 id 는 다시 쓰이지 않는다 — 앞서 받은 커서는 그 뒤의 행을 가리키지
+	 * 않는다.
+	 */
+	"mcp.audit.clear": { params: McpAuditClearParams; result: McpAuditCleared };
+	/**
 	 * 감사 로그를 최신부터 쪽 단위로 읽는다. 다른 프로세스(헤드리스 `pitwall mcp` · `pitwall tool`)가 쓴 행도 있다 —
 	 * 그 행은 `mcp.activity` 가 나가지 않으므로 화면이 열릴 때 · 창이 앞으로 올 때 다시 읽는다.
 	 */
@@ -1371,6 +1377,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lsp.tool.diagnostics": {"name":"lsp.tool.diagnostics","kind":"unary","tier":"read","roles":["owner"],"params":"DiagnosticsToolParams","output":"DiagnosticsToolResult","doc":" Language server diagnostics (errors, warnings, hints) for a project, one page at a time: files in path order, each\n file's diagnostics most severe first. Filter by one file (`path`, absolute or relative to the project root) and by\n `minSeverity`. Lines and columns start at 1; columns count UTF-16 code units. Only what the language servers have\n published on their own: servers run while the project is open in a Pitwall window (they start when a file of that\n language is opened there), and many servers only report files that are open in the editor, so files nobody opened\n may be missing — an empty list is not proof the project builds. `servers` tells \"no problems\" apart from \"no server\n yet / still starting / still indexing\" (a `progress` means more diagnostics may come). This tool never starts a\n server. An untrusted project runs no language servers: the result is empty with `unavailable.reason = \"untrusted\"`.\n","mcp":{"group":"code","name":"diagnostics"},"fileScope":false},
 	"lsp.typeDefinition": {"name":"lsp.typeDefinition","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspLocationsResult","doc":" 타입 정의로(`textDocument/typeDefinition`).\n","mcp":null,"fileScope":false},
 	"lsp.workspaceSymbol": {"name":"lsp.workspaceSymbol","kind":"unary","tier":"read","roles":["owner"],"params":"LspWorkspaceSymbolParams","output":"LspWorkspaceSymbols","doc":" 프로젝트의 언어 서버들에 `workspace/symbol` 을 묻는다(심볼로 이동 · 클래스로 이동 · SE 「심볼」 탭 — M4-16). 이 창이 문서를 연\n 떠 있는 서버에만 묻고 서버를 띄우지 않는다. 루트 밖 위치는 읽기 토큰과 함께(결정 M4-D13). 미신뢰면 untrusted.\n","mcp":null,"fileScope":false},
+	"mcp.audit.clear": {"name":"mcp.audit.clear","kind":"unary","tier":"write","roles":["owner"],"params":"McpAuditClearParams","output":"McpAuditCleared","doc":" 그 프로젝트의 감사 행을 모두 지운다(「에이전트 활동」 패널의 「기록 지우기」 — 화면이 확인을 받은 뒤 부른다). 그 프로젝트\n 창의 연결만 부른다(`project.state.set` 과 같은 판정). 지운 id 는 다시 쓰이지 않는다 — 앞서 받은 커서는 그 뒤의 행을 가리키지\n 않는다.\n","mcp":null,"fileScope":false},
 	"mcp.audit.list": {"name":"mcp.audit.list","kind":"unary","tier":"read","roles":["owner"],"params":"McpAuditListParams","output":"McpAuditPage","doc":" 감사 로그를 최신부터 쪽 단위로 읽는다. 다른 프로세스(헤드리스 `pitwall mcp` · `pitwall tool`)가 쓴 행도 있다 —\n 그 행은 `mcp.activity` 가 나가지 않으므로 화면이 열릴 때 · 창이 앞으로 올 때 다시 읽는다.\n","mcp":null,"fileScope":false},
 	"mcp.sessions": {"name":"mcp.sessions","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"Vec<McpSessionInfo>","doc":" 이 앱에 열린 MCP 세션(시작 순서): id · 클라이언트 · 세션 프로젝트 · 전송 · 시작 시각 · 호출 수. 열고 닫히면\n `mcp.sessionsChanged`(Host 범위)가 나간다. 앱 없이 뜬 `pitwall mcp` 의 헤드리스 세션은 보이지 않는다.\n","mcp":null,"fileScope":false},
 	"mcp.tools.list": {"name":"mcp.tools.list","kind":"unary","tier":"read","roles":["owner"],"params":"McpToolsListParams","output":"Vec<McpToolInfo>","doc":" MCP 툴 카탈로그 전부와 지금 노출 판정(켜졌는지 · 그 규칙), 최근 호출 수. 이 앱의 Host 가 처리하는 툴만이다.\n","mcp":null,"fileScope":false},
@@ -1478,16 +1485,32 @@ export type AskpassHint =
 /**  알림만(ssh 의 `none` — 보안 키를 만지라는 안내). ssh 가 일을 마치면 도우미를 끝내고 질문이 닫힌다. 답은 `cancel`(내리기)만. */
 "notice";
 
+/**
+ *  승인을 지난 호출이 어떻게 허용됐는가(05-mcp.md 「권한 모델」). 승인 경로(16-m5-plan M5-12)가 채운다 — 승인을 지나지 않은
+ *  호출(`read`, 거절)은 비어 있다.
+ */
+export type AuditApproval = 
+/**  `auto_approve` 로 묻지 않았다. */
+"auto" | 
+/**  사람이 [이번만 허용]. */
+"once" | 
+/**  사람이 [이 세션 동안 허용] — 앞서 허용한 것으로 묻지 않은 호출도 이것이다. */
+"session" | 
+/**  CLI 호출의 「이 프로젝트 창이 열려 있는 동안 CLI 허용」(결정 M5-D5). */
+"window";
+
 export type AuditOutcome = "ok" | 
 /**  툴은 불렸고 실패했다(RPC 오류). */
 "error" | 
 /**  부르지 않았다(노출 안 된 툴, 등급 정책). */
-"denied";
-
+"denied" | 
 /**
- *  쓰인 감사 행 하나(`mcp.audit.list` 의 원소). 열은 [`Entry`] 와 같고 `id` · `at` 이 더 있다. M5-11 이 칸(승인 방식 · 계획
- *  해시)을 더할 자리다.
+ *  실행 전에 쓴 행이고 끝이 아직 쓰이지 않았다([`AuditLog::begin`]). 호출이 도는 중이거나, 끝을 쓰기 전에 프로세스가
+ *  죽었다 — 화면은 「끝을 모름」 이다. 툴 결과의 표지(`marker`)에는 나오지 않는다.
  */
+"started";
+
+/**  쓰인 감사 행 하나(`mcp.audit.list` 의 원소). 열은 [`Entry`] 와 같고 `id` · `at` 이 더 있다. */
 export type AuditRow = {
 	/**  행 id. 쪽 넘기기의 커서이고 [`AuditLog::record`] 가 돌려준 값이다. */
 	id: number,
@@ -1502,7 +1525,12 @@ export type AuditRow = {
 	outcome: AuditOutcome,
 	detail: string | null,
 	resultSize: number | null,
+	/**  걸린 시간. 결과가 `started` 면 0 이다(아직 · 끝을 모름). */
 	durationMs: number,
+	/**  승인 방식. 승인을 지나지 않은 호출은 `null`. */
+	approval: AuditApproval | null,
+	/**  승인이 묶인 계획의 해시. 승인을 지나지 않은 호출은 `null`. */
+	planHash: string | null,
 };
 
 /**  `git.blame` 스트림의 항목 하나. */
@@ -6864,6 +6892,16 @@ export type McpActivity = {
 	/**  쓰인 감사 행의 id(`mcp.audit.list` 의 `id`). */
 	id: number,
 	projectId: string | null,
+};
+
+export type McpAuditClearParams = {
+	/**  이 프로젝트의 행을 지운다. 프로젝트 없는 행 · 다른 프로젝트의 행은 남는다. */
+	projectId: string,
+};
+
+export type McpAuditCleared = {
+	/**  지운 행 수. */
+	deleted: number,
 };
 
 export type McpAuditListParams = {

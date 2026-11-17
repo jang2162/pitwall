@@ -216,6 +216,8 @@ impl Fixture {
             detail: None,
             result_size: None,
             duration: Duration::from_millis(1),
+            approval: None,
+            plan_hash: None,
         }
     }
 }
@@ -697,4 +699,164 @@ async fn recent_calls_count_only_the_last_thirty_days() {
         .await
         .unwrap();
     assert_eq!(tool(list.as_array().unwrap(), "probe_on")["recentCalls"], 2);
+}
+
+/// `mcp.audit.clear` 는 그 프로젝트의 행만 지운다 — 프로젝트 없는 행 · 다른 프로젝트의 행은 남는다. 부르는 것은 그 프로젝트의
+/// 창뿐이다(Host 범위 연결 · 다른 프로젝트의 창은 `PERMISSION_DENIED`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn audit_clear_removes_only_that_projects_rows_from_its_own_window() {
+    let f = Fixture::new();
+    let log = AuditLog::under_state(&f.paths.state);
+    for project in [
+        Some(f.alpha.as_str()),
+        None,
+        Some("other"),
+        Some(f.alpha.as_str()),
+    ] {
+        log.record(&f.entry("probe_on", project, Outcome::Ok))
+            .unwrap();
+    }
+    let params = json!({"projectId": f.alpha});
+    for (who, caller) in [
+        ("host window", Caller::new(Role::Owner)),
+        (
+            "another project's window",
+            Caller {
+                scope: pw_rpc::ConnectionScope::Project("other".into()),
+                ..Caller::new(Role::Owner)
+            },
+        ),
+    ] {
+        match f
+            .window_as(caller)
+            .await
+            .call("mcp.audit.clear", params.clone())
+            .await
+        {
+            Err(CallError::Rpc { code, data, .. }) => {
+                assert_eq!(code, i64::from(pw_rpc::code::PERMISSION_DENIED), "{who}");
+                assert_eq!(data.unwrap()["reason"], "notProjectWindow", "{who}");
+            }
+            other => panic!("{who}: {other:?}"),
+        }
+    }
+    let own = f
+        .window_as(Caller {
+            scope: pw_rpc::ConnectionScope::Project(f.alpha.clone()),
+            ..Caller::new(Role::Owner)
+        })
+        .await;
+    let cleared = own.call("mcp.audit.clear", params).await.unwrap();
+    assert_eq!(cleared, json!({"deleted": 2}));
+    let page = f
+        .window()
+        .await
+        .call("mcp.audit.list", json!({}))
+        .await
+        .unwrap();
+    let left: Vec<Value> = page["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["projectId"].clone())
+        .collect();
+    assert_eq!(left, [json!("other"), Value::Null]);
+}
+
+/// `mcp.audit.clear` 도 에이전트 범위 연결을 거절한다(`WindowsOnly` — 그 프로젝트의 id 를 줘도). 툴도 아니고, 단일 파일 창도
+/// 부르지 못한다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_audit_clear_refuses_agent_connections() {
+    let f = Fixture::new();
+    assert!(
+        Catalog::linked()
+            .tools()
+            .iter()
+            .all(|t| t.method != "mcp.audit.clear")
+    );
+    let log = AuditLog::under_state(&f.paths.state);
+    log.record(&f.entry("probe_on", Some(&f.alpha), Outcome::Ok))
+        .unwrap();
+    let params = json!({"projectId": f.alpha});
+    match f
+        .window_as(Caller::agent(Role::Owner))
+        .await
+        .call("mcp.audit.clear", params.clone())
+        .await
+    {
+        Err(CallError::Rpc { code, data, .. }) => {
+            assert_eq!(code, i64::from(pw_rpc::code::PERMISSION_DENIED));
+            let data = data.unwrap();
+            assert_eq!(data["reason"], "agentSession");
+            assert_eq!(data["method"], "mcp.audit.clear");
+        }
+        other => panic!("에이전트 범위 연결은 지우지 못한다: {other:?}"),
+    }
+    // 단일 파일 창도 부르지 못한다(`file_scope` 를 달지 않았다).
+    let file = f
+        .window_as(Caller::file(Role::Owner, f.base.join("work/alpha/a.txt")))
+        .await;
+    match file.call("mcp.audit.clear", params).await {
+        Err(CallError::Rpc { code, data, .. }) => {
+            assert_eq!(code, i64::from(pw_rpc::code::PERMISSION_DENIED));
+            assert_eq!(data.unwrap()["scope"], "file");
+        }
+        other => panic!("파일 범위 연결은 지우지 못한다: {other:?}"),
+    }
+    let (rows, _) = log
+        .list(&pw_mcp::audit::Query {
+            limit: 10,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(rows.len(), 1, "지워지지 않았다");
+}
+
+/// `mcp.audit.list` 는 둘째 판의 칸(승인 방식 · 계획 해시)과 결과 `started` 를 돌려주고 `started` 로 거른다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn audit_list_returns_the_approval_the_plan_hash_and_started_rows() {
+    let f = Fixture::new();
+    let log = AuditLog::under_state(&f.paths.state);
+    let approved = Entry {
+        approval: Some(pw_mcp::audit::AuditApproval::Window),
+        plan_hash: Some("sha256:plan".into()),
+        ..f.entry("probe_write", Some(&f.alpha), Outcome::Ok)
+    };
+    let done = log.begin(&approved).unwrap();
+    log.finish(
+        done,
+        &Entry {
+            approval: None,
+            plan_hash: None,
+            ..approved.clone()
+        },
+    )
+    .unwrap();
+    let unknown = log.begin(&approved).unwrap();
+    log.record(&f.entry("probe_on", None, Outcome::Ok)).unwrap();
+    let window = f.window().await;
+    let page = window.call("mcp.audit.list", json!({})).await.unwrap();
+    let entries = page["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[0]["approval"], Value::Null);
+    assert_eq!(entries[0]["planHash"], Value::Null);
+    assert_eq!(entries[1]["id"], unknown);
+    assert_eq!(entries[1]["outcome"], "started");
+    assert_eq!(entries[1]["durationMs"], 0);
+    assert_eq!(entries[1]["resultSize"], Value::Null);
+    assert_eq!(entries[2]["id"], done);
+    assert_eq!(entries[2]["outcome"], "ok");
+    assert_eq!(entries[2]["approval"], "window");
+    assert_eq!(entries[2]["planHash"], "sha256:plan");
+    let started = window
+        .call("mcp.audit.list", json!({"outcome": "started"}))
+        .await
+        .unwrap();
+    let ids: Vec<Value> = started["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["id"].clone())
+        .collect();
+    assert_eq!(ids, [json!(unknown)]);
 }

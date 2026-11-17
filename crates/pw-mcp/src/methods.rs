@@ -1,4 +1,4 @@
-//! 사람의 화면이 부르는 `mcp.*` RPC(16-m5-plan.md M5-10): 세션 목록 · 툴 목록과 노출 판정 · 감사 로그.
+//! 사람의 화면이 부르는 `mcp.*` RPC(16-m5-plan.md M5-10): 세션 목록 · 툴 목록과 노출 판정 · 감사 로그와 그 지우기(M5-11).
 //!
 //! - **에이전트에게 열지 않는다** — 선언에 `mcp` 를 달지 않는다(에이전트가 자기 감사 로그 · 노출 설정을 읽는 툴은 05 에 없다).
 //!   role 은 owner 만, 파일 범위 연결(단일 파일 창)도 부르지 못한다(`file_scope` 를 달지 않는다). 에이전트 범위 연결(MCP 세션이
@@ -7,7 +7,7 @@
 //! - 문장(오류 글)은 사람이 보는 화면 쪽이지만 RPC 오류 글은 지금 저장소의 다른 RPC 처럼 영어다. 화면 글자는 웹뷰의 i18n 이다.
 //! - 이벤트: [`crate::sessions`] 의 `mcp.sessionsChanged` · `mcp.activity`. payload 는 수 · id 뿐이라 화면은 받으면 이 RPC 를
 //!   다시 부른다.
-//! - 다른 행이 더하는 메서드: `mcp.audit.clear`(M5-11), `mcp.approvals` · `mcp.approval.answer`(M5-12), `mcp.settings.set`(M5-15).
+//! - 다른 행이 더하는 메서드: `mcp.approvals` · `mcp.approval.answer`(M5-12), `mcp.settings.set`(M5-15).
 //!   더할 때 [`register`] 안의 `router`(그 문을 지나는 [`WindowsOnly`])에 붙이고, 필요한 것은 [`HostParts`] 에서 꺼낸다.
 
 use std::sync::{Arc, OnceLock};
@@ -97,6 +97,25 @@ pub struct McpAuditPage {
     pub next_cursor: Option<String>,
 }
 
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct McpAuditClearParams {
+    /// 이 프로젝트의 행을 지운다. 프로젝트 없는 행 · 다른 프로젝트의 행은 남는다.
+    pub project_id: String,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct McpAuditCleared {
+    /// 지운 행 수.
+    #[specta(type = pw_rpc::JsNumber)]
+    pub deleted: u64,
+}
+
 rpc_method! {
     /// 이 앱에 열린 MCP 세션(시작 순서): id · 클라이언트 · 세션 프로젝트 · 전송 · 시작 시각 · 호출 수. 열고 닫히면
     /// `mcp.sessionsChanged`(Host 범위)가 나간다. 앱 없이 뜬 `pitwall mcp` 의 헤드리스 세션은 보이지 않는다.
@@ -121,6 +140,16 @@ rpc_method! {
         params: McpAuditListParams,
         result: McpAuditPage,
         tier: Read,
+        roles: [Owner],
+    }
+
+    /// 그 프로젝트의 감사 행을 모두 지운다(「에이전트 활동」 패널의 「기록 지우기」 — 화면이 확인을 받은 뒤 부른다). 그 프로젝트
+    /// 창의 연결만 부른다(`project.state.set` 과 같은 판정). 지운 id 는 다시 쓰이지 않는다 — 앞서 받은 커서는 그 뒤의 행을 가리키지
+    /// 않는다.
+    pub McpAuditClear: "mcp.audit.clear" {
+        params: McpAuditClearParams,
+        result: McpAuditCleared,
+        tier: Write,
         roles: [Owner],
     }
 }
@@ -250,6 +279,20 @@ impl Mcp {
     }
 }
 
+impl Mcp {
+    /// `mcp.audit.clear`. 범위 판정은 핸들러가 먼저 한다. 디스크 IO 를 한다.
+    pub fn clear(&self, params: &McpAuditClearParams) -> Result<McpAuditCleared, RpcError> {
+        let parts = self.parts()?;
+        let deleted = parts
+            .audit
+            .clear(&params.project_id)
+            .map_err(RpcError::internal)?;
+        Ok(McpAuditCleared {
+            deleted: u64::try_from(deleted).unwrap_or(u64::MAX),
+        })
+    }
+}
+
 /// 에이전트 범위 연결(MCP 세션)이면 거절한다 — `mcp.*` 는 사람의 창이 부른다. 오류 꼴은 `project.setTrust` 의 거절과 같다
 /// (`PERMISSION_DENIED`, `data.reason = "agentSession"`).
 pub fn refuse_agent(ctx: &Ctx, method: &str) -> Result<(), RpcError> {
@@ -308,9 +351,24 @@ pub fn register(router: &mut Router, mcp: Arc<Mcp>) {
         let mcp = Arc::clone(&tools);
         async move { blocking(move || mcp.tools(&params)).await }
     });
+    let list = Arc::clone(&mcp);
     router.unary(McpAuditList, move |_ctx, params: McpAuditListParams| {
-        let mcp = Arc::clone(&mcp);
+        let mcp = Arc::clone(&list);
         async move { blocking(move || mcp.audit(&params)).await }
+    });
+    router.unary(McpAuditClear, move |ctx, params: McpAuditClearParams| {
+        let mcp = Arc::clone(&mcp);
+        async move {
+            // 그 프로젝트의 창만 — 웰컴 · 설정 창(Host 범위)과 다른 프로젝트의 창은 지우지 못한다.
+            if !pw_core::registry::state::connection_may_write(&ctx, &params.project_id) {
+                return Err(RpcError::new(
+                    code::PERMISSION_DENIED,
+                    "only the project's own window may clear its mcp audit log",
+                )
+                .with_data(serde_json::json!({ "reason": "notProjectWindow" })));
+            }
+            blocking(move || mcp.clear(&params)).await
+        }
     });
 }
 

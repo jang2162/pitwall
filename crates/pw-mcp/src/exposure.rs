@@ -130,7 +130,8 @@ impl Default for Exposure {
 }
 
 impl Exposure {
-    /// 전역 `[mcp]` 위에 프로젝트 `[mcp]` 를 덮어 읽는다. 경고는 사람이 읽을 문장이다.
+    /// 전역 `[mcp]` 위에 프로젝트 `[mcp]` 를 덮어 읽는다. 경고는 사람이 읽을 문장이다. 프로젝트 `[mcp]` 에 전역에서만 읽는
+    /// 표(`[mcp.audit]` — 결정 M5-D10)가 있으면 효과가 없다는 경고도 여기서 낸다 — 프로젝트의 `[mcp]` 를 읽는 자리가 이것이다.
     pub fn from_layers(global: Option<&Value>, project: Option<&Value>) -> (Self, Vec<String>) {
         let mut merged = Map::new();
         for layer in [global, project].into_iter().flatten() {
@@ -138,7 +139,9 @@ impl Exposure {
                 pw_core::config::merge::merge(&mut merged, table.clone());
             }
         }
-        let mut warnings = Vec::new();
+        let mut warnings: Vec<String> = crate::audit::project_table_warning(project)
+            .into_iter()
+            .collect();
         let preset = match merged.get("preset") {
             None => Preset::Standard,
             Some(Value::String(s)) => Preset::parse(s).unwrap_or_else(|| {
@@ -392,6 +395,17 @@ mod tests {
         assert!(on("run_start", Tier::Exec), "glob 이 프리셋보다 앞선다");
         assert!(on("settings_set", Tier::Write), "프리셋 standard");
         assert!(!on("db_execute", Tier::Dangerous), "프리셋 standard");
+    }
+
+    /// `[mcp.audit]` 은 전역 설정에서만 읽는다(결정 M5-D10) — 프로젝트의 `[mcp]` 에 있으면 경고가 남고, 전역에 있으면 남지 않는다.
+    #[test]
+    fn an_audit_table_in_the_project_settings_leaves_a_warning() {
+        let audit = json!({"audit": {"retention_days": 1}});
+        let (_, global_only) = Exposure::from_layers(Some(&audit), None);
+        assert!(global_only.is_empty(), "{global_only:?}");
+        let (_, project) = Exposure::from_layers(Some(&json!({"preset": "full"})), Some(&audit));
+        assert_eq!(project.len(), 1, "{project:?}");
+        assert!(project[0].contains("mcp.audit") && project[0].contains("no effect"));
     }
 
     #[test]

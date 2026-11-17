@@ -5,7 +5,7 @@
 //! - `tools/call` 결과: `_meta` 에 [`OUTCOME`] 와(까닭이 있으면) [`REASON`].
 //! - 노출 안 된 툴 호출(JSON-RPC invalid params): 오류의 `data` 객체에 같은 두 키.
 //!
-//! 결과 값은 감사 로그의 `outcome` 과 같은 셋이다(`ok` · `error` · `denied`). 까닭 코드는 [`Reason`] 이고, 거절의 까닭이
+//! 결과 값은 감사 로그의 `outcome` 가운데 셋이다(`ok` · `error` · `denied` — 넷째 `started` 는 실행 전에 쓴 감사 행에만 있다). 까닭 코드는 [`Reason`] 이고, 거절의 까닭이
 //! 대부분이지만 [`Reason::Cancelled`] · [`Reason::TooLarge`] 는 결과 `error` 의 까닭이다. 다른 행이 코드를 더하면 05 의 표에
 //! 한 줄을 더한다.
 //!
@@ -52,6 +52,8 @@ pub enum Reason {
     ProductionBlocked,
     /// (거절) Host 전체의 호출 빈도를 넘었다(16-m5-plan M5-09 — `project_open`, `data.reason = "rateLimited"`). 잠시 뒤 다시 부른다.
     RateLimited,
+    /// (거절) `write` 이상의 호출인데 실행 전의 감사 행을 쓰지 못했다 — 돌리지 않았다(16-m5-plan 결정 M5-D11).
+    AuditUnavailable,
 }
 
 impl Reason {
@@ -69,6 +71,7 @@ impl Reason {
         Reason::Untrusted,
         Reason::ProductionBlocked,
         Reason::RateLimited,
+        Reason::AuditUnavailable,
     ];
 
     /// Host RPC 의 `PERMISSION_DENIED` 오류가 싣는 `data.reason`(camelCase) ↔ 까닭 코드. 거절 까닭을 더하는 행은 [`Reason`] 과 이
@@ -103,6 +106,7 @@ impl Reason {
             Reason::Untrusted => "untrusted",
             Reason::ProductionBlocked => "production_blocked",
             Reason::RateLimited => "rate_limited",
+            Reason::AuditUnavailable => "audit_unavailable",
         }
     }
 
@@ -111,12 +115,13 @@ impl Reason {
     }
 }
 
-/// 결과 값의 표기. 감사 로그의 `outcome` 열과 같다.
+/// 결과 값의 표기. 감사 로그의 `outcome` 열과 같다. 표지는 `started` 를 싣지 않는다 — 읽을 때도 셋만 받는다.
 pub fn outcome_str(outcome: Outcome) -> &'static str {
     match outcome {
         Outcome::Ok => "ok",
         Outcome::Error => "error",
         Outcome::Denied => "denied",
+        Outcome::Started => "started",
     }
 }
 

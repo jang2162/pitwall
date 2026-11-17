@@ -246,13 +246,21 @@ fn local_host_with(
         if let Some(projects) = host.registry() {
             // MCP 상태: 세션 이벤트는 Host 버스로, 툴 목록은 세션과 같은 카탈로그(이 Host 가 처리하는 툴)로.
             mcp_status.sessions().attach(host.bus().clone());
+            let mcp_audit = Arc::new(pw_mcp::audit::AuditLog::under_state(&config.paths.state));
             mcp_status.attach(pw_mcp::methods::HostParts {
                 paths: config.paths.clone(),
                 global: config.global.clone(),
                 projects: projects.clone(),
                 catalog: Arc::new(pw_mcp::Catalog::linked().routed_by(host.router())),
-                audit: Arc::new(pw_mcp::audit::AuditLog::under_state(&config.paths.state)),
+                audit: Arc::clone(&mcp_audit),
             });
+            // 감사 로그의 보관 정리(16-m5-plan M5-11 — 결정 M5-D10): 지금 한 번, 그 뒤 하루에 한 번. 보관 일수는 전역 설정의
+            // `[mcp.audit] retention_days` 만 읽는다. 앱이 끝나면 함께 끝난다.
+            tauri::async_runtime::spawn(pw_mcp::audit::keep_pruned(
+                mcp_audit,
+                config.global.clone(),
+                tokio_util::sync::CancellationToken::new(),
+            ));
             // 파일 RPC(`fs.*`)는 요청의 프로젝트 루트를 레지스트리에서 찾는다.
             fs.attach(projects.clone());
             // 터미널은 전역 설정(`[terminal] shell`)과 레지스트리(프로젝트 · cwd)를 쓴다.

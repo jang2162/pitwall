@@ -35048,6 +35048,42 @@
       ],
       "tier": "read"
     },
+    "mcp.audit.clear": {
+      "description": "그 프로젝트의 감사 행을 모두 지운다(「에이전트 활동」 패널의 「기록 지우기」 — 화면이 확인을 받은 뒤 부른다). 그 프로젝트\n창의 연결만 부른다(`project.state.set` 과 같은 판정). 지운 id 는 다시 쓰이지 않는다 — 앞서 받은 커서는 그 뒤의 행을 가리키지\n않는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "description": "이 프로젝트의 행을 지운다. 프로젝트 없는 행 · 다른 프로젝트의 행은 남는다.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "deleted": {
+            "description": "지운 행 수.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "mcp.audit.list": {
       "description": "감사 로그를 최신부터 쪽 단위로 읽는다. 다른 프로세스(헤드리스 `pitwall mcp` · `pitwall tool`)가 쓴 행도 있다 —\n그 행은 `mcp.activity` 가 나가지 않으므로 화면이 열릴 때 · 창이 앞으로 올 때 다시 읽는다.",
       "kind": "unary",
@@ -35069,6 +35105,11 @@
               {
                 "const": "denied",
                 "description": "부르지 않았다(노출 안 된 툴, 등급 정책).",
+                "type": "string"
+              },
+              {
+                "const": "started",
+                "description": "실행 전에 쓴 행이고 끝이 아직 쓰이지 않았다([`AuditLog::begin`]). 호출이 도는 중이거나, 끝을 쓰기 전에 프로세스가\n죽었다 — 화면은 「끝을 모름」 이다. 툴 결과의 표지(`marker`)에는 나오지 않는다.",
                 "type": "string"
               }
             ]
@@ -35126,6 +35167,31 @@
       },
       "result": {
         "$defs": {
+          "AuditApproval": {
+            "description": "승인을 지난 호출이 어떻게 허용됐는가(05-mcp.md 「권한 모델」). 승인 경로(16-m5-plan M5-12)가 채운다 — 승인을 지나지 않은\n호출(`read`, 거절)은 비어 있다.",
+            "oneOf": [
+              {
+                "const": "auto",
+                "description": "`auto_approve` 로 묻지 않았다.",
+                "type": "string"
+              },
+              {
+                "const": "once",
+                "description": "사람이 [이번만 허용].",
+                "type": "string"
+              },
+              {
+                "const": "session",
+                "description": "사람이 [이 세션 동안 허용] — 앞서 허용한 것으로 묻지 않은 호출도 이것이다.",
+                "type": "string"
+              },
+              {
+                "const": "window",
+                "description": "CLI 호출의 「이 프로젝트 창이 열려 있는 동안 CLI 허용」(결정 M5-D5).",
+                "type": "string"
+              }
+            ]
+          },
           "AuditOutcome": {
             "oneOf": [
               {
@@ -35143,12 +35209,28 @@
                 "const": "denied",
                 "description": "부르지 않았다(노출 안 된 툴, 등급 정책).",
                 "type": "string"
+              },
+              {
+                "const": "started",
+                "description": "실행 전에 쓴 행이고 끝이 아직 쓰이지 않았다([`AuditLog::begin`]). 호출이 도는 중이거나, 끝을 쓰기 전에 프로세스가\n죽었다 — 화면은 「끝을 모름」 이다. 툴 결과의 표지(`marker`)에는 나오지 않는다.",
+                "type": "string"
               }
             ]
           },
           "AuditRow": {
-            "description": "쓰인 감사 행 하나(`mcp.audit.list` 의 원소). 열은 [`Entry`] 와 같고 `id` · `at` 이 더 있다. M5-11 이 칸(승인 방식 · 계획\n해시)을 더할 자리다.",
+            "description": "쓰인 감사 행 하나(`mcp.audit.list` 의 원소). 열은 [`Entry`] 와 같고 `id` · `at` 이 더 있다.",
             "properties": {
+              "approval": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AuditApproval"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "승인 방식. 승인을 지나지 않은 호출은 `null`."
+              },
               "args": {
                 "description": "인자 요약([`summarize`] 의 JSON 글).",
                 "type": "string"
@@ -35171,6 +35253,7 @@
                 ]
               },
               "durationMs": {
+                "description": "걸린 시간. 결과가 `started` 면 0 이다(아직 · 끝을 모름).",
                 "format": "int64",
                 "type": "integer"
               },
@@ -35181,6 +35264,13 @@
               },
               "outcome": {
                 "$ref": "#/$defs/AuditOutcome"
+              },
+              "planHash": {
+                "description": "승인이 묶인 계획의 해시. 승인을 지나지 않은 호출은 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "projectId": {
                 "type": [
@@ -35213,7 +35303,9 @@
               "outcome",
               "detail",
               "resultSize",
-              "durationMs"
+              "durationMs",
+              "approval",
+              "planHash"
             ],
             "type": "object"
           }
