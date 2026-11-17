@@ -106,6 +106,7 @@ export function WindowApprovals({
       onAnswer={(answer) => answerApproval(client, store, current.id, answer)}
       onDismiss={() => dismiss(store, current.id)}
       armDelayMs={armDelayMs}
+      epoch={state.revealed}
     />
   );
 }

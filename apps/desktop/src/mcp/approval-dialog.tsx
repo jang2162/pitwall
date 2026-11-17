@@ -18,7 +18,8 @@
 // - SQL(`PlanChange` 의 `sql`): 연결 표지(프로덕션 · 읽기 전용), 파일이면 경로, 「되돌릴 수 없다」, 문장마다 등급. 조회가 아닌
 //   문장은 수와 상관없이 모두 보이고 넘는 조회 문장만 접는다(접은 수를 보인다). 파괴 등급 문장이
 //   하나라도 있으면 그 연결 이름을 쳐야 허용 단추가 켜진다(위험 쿼리 확인과 같은 부품 — db/safety/name-confirm.tsx).
-// - 남은 시한과 「n개 중 k」 를 보인다. 시한이 지나면 approvals.ts 가 요청을 빼 다이얼로그가 내려간다.
+// - 남은 시한과 「n개 중 k」 를 보인다. 시한이 지나면 approvals.ts 가 요청을 빼 다이얼로그가 내려간다. 시계가 1초마다 다이얼로그를
+//   다시 그려도 바뀔 것 목록(`Changes`)은 다시 그리지 않는다.
 
 import * as Dialog from "@radix-ui/react-dialog";
 import type {
@@ -29,7 +30,7 @@ import type {
   ToolPlan,
 } from "@pitwall/rpc-client";
 import { Lock, TriangleAlert } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { memo, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
 import { ConnectionMark } from "../db/safety/connection-mark";
 import { ConnectionNameField } from "../db/safety/name-confirm";
@@ -76,36 +77,72 @@ export function namesRequired(plan: ToolPlan): string[] {
 }
 
 /**
- * 허용 단추의 잠금. `delayMs` 동안 `false` 이고, 그동안 창에 키 · 포인터가 눌리면 처음부터 다시 센다(입력 칸 안의 키는 빼고). 컴포넌트가 요청마다 새로
- * 그려지므로(approvals-host.tsx 의 `key`) 요청이 바뀔 때마다 다시 잠긴다. `delayMs` 가 0 이하면 처음부터 풀려 있다.
+ * 허용 단추의 잠금. 사람이 그 요청을 볼 수 있게 된 순간부터 `delayMs` 를 센다(M5-14 재리뷰 G1):
+ * - 컴포넌트가 요청마다 새로 그려지므로(approvals-host.tsx 의 `key`) 뜰 때 · 다른 요청으로 바뀔 때 잠긴다. `epoch` 가 바뀌면(목록 ·
+ *   알림으로 다시 엶 — 이미 떠 있던 요청이어도) 다시 잠근다.
+ * - 창이 앞에 없으면(`blur` · 숨김) 잠근 채 세지 않는다 — 뒤에 있는 동안 시간이 흘러 풀리지 않는다. 창이 앞으로 오면(`focus` ·
+ *   보임) 처음부터 센다.
+ * - 세는 동안 창에 키 · 포인터가 눌리면 처음부터 다시 센다(입력 칸 안의 키는 빼고 — 이름 칸에 치는 글자는 이 다이얼로그에 뜻을 둔
+ *   것이다).
+ * `delayMs` 가 0 이하면 늘 풀려 있다.
  */
-export function useArmed(delayMs: number): boolean {
+export function useArmed(delayMs: number, epoch = 0): boolean {
   const [armed, setArmed] = useState(delayMs <= 0);
   useEffect(() => {
     if (delayMs <= 0) return;
-    let done = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const start = (event?: Event) => {
-      // 이름 칸에 치는 글자는 사람이 이 다이얼로그에 뜻을 두고 친 것이다 — 다시 세지 않는다.
-      if (done || event?.target instanceof HTMLInputElement) return;
+    let done = false;
+    const inFront = () => document.visibilityState !== "hidden" && document.hasFocus();
+    const lock = () => {
+      done = false;
+      clearTimeout(timer);
+      timer = undefined;
+      setArmed(false);
+    };
+    const count = () => {
       clearTimeout(timer);
       timer = setTimeout(() => {
         done = true;
         setArmed(true);
       }, delayMs);
     };
-    start();
-    window.addEventListener("keydown", start, true);
-    window.addEventListener("pointerdown", start, true);
-    window.addEventListener("mousedown", start, true);
-    return () => {
-      done = true;
-      clearTimeout(timer);
-      window.removeEventListener("keydown", start, true);
-      window.removeEventListener("pointerdown", start, true);
-      window.removeEventListener("mousedown", start, true);
+    const pressed = (event: Event) => {
+      if (done || event.target instanceof HTMLInputElement) return;
+      if (timer !== undefined) count();
     };
-  }, [delayMs]);
+    // 요소의 blur · focus 는 거품이 없어 창의 (capture 아닌) 듣기까지 오지 않는다 — 그래도 요소에서 온 것은 거른다. 창 자체가
+    // 포커스를 잃고 얻을 때만이다.
+    const fromElement = (event: Event) => event.target instanceof Element;
+    const away = (event: Event) => {
+      if (!fromElement(event)) lock();
+    };
+    const back = (event: Event) => {
+      if (fromElement(event)) return;
+      lock();
+      if (inFront()) count();
+    };
+    const visibility = () => {
+      lock();
+      if (inFront()) count();
+    };
+    lock();
+    if (inFront()) count();
+    window.addEventListener("keydown", pressed, true);
+    window.addEventListener("pointerdown", pressed, true);
+    window.addEventListener("mousedown", pressed, true);
+    window.addEventListener("blur", away);
+    window.addEventListener("focus", back);
+    document.addEventListener("visibilitychange", visibility);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("keydown", pressed, true);
+      window.removeEventListener("pointerdown", pressed, true);
+      window.removeEventListener("mousedown", pressed, true);
+      window.removeEventListener("blur", away);
+      window.removeEventListener("focus", back);
+      document.removeEventListener("visibilitychange", visibility);
+    };
+  }, [delayMs, epoch]);
   return armed;
 }
 
@@ -308,6 +345,32 @@ function Change({
   }
 }
 
+/**
+ * 바뀔 것 목록. 남은 시한 시계(1초마다)와 잠금이 다이얼로그를 다시 그려도 이 목록은 다시 그리지 않는다(M5-14 재리뷰 G3 — 문장이
+ * 수천 개면 한 번 그리는 데 수백 ms 다). 계획 · 문자열이 바뀔 때만 그린다.
+ */
+const Changes = memo(function Changes({
+  changes,
+  T,
+  phrases,
+}: {
+  changes: readonly PlanChange[];
+  T: Strings;
+  phrases: Record<string, string>;
+}) {
+  if (changes.length === 0)
+    return <p className="text-[12px] text-ui-muted-foreground">{T.noChanges}</p>;
+  return (
+    <section className="flex flex-col gap-2">
+      <h3 className="text-[12px] font-semibold">{T.changes(changes.length)}</h3>
+      {changes.map((change, i) => (
+        // 변경은 자리가 곧 순서다.
+        <Change key={i} change={change} T={T} phrases={phrases} />
+      ))}
+    </section>
+  );
+});
+
 export interface ApprovalDialogProps {
   request: McpApprovalRequest;
   /** 이 창의 대기 가운데 이 요청의 차례(1 기준)와 전체 수. */
@@ -320,6 +383,8 @@ export interface ApprovalDialogProps {
   onDismiss(): void;
   /** 허용 단추를 잠그는 시간(기본 `ARM_DELAY_MS`). 시험만 바꾼다. */
   armDelayMs?: number;
+  /** 다시 연 횟수 — 바뀌면 허용 단추를 다시 잠근다(approvals.ts 의 `revealed`). */
+  epoch?: number;
 }
 
 export function ApprovalDialog({
@@ -330,6 +395,7 @@ export function ApprovalDialog({
   onAnswer,
   onDismiss,
   armDelayMs = ARM_DELAY_MS,
+  epoch = 0,
 }: ApprovalDialogProps) {
   const T = useMcpStrings().approval;
   useKeymapPopup(true);
@@ -338,7 +404,7 @@ export function ApprovalDialog({
   const required = useMemo(() => namesRequired(plan), [plan]);
   const [typed, setTyped] = useState<Record<string, string>>({});
   const namesOk = required.every((name) => typed[name] === name);
-  const armed = useArmed(armDelayMs);
+  const armed = useArmed(armDelayMs, epoch);
   /** 잠금이 풀린 뒤 포인터가 내려간 허용 단추 — 포인터로 누른 허용은 이 단추여야 받는다. */
   const pressed = useRef<McpApprovalAnswer | undefined>(undefined);
   const press = (answer: McpApprovalAnswer) => {
@@ -425,17 +491,7 @@ export function ApprovalDialog({
                   </>
                 )}
               </dl>
-              {plan.changes.length === 0 ? (
-                <p className="text-[12px] text-ui-muted-foreground">{T.noChanges}</p>
-              ) : (
-                <section className="flex flex-col gap-2">
-                  <h3 className="text-[12px] font-semibold">{T.changes(plan.changes.length)}</h3>
-                  {plan.changes.map((change, i) => (
-                    // 변경은 자리가 곧 순서다.
-                    <Change key={i} change={change} T={T} phrases={phrases} />
-                  ))}
-                </section>
-              )}
+              <Changes changes={plan.changes} T={T} phrases={phrases} />
             </div>
           </Dialog.Description>
           {required.map((name) => (

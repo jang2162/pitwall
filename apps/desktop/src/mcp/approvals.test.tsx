@@ -15,10 +15,11 @@ import type {
   SqlStatement,
 } from "@pitwall/rpc-client";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, vi } from "vitest";
+import { afterEach, beforeEach, expect, type MockInstance, vi } from "vitest";
 
 import { bundledLocalization, bundledTranslator } from "../i18n/testing";
 import { act, endTest, it } from "../test-support/ended-test";
+import { agentBlock } from "./agent-text";
 import { ARM_DELAY_MS, STATEMENTS_SHOWN } from "./approval-dialog";
 import type { ApprovalNative, ApprovalNotice } from "./approval-native";
 import { createApprovalStore, type ApprovalStore } from "./approvals";
@@ -32,6 +33,12 @@ declare global {
 }
 
 const popup = vi.hoisted(() => ({ calls: [] as boolean[] }));
+// 문장 원문을 그리는 횟수를 센다(시계가 목록을 다시 그리지 않는지 — G3). 동작은 그대로다.
+vi.mock("./agent-text", async (original) => {
+  const actual = await original<typeof import("./agent-text")>();
+  return { ...actual, agentBlock: vi.fn(actual.agentBlock) };
+});
+
 vi.mock("../keymap/keymap-provider", () => ({
   useKeymapPopup: (open: boolean) => popup.calls.push(open),
 }));
@@ -133,8 +140,14 @@ function request(over: Partial<McpApprovalRequest> = {}): McpApprovalRequest {
 
 const open = (r: McpApprovalRequest): McpApprovalEvent => ({ kind: "open", request: r });
 
-/** 잠금 시간은 기본 0(허용 단추가 곧바로 켜진다) — 잠금을 보는 시험만 `ARM_DELAY_MS` 를 준다. */
-async function mount(projectId: string | null = "p1", { armDelayMs = 0 } = {}) {
+/**
+ * 잠금 시간은 기본 0(허용 단추가 곧바로 켜진다) — 잠금을 보는 시험만 `ARM_DELAY_MS` 를 준다. `appDefault` 면 prop 을 넘기지 않는다
+ * (앱이 쓰는 기본값의 길).
+ */
+async function mount(
+  projectId: string | null = "p1",
+  { armDelayMs = 0, appDefault = false }: { armDelayMs?: number; appDefault?: boolean } = {},
+) {
   const host = fakeHost();
   const native = fakeNative();
   const store: ApprovalStore = createApprovalStore();
@@ -149,7 +162,7 @@ async function mount(projectId: string | null = "p1", { armDelayMs = 0 } = {}) {
           projectId={projectId}
           native={native.native}
           store={store}
-          armDelayMs={armDelayMs}
+          {...(appDefault ? {} : { armDelayMs })}
         />
         <PendingApprovals projectId="p1" store={store} />
       </LocalizationProvider>,
@@ -847,4 +860,130 @@ it("a reopened later request shows its own place in the queue", async () => {
   press("Escape", dialog());
   await act(async () => rows()[1]!.click());
   expect(text("mcp-approval-position")).toBe(T.position(2, 2));
+});
+
+// --- 잠금은 사람이 그 요청을 볼 수 있게 된 순간부터 센다(M5-14 재리뷰 G1 · G2). ---
+
+/** 창이 뒤로 가거나(`blur`) 앞으로 온다(`focus`). happy-dom 의 `document.hasFocus()` 는 늘 참이라 함께 바꾼다. */
+function windowEvent(type: "blur" | "focus") {
+  focusSpy ??= vi.spyOn(document, "hasFocus");
+  focusSpy.mockReturnValue(type === "focus");
+  act(() => {
+    window.dispatchEvent(new FocusEvent(type));
+  });
+}
+
+let focusSpy: MockInstance<() => boolean> | undefined;
+afterEach(() => {
+  focusSpy?.mockRestore();
+  focusSpy = undefined;
+});
+
+function setVisibility(state: "hidden" | "visible") {
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+  act(() => {
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+}
+
+it("revealing the request already on screen locks its allow buttons again", async () => {
+  fakeClock();
+  const f = await mount("p1", { armDelayMs: ARM_DELAY_MS });
+  await f.push(open(request({ id: 5 })));
+  await advance(ARM_DELAY_MS);
+  expect(button("once")!.disabled).toBe(false);
+  // 알림을 눌러 창이 앞에 온다 — 같은 요청이 이미 떠 있다(탐침 C).
+  f.reveal(5);
+  expect(button("once")!.disabled).toBe(true);
+  await advance(ARM_DELAY_MS);
+  expect(button("once")!.disabled).toBe(false);
+  // 「승인 대기」 줄을 눌러도 같다.
+  await act(async () => rows()[0]!.click());
+  expect(button("once")!.disabled).toBe(true);
+});
+
+it("the lock does not run out while the window is in the back; coming to the front locks again", async () => {
+  fakeClock();
+  const f = await mount("p1", { armDelayMs: ARM_DELAY_MS });
+  // 창이 뒤에 있을 때 온 요청: 시간이 지나도 풀리지 않는다.
+  windowEvent("blur");
+  await f.push(open(request({ id: 5 })));
+  await advance(ARM_DELAY_MS * 3);
+  expect(button("once")!.disabled).toBe(true);
+  // 앞으로 오면 처음부터 센다(탐침 D).
+  windowEvent("focus");
+  await advance(ARM_DELAY_MS - 1);
+  expect(button("once")!.disabled).toBe(true);
+  await advance(1);
+  expect(button("once")!.disabled).toBe(false);
+  // 풀린 뒤 창이 뒤로 갔다 오면 다시 잠긴다.
+  windowEvent("blur");
+  expect(button("once")!.disabled).toBe(true);
+  await advance(ARM_DELAY_MS * 3);
+  windowEvent("focus");
+  expect(button("once")!.disabled).toBe(true);
+  await advance(ARM_DELAY_MS);
+  expect(button("once")!.disabled).toBe(false);
+  expect(f.answers).toEqual([]);
+});
+
+it("a hidden window keeps the lock and showing it again starts the count over", async () => {
+  fakeClock();
+  const f = await mount("p1", { armDelayMs: ARM_DELAY_MS });
+  try {
+    await f.push(open(request()));
+    await advance(ARM_DELAY_MS);
+    setVisibility("hidden");
+    expect(button("once")!.disabled).toBe(true);
+    await advance(ARM_DELAY_MS * 3);
+    expect(button("once")!.disabled).toBe(true);
+    setVisibility("visible");
+    expect(button("once")!.disabled).toBe(true);
+    await advance(ARM_DELAY_MS);
+    expect(button("once")!.disabled).toBe(false);
+  } finally {
+    Reflect.deleteProperty(document, "visibilityState");
+  }
+});
+
+it("the app's default lock is ARM_DELAY_MS", async () => {
+  expect(ARM_DELAY_MS).toBeGreaterThanOrEqual(500);
+  fakeClock();
+  const f = await mount("p1", { appDefault: true });
+  await f.push(open(request()));
+  expect(button("once")!.disabled).toBe(true);
+  await advance(ARM_DELAY_MS - 1);
+  expect(button("once")!.disabled).toBe(true);
+  await advance(1);
+  expect(button("once")!.disabled).toBe(false);
+});
+
+// --- 시계는 목록을 다시 그리지 않는다(M5-14 재리뷰 G3). ---
+
+it("with 5,000 statements the clock tick does not redraw the statement list", async () => {
+  fakeClock();
+  const f = await mount("p1", { armDelayMs: ARM_DELAY_MS });
+  const many = Array.from({ length: 5000 }, (_, i) =>
+    stmt(i, "write", `UPDATE t SET a = ${i} WHERE id = ${i}`),
+  );
+  const drawn = vi.mocked(agentBlock);
+  drawn.mockClear();
+  await f.push(
+    open(
+      request({
+        tier: "dangerous",
+        answers: ["deny", "once"],
+        expiresAt: Date.now() + 300_000,
+        plan: { ...request().plan, changes: [sql(many)] },
+      }),
+    ),
+  );
+  const first = drawn.mock.calls.length;
+  expect(first).toBeGreaterThanOrEqual(5000);
+  const before = text("mcp-approval-remaining");
+  // 시계 셋 · 잠금 풀림 하나 — 다이얼로그는 다시 그려지지만 문장 목록은 그대로다.
+  await advance(CLOCK_MS * 3);
+  expect(text("mcp-approval-remaining")).not.toBe(before);
+  expect(button("once")!.disabled).toBe(false);
+  expect(drawn.mock.calls.length).toBe(first);
 });

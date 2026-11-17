@@ -24,11 +24,13 @@ export interface ApprovalsState {
   readonly dismissed: ReadonlySet<number>;
   /** 목록에서 눌러 다시 연 요청 — 다이얼로그가 이것을 먼저 보인다. */
   readonly front: number | undefined;
+  /** 다시 연 횟수(`reveal` 마다 하나). 이미 떠 있던 요청을 다시 열어도 다이얼로그가 허용 단추를 다시 잠근다. */
+  readonly revealed: number;
 }
 
 export type ApprovalStore = StoreApi<ApprovalsState>;
 
-const EMPTY: ApprovalsState = { requests: [], dismissed: new Set(), front: undefined };
+const EMPTY: ApprovalsState = { requests: [], dismissed: new Set(), front: undefined, revealed: 0 };
 
 export function createApprovalStore(): ApprovalStore {
   return createStore<ApprovalsState>(() => EMPTY);
@@ -72,13 +74,13 @@ export function dismiss(store: ApprovalStore, id: number): void {
   }));
 }
 
-/** 목록 · OS 알림에서 그 요청을 다시 연다. 없는 요청이면 아무것도 하지 않는다. */
+/** 목록 · OS 알림에서 그 요청을 다시 연다(이미 떠 있던 요청이어도 다시 잠근다 — `revealed`). 없는 요청이면 아무것도 하지 않는다. */
 export function reveal(store: ApprovalStore, id: number): void {
   store.setState((s) => {
     if (!s.requests.some((r) => r.id === id)) return s;
     const dismissed = new Set(s.dismissed);
     dismissed.delete(id);
-    return { dismissed, front: id };
+    return { dismissed, front: id, revealed: s.revealed + 1 };
   });
 }
 
