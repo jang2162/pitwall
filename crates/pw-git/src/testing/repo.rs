@@ -44,6 +44,13 @@ pub fn git_command(dir: &Path, ceiling: &Path) -> Command {
             "core.autocrlf=false",
             "-c",
             "advice.detachedHead=false",
+            // 명령 끝의 자동 유지보수(`git maintenance run --auto`)를 끈다. git 2.54 는 커밋 수십 번이면 그것을 뒤에서 띄워 낱개 객체를
+            // 팩으로 옮기고 지운다 — 그 사이 다음 커밋이 HEAD 를 읽지 못하고(`could not parse HEAD`), 시험이 연 gix 가 객체를 찾지
+            // 못한다(`Could not find existing iterator over a tree`). 시험 저장소는 시험이 만든 그대로여야 한다.
+            "-c",
+            "maintenance.auto=false",
+            "-c",
+            "gc.auto=0",
         ]);
     c
 }
