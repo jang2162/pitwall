@@ -384,7 +384,11 @@ export function SymbolSearchFeature({
     };
     return new SymbolSearch(deps);
   });
-  useEffect(() => () => search.dispose(), [search]);
+  // 시작과 정리를 짝으로 건다 — StrictMode(dev)의 정리 · 다시 걸기 뒤에도 쓰게(symbol-search.ts `start`).
+  useEffect(() => {
+    search.start();
+    return () => search.dispose();
+  }, [search]);
 
   const actions = useMemo(() => symbolSearchActions(strings, openSearch), [strings, openSearch]);
   useRegisterActions(actions);

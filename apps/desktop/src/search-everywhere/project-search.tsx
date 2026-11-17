@@ -439,7 +439,11 @@ export function ProjectSearch({
         return c.call("search.files", params, { signal });
       }),
   );
-  useEffect(() => () => files.dispose(), [files]);
+  // 시작과 정리를 짝으로 건다 — StrictMode(dev)의 정리 · 다시 걸기 뒤에도 쓰게(file-search.ts `start`).
+  useEffect(() => {
+    files.start();
+    return () => files.dispose();
+  }, [files]);
   useEffect(() => (api ? recent.track(api) : undefined), [api, recent]);
 
   const actions = useMemo(

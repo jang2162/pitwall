@@ -93,6 +93,15 @@ export class FileSearch {
     this.state = EMPTY;
   }
 
+  /**
+   * `dispose` 한 것을 다시 쓴다. 쓰고 있으면 아무것도 하지 않는다. 화면은 effect 에서 `start` 와 `dispose` 를 짝으로 부른다 —
+   * StrictMode(dev)가 effect 를 한 번 정리했다 다시 걸면 같은 객체가 `dispose` 뒤 `start` 를 받는다. 정리만 걸면 멈춘 채 남아 결과가
+   * 영영 비었다(M5-13b).
+   */
+  start() {
+    this.disposed = false;
+  }
+
   dispose() {
     this.stop();
     this.disposed = true;
