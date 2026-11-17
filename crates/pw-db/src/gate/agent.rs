@@ -28,7 +28,8 @@ pub const PRODUCTION_BLOCKED: &str = "productionBlocked";
 /// 기본) · DB · 사용자 · 터널 목적지, SQLite 면 파일의 실제 경로(링크를 끝까지 푼 것 — 워크트리마다 상대 경로가 다른 파일을
 /// 가리킨다). 호스트는 소문자로 맞춘다(DNS 이름은 대소문자를 가리지 않는다 — `DB.example.com` 으로 표지를 비껴가지 못하게). TLS
 /// 설정은 넣지 않는다 — 같은 서버 · DB 를 `sslmode` 만 바꿔 가리켜 표지를 비껴가지 못하게(TLS 의 확인은 `crate::trust` 가 따로 본다).
-/// 남는 한계: 호스트 별칭(`localhost` · `127.0.0.1`), 터널 목적지의 다른 표기, DB 이름의 대소문자는 다른 대상으로 본다.
+/// 루프백 별칭은 하나로 맞춘다([`normalize_host`]). 남는 한계: 그 밖의 호스트 별칭(DNS 이름과 그 IP), 터널 목적지의 다른 표기,
+/// DB 이름의 대소문자는 다른 대상으로 본다.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DbTarget {
@@ -55,10 +56,7 @@ impl DbTarget {
         });
         Self {
             driver: config.driver,
-            host: config
-                .host
-                .as_deref()
-                .map(|h| h.trim_end_matches('.').to_ascii_lowercase()),
+            host: config.host.as_deref().map(normalize_host),
             port: config.effective_port(),
             database: config.database.clone(),
             user: config.user.clone(),
@@ -117,6 +115,35 @@ impl DbTarget {
     }
 }
 
+/// 대상의 호스트 표기를 맞춘다: 끝의 점을 떼고 소문자로, 그리고 **루프백 별칭을 하나로**(메인 판정 2026-11-17 — M5-17 재리뷰
+/// G1) — `localhost` · `*.localhost` · `127.0.0.0/8` · `::1` · `0.0.0.0` · `::` · IPv4 를 담은 IPv6(`::ffff:127.0.0.1`) · 대괄호
+/// 표기는 모두 `localhost` 다. 에이전트가 같은 로컬 서버를 다른 별칭으로 가리켜 표지 · 「사람이 연 연결」 · 승인을 비껴가지
+/// 못하게. 표지 열쇠 · 「사람이 연 연결」 · 「승인받은 연결」 이 모두 이 대상을 쓴다. 그 밖의 별칭(DNS 이름과 그 IP, CNAME)은 다른
+/// 대상이다(남는 한계 — 「이 연결 열기」 다이얼로그가 대상을 보이는 것이 방어).
+fn normalize_host(host: &str) -> String {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(&host);
+    let loopback = bare == "localhost"
+        || bare.ends_with(".localhost")
+        || bare.parse::<std::net::IpAddr>().is_ok_and(|ip| match ip {
+            std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_unspecified(),
+            std::net::IpAddr::V6(v6) => {
+                v6.is_loopback()
+                    || v6.is_unspecified()
+                    || v6
+                        .to_ipv4_mapped()
+                        .is_some_and(|v4| v4.is_loopback() || v4.is_unspecified())
+            }
+        });
+    if loopback { LOOPBACK.to_owned() } else { host }
+}
+
+/// 루프백 별칭을 맞춘 표기.
+const LOOPBACK: &str = "localhost";
+
 /// Redis 에서 사용자를 적지 않은 `AUTH` 가 쓰는 사용자.
 const REDIS_DEFAULT_USER: &str = "default";
 
@@ -134,6 +161,12 @@ impl DbMarks {
             production: config.production,
             read_only: config.read_only,
         }
+    }
+
+    /// 읽어 올린 연결의 표지: 병합 값과 각 레이어 파일에 적힌 표지의 합(메인 판정 2026-11-17 — 재리뷰 G2). 에이전트에게 쓰는 모든
+    /// 자리(관문 · 표지 기억 · 쓰기 판정)가 이것을 본다.
+    pub(crate) fn of_loaded(loaded: &LoadedConnection, config: &DbConnectionConfig) -> Self {
+        Self::of(config).tighten(loaded.layer_marks)
     }
 
     /// 둘 가운데 엄한 것.
@@ -154,8 +187,13 @@ impl MarkMemory {
     pub fn see(&self, root: &Path, list: &[LoadedConnection]) {
         let seen: Vec<(DbTarget, DbMarks)> = list
             .iter()
-            .filter_map(|c| c.config.as_ref().ok())
-            .map(|config| (DbTarget::of(config, root).mark_key(), DbMarks::of(config)))
+            .filter_map(|c| c.config.as_ref().ok().map(|config| (c, config)))
+            .map(|(c, config)| {
+                (
+                    DbTarget::of(config, root).mark_key(),
+                    DbMarks::of_loaded(c, config),
+                )
+            })
             .filter(|(_, marks)| *marks != DbMarks::default())
             .collect();
         if seen.is_empty() {
@@ -459,10 +497,13 @@ pub(crate) fn check_agent_write(
             connections.load(project, wt.as_deref()).ok()
         };
         let view = view.as_ref().unwrap_or(&loaded);
-        if let Some(config) = view.get(connection_id).and_then(|c| c.config.as_ref().ok()) {
+        if let Some((loaded_connection, config)) = view
+            .get(connection_id)
+            .and_then(|c| c.config.as_ref().ok().map(|config| (c, config)))
+        {
             let target = DbTarget::of(config, &view.root);
             existing = existing
-                .tighten(DbMarks::of(config))
+                .tighten(DbMarks::of_loaded(loaded_connection, config))
                 .tighten(connections.marks.get(&target));
             targets.push(target);
         }
@@ -511,6 +552,17 @@ pub(crate) fn check_agent_write(
         ));
     }
     Ok(())
+}
+
+/// [`layer_marks`] 인데 읽지 못하면 두 표지를 다 단 것으로 본다(fail-closed — 설정 계층이 방금 읽은 파일이라 드물다).
+pub(crate) fn layer_marks_or_strict(file: &Path) -> DbMarks {
+    layer_marks(file).unwrap_or_else(|_| {
+        tracing::warn!(target: "pw_db", path = %file.display(), "cannot read a db connection layer for its marks; treating it as marked");
+        DbMarks {
+            production: true,
+            read_only: true,
+        }
+    })
 }
 
 /// 레이어 파일 하나에 적힌 표지(없는 파일은 표지 없음). 읽지 못하면 거절한다 — 표지를 모르는 채로 쓰지 않는다.
@@ -585,7 +637,7 @@ pub(crate) fn judge_for_agent(
         .map_err(|_| RpcError::invalid_params(invalid_settings(&connection.id)))?;
     let target = DbTarget::of(config, &loaded.root);
     let marks_memory = &sessions.connections.marks;
-    let mut marks = DbMarks::of(config).tighten(marks_memory.get(&target));
+    let mut marks = DbMarks::of_loaded(connection, config).tighten(marks_memory.get(&target));
     if database.is_some_and(|db| config.database.as_deref() != Some(db)) {
         marks = marks.tighten(marks_memory.get(&target.with_database(database)));
     }

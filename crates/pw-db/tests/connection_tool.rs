@@ -967,3 +967,122 @@ async fn a_write_onto_a_remembered_target_must_carry_its_marks() {
     asked(&e.upsert(&mut agent, other_user, None).await);
     assert!(!e.f.db_file("fresh.toml").exists());
 }
+
+// --- 재리뷰 G1 · G2 · F3 ----------------------------------------------------------------------------------------------
+
+/// 재리뷰 G1 의 재현: 프로덕션 연결이 `127.0.0.1` 을 가리킬 때 에이전트가 같은 로컬 서버를 다른 루프백 별칭(`localhost` · `::1` ·
+/// `127.0.0.2` · `0.0.0.0` · `[::ffff:127.0.0.1]` · `app.localhost`)으로 가리키는 새 연결 · 표지 없는 연결의 이동은 묻지 않고
+/// 거절한다 — 루프백 별칭은 한 대상이다(표지 열쇠). 같은 별칭 맞추기가 「사람이 연 연결」 에도 적용된다: 사람이 `127.0.0.1` 로 연
+/// 연결의 파일이 `localhost` 로 바뀌어도 같은 대상이다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn loopback_aliases_are_one_target() {
+    let e = env();
+    e.f.write_db(
+        "lp.toml",
+        "schema = 1\nname = \"lp\"\ndriver = \"postgres\"\nhost = \"127.0.0.1\"\nport = 5432\ndatabase = \"main\"\nuser = \"app\"\nproduction = true\n",
+    );
+    let mut agent = e.agent();
+    e.call(&mut agent, "db.tool.connectionList", json!({}), None)
+        .await
+        .unwrap();
+    for (id, host) in [
+        ("p2", "localhost"),
+        ("p3", "::1"),
+        ("p4", "127.0.0.2"),
+        ("p5", "0.0.0.0"),
+        ("p6", "[::ffff:127.0.0.1]"),
+        ("p7", "app.localhost"),
+        ("dev", "LOCALHOST."),
+    ] {
+        let write = json!({ "connectionId": id, "config": { "name": id, "driver": "postgres", "host": host,
+            "database": "main", "user": "app" } });
+        refused(&e.upsert(&mut agent, write, None).await, "lowersMarks");
+    }
+    // 루프백이 아닌 호스트는 다른 대상이다(남는 한계 — DNS 이름과 그 IP).
+    let remote = json!({ "connectionId": "p8", "config": { "name": "p8", "driver": "postgres",
+        "host": "10.0.0.1", "database": "main", "user": "app" } });
+    asked(&e.upsert(&mut agent, remote, None).await);
+
+    // 「사람이 연 연결」 도 같은 맞추기를 쓴다.
+    e.human_opens("dev", None).await;
+    e.f.edit_db("dev.toml", "host = \"localhost\"", "host = \"127.0.0.1\"");
+    e.schema(&mut agent, "dev", None).await.unwrap();
+}
+
+/// 재리뷰 G2 의 재현: 에이전트가 자기 파일 툴로 개인 파일 `prod.local.toml` 에 `production = false` 를 써 공유 파일의 `production =
+/// true` 를 덮어도, 앱을 다시 켠 뒤 에이전트에게 그 연결은 프로덕션이다 — 관문 · 표지 기억이 모든 레이어의 표지를 OR 로 본다. 목록
+/// · `db_connection_test`(묻지 않고 거절) · 같은 대상의 표지 없는 새 연결 쓰기(거절) 모두. read-only 도 같다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_personal_file_cannot_turn_off_a_shared_mark_across_app_runs() {
+    for mark in ["production", "read_only"] {
+        let mut e = env();
+        let shared = format!(
+            "schema = 1\nname = \"prod\"\ndriver = \"postgres\"\nhost = \"db.prod.example\"\ndatabase = \"app\"\nuser = \"app\"\n{mark} = true\n"
+        );
+        e.f.write_db("prod.toml", &shared);
+        // 에이전트의 파일 툴 흉내 — Pitwall 을 지나지 않는다.
+        e.f.write_db("prod.local.toml", &format!("schema = 1\n{mark} = false\n"));
+        e.restart();
+        let mut agent = e.agent();
+        let list = e
+            .call(&mut agent, "db.tool.connectionList", json!({}), None)
+            .await
+            .unwrap();
+        let prod = list["connections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == "prod")
+            .unwrap()
+            .clone();
+        let field = if mark == "production" {
+            "production"
+        } else {
+            "readOnly"
+        };
+        assert_eq!(prod[field], true, "{mark}: {prod}");
+        if mark == "production" {
+            refused(
+                &e.test(&mut agent, "prod", None, None).await,
+                "productionBlocked",
+            );
+        }
+        let fresh = json!({ "connectionId": "fresh", "config": { "name": "fresh", "driver": "postgres",
+            "host": "db.prod.example", "database": "app", "user": "app" } });
+        refused(&e.upsert(&mut agent, fresh, None).await, "lowersMarks");
+        assert_eq!(e.connects(), 0);
+    }
+}
+
+/// 재리뷰 F3 ①: 공유 파일의 `read_only = true` 를 사람의 개인 파일이 `false` 로 덮은 연결(병합 값은 read-only 아님)에 에이전트가
+/// read-only 없는 쓰기를 하면 거절한다 — 레이어의 read-only 도 바닥이다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_read_only_mark_in_a_layer_holds() {
+    let e = env();
+    e.f.write_db(
+        "ro.toml",
+        "schema = 1\nname = \"ro\"\ndriver = \"postgres\"\nhost = \"replica.example\"\ndatabase = \"app\"\nread_only = true\n",
+    );
+    e.f.write_db("ro.local.toml", "schema = 1\nread_only = false\n");
+    let mut agent = e.agent();
+    let write = json!({ "connectionId": "ro", "config": { "name": "ro", "driver": "postgres",
+        "host": "replica.example", "database": "app", "readOnly": false } });
+    refused(&e.upsert(&mut agent, write, None).await, "lowersMarks");
+}
+
+/// 재리뷰 F3 ②: read-only 만 단 연결의 대상을 바꾸는 쓰기는 read-only 를 그대로 달아도 거절한다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_read_only_connection_cannot_be_moved() {
+    let e = env();
+    e.f.write_db(
+        "ro.toml",
+        "schema = 1\nname = \"ro\"\ndriver = \"postgres\"\nhost = \"replica.example\"\ndatabase = \"app\"\nread_only = true\n",
+    );
+    let mut agent = e.agent();
+    let moved = json!({ "connectionId": "ro", "config": { "name": "ro", "driver": "postgres",
+        "host": "elsewhere.example", "database": "app", "readOnly": true } });
+    refused(
+        &e.upsert(&mut agent, moved, None).await,
+        "movesMarkedTarget",
+    );
+}

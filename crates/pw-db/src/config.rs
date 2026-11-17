@@ -697,6 +697,10 @@ pub(crate) struct LoadedConnection {
     pub config: Result<DbConnectionConfig, String>,
     pub layers: Vec<LayerOrigin>,
     pub read_only: bool,
+    /// 레이어 파일마다 적힌 프로덕션 · read-only 표지의 합(OR — 메인 판정 2026-11-17, M5-17 재리뷰 G2). 에이전트에게 적용하는
+    /// 표지는 병합 값이 아니라 이것과 병합 값의 합이다 — 개인 `.local.toml` 의 `production = false` 가 공유 파일의 `production =
+    /// true` 를 끄지 못한다(`crate::gate::DbMarks::of_loaded`). 창의 표지(병합 값)는 그대로다.
+    pub layer_marks: crate::gate::DbMarks,
 }
 
 /// 프로젝트의 연결 설정 파일들.
@@ -755,6 +759,15 @@ fn connections_of(snapshot: &ConfigSnapshot) -> Vec<LoadedConnection> {
                     .filter(|o| *o != LayerOrigin::Builtin)
                     .collect(),
                 read_only: file.layers.iter().any(|l| l.read_only),
+                layer_marks: file
+                    .layers
+                    .iter()
+                    .filter_map(|l| l.path.as_deref())
+                    .map(|path| crate::gate::layer_marks_or_strict(Path::new(path)))
+                    .fold(
+                        crate::gate::DbMarks::default(),
+                        crate::gate::DbMarks::tighten,
+                    ),
             })
         })
         .collect()

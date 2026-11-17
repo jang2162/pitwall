@@ -486,7 +486,7 @@ pub use agent::{
 };
 pub(crate) use agent::{
     ApprovedMemory, Asker, MarkMemory, OpenedMemory, UNREADABLE_SETTINGS, agent_view,
-    check_agent_write, invalid_settings, judge_for_agent, production_policy,
+    check_agent_write, invalid_settings, judge_for_agent, layer_marks_or_strict, production_policy,
 };
 
 #[cfg(test)]
