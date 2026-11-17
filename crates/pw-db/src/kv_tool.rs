@@ -10,6 +10,9 @@
 //!
 //! - **관문**: `agent_grant` → M5-06 의 입구 [`db_grant_for_agent`](사람이 연 연결만 · 프로덕션 표지 — Redis 의 표지 열쇠는 DB
 //!   번호를 뺀다, `DbTarget::mark_key`). `database` 입력(DB 번호)도 관문에 넘긴다. 관문을 따로 두지 않는다.
+//! - **프로덕션 `ask`**(16-m5-plan M5-18 ④): `[mcp.policy] production = "ask"`(사람의 설정)이면 사람이 연 프로덕션 Redis 연결도
+//!   **호출마다 승인받아** 읽는다 — 입력을 `Planned` 로 감싸고, 관문의 증거가 승인을 청할 때만 계획을 낸다
+//!   ([`crate::tool_plan::approve_production_read`]). 그 밖의 호출은 승인 없이 바로 돈다.
 //! - **연결**: 세션 id 를 받지 않고 호출마다 자기 연결을 연다([`crate::connection::connect`] — 창의 세션 · 키 브라우저의 연결을
 //!   빌리지 않는다). DB 번호마다 연결 하나다(결정 M3-D15 — `SELECT` 를 보내지 않는다). 응답 타임아웃은 `[db]
 //!   redis_response_timeout`(연결을 풀 때 `crate::trust` 가 싣는다). 호출이 버려지면(취소 · 세션 끊김) 연결도 버려진다 — Redis
@@ -37,6 +40,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use pw_core::registry::agent::agent_grant;
+use pw_core::registry::plan::{ApprovalTicket, Planned};
 use pw_db_driver::budget::within;
 use pw_db_driver::{Budget, DbConnection, KvConnection};
 use pw_db_types::{
@@ -51,6 +55,7 @@ use crate::kv::{MAX_PATTERN_BYTES, MAX_REQUEST_BYTES};
 use crate::schema::{check_limit, check_text};
 use crate::script::RESPONSE_BUDGET;
 use crate::session::{DbSessions, blocking, db_error};
+use crate::tool_plan::approve_production_read;
 
 /// 값 읽기에서 string · JSON 한 쪽의 바이트 창(응답 상한 안 — 글자를 이스케이프해 늘어나도 반씩 줄여 맞춘다).
 pub const TOOL_STRING_WINDOW: u32 = 64 * 1024;
@@ -188,12 +193,13 @@ rpc_method! {
     /// can appear again on a later page** (Redis `SCAN` may return a key twice); keys that exist for the whole scan are
     /// never missed. There is no command input — this tool only reads. Uses only connections the person opened in
     /// Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` — try again after the person has opened
-    /// it once) and never uses a Redis server marked production — any database number on the same server · user
-    /// (`productionBlocked`). Redis connections only — for SQL databases use `db_schema` · `db_query`. The only page that
+    /// it once) and does not use a Redis server marked production — any database number on the same server · user
+    /// (`productionBlocked`) — unless the person set production targets to ask, and then each call waits for the
+    /// person's approval in Pitwall. Redis connections only — for SQL databases use `db_schema` · `db_query`. The only page that
     /// cannot be returned is one whose key name alone is larger than the response (about 192 KiB): that call is refused
     /// (`data.reason: "tooLarge"`) and `data.nextCursor` continues after it.
     pub DbToolKvScanMethod: "db.tool.kvScan" {
-        params: DbToolKvScanParams,
+        params: Planned<DbToolKvScanParams>,
         result: DbToolKvScan,
         tier: Read,
         roles: [Owner],
@@ -210,10 +216,10 @@ rpc_method! {
     /// reading never stops at one large element. A call is refused only when even an empty page cannot fit
     /// (`data.reason: "tooLarge"`, with `data.nextCursor`). There is no command
     /// input — this tool only reads. Uses only connections the person opened in Pitwall's DB explorer during this app
-    /// run (`notOpenedByUser`) and never uses a Redis server marked production (`productionBlocked`). Redis connections
-    /// only.
+    /// run (`notOpenedByUser`) and does not use a Redis server marked production (`productionBlocked`) unless the person
+    /// set production targets to ask (then each call waits for approval in Pitwall). Redis connections only.
     pub DbToolKvGetMethod: "db.tool.kvGet" {
-        params: DbToolKvGetParams,
+        params: Planned<DbToolKvGetParams>,
         result: DbToolKvGet,
         tier: Read,
         roles: [Owner],
@@ -237,12 +243,14 @@ fn json_len<T: Serialize>(value: &T) -> usize {
 }
 
 impl DbSessions {
-    /// 관문(M5-06 의 입구)을 지나 그 연결의 KV 연결을 연다. Redis 연결이 아니면 `unsupported`.
+    /// 관문(M5-06 의 입구)을 지나 그 연결의 KV 연결을 연다. Redis 연결이 아니면 `unsupported`. 프로덕션 `ask` 의 증거면 연결을
+    /// 열기 전에 이 호출의 승인을 받는다(`approval` — RPC 이름 · 서버가 채운 입력 · 승인 표 · 보일 「무엇을 읽는가」).
     async fn kv_tool_open(
         self: &Arc<Self>,
         ctx: &Ctx,
         tool: &str,
         target: (&str, Option<&str>, &str, Option<&str>),
+        approval: (&str, &impl Serialize, Option<&ApprovalTicket>, &str),
     ) -> Result<(Box<dyn KvConnection>, Option<crate::session::DbTunnelLease>), RpcError> {
         let (project, worktree, id, database) = target;
         check_text("worktree", worktree)?;
@@ -254,7 +262,7 @@ impl DbSessions {
             id.to_owned(),
             database.map(str::to_owned),
         );
-        let grant: DbGrant = blocking(move || {
+        let mut grant: DbGrant = blocking(move || {
             let agent = agent_grant(&scope, &s.connections.host()?.projects, &project_owned)?;
             db_grant_for_agent(
                 &s,
@@ -282,6 +290,8 @@ impl DbSessions {
                 ),
             )));
         }
+        let (method, input, ticket, what) = approval;
+        approve_production_read(&mut grant, method, input, ticket, None, what, None)?;
         let opened =
             crate::connection::connect(self, &grant, worktree, id, database.map(str::to_owned))
                 .await?;
@@ -300,8 +310,9 @@ impl DbSessions {
     async fn tool_kv_scan(
         self: &Arc<Self>,
         ctx: &Ctx,
-        p: DbToolKvScanParams,
+        planned: Planned<DbToolKvScanParams>,
     ) -> Result<DbToolKvScan, RpcError> {
+        let p = planned.params;
         let limit = check_limit(p.limit.unwrap_or(DEFAULT_LIST_LIMIT))?;
         if let Some(pattern) = &p.pattern
             && (pattern.is_empty() || pattern.len() > MAX_PATTERN_BYTES)
@@ -329,6 +340,7 @@ impl DbSessions {
                     &p.connection_id,
                     p.database.as_deref(),
                 ),
+                ("db.tool.kvScan", &p, planned.ticket.as_ref(), "Redis keys"),
             )
             .await?;
         let scanned = scan_page(conn.as_mut(), p.pattern, p.cursor, limit).await;
@@ -341,8 +353,9 @@ impl DbSessions {
     async fn tool_kv_get(
         self: &Arc<Self>,
         ctx: &Ctx,
-        p: DbToolKvGetParams,
+        planned: Planned<DbToolKvGetParams>,
     ) -> Result<DbToolKvGet, RpcError> {
+        let p = planned.params;
         let limit = check_limit(p.limit.unwrap_or(DEFAULT_LIST_LIMIT))?;
         let bytes = p.key.to_bytes().ok_or_else(|| {
             RpcError::invalid_params("a key's hex must be `0x` and an even number of hex digits")
@@ -363,6 +376,12 @@ impl DbSessions {
                     p.worktree.as_deref(),
                     &p.connection_id,
                     p.database.as_deref(),
+                ),
+                (
+                    "db.tool.kvGet",
+                    &p,
+                    planned.ticket.as_ref(),
+                    "a Redis value",
                 ),
             )
             .await?;
@@ -712,14 +731,20 @@ fn too_large(message: &str, next_cursor: Option<&str>) -> RpcError {
 pub(crate) fn register(router: &mut Router, sessions: Arc<DbSessions>) {
     let scan = Arc::clone(&sessions);
     router
-        .unary(DbToolKvScanMethod, move |ctx, p: DbToolKvScanParams| {
-            let s = Arc::clone(&scan);
-            async move { s.tool_kv_scan(&ctx, p).await }
-        })
-        .unary(DbToolKvGetMethod, move |ctx, p: DbToolKvGetParams| {
-            let s = Arc::clone(&sessions);
-            async move { s.tool_kv_get(&ctx, p).await }
-        });
+        .unary(
+            DbToolKvScanMethod,
+            move |ctx, p: Planned<DbToolKvScanParams>| {
+                let s = Arc::clone(&scan);
+                async move { s.tool_kv_scan(&ctx, p).await }
+            },
+        )
+        .unary(
+            DbToolKvGetMethod,
+            move |ctx, p: Planned<DbToolKvGetParams>| {
+                let s = Arc::clone(&sessions);
+                async move { s.tool_kv_get(&ctx, p).await }
+            },
+        );
 }
 
 #[cfg(test)]

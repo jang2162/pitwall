@@ -16,6 +16,9 @@
 //! - [`tools`]: MCP 툴 메서드(`db_connection_list` · `db_schema` — 16-m5-plan.md M5-06, `db_query` — M5-07). 관문은
 //!   [`gate::db_grant_for_agent`].
 //! - [`script`]: 에이전트의 SQL 실행 파이프라인(`sql` · `file` 입력, 여러 문장, 감사 상세 — M5-07, `db_execute` M5-18 이 함께 쓴다).
+//! - [`execute_tool`]: DB 쓰기 툴 메서드(`db_execute` — 16-m5-plan.md M5-18). 관문은 [`gate::db_grant_for_agent`], 파이프라인은
+//!   [`script`].
+//! - [`tool_plan`]: 에이전트 DB 툴의 승인 계획(`db_execute` · 프로덕션 `ask` 의 조회 — M5-18).
 //!
 //! 모듈 배치의 주인은 M3-01 이다. 이후 행은 자기 모듈을 채우고, 메서드 등록 줄을 하나씩 더한다(14 「공유 부품의 주인」).
 
@@ -23,6 +26,7 @@ pub mod config;
 pub mod connection;
 pub mod edit;
 pub mod execute;
+pub mod execute_tool;
 pub mod gate;
 pub mod kv;
 pub mod kv_tool;
@@ -33,6 +37,7 @@ pub mod secret;
 pub mod session;
 pub mod settings;
 pub mod ssh_hosts;
+pub mod tool_plan;
 pub mod tools;
 pub mod trust;
 pub mod tunnel;

@@ -338,9 +338,11 @@ fn an_agent_grant_is_used_only_for_the_judged_connection() {
         project_id: "p".into(),
         agent: Some(Box::new(agent::AgentBinding {
             connection_id: "dev".into(),
+            name: "Dev".into(),
             worktree: Some("/wt".into()),
             target: target("localhost"),
             marks: agent::DbMarks::default(),
+            approval: agent::AgentApproval::NotNeeded,
         })),
     };
     assert!(grant.is_agent());
@@ -363,6 +365,52 @@ fn an_agent_grant_is_used_only_for_the_judged_connection() {
     window
         .check_agent_use(None, Some("any"), &target("elsewhere"))
         .unwrap();
+}
+
+/// 프로덕션 `ask` 로 지난 증거(16-m5-plan M5-18 ④)는 이 호출의 승인(`Approved` — 계획 해시가 맞은 표)을 달기 전에는 연결을 여는
+/// 자리 · 스키마 캐시를 지나지 못한다. 툴이 승인을 잊어도 열리지 않는다(fail-closed).
+#[test]
+fn a_production_ask_grant_opens_nothing_until_the_call_is_approved() {
+    use pw_core::registry::plan::{ApprovalTicket, ToolPlan, approve};
+    let target = agent::DbTarget {
+        driver: pw_db_types::DriverKind::Postgres,
+        host: Some("prod".into()),
+        port: Some(5432),
+        database: Some("app".into()),
+        user: None,
+        tunnel: None,
+        file: None,
+    };
+    let mut grant = DbGrant {
+        project_id: "p".into(),
+        agent: Some(Box::new(agent::AgentBinding {
+            connection_id: "prod".into(),
+            name: "Prod".into(),
+            worktree: None,
+            target: target.clone(),
+            marks: agent::DbMarks {
+                production: true,
+                read_only: false,
+            },
+            approval: agent::AgentApproval::Required,
+        })),
+    };
+    assert!(grant.needs_approval());
+    let e = grant
+        .check_agent_use(None, Some("prod"), &target)
+        .unwrap_err();
+    assert_eq!(e.code, pw_rpc::code::INTERNAL_ERROR, "{e:?}");
+    let plan = ToolPlan::builder("db.tool.query", pw_rpc::Tier::Read, &json!({"x": 1})).build();
+    let approved = approve(
+        Some(&ApprovalTicket {
+            hash: plan.hash.clone(),
+        }),
+        plan,
+    )
+    .unwrap();
+    grant.approve(&approved);
+    assert!(!grant.needs_approval());
+    grant.check_agent_use(None, Some("prod"), &target).unwrap();
 }
 
 /// 대상의 호스트는 소문자로, 포트는 드라이버 기본으로 맞춘다 — 표지를 대소문자 · 적지 않은 포트로 비껴가지 못한다. TLS 설정은

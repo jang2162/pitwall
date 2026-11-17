@@ -266,9 +266,29 @@ export type UnaryMethods = {
 	 * This project's DB connections (no secrets): id · name · driver · target (host · port · database · SQLite path) ·
 	 * read-only · production · state, plus whether the agent DB tools can use it now (`usable`) and why not. The agent
 	 * DB tools use only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`)
-	 * and never use connections marked production (`productionBlocked`). Does not open any connection.
+	 * and do not use connections marked production (`productionBlocked`) unless the person allowed it with approval for
+	 * every call (`asksApproval`). Does not open any connection.
 	 */
 	"db.tool.connectionList": { params: DbToolConnectionListParams; result: DbToolConnectionList };
+	/**
+	 * Run SQL that changes data (SQL drivers only — PG · MySQL/MariaDB · SQLite). The input is either `sql` (text) or
+	 * `file` (an SQL file path relative to the project root — Pitwall reads it once when it runs). Queries and writes
+	 * may be mixed. **Every call asks the person in Pitwall first**: the request shows every statement with its risk
+	 * grade, the connection and its marks (and the file path and hash for `file`), and the statements run only after
+	 * the person allows them — exactly the statements that were shown (if the file or the connection's target · marks
+	 * change after approval, nothing runs). There is no "allow for this session" and `auto_approve` does not apply.
+	 * The whole call is **one transaction**: if every statement succeeds it is committed; if one fails, the call stops
+	 * there, the transaction is rolled back and the database's error is returned (`error`, with statement index ·
+	 * line) — including for statements that cannot run inside a transaction (PG `CREATE INDEX CONCURRENTLY`, `VACUUM`,
+	 * ...). Statements that commit on their own (MySQL · MariaDB DDL) cannot be rolled back (`irreversible`). Refused
+	 * before asking: text that cannot be classified (cannot be parsed, or a statement over 512 KiB — run it in
+	 * Pitwall's SQL console instead), transaction control (`BEGIN` · `COMMIT` · `SAVEPOINT` ...), statements that change
+	 * how the server reads SQL text, and anything but queries on a read-only connection. Each statement's result is the
+	 * number of rows changed, or its rows (`RETURNING`, queries — up to `maxRows`, cells cut at 4 KiB). Uses only
+	 * connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`) and does not use a
+	 * target marked production (`productionBlocked`) unless the person set production targets to ask.
+	 */
+	"db.tool.execute": { params: DbToolExecuteParams; result: DbToolExecute };
 	/**
 	 * Read one page of a Redis key's value, by type: a string in byte windows, a hash · set in scan pages, a list ·
 	 * zset by index, a stream by entry id, a RedisJSON document whole. `nextCursor` reads the next page; a missing key
@@ -280,8 +300,8 @@ export type UnaryMethods = {
 	 * reading never stops at one large element. A call is refused only when even an empty page cannot fit
 	 * (`data.reason: "tooLarge"`, with `data.nextCursor`). There is no command
 	 * input — this tool only reads. Uses only connections the person opened in Pitwall's DB explorer during this app
-	 * run (`notOpenedByUser`) and never uses a Redis server marked production (`productionBlocked`). Redis connections
-	 * only.
+	 * run (`notOpenedByUser`) and does not use a Redis server marked production (`productionBlocked`) unless the person
+	 * set production targets to ask (then each call waits for approval in Pitwall). Redis connections only.
 	 */
 	"db.tool.kvGet": { params: DbToolKvGetParams; result: DbToolKvGet };
 	/**
@@ -291,8 +311,9 @@ export type UnaryMethods = {
 	 * can appear again on a later page** (Redis `SCAN` may return a key twice); keys that exist for the whole scan are
 	 * never missed. There is no command input — this tool only reads. Uses only connections the person opened in
 	 * Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` — try again after the person has opened
-	 * it once) and never uses a Redis server marked production — any database number on the same server · user
-	 * (`productionBlocked`). Redis connections only — for SQL databases use `db_schema` · `db_query`. The only page that
+	 * it once) and does not use a Redis server marked production — any database number on the same server · user
+	 * (`productionBlocked`) — unless the person set production targets to ask, and then each call waits for the
+	 * person's approval in Pitwall. Redis connections only — for SQL databases use `db_schema` · `db_query`. The only page that
 	 * cannot be returned is one whose key name alone is larger than the response (about 192 KiB): that call is refused
 	 * (`data.reason: "tooLarge"`) and `data.nextCursor` continues after it.
 	 */
@@ -310,9 +331,10 @@ export type UnaryMethods = {
 	 * "responseBudget"`). **There is no next page** — if a result was cut, narrow the WHERE · LIMIT · columns and call
 	 * again (a new call sees a different snapshot).
 	 * Uses only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`) and
-	 * never uses a target marked production — for MySQL · MariaDB, any database on the same server · user
-	 * (`productionBlocked`). The result's `audit` is the detail kept in the audit log (statement count · grade ·
-	 * hashes) and is shown to the agent too.
+	 * does not use a target marked production — for MySQL · MariaDB, any database on the same server · user
+	 * (`productionBlocked`) — unless the person set production targets to ask, and then each call shows its statements
+	 * to the person and waits for approval in Pitwall. The result's `audit` is the detail kept in the audit log
+	 * (statement count · grade · hashes) and is shown to the agent too.
 	 */
 	"db.tool.query": { params: DbToolQueryParams; result: DbToolQuery };
 	/**
@@ -321,8 +343,9 @@ export type UnaryMethods = {
 	 * `schema` and filtered by `filter`); with it, that object's columns (name · type · null · default · primary key)
 	 * · indexes · foreign keys, or its DDL text with `detail: "ddl"`. Sees the same as Pitwall's DB explorer. Uses
 	 * only connections the person opened in Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` —
-	 * try again after the person has opened it once) and never uses connections marked production. For a Redis
-	 * connection, `unsupported` — use `db_kv_scan`.
+	 * try again after the person has opened it once) and does not use connections marked production
+	 * (`productionBlocked`) — unless the person set them to ask, and then each call waits for the person's approval in
+	 * Pitwall. For a Redis connection, `unsupported` — use `db_kv_scan`.
 	 */
 	"db.tool.schema": { params: DbToolSchemaParams; result: DbToolSchema };
 	/**
@@ -1281,11 +1304,12 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"db.sql.split": {"name":"db.sql.split","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlSplitParams","output":"SqlSplitResult","doc":" SQL 스크립트를 문장으로 나눈다(방언별 따옴표 · 주석 · 달러 인용 · `DELIMITER` · 루틴 본문을 지나 구분자로). 범위는\n UTF-16 이고 끝의 구분자와 앞뒤 공백 · 주석을 뺀다. 파서가 못 읽는 문장도 나뉜다. `sql` 이 16 MiB 를 넘으면\n `INVALID_PARAMS`.\n","mcp":null,"fileScope":false},
 	"db.sql.statementAt": {"name":"db.sql.statementAt","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlStatementAtParams","output":"SqlStatementAtResult","doc":" 커서(UTF-16 오프셋)의 「현재 문장」 — 빈 줄이 아니라 구분자 기준. 두 문장 사이면 앞 문장, 첫 문장 앞이면 첫 문장.\n 오프셋이 `sql` 의 길이를 넘으면 `INVALID_PARAMS`.\n","mcp":null,"fileScope":false},
 	"db.ssh.hosts": {"name":"db.ssh.hosts","kind":"unary","tier":"read","roles":["owner"],"params":"DbProjectParams","output":"DbSshHosts","doc":" `~/.ssh/config`(과 그 `Include`)의 `Host` 이름 — 와일드카드 · 부정 패턴이 없고 터널 목적지로 쓸 수 있는 것만. 다른 값은\n 읽지 않는다. 읽지 못하면 빈 목록. 그 프로젝트 창의 연결 + 신뢰한 프로젝트만.\n","mcp":null,"fileScope":false},
-	"db.tool.connectionList": {"name":"db.tool.connectionList","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolConnectionListParams","output":"DbToolConnectionList","doc":" This project's DB connections (no secrets): id · name · driver · target (host · port · database · SQLite path) ·\n read-only · production · state, plus whether the agent DB tools can use it now (`usable`) and why not. The agent\n DB tools use only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`)\n and never use connections marked production (`productionBlocked`). Does not open any connection.\n","mcp":{"group":"db","name":"db_connection_list"},"fileScope":false},
-	"db.tool.kvGet": {"name":"db.tool.kvGet","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolKvGetParams","output":"DbToolKvGet","doc":" Read one page of a Redis key's value, by type: a string in byte windows, a hash · set in scan pages, a list ·\n zset by index, a stream by entry id, a RedisJSON document whole. `nextCursor` reads the next page; a missing key\n is `\"missing\"`. Values that are not UTF-8 come as hex bytes. The response is limited to about 192 KiB — a page\n holds fewer elements to fit, and an element too large on its own is cut (`truncated`); a stream entry with too\n many fields shows only its first fields, and a hash · set that Redis returns in one step may show only its first\n elements (`omitted` says how many — the rest cannot be read through this tool). An element that cannot fit even\n cut is left out with `omitted.shown: 0`. In every case `nextCursor` continues after what this page covered, so\n reading never stops at one large element. A call is refused only when even an empty page cannot fit\n (`data.reason: \"tooLarge\"`, with `data.nextCursor`). There is no command\n input — this tool only reads. Uses only connections the person opened in Pitwall's DB explorer during this app\n run (`notOpenedByUser`) and never uses a Redis server marked production (`productionBlocked`). Redis connections\n only.\n","mcp":{"group":"db","name":"db_kv_get"},"fileScope":false},
-	"db.tool.kvScan": {"name":"db.tool.kvScan","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolKvScanParams","output":"DbToolKvScan","doc":" Find Redis keys, one page at a time (Redis `SCAN` with an optional glob `match`): each key with its type · TTL ·\n size, and `nextCursor` for the next page — call again with it until `nextCursor` is missing. A page may hold\n fewer keys than `limit`, even none, while more pages remain. Keys are not repeated within one page, but **a key\n can appear again on a later page** (Redis `SCAN` may return a key twice); keys that exist for the whole scan are\n never missed. There is no command input — this tool only reads. Uses only connections the person opened in\n Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` — try again after the person has opened\n it once) and never uses a Redis server marked production — any database number on the same server · user\n (`productionBlocked`). Redis connections only — for SQL databases use `db_schema` · `db_query`. The only page that\n cannot be returned is one whose key name alone is larger than the response (about 192 KiB): that call is refused\n (`data.reason: \"tooLarge\"`) and `data.nextCursor` continues after it.\n","mcp":{"group":"db","name":"db_kv_scan"},"fileScope":false},
-	"db.tool.query": {"name":"db.tool.query","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolQueryParams","output":"DbToolQuery","doc":" Run read-only SQL (SQL drivers only — PG · MySQL/MariaDB · SQLite). The input is either `sql` (text) or `file`\n (an SQL file path relative to the project root — Pitwall reads it when it runs). The statements are split by the\n dialect and run in order in one read-only transaction, with one result per statement (columns · rows ·\n `truncated` · duration). **Only queries run** — if any statement is not a query (a write · DDL · `SET` ·\n transaction control · `ATTACH` · text that cannot be parsed), nothing runs and the call is refused (`notAQuery`\n — writes go through `db_execute`). If a statement fails, it stops there and returns the results so far with\n `error` (statement index · line). Rows are limited to `maxRows` per statement (default 100), cells are cut at 4\n KiB (`truncated` values). The whole response is limited to about 192 KiB — when the rows fill it, that statement\n is `truncated` and the later statements do not run and are reported as `notRun` (`count` from `index`, `reason:\n \"responseBudget\"`). **There is no next page** — if a result was cut, narrow the WHERE · LIMIT · columns and call\n again (a new call sees a different snapshot).\n Uses only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`) and\n never uses a target marked production — for MySQL · MariaDB, any database on the same server · user\n (`productionBlocked`). The result's `audit` is the detail kept in the audit log (statement count · grade ·\n hashes) and is shown to the agent too.\n","mcp":{"group":"db","name":"db_query"},"fileScope":false},
-	"db.tool.schema": {"name":"db.tool.schema","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolSchemaParams","output":"DbToolSchema","doc":" Read a DB schema (SQL drivers only — PG · MySQL/MariaDB · SQLite). Without `object`, one page of one level's\n list (`kind`: `database` · `schema` · `table` (default) · `view`, etc. — object lists are within `database` ·\n `schema` and filtered by `filter`); with it, that object's columns (name · type · null · default · primary key)\n · indexes · foreign keys, or its DDL text with `detail: \"ddl\"`. Sees the same as Pitwall's DB explorer. Uses\n only connections the person opened in Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` —\n try again after the person has opened it once) and never uses connections marked production. For a Redis\n connection, `unsupported` — use `db_kv_scan`.\n","mcp":{"group":"db","name":"db_schema"},"fileScope":false},
+	"db.tool.connectionList": {"name":"db.tool.connectionList","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolConnectionListParams","output":"DbToolConnectionList","doc":" This project's DB connections (no secrets): id · name · driver · target (host · port · database · SQLite path) ·\n read-only · production · state, plus whether the agent DB tools can use it now (`usable`) and why not. The agent\n DB tools use only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`)\n and do not use connections marked production (`productionBlocked`) unless the person allowed it with approval for\n every call (`asksApproval`). Does not open any connection.\n","mcp":{"group":"db","name":"db_connection_list"},"fileScope":false},
+	"db.tool.execute": {"name":"db.tool.execute","kind":"unary","tier":"dangerous","roles":["owner"],"params":"Planned<DbToolExecuteParams>","output":"DbToolExecute","doc":" Run SQL that changes data (SQL drivers only — PG · MySQL/MariaDB · SQLite). The input is either `sql` (text) or\n `file` (an SQL file path relative to the project root — Pitwall reads it once when it runs). Queries and writes\n may be mixed. **Every call asks the person in Pitwall first**: the request shows every statement with its risk\n grade, the connection and its marks (and the file path and hash for `file`), and the statements run only after\n the person allows them — exactly the statements that were shown (if the file or the connection's target · marks\n change after approval, nothing runs). There is no \"allow for this session\" and `auto_approve` does not apply.\n The whole call is **one transaction**: if every statement succeeds it is committed; if one fails, the call stops\n there, the transaction is rolled back and the database's error is returned (`error`, with statement index ·\n line) — including for statements that cannot run inside a transaction (PG `CREATE INDEX CONCURRENTLY`, `VACUUM`,\n ...). Statements that commit on their own (MySQL · MariaDB DDL) cannot be rolled back (`irreversible`). Refused\n before asking: text that cannot be classified (cannot be parsed, or a statement over 512 KiB — run it in\n Pitwall's SQL console instead), transaction control (`BEGIN` · `COMMIT` · `SAVEPOINT` ...), statements that change\n how the server reads SQL text, and anything but queries on a read-only connection. Each statement's result is the\n number of rows changed, or its rows (`RETURNING`, queries — up to `maxRows`, cells cut at 4 KiB). Uses only\n connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`) and does not use a\n target marked production (`productionBlocked`) unless the person set production targets to ask.\n","mcp":{"group":"db","name":"db_execute"},"fileScope":false},
+	"db.tool.kvGet": {"name":"db.tool.kvGet","kind":"unary","tier":"read","roles":["owner"],"params":"Planned<DbToolKvGetParams>","output":"DbToolKvGet","doc":" Read one page of a Redis key's value, by type: a string in byte windows, a hash · set in scan pages, a list ·\n zset by index, a stream by entry id, a RedisJSON document whole. `nextCursor` reads the next page; a missing key\n is `\"missing\"`. Values that are not UTF-8 come as hex bytes. The response is limited to about 192 KiB — a page\n holds fewer elements to fit, and an element too large on its own is cut (`truncated`); a stream entry with too\n many fields shows only its first fields, and a hash · set that Redis returns in one step may show only its first\n elements (`omitted` says how many — the rest cannot be read through this tool). An element that cannot fit even\n cut is left out with `omitted.shown: 0`. In every case `nextCursor` continues after what this page covered, so\n reading never stops at one large element. A call is refused only when even an empty page cannot fit\n (`data.reason: \"tooLarge\"`, with `data.nextCursor`). There is no command\n input — this tool only reads. Uses only connections the person opened in Pitwall's DB explorer during this app\n run (`notOpenedByUser`) and does not use a Redis server marked production (`productionBlocked`) unless the person\n set production targets to ask (then each call waits for approval in Pitwall). Redis connections only.\n","mcp":{"group":"db","name":"db_kv_get"},"fileScope":false},
+	"db.tool.kvScan": {"name":"db.tool.kvScan","kind":"unary","tier":"read","roles":["owner"],"params":"Planned<DbToolKvScanParams>","output":"DbToolKvScan","doc":" Find Redis keys, one page at a time (Redis `SCAN` with an optional glob `match`): each key with its type · TTL ·\n size, and `nextCursor` for the next page — call again with it until `nextCursor` is missing. A page may hold\n fewer keys than `limit`, even none, while more pages remain. Keys are not repeated within one page, but **a key\n can appear again on a later page** (Redis `SCAN` may return a key twice); keys that exist for the whole scan are\n never missed. There is no command input — this tool only reads. Uses only connections the person opened in\n Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` — try again after the person has opened\n it once) and does not use a Redis server marked production — any database number on the same server · user\n (`productionBlocked`) — unless the person set production targets to ask, and then each call waits for the\n person's approval in Pitwall. Redis connections only — for SQL databases use `db_schema` · `db_query`. The only page that\n cannot be returned is one whose key name alone is larger than the response (about 192 KiB): that call is refused\n (`data.reason: \"tooLarge\"`) and `data.nextCursor` continues after it.\n","mcp":{"group":"db","name":"db_kv_scan"},"fileScope":false},
+	"db.tool.query": {"name":"db.tool.query","kind":"unary","tier":"read","roles":["owner"],"params":"Planned<DbToolQueryParams>","output":"DbToolQuery","doc":" Run read-only SQL (SQL drivers only — PG · MySQL/MariaDB · SQLite). The input is either `sql` (text) or `file`\n (an SQL file path relative to the project root — Pitwall reads it when it runs). The statements are split by the\n dialect and run in order in one read-only transaction, with one result per statement (columns · rows ·\n `truncated` · duration). **Only queries run** — if any statement is not a query (a write · DDL · `SET` ·\n transaction control · `ATTACH` · text that cannot be parsed), nothing runs and the call is refused (`notAQuery`\n — writes go through `db_execute`). If a statement fails, it stops there and returns the results so far with\n `error` (statement index · line). Rows are limited to `maxRows` per statement (default 100), cells are cut at 4\n KiB (`truncated` values). The whole response is limited to about 192 KiB — when the rows fill it, that statement\n is `truncated` and the later statements do not run and are reported as `notRun` (`count` from `index`, `reason:\n \"responseBudget\"`). **There is no next page** — if a result was cut, narrow the WHERE · LIMIT · columns and call\n again (a new call sees a different snapshot).\n Uses only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`) and\n does not use a target marked production — for MySQL · MariaDB, any database on the same server · user\n (`productionBlocked`) — unless the person set production targets to ask, and then each call shows its statements\n to the person and waits for approval in Pitwall. The result's `audit` is the detail kept in the audit log\n (statement count · grade · hashes) and is shown to the agent too.\n","mcp":{"group":"db","name":"db_query"},"fileScope":false},
+	"db.tool.schema": {"name":"db.tool.schema","kind":"unary","tier":"read","roles":["owner"],"params":"Planned<DbToolSchemaParams>","output":"DbToolSchema","doc":" Read a DB schema (SQL drivers only — PG · MySQL/MariaDB · SQLite). Without `object`, one page of one level's\n list (`kind`: `database` · `schema` · `table` (default) · `view`, etc. — object lists are within `database` ·\n `schema` and filtered by `filter`); with it, that object's columns (name · type · null · default · primary key)\n · indexes · foreign keys, or its DDL text with `detail: \"ddl\"`. Sees the same as Pitwall's DB explorer. Uses\n only connections the person opened in Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` —\n try again after the person has opened it once) and does not use connections marked production\n (`productionBlocked`) — unless the person set them to ask, and then each call waits for the person's approval in\n Pitwall. For a Redis connection, `unsupported` — use `db_kv_scan`.\n","mcp":{"group":"db","name":"db_schema"},"fileScope":false},
 	"diag.collect": {"name":"diag.collect","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"DiagnosticsText","doc":" 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.\n 경로 · 비밀 · 홈 디렉터리 이름은 가린다.\n","mcp":null,"fileScope":false},
 	"ext.list": {"name":"ext.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ExtensionList","doc":" 등록된 확장과 읽는 중에 나온 진단.\n","mcp":null,"fileScope":false},
 	"fs.copy": {"name":"fs.copy","kind":"unary","tier":"write","roles":["owner"],"params":"FsFromToParams","output":"FsCopied","doc":" 파일이나 폴더(그 아래 전부)를 복사한다. 심링크는 따르지 않고 링크로 복사한다. 대상 이름이 있으면 덮지 않고 `CONFLICT`.\n","mcp":null,"fileScope":false},
@@ -2706,6 +2730,21 @@ export type DbScriptResult = {
 	elapsedMs: number,
 };
 
+/**
+ *  Statements that ran but whose results are not listed because the response budget was used up (write calls only —
+ *  `count` statements from `index` on). They ran inside the same transaction as the listed ones.
+ */
+export type DbScriptUnlisted = {
+	/**  Index of the first statement not listed (from 0). */
+	index: number,
+	/**  Line the statement starts on (from 1). */
+	line: number,
+	/**  Number of statements that ran without being listed. */
+	count: number,
+	/**  Sum of the rows they changed (as far as the driver reported it). */
+	rowsAffected: number,
+};
+
 export type DbSecretClearParams = {
 	projectId: string,
 	connectionId: string,
@@ -2998,13 +3037,21 @@ export type DbToolConnection = {
 	path: string | null,
 	/**  Read-only mark as applied to agents (the strictest one seen for this target during this app run). */
 	readOnly: boolean,
-	/**  Production mark as applied to agents (same rule). When on, the DB tools do not use the connection. */
+	/**
+	 *  Production mark as applied to agents (same rule). When on, the DB tools do not use the connection — unless the
+	 *  person set `[mcp.policy] production = "ask"`, and then every call on it asks the person (`asksApproval`).
+	 */
 	production: boolean,
 	state: DbToolConnectionState,
 	/**  Whether the agent DB tools (`db_schema`, etc.) can use this connection now. */
 	usable: boolean,
 	/**  Why it cannot be used (`null` when `usable` is true). */
 	unusableReason: DbToolUnusable | null,
+	/**
+	 *  Every call of the DB tools on this connection asks the person in Pitwall first (a production target with
+	 *  `[mcp.policy] production = "ask"`). There is no "allow for this session" for it.
+	 */
+	asksApproval: boolean,
 	/**  If the settings are wrong, a short notice (the values are not included — see the reason in Pitwall). */
 	message: string | null,
 };
@@ -3039,6 +3086,59 @@ export type DbToolConnectionState =
 "secretRequired" | 
 /**  The person's confirmation is needed — the person confirms it in Pitwall. */
 "approvalRequired" | "ready";
+
+export type DbToolExecute = {
+	/**  Number of statements after splitting. */
+	statements: number,
+	/**
+	 *  One result per statement that ran and is listed (in order): rows changed (`rowsAffected`), or the rows of a
+	 *  statement that returns rows (`RETURNING`, queries).
+	 */
+	results: DbScriptResult[],
+	/**
+	 *  If a statement failed, that statement and the database's error. The statements after it did not run and the
+	 *  transaction was rolled back.
+	 */
+	error: DbScriptError | null,
+	/**
+	 *  Statements that ran but are not listed, because the rows of earlier statements used up the response budget
+	 *  (about 192 KiB): `count` statements from `index`, with the sum of the rows they changed.
+	 */
+	unlisted: DbScriptUnlisted | null,
+	transaction: DbToolTransaction,
+	/**  The SQL had statements that commit on their own and cannot be rolled back (MySQL · MariaDB DDL and the like). */
+	irreversible: boolean,
+	/**  The file read, when `file` was given (path relative to the root). */
+	file: string | null,
+	/**
+	 *  Details kept in the audit log — statement count · highest grade · statement hashes (for `file`, its path and
+	 *  content hash). No SQL text or values.
+	 */
+	audit: string,
+};
+
+export type DbToolExecuteParams = {
+	projectId: string,
+	/**
+	 *  Top of the worktree (absolute path). Connection settings and `file` are read from that worktree. Empty means the
+	 *  session's worktree, or else the main checkout.
+	 */
+	worktree?: string | null,
+	/**  Connection id from `db_connection_list`. */
+	connectionId: string,
+	/**  SQL to run (several statements — split by the dialect's delimiter). Cannot be given together with `file`. */
+	sql?: string | null,
+	/**
+	 *  SQL file — a path relative to the project root (inside the chosen worktree, if one is given). A UTF-8 regular
+	 *  file inside the root, up to 5 MiB. Cannot be given together with `sql`.
+	 */
+	file?: string | null,
+	/**
+	 *  Maximum rows returned per statement that returns rows (1 – 10000, default 100). Not paged — past it the
+	 *  statement is `truncated`.
+	 */
+	maxRows?: number | null,
+};
 
 export type DbToolKvGet = {
 	/**  The key's type (`null` when the key is missing). */
@@ -3254,13 +3354,28 @@ export type DbToolSchemaParams = {
 	detail?: DbToolSchemaDetail | null,
 };
 
+/**  How the call's transaction ended. */
+export type DbToolTransaction = 
+/**  Every statement ran and the transaction was committed. */
+"committed" | 
+/**
+ *  A statement failed (`error`) and the transaction was rolled back — nothing of this call is kept, except what
+ *  statements that commit on their own already committed (`irreversible`).
+ */
+"rolledBack" | 
+/**  A read-only connection: only queries ran, in a read-only transaction that was rolled back. */
+"readOnly";
+
 /**  Why the agent cannot use this connection now (the same as `data.reason` when a DB tool refuses). */
 export type DbToolUnusable = 
 /**  The project is not trusted. */
 "untrusted" | 
 /**  The settings file is wrong. */
 "invalid" | 
-/**  The target is marked production — agent tools do not use it. */
+/**
+ *  The target is marked production and `[mcp.policy] production` is `"block"` (the default) — agent tools do not use
+ *  it.
+ */
 "productionBlocked" | 
 /**
  *  The person has not opened this connection (with its current target) in Pitwall's DB explorer during this app run

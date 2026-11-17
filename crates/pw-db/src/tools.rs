@@ -11,12 +11,18 @@
 //!   실행 파이프라인 [`crate::script`](여러 문장 · `file` 읽기 · 읽기 전용 트랜잭션 · 감사 상세)로 돈다. 조회가 아닌 문장이 하나라도
 //!   있으면 아무것도 돌리지 않고 거절한다(쓰기는 `db_execute` — M5-18). SQL 드라이버만.
 //!
+//! **프로덕션 `ask`**(M5-18 ④): `[mcp.policy] production = "ask"`(사람의 설정)이면 사람이 연 프로덕션 연결을 `db_schema` ·
+//! `db_query` 도 **호출마다 승인받아** 쓴다 — 입력을 `Planned` 로 감싸고, 관문의 증거가 승인을 청할 때만 계획을 낸다
+//! ([`crate::tool_plan::approve_production_read`]). 그 밖의 호출은 승인 없이 바로 돈다. `db_connection_list` 는 그 연결을
+//! `usable` · `asksApproval` 로 보인다.
+//!
 //! 툴 모두 MCP 세션의 연결 범위만 받는다(`agent_grant` — 창 · Host 범위는 `notAgentSession`). UI 의 RPC(`db.connection.list` ·
 //! `db.schema.*`)는 그대로 창 범위만 받는다.
 
 use std::sync::Arc;
 
 use pw_core::registry::agent::agent_grant;
+use pw_core::registry::plan::Planned;
 use pw_db_driver::budget::within;
 use pw_db_driver::{Budget, DbConnection, QueryCancel};
 use pw_db_types::{
@@ -28,7 +34,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{DbConnectionConfig, DbConnectionState};
 use crate::execute::MAX_PAGE_ROWS;
-use crate::gate::{DbMarks, DbTarget, agent_view, db_grant_for_agent};
+use crate::gate::{DbMarks, DbTarget, agent_view, db_grant_for_agent, production_policy};
 use crate::gate::{on_classifier_thread, plan};
 use crate::schema::{Cached, Request, check_limit, check_object, check_text, slice, unexpected};
 use crate::script::{
@@ -37,6 +43,7 @@ use crate::script::{
     read_script_file, refuse_non_queries, run_read_only,
 };
 use crate::session::{DbSessions, blocking, db_error};
+use crate::tool_plan::{approve_production_read, sql_change};
 
 // --- db_connection_list ---------------------------------------------------------------------------------------------
 
@@ -80,7 +87,8 @@ pub enum DbToolUnusable {
     Untrusted,
     /// The settings file is wrong.
     Invalid,
-    /// The target is marked production — agent tools do not use it.
+    /// The target is marked production and `[mcp.policy] production` is `"block"` (the default) — agent tools do not use
+    /// it.
     ProductionBlocked,
     /// The person has not opened this connection (with its current target) in Pitwall's DB explorer during this app run
     /// — try again after the person has opened it once.
@@ -106,13 +114,17 @@ pub struct DbToolConnection {
     pub path: Option<String>,
     /// Read-only mark as applied to agents (the strictest one seen for this target during this app run).
     pub read_only: bool,
-    /// Production mark as applied to agents (same rule). When on, the DB tools do not use the connection.
+    /// Production mark as applied to agents (same rule). When on, the DB tools do not use the connection — unless the
+    /// person set `[mcp.policy] production = "ask"`, and then every call on it asks the person (`asksApproval`).
     pub production: bool,
     pub state: DbToolConnectionState,
     /// Whether the agent DB tools (`db_schema`, etc.) can use this connection now.
     pub usable: bool,
     /// Why it cannot be used (`null` when `usable` is true).
     pub unusable_reason: Option<DbToolUnusable>,
+    /// Every call of the DB tools on this connection asks the person in Pitwall first (a production target with
+    /// `[mcp.policy] production = "ask"`). There is no "allow for this session" for it.
+    pub asks_approval: bool,
     /// If the settings are wrong, a short notice (the values are not included — see the reason in Pitwall).
     pub message: Option<String>,
 }
@@ -338,7 +350,8 @@ rpc_method! {
     /// This project's DB connections (no secrets): id · name · driver · target (host · port · database · SQLite path) ·
     /// read-only · production · state, plus whether the agent DB tools can use it now (`usable`) and why not. The agent
     /// DB tools use only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`)
-    /// and never use connections marked production (`productionBlocked`). Does not open any connection.
+    /// and do not use connections marked production (`productionBlocked`) unless the person allowed it with approval for
+    /// every call (`asksApproval`). Does not open any connection.
     pub DbToolConnectionListMethod: "db.tool.connectionList" {
         params: DbToolConnectionListParams,
         result: DbToolConnectionList,
@@ -352,10 +365,11 @@ rpc_method! {
     /// `schema` and filtered by `filter`); with it, that object's columns (name · type · null · default · primary key)
     /// · indexes · foreign keys, or its DDL text with `detail: "ddl"`. Sees the same as Pitwall's DB explorer. Uses
     /// only connections the person opened in Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` —
-    /// try again after the person has opened it once) and never uses connections marked production. For a Redis
-    /// connection, `unsupported` — use `db_kv_scan`.
+    /// try again after the person has opened it once) and does not use connections marked production
+    /// (`productionBlocked`) — unless the person set them to ask, and then each call waits for the person's approval in
+    /// Pitwall. For a Redis connection, `unsupported` — use `db_kv_scan`.
     pub DbToolSchemaMethod: "db.tool.schema" {
-        params: DbToolSchemaParams,
+        params: Planned<DbToolSchemaParams>,
         result: DbToolSchema,
         tier: Read,
         roles: [Owner],
@@ -374,11 +388,12 @@ rpc_method! {
     /// "responseBudget"`). **There is no next page** — if a result was cut, narrow the WHERE · LIMIT · columns and call
     /// again (a new call sees a different snapshot).
     /// Uses only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`) and
-    /// never uses a target marked production — for MySQL · MariaDB, any database on the same server · user
-    /// (`productionBlocked`). The result's `audit` is the detail kept in the audit log (statement count · grade ·
-    /// hashes) and is shown to the agent too.
+    /// does not use a target marked production — for MySQL · MariaDB, any database on the same server · user
+    /// (`productionBlocked`) — unless the person set production targets to ask, and then each call shows its statements
+    /// to the person and waits for approval in Pitwall. The result's `audit` is the detail kept in the audit log
+    /// (statement count · grade · hashes) and is shown to the agent too.
     pub DbToolQueryMethod: "db.tool.query" {
-        params: DbToolQueryParams,
+        params: Planned<DbToolQueryParams>,
         result: DbToolQuery,
         tier: Read,
         roles: [Owner],
@@ -397,6 +412,7 @@ impl DbSessions {
         let agent = agent_grant(scope, &c.host()?.projects, &p.project_id)?;
         let loaded = agent_view(self, agent.project_id(), p.worktree.as_deref())?;
         let trusted = c.trusted(agent.project_id());
+        let production = production_policy(self, agent.project());
         let approvals = if trusted {
             Some(c.approvals(agent.project_id())?.0)
         } else {
@@ -435,14 +451,15 @@ impl DbSessions {
                 let marks = config.map_or(DbMarks::default(), |config| {
                     DbMarks::of(config).tighten(c.marks.get(&DbTarget::of(config, &loaded.root)))
                 });
-                let unusable = if !trusted {
-                    Some(DbToolUnusable::Untrusted)
+                let (unusable, asks_approval) = if !trusted {
+                    (Some(DbToolUnusable::Untrusted), false)
                 } else if config.is_none() {
-                    Some(DbToolUnusable::Invalid)
+                    (Some(DbToolUnusable::Invalid), false)
                 } else {
-                    match crate::gate::judge_for_agent(self, &loaded, connection, None) {
-                        Ok(_) => None,
-                        Err(e) => Some(unusable_of(&e)),
+                    match crate::gate::judge_for_agent(self, &loaded, connection, None, production)
+                    {
+                        Ok(binding) => (None, binding.asks_approval()),
+                        Err(e) => (Some(unusable_of(&e)), false),
                     }
                 };
                 DbToolConnection {
@@ -458,6 +475,7 @@ impl DbSessions {
                     state,
                     usable: unusable.is_none(),
                     unusable_reason: unusable,
+                    asks_approval,
                     message,
                 }
             })
@@ -473,8 +491,9 @@ impl DbSessions {
     async fn tool_schema(
         self: &Arc<Self>,
         ctx: &Ctx,
-        p: DbToolSchemaParams,
+        planned: Planned<DbToolSchemaParams>,
     ) -> Result<DbToolSchema, RpcError> {
+        let p = &planned.params;
         for (what, value) in [
             ("worktree", &p.worktree),
             ("database", &p.database),
@@ -532,12 +551,22 @@ impl DbSessions {
                 caps.multiple_databases,
             )
         });
-        let grant = match object.as_ref().and_then(|o| o.database.clone()) {
+        let mut grant = match object.as_ref().and_then(|o| o.database.clone()) {
             Some(database) if Some(&database) != p.database.as_ref() => {
                 gate(Some(database)).await?
             }
             _ => first,
         };
+        // 프로덕션 `ask`: 메타데이터용 연결 · 캐시를 보기 전에 이 호출의 승인을 받는다.
+        approve_production_read(
+            &mut grant,
+            "db.tool.schema",
+            p,
+            planned.ticket.as_ref(),
+            driver.dialect(),
+            &schema_what(p),
+            None,
+        )?;
         let worktree = p.worktree.as_deref();
         let meta = |request| self.meta(ctx, &grant, worktree, &p.connection_id, request);
         let Some(object) = object else {
@@ -626,10 +655,11 @@ impl DbSessions {
     async fn tool_query(
         self: &Arc<Self>,
         ctx: &Ctx,
-        p: DbToolQueryParams,
+        planned_input: Planned<DbToolQueryParams>,
     ) -> Result<DbToolQuery, RpcError> {
+        let p = &planned_input.params;
         check_text("worktree", p.worktree.as_deref())?;
-        let input = ScriptInput::of(p.sql, p.file)?;
+        let input = ScriptInput::of(p.sql.clone(), p.file.clone())?;
         let max_rows = p.max_rows.unwrap_or(DEFAULT_MAX_ROWS);
         if max_rows == 0 || max_rows > MAX_PAGE_ROWS {
             return Err(RpcError::invalid_params(format!(
@@ -644,7 +674,7 @@ impl DbSessions {
             p.worktree.clone(),
             p.connection_id.clone(),
         );
-        let grant = blocking(move || {
+        let mut grant = blocking(move || {
             let agent = agent_grant(&scope, &s.connections.host()?.projects, &project)?;
             db_grant_for_agent(&s, &agent, worktree.as_deref(), &id, None)
         })
@@ -694,6 +724,20 @@ impl DbSessions {
         // 연결을 열기 전에 거절한다(비밀도 읽지 않는다).
         refuse_non_queries("db_query", &source, &planned, &audit)?;
         let with_audit = |e: RpcError| with_audit(e, &audit);
+        // 프로덕션 `ask`: 연결을 열기 전에 이 호출의 문장들을 보이고 승인을 받는다(돌릴 것은 지금 읽은 그 글이다).
+        let change = grant
+            .needs_approval()
+            .then(|| sql_change(&grant, &source, &planned, file.as_ref(), false));
+        approve_production_read(
+            &mut grant,
+            "db.tool.query",
+            p,
+            planned_input.ticket.as_ref(),
+            Some(dialect),
+            "with SQL",
+            change,
+        )
+        .map_err(with_audit)?;
         let opened =
             crate::connection::connect(self, &grant, p.worktree.as_deref(), &p.connection_id, None)
                 .await
@@ -788,11 +832,11 @@ impl DbSessions {
 }
 
 /// 실패한 문장의 오류(서버 글 · 범위)에 남겨 두는 응답 예산의 몫.
-const ERROR_ROOM: usize = 8 * 1024;
+pub(crate) const ERROR_ROOM: usize = 8 * 1024;
 
 /// 오류 `data` 의 최상위 `audit` 에 감사 상세를 싣는다(`crates/pw-mcp` 머리 주석 「툴 메서드 규약」 — 세션이 감사 행으로 옮긴다).
 /// `data` 가 object 가 아니면(글 등) `{ message, audit }` 로 감싼다.
-fn with_audit(mut error: RpcError, audit: &str) -> RpcError {
+pub(crate) fn with_audit(mut error: RpcError, audit: &str) -> RpcError {
     let data = match error.data.take() {
         Some(serde_json::Value::Object(mut map)) => {
             map.insert("audit".into(), audit.into());
@@ -803,6 +847,26 @@ fn with_audit(mut error: RpcError, audit: &str) -> RpcError {
     };
     error.data = Some(data);
     error
+}
+
+/// 프로덕션 `ask` 의 승인 요청에 보이는 「무엇을 읽는가」.
+fn schema_what(p: &DbToolSchemaParams) -> String {
+    let mut what = match (&p.object, p.detail.unwrap_or_default()) {
+        (Some(object), DbToolSchemaDetail::Ddl) => format!("the DDL of `{object}`"),
+        (Some(object), DbToolSchemaDetail::Columns) => format!("the columns of `{object}`"),
+        (None, _) => format!(
+            "the schema list ({})",
+            match p.kind.unwrap_or(DbToolSchemaKind::Table) {
+                DbToolSchemaKind::Database => "databases",
+                DbToolSchemaKind::Schema => "schemas",
+                _ => "objects",
+            }
+        ),
+    };
+    if let Some(database) = &p.database {
+        what.push_str(&format!(" in database `{database}`"));
+    }
+    what
 }
 
 /// 거절 오류의 `data.reason` → 까닭.
@@ -928,15 +992,18 @@ pub(crate) fn register(router: &mut Router, sessions: Arc<DbSessions>) {
         )
         .unary(DbToolSchemaMethod, {
             let sessions = Arc::clone(&sessions);
-            move |ctx, p: DbToolSchemaParams| {
+            move |ctx, p: Planned<DbToolSchemaParams>| {
                 let s = Arc::clone(&sessions);
                 async move { s.tool_schema(&ctx, p).await }
             }
         })
-        .unary(DbToolQueryMethod, move |ctx, p: DbToolQueryParams| {
-            let s = Arc::clone(&sessions);
-            async move { s.tool_query(&ctx, p).await }
-        });
+        .unary(
+            DbToolQueryMethod,
+            move |ctx, p: Planned<DbToolQueryParams>| {
+                let s = Arc::clone(&sessions);
+                async move { s.tool_query(&ctx, p).await }
+            },
+        );
 }
 
 #[cfg(test)]

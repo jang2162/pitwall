@@ -11,9 +11,17 @@
 //!    받는 툴은 [`refuse_non_queries`] 로 조회가 아닌 문장이 하나라도 있으면 아무것도 돌리지 않고 거절한다. 판정은 `db.query.page`
 //!    와 같은 `Planned::is_strict_query` 다(세션 설정 · 트랜잭션 제어 · 분류기가 못 읽은 읽기 · 파싱 실패 · `tooLarge` 는 조회가
 //!    아니다 — SQLite 의 `ATTACH` 도 분류가 쓰기다).
-//! 4. **실행**([`run_read_only`]) — 새 연결의 읽기 전용 트랜잭션 하나(드라이버의 `begin { read_only }` — PG `BEGIN READ ONLY` ·
-//!    MySQL `START TRANSACTION READ ONLY` · SQLite `query_only`)에서 문장을 차례로 돌린다. 문장마다 결과 하나, 행 제한은 문장마다.
-//!    문장 하나가 실패하면 거기서 멈추고 그때까지의 결과와 오류(문장 번호 · 줄)를 돌려준다. 끝나면 롤백하고 연결을 닫는다.
+//! 4. **실행**([`run_script`]) — 새 연결의 트랜잭션 하나에서 문장을 차례로 돌린다. 문장마다 결과 하나, 행 제한은 문장마다.
+//!    문장 하나가 실패하면 거기서 멈추고 그때까지의 결과와 오류(문장 번호 · 줄)를 돌려준다.
+//!    - **조회**([`ScriptMode::ReadOnly`] — `db_query`, read-only 연결의 `db_execute`): 드라이버의 읽기 전용 트랜잭션(`begin {
+//!      read_only }` — PG `BEGIN READ ONLY` · MySQL `START TRANSACTION READ ONLY` · SQLite `query_only`). 끝나면 롤백한다.
+//!    - **쓰기**([`ScriptMode::Write`] — `db_execute`, 16-m5-plan M5-18 ③ · 결정 M5-D35): 읽고 쓰는 트랜잭션 하나. 모두 성공하면
+//!      커밋하고, 문장 하나가 실패하면 롤백한다(부른 쪽 — [`run_script`] 는 커밋하지 않는다). 암묵 커밋 문장(MySQL 의 DDL)은
+//!      트랜잭션으로 되돌릴 수 없다 — 계획이 「되돌릴 수 없다」 를 보인다. 트랜잭션 안에서 못 도는 문장(PG `CREATE INDEX
+//!      CONCURRENTLY` · `VACUUM` 등)은 DB 의 오류가 그대로 그 문장의 오류다. 응답 예산을 다 써도 뒤 문장을 **멈추지 않는다** — 반만
+//!      돌린 쓰기를 커밋하지 않게, 남은 문장은 돌리되 결과를 싣지 않고 수와 영향 행 수만 센다([`DbScriptUnlisted`]).
+//!
+//!    끝나면 연결을 닫는다.
 //! 5. **취소** — 실행은 연결을 쥔 태스크에서 돈다. 호출(핸들러 future)이 버려지면(MCP 취소 → `request.cancel`, 세션 끊김 —
 //!    05-mcp.md 「호출 취소」) [`CancelOnDrop`] 이 그 연결의 인터럽트를 보내고(`QueryCancel`), 태스크는 드라이버 호출을 버린 뒤
 //!    롤백하고 연결을 닫는다.
@@ -37,7 +45,7 @@ use pw_db_driver::{Budget, QueryCancel, SqlConnection};
 use pw_db_sql::split::SqlRange;
 use pw_db_types::{
     BeginOptions, CellLimit, ColumnMeta, DbError, DbErrorKind, ExecuteRequest, FetchLimit,
-    RiskGrade, Row, SqlDialect,
+    RiskGrade, Row, SqlDialect, TransactionState,
 };
 use pw_fs::scope::{Escaped, NotAFile, Roots};
 use pw_rpc::{JsNumber, RpcError, code as rpc_code};
@@ -320,12 +328,41 @@ pub struct DbScriptError {
     pub error: DbError,
 }
 
-/// 실행의 결과([`run_read_only`]).
+/// 실행의 결과([`run_script`]).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Ran {
     pub results: Vec<DbScriptResult>,
     pub error: Option<DbScriptError>,
     pub not_run: Option<DbScriptNotRun>,
+    /// 쓰기 모드에서 응답 예산을 다 쓴 뒤에 돈 문장들.
+    pub unlisted: Option<DbScriptUnlisted>,
+}
+
+/// 트랜잭션의 꼴(머리 주석 ④).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScriptMode {
+    /// 읽기 전용 트랜잭션. 응답 예산을 다 쓰면 뒤 문장을 돌리지 않는다(`not_run`).
+    ReadOnly,
+    /// 읽고 쓰는 트랜잭션. 응답 예산을 다 써도 끝까지 돌리고 뒤 문장의 결과는 싣지 않는다(`unlisted`).
+    Write,
+}
+
+/// Statements that ran but whose results are not listed because the response budget was used up (write calls only —
+/// `count` statements from `index` on). They ran inside the same transaction as the listed ones.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct DbScriptUnlisted {
+    /// Index of the first statement not listed (from 0).
+    pub index: u32,
+    /// Line the statement starts on (from 1).
+    pub line: u32,
+    /// Number of statements that ran without being listed.
+    pub count: u32,
+    /// Sum of the rows they changed (as far as the driver reported it).
+    #[specta(type = JsNumber)]
+    pub rows_affected: u64,
 }
 
 /// Statements not run because of the response budget (header comment ⑥): `count` statements from `index` to the end.
@@ -372,6 +409,14 @@ impl ResponseRoom {
 
     fn left(&self) -> usize {
         self.limit.saturating_sub(self.used)
+    }
+
+    /// 남은 몫이 없는 예산(쓰기 모드에서 예산을 다 쓴 뒤의 문장 — 결과를 싣지 않고 돌린다).
+    fn spent() -> Self {
+        Self {
+            used: RESPONSE_BUDGET,
+            limit: RESPONSE_BUDGET,
+        }
     }
 
     /// `size` 바이트를 쓸 수 있으면 쓴다.
@@ -437,8 +482,7 @@ impl Drop for CancelOnDrop {
     }
 }
 
-/// 읽기 전용 트랜잭션 하나에서 문장을 차례로 돌린다(머리 주석 ④). 트랜잭션을 열지 못하면 오류, 문장이 실패하면 그때까지의 결과와
-/// 그 오류. 끝난 뒤의 롤백 · 닫기는 부른 쪽이 한다. 드라이버 호출마다 `cancel` 과 비활동 타임아웃(`Budget::PAGE` — 30 s)을 건다.
+/// 읽기 전용 트랜잭션 하나에서 문장을 차례로 돌린다 — [`run_script`] 의 [`ScriptMode::ReadOnly`].
 pub(crate) async fn run_read_only(
     conn: &mut dyn SqlConnection,
     source: &str,
@@ -448,9 +492,39 @@ pub(crate) async fn run_read_only(
     cancel: &QueryCancel,
     room: &mut ResponseRoom,
 ) -> Result<Ran, DbError> {
+    run_script(
+        conn,
+        ScriptMode::ReadOnly,
+        source,
+        planned,
+        max_rows,
+        cell,
+        cancel,
+        room,
+    )
+    .await
+}
+
+/// 트랜잭션 하나를 열고 문장을 차례로 돌린다(머리 주석 ④). 트랜잭션을 열지 못하면 오류, 문장이 실패하면 그때까지의 결과와 그
+/// 오류. 끝난 뒤의 커밋 · 롤백 · 닫기는 부른 쪽이 한다. 드라이버 호출마다 `cancel` 과 비활동 타임아웃(`Budget::PAGE` — 30 s)을
+/// 건다. 드라이버에는 문장의 등급을 싣는다 — 조회가 아닌 문장(`INSERT … RETURNING` 등)의 커서를 버릴 때 드라이버가 끝까지 읽어
+/// 버린다(멈추면 그 쓰기가 되돌려진다 — `ExecuteRequest::grade`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_script(
+    conn: &mut dyn SqlConnection,
+    mode: ScriptMode,
+    source: &str,
+    planned: &[Planned],
+    max_rows: u32,
+    cell: CellLimit,
+    cancel: &QueryCancel,
+    room: &mut ResponseRoom,
+) -> Result<Ran, DbError> {
     let mut inactivity = Inactivity::new(Budget::PAGE.inactivity);
     let begun = cancel
-        .run(inactivity.guard(conn.begin(BeginOptions { read_only: true })))
+        .run(inactivity.guard(conn.begin(BeginOptions {
+            read_only: mode == ScriptMode::ReadOnly,
+        })))
         .await;
     interrupt_on_timeout(&begun, cancel).await;
     begun?;
@@ -458,10 +532,14 @@ pub(crate) async fn run_read_only(
         results: Vec::new(),
         error: None,
         not_run: None,
+        unlisted: None,
     };
+    let mut spent = ResponseRoom::spent();
     for (at, statement) in planned.iter().enumerate() {
         let started = Instant::now();
         let line = line_of(source, statement.range);
+        let listing = ran.unlisted.is_none();
+        let budget = if listing { &mut *room } else { &mut spent };
         match run_one(
             conn,
             statement,
@@ -469,11 +547,11 @@ pub(crate) async fn run_read_only(
             cell,
             cancel,
             &mut inactivity,
-            room,
+            budget,
         )
         .await
         {
-            Ok(out) => {
+            Ok(out) if listing => {
                 ran.results.push(DbScriptResult {
                     index: statement.index,
                     line,
@@ -487,13 +565,36 @@ pub(crate) async fn run_read_only(
                 if out.budget_spent
                     && let Some(next) = planned.get(at + 1)
                 {
-                    ran.not_run = Some(DbScriptNotRun {
-                        index: next.index,
-                        line: line_of(source, next.range),
-                        count: u32::try_from(planned.len() - at - 1).unwrap_or(u32::MAX),
-                        reason: DbScriptNotRunReason::ResponseBudget,
-                    });
-                    break;
+                    let count = u32::try_from(planned.len() - at - 1).unwrap_or(u32::MAX);
+                    let line = line_of(source, next.range);
+                    match mode {
+                        ScriptMode::ReadOnly => {
+                            ran.not_run = Some(DbScriptNotRun {
+                                index: next.index,
+                                line,
+                                count,
+                                reason: DbScriptNotRunReason::ResponseBudget,
+                            });
+                            break;
+                        }
+                        // 반만 돈 쓰기를 남기지 않게 끝까지 돌리고, 결과는 싣지 않는다.
+                        ScriptMode::Write => {
+                            ran.unlisted = Some(DbScriptUnlisted {
+                                index: next.index,
+                                line,
+                                count: 0,
+                                rows_affected: 0,
+                            });
+                        }
+                    }
+                }
+            }
+            Ok(out) => {
+                if let Some(unlisted) = ran.unlisted.as_mut() {
+                    unlisted.count += 1;
+                    unlisted.rows_affected = unlisted
+                        .rows_affected
+                        .saturating_add(out.rows_affected.unwrap_or(0));
                 }
             }
             Err(error) => {
@@ -501,6 +602,29 @@ pub(crate) async fn run_read_only(
                     index: statement.index,
                     line,
                     range: statement.range,
+                    error,
+                });
+                break;
+            }
+        }
+        // 암묵 커밋 문장(MySQL 의 DDL 등)이 트랜잭션을 끝냈으면 뒤 문장을 위해 다시 연다 — 앞의 것은 이미 커밋됐다(계획이 「되돌릴
+        // 수 없다」 를 보였다). 뒤 문장은 다시 한 트랜잭션에 묶여, 실패하면 거기서부터 롤백된다.
+        if mode == ScriptMode::Write
+            && (statement.implicit_commit || statement.may_end)
+            && at + 1 < planned.len()
+            && conn.transaction_state() == TransactionState::Idle
+        {
+            inactivity.rearm();
+            let again = cancel
+                .run(inactivity.guard(conn.begin(BeginOptions { read_only: false })))
+                .await;
+            interrupt_on_timeout(&again, cancel).await;
+            if let Err(error) = again {
+                let next = &planned[at + 1];
+                ran.error = Some(DbScriptError {
+                    index: next.index,
+                    line: line_of(source, next.range),
+                    range: next.range,
                     error,
                 });
                 break;
@@ -531,7 +655,7 @@ async fn run_one(
     inactivity: &mut Inactivity,
     room: &mut ResponseRoom,
 ) -> Result<StatementRows, DbError> {
-    let mut request = ExecuteRequest::new(statement.text.clone(), RiskGrade::Read);
+    let mut request = ExecuteRequest::new(statement.text.clone(), statement.grade);
     request.cell_limit = cell;
     inactivity.rearm();
     let started = cancel.run(inactivity.guard(conn.execute(request))).await;

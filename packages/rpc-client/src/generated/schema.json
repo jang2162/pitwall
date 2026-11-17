@@ -12584,7 +12584,7 @@
       "tier": "read"
     },
     "db.tool.connectionList": {
-      "description": "This project's DB connections (no secrets): id · name · driver · target (host · port · database · SQLite path) ·\nread-only · production · state, plus whether the agent DB tools can use it now (`usable`) and why not. The agent\nDB tools use only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`)\nand never use connections marked production (`productionBlocked`). Does not open any connection.",
+      "description": "This project's DB connections (no secrets): id · name · driver · target (host · port · database · SQLite path) ·\nread-only · production · state, plus whether the agent DB tools can use it now (`usable`) and why not. The agent\nDB tools use only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`)\nand do not use connections marked production (`productionBlocked`) unless the person allowed it with approval for\nevery call (`asksApproval`). Does not open any connection.",
       "kind": "unary",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -12611,6 +12611,10 @@
           "DbToolConnection": {
             "description": "One connection (no secrets).",
             "properties": {
+              "asksApproval": {
+                "description": "Every call of the DB tools on this connection asks the person in Pitwall first (a production target with\n`[mcp.policy] production = \"ask\"`). There is no \"allow for this session\" for it.",
+                "type": "boolean"
+              },
               "database": {
                 "type": [
                   "string",
@@ -12669,7 +12673,7 @@
                 ]
               },
               "production": {
-                "description": "Production mark as applied to agents (same rule). When on, the DB tools do not use the connection.",
+                "description": "Production mark as applied to agents (same rule). When on, the DB tools do not use the connection — unless the\nperson set `[mcp.policy] production = \"ask\"`, and then every call on it asks the person (`asksApproval`).",
                 "type": "boolean"
               },
               "readOnly": {
@@ -12708,6 +12712,7 @@
               "state",
               "usable",
               "unusableReason",
+              "asksApproval",
               "message"
             ],
             "type": "object"
@@ -12758,7 +12763,7 @@
               },
               {
                 "const": "productionBlocked",
-                "description": "The target is marked production — agent tools do not use it.",
+                "description": "The target is marked production and `[mcp.policy] production` is `\"block\"` (the default) — agent tools do not use\nit.",
                 "type": "string"
               },
               {
@@ -12811,8 +12816,731 @@
       ],
       "tier": "read"
     },
+    "db.tool.execute": {
+      "description": "Run SQL that changes data (SQL drivers only — PG · MySQL/MariaDB · SQLite). The input is either `sql` (text) or\n`file` (an SQL file path relative to the project root — Pitwall reads it once when it runs). Queries and writes\nmay be mixed. **Every call asks the person in Pitwall first**: the request shows every statement with its risk\ngrade, the connection and its marks (and the file path and hash for `file`), and the statements run only after\nthe person allows them — exactly the statements that were shown (if the file or the connection's target · marks\nchange after approval, nothing runs). There is no \"allow for this session\" and `auto_approve` does not apply.\nThe whole call is **one transaction**: if every statement succeeds it is committed; if one fails, the call stops\nthere, the transaction is rolled back and the database's error is returned (`error`, with statement index ·\nline) — including for statements that cannot run inside a transaction (PG `CREATE INDEX CONCURRENTLY`, `VACUUM`,\n...). Statements that commit on their own (MySQL · MariaDB DDL) cannot be rolled back (`irreversible`). Refused\nbefore asking: text that cannot be classified (cannot be parsed, or a statement over 512 KiB — run it in\nPitwall's SQL console instead), transaction control (`BEGIN` · `COMMIT` · `SAVEPOINT` ...), statements that change\nhow the server reads SQL text, and anything but queries on a read-only connection. Each statement's result is the\nnumber of rows changed, or its rows (`RETURNING`, queries — up to `maxRows`, cells cut at 4 KiB). Uses only\nconnections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`) and does not use a\ntarget marked production (`productionBlocked`) unless the person set production targets to ask.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "connectionId": {
+            "description": "Connection id from `db_connection_list`.",
+            "type": "string"
+          },
+          "file": {
+            "default": null,
+            "description": "SQL file — a path relative to the project root (inside the chosen worktree, if one is given). A UTF-8 regular\nfile inside the root, up to 5 MiB. Cannot be given together with `sql`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "maxRows": {
+            "default": null,
+            "description": "Maximum rows returned per statement that returns rows (1 – 10000, default 100). Not paged — past it the\nstatement is `truncated`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "sql": {
+            "default": null,
+            "description": "SQL to run (several statements — split by the dialect's delimiter). Cannot be given together with `file`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worktree": {
+            "default": null,
+            "description": "Top of the worktree (absolute path). Connection settings and `file` are read from that worktree. Empty means the\nsession's worktree, or else the main checkout.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "connectionId"
+        ],
+        "type": "object",
+        "x-pitwall-planned": true
+      },
+      "result": {
+        "$defs": {
+          "ColumnMeta": {
+            "description": "One result column.",
+            "properties": {
+              "dbType": {
+                "description": "The type name the DB uses (`int8` · `BIGINT UNSIGNED` · `TEXT` …).",
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "nullable": {
+                "description": "Whether the column accepts NULL. `None` if the driver does not know.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "dbType",
+              "nullable"
+            ],
+            "type": "object"
+          },
+          "DbBytes": {
+            "description": "A bytes value.",
+            "properties": {
+              "hex": {
+                "description": "Lowercase hex starting with `0x`. Only the beginning if truncated.",
+                "type": "string"
+              },
+              "size": {
+                "description": "Original size (bytes).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "hex",
+              "size",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          "DbError": {
+            "properties": {
+              "code": {
+                "description": "The server's error code (PG SQLSTATE `25006`, MySQL error number `1792`, etc.).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/DbErrorKind"
+              },
+              "message": {
+                "description": "Human-readable text (may be the server's message as is).",
+                "type": "string"
+              },
+              "rolledBack": {
+                "default": false,
+                "description": "True only when the server or driver rolled back the whole transaction — the pipeline (M3-05) sets the session\nstate to idle and tells the person (e.g. a write inside a manual SQLite transaction was cancelled). Missing\nmeans false.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "kind",
+              "message",
+              "code",
+              "rolledBack"
+            ],
+            "type": "object"
+          },
+          "DbErrorKind": {
+            "oneOf": [
+              {
+                "const": "connect",
+                "description": "Could not reach the server (name resolution · TCP · tunnel).",
+                "type": "string"
+              },
+              {
+                "const": "auth",
+                "description": "Authentication failed.",
+                "type": "string"
+              },
+              {
+                "const": "tls",
+                "description": "TLS negotiation or certificate verification failed.",
+                "type": "string"
+              },
+              {
+                "const": "timeout",
+                "description": "A budget (connect · response · idle timeout) was exceeded.",
+                "type": "string"
+              },
+              {
+                "const": "cancelled",
+                "description": "Cancelled (including SQLite's `interrupted`).",
+                "type": "string"
+              },
+              {
+                "const": "busy",
+                "description": "Gave up waiting for a lock (SQLite `busy`).",
+                "type": "string"
+              },
+              {
+                "const": "readOnly",
+                "description": "A write was refused on a read-only transaction or connection (PG 25006 · MySQL 1792 · SQLite `readonly`).",
+                "type": "string"
+              },
+              {
+                "const": "unsupported",
+                "description": "A feature the driver does not support (a trait method whose capability flag is off).",
+                "type": "string"
+              },
+              {
+                "const": "server",
+                "description": "The server refused the statement (syntax · constraint · permission, etc.). `code` holds the server's code.",
+                "type": "string"
+              },
+              {
+                "const": "disconnected",
+                "description": "The connection was lost. It reconnects only when the person asks for it (decision M3-D13).",
+                "type": "string"
+              },
+              {
+                "const": "invalid",
+                "description": "The request was wrong (`fetch` without a cursor, an unknown savepoint, etc.).",
+                "type": "string"
+              }
+            ]
+          },
+          "DbFloat": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "description": "`NaN` · `Infinity` · `-Infinity`.",
+                "type": "string"
+              }
+            ],
+            "description": "A floating-point value. Non-finite values are strings with their names — build it with [`DbValue::float`]. Any other\ntext is refused when received."
+          },
+          "DbInt": {
+            "anyOf": [
+              {
+                "description": "|value| ≤ 2^53 − 1.",
+                "format": "int64",
+                "type": "integer"
+              },
+              {
+                "description": "Anything else. A decimal string.",
+                "type": "string"
+              }
+            ],
+            "description": "An integer value. Its size decides whether it is a number or a string — build it with [`DbValue::int`].\n\nWhen received it is chosen again by the rule — `{\"int\": 9007199254740993}` is taken as a string and `{\"int\": \"5\"}`\nas a number (so the same value gets the same shape even when a bind value from the window or an out-of-process\ndriver breaks the rule). Text that is not an integer is refused."
+          },
+          "DbOther": {
+            "description": "A value that fits no other kind.",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "typeName": {
+                "description": "The type name the DB uses (PG `tsvector`, MySQL `GEOMETRY`, etc.).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "typeName"
+            ],
+            "type": "object"
+          },
+          "DbScriptError": {
+            "description": "The statement that failed. The statements after it did not run.",
+            "properties": {
+              "error": {
+                "$ref": "#/$defs/DbError"
+              },
+              "index": {
+                "description": "Which statement it is (from 0).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line": {
+                "description": "Line the statement starts on (from 1).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "range": {
+                "$ref": "#/$defs/SqlRange",
+                "description": "Range of the statement (UTF-16, in the `sql` or file text)."
+              }
+            },
+            "required": [
+              "index",
+              "line",
+              "range",
+              "error"
+            ],
+            "type": "object"
+          },
+          "DbScriptResult": {
+            "description": "The result of one statement.",
+            "properties": {
+              "columns": {
+                "description": "Columns of a statement that returns rows. Empty for a statement without rows.",
+                "items": {
+                  "$ref": "#/$defs/ColumnMeta"
+                },
+                "type": "array"
+              },
+              "elapsedMs": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "grade": {
+                "$ref": "#/$defs/RiskGrade"
+              },
+              "index": {
+                "description": "Which of the split statements it is (from 0 — the order of `db.sql.split`).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line": {
+                "description": "Line the statement starts on (from 1 — in `sql` or the file).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "rows": {
+                "items": {
+                  "items": {
+                    "$ref": "#/$defs/DbValue"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "rowsAffected": {
+                "description": "Number of rows changed (for a statement without rows — if the driver reports it).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "truncated": {
+                "description": "Cut at the row limit (`maxRows`) or the response size — there was more. There is no next page (narrow the query\nand call again).",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "index",
+              "line",
+              "grade",
+              "columns",
+              "rows",
+              "rowsAffected",
+              "truncated",
+              "elapsedMs"
+            ],
+            "type": "object"
+          },
+          "DbScriptUnlisted": {
+            "description": "Statements that ran but whose results are not listed because the response budget was used up (write calls only —\n`count` statements from `index` on). They ran inside the same transaction as the listed ones.",
+            "properties": {
+              "count": {
+                "description": "Number of statements that ran without being listed.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "index": {
+                "description": "Index of the first statement not listed (from 0).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line": {
+                "description": "Line the statement starts on (from 1).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "rowsAffected": {
+                "description": "Sum of the rows they changed (as far as the driver reported it).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "index",
+              "line",
+              "count",
+              "rowsAffected"
+            ],
+            "type": "object"
+          },
+          "DbToolTransaction": {
+            "description": "How the call's transaction ended.",
+            "oneOf": [
+              {
+                "const": "committed",
+                "description": "Every statement ran and the transaction was committed.",
+                "type": "string"
+              },
+              {
+                "const": "rolledBack",
+                "description": "A statement failed (`error`) and the transaction was rolled back — nothing of this call is kept, except what\nstatements that commit on their own already committed (`irreversible`).",
+                "type": "string"
+              },
+              {
+                "const": "readOnly",
+                "description": "A read-only connection: only queries ran, in a read-only transaction that was rolled back.",
+                "type": "string"
+              }
+            ]
+          },
+          "DbTruncated": {
+            "description": "A value truncated at the cell limit.",
+            "properties": {
+              "of": {
+                "$ref": "#/$defs/TruncatedKind",
+                "description": "Kind of the original value."
+              },
+              "prefix": {
+                "description": "The beginning (cut at a UTF-8 character boundary).",
+                "type": "string"
+              },
+              "size": {
+                "description": "Original size (UTF-8 bytes).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "typeName": {
+                "description": "The DB type name when `of` is `other`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "of",
+              "prefix",
+              "size",
+              "typeName"
+            ],
+            "type": "object"
+          },
+          "DbValue": {
+            "description": "A cell value.",
+            "oneOf": [
+              {
+                "enum": [
+                  "null"
+                ],
+                "type": "string"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "bool": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "bool"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Integer. A number within ±(2^53−1), a string outside it.",
+                "properties": {
+                  "int": {
+                    "$ref": "#/$defs/DbInt"
+                  }
+                },
+                "required": [
+                  "int"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Floating point. A number when finite; `NaN` · `Infinity` · `-Infinity` are strings (JSON has no such numbers).",
+                "properties": {
+                  "float": {
+                    "$ref": "#/$defs/DbFloat"
+                  }
+                },
+                "required": [
+                  "float"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "decimal · numeric · money. Always a string, so no precision is lost.",
+                "properties": {
+                  "decimal": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "decimal"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "text"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Bytes. Always `0x` hex; only the beginning past the cell limit.",
+                "properties": {
+                  "bytes": {
+                    "$ref": "#/$defs/DbBytes"
+                  }
+                },
+                "required": [
+                  "bytes"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "json · jsonb. The text as the server sent it (not parsed).",
+                "properties": {
+                  "json": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "json"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Date · time · timestamp. The text as the server sent it — timestamptz is text in the server session's time zone.",
+                "properties": {
+                  "datetime": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "datetime"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "uuid": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uuid"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "array": {
+                    "items": {
+                      "$ref": "#/$defs/DbValue"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "array"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "The beginning of a text · json · other value past the cell limit.",
+                "properties": {
+                  "truncated": {
+                    "$ref": "#/$defs/DbTruncated"
+                  }
+                },
+                "required": [
+                  "truncated"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A value that fits none of the above: the server's text form and the DB type name.",
+                "properties": {
+                  "other": {
+                    "$ref": "#/$defs/DbOther"
+                  }
+                },
+                "required": [
+                  "other"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "RiskGrade": {
+            "description": "Risk grade. The order is the order of risk — several statements combine to the highest grade (`Ord::max`).",
+            "oneOf": [
+              {
+                "enum": [
+                  "ddl"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "read",
+                "description": "A read — does not change data.",
+                "type": "string"
+              },
+              {
+                "const": "write",
+                "description": "A write (a key-scoped `UPDATE` · `INSERT`, a `SELECT` with a side-effecting function, transaction control,\netc.).",
+                "type": "string"
+              },
+              {
+                "const": "unboundedWrite",
+                "description": "An unscoped write (an `UPDATE` · `DELETE` with no WHERE or an always-true one).",
+                "type": "string"
+              },
+              {
+                "const": "destructive",
+                "description": "Destructive (`DROP` · `TRUNCATE`). A statement the parser could not read also lands here (reason `unparsed`,\nfail-closed).",
+                "type": "string"
+              }
+            ]
+          },
+          "SqlRange": {
+            "description": "Range in the source text, in UTF-16 units; `to` is exclusive (like CodeMirror's `from` · `to`).",
+            "properties": {
+              "from": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "to": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ],
+            "type": "object"
+          },
+          "TruncatedKind": {
+            "enum": [
+              "text",
+              "json",
+              "other"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "audit": {
+            "description": "Details kept in the audit log — statement count · highest grade · statement hashes (for `file`, its path and\ncontent hash). No SQL text or values.",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DbScriptError"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "If a statement failed, that statement and the database's error. The statements after it did not run and the\ntransaction was rolled back."
+          },
+          "file": {
+            "description": "The file read, when `file` was given (path relative to the root).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "irreversible": {
+            "description": "The SQL had statements that commit on their own and cannot be rolled back (MySQL · MariaDB DDL and the like).",
+            "type": "boolean"
+          },
+          "results": {
+            "description": "One result per statement that ran and is listed (in order): rows changed (`rowsAffected`), or the rows of a\nstatement that returns rows (`RETURNING`, queries).",
+            "items": {
+              "$ref": "#/$defs/DbScriptResult"
+            },
+            "type": "array"
+          },
+          "statements": {
+            "description": "Number of statements after splitting.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "transaction": {
+            "$ref": "#/$defs/DbToolTransaction"
+          },
+          "unlisted": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DbScriptUnlisted"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Statements that ran but are not listed, because the rows of earlier statements used up the response budget\n(about 192 KiB): `count` statements from `index`, with the sum of the rows they changed."
+          }
+        },
+        "required": [
+          "statements",
+          "results",
+          "error",
+          "unlisted",
+          "transaction",
+          "irreversible",
+          "file",
+          "audit"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "dangerous"
+    },
     "db.tool.kvGet": {
-      "description": "Read one page of a Redis key's value, by type: a string in byte windows, a hash · set in scan pages, a list ·\nzset by index, a stream by entry id, a RedisJSON document whole. `nextCursor` reads the next page; a missing key\nis `\"missing\"`. Values that are not UTF-8 come as hex bytes. The response is limited to about 192 KiB — a page\nholds fewer elements to fit, and an element too large on its own is cut (`truncated`); a stream entry with too\nmany fields shows only its first fields, and a hash · set that Redis returns in one step may show only its first\nelements (`omitted` says how many — the rest cannot be read through this tool). An element that cannot fit even\ncut is left out with `omitted.shown: 0`. In every case `nextCursor` continues after what this page covered, so\nreading never stops at one large element. A call is refused only when even an empty page cannot fit\n(`data.reason: \"tooLarge\"`, with `data.nextCursor`). There is no command\ninput — this tool only reads. Uses only connections the person opened in Pitwall's DB explorer during this app\nrun (`notOpenedByUser`) and never uses a Redis server marked production (`productionBlocked`). Redis connections\nonly.",
+      "description": "Read one page of a Redis key's value, by type: a string in byte windows, a hash · set in scan pages, a list ·\nzset by index, a stream by entry id, a RedisJSON document whole. `nextCursor` reads the next page; a missing key\nis `\"missing\"`. Values that are not UTF-8 come as hex bytes. The response is limited to about 192 KiB — a page\nholds fewer elements to fit, and an element too large on its own is cut (`truncated`); a stream entry with too\nmany fields shows only its first fields, and a hash · set that Redis returns in one step may show only its first\nelements (`omitted` says how many — the rest cannot be read through this tool). An element that cannot fit even\ncut is left out with `omitted.shown: 0`. In every case `nextCursor` continues after what this page covered, so\nreading never stops at one large element. A call is refused only when even an empty page cannot fit\n(`data.reason: \"tooLarge\"`, with `data.nextCursor`). There is no command\ninput — this tool only reads. Uses only connections the person opened in Pitwall's DB explorer during this app\nrun (`notOpenedByUser`) and does not use a Redis server marked production (`productionBlocked`) unless the person\nset production targets to ask (then each call waits for approval in Pitwall). Redis connections only.",
       "kind": "unary",
       "params": {
         "$defs": {
@@ -12893,7 +13621,8 @@
           "connectionId",
           "key"
         ],
-        "type": "object"
+        "type": "object",
+        "x-pitwall-planned": true
       },
       "result": {
         "$defs": {
@@ -13480,7 +14209,7 @@
       "tier": "read"
     },
     "db.tool.kvScan": {
-      "description": "Find Redis keys, one page at a time (Redis `SCAN` with an optional glob `match`): each key with its type · TTL ·\nsize, and `nextCursor` for the next page — call again with it until `nextCursor` is missing. A page may hold\nfewer keys than `limit`, even none, while more pages remain. Keys are not repeated within one page, but **a key\ncan appear again on a later page** (Redis `SCAN` may return a key twice); keys that exist for the whole scan are\nnever missed. There is no command input — this tool only reads. Uses only connections the person opened in\nPitwall's DB explorer during this app run (otherwise `notOpenedByUser` — try again after the person has opened\nit once) and never uses a Redis server marked production — any database number on the same server · user\n(`productionBlocked`). Redis connections only — for SQL databases use `db_schema` · `db_query`. The only page that\ncannot be returned is one whose key name alone is larger than the response (about 192 KiB): that call is refused\n(`data.reason: \"tooLarge\"`) and `data.nextCursor` continues after it.",
+      "description": "Find Redis keys, one page at a time (Redis `SCAN` with an optional glob `match`): each key with its type · TTL ·\nsize, and `nextCursor` for the next page — call again with it until `nextCursor` is missing. A page may hold\nfewer keys than `limit`, even none, while more pages remain. Keys are not repeated within one page, but **a key\ncan appear again on a later page** (Redis `SCAN` may return a key twice); keys that exist for the whole scan are\nnever missed. There is no command input — this tool only reads. Uses only connections the person opened in\nPitwall's DB explorer during this app run (otherwise `notOpenedByUser` — try again after the person has opened\nit once) and does not use a Redis server marked production — any database number on the same server · user\n(`productionBlocked`) — unless the person set production targets to ask, and then each call waits for the\nperson's approval in Pitwall. Redis connections only — for SQL databases use `db_schema` · `db_query`. The only page that\ncannot be returned is one whose key name alone is larger than the response (about 192 KiB): that call is refused\n(`data.reason: \"tooLarge\"`) and `data.nextCursor` continues after it.",
       "kind": "unary",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -13539,7 +14268,8 @@
           "projectId",
           "connectionId"
         ],
-        "type": "object"
+        "type": "object",
+        "x-pitwall-planned": true
       },
       "result": {
         "$defs": {
@@ -13665,7 +14395,7 @@
       "tier": "read"
     },
     "db.tool.query": {
-      "description": "Run read-only SQL (SQL drivers only — PG · MySQL/MariaDB · SQLite). The input is either `sql` (text) or `file`\n(an SQL file path relative to the project root — Pitwall reads it when it runs). The statements are split by the\ndialect and run in order in one read-only transaction, with one result per statement (columns · rows ·\n`truncated` · duration). **Only queries run** — if any statement is not a query (a write · DDL · `SET` ·\ntransaction control · `ATTACH` · text that cannot be parsed), nothing runs and the call is refused (`notAQuery`\n— writes go through `db_execute`). If a statement fails, it stops there and returns the results so far with\n`error` (statement index · line). Rows are limited to `maxRows` per statement (default 100), cells are cut at 4\nKiB (`truncated` values). The whole response is limited to about 192 KiB — when the rows fill it, that statement\nis `truncated` and the later statements do not run and are reported as `notRun` (`count` from `index`, `reason:\n\"responseBudget\"`). **There is no next page** — if a result was cut, narrow the WHERE · LIMIT · columns and call\nagain (a new call sees a different snapshot).\nUses only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`) and\nnever uses a target marked production — for MySQL · MariaDB, any database on the same server · user\n(`productionBlocked`). The result's `audit` is the detail kept in the audit log (statement count · grade ·\nhashes) and is shown to the agent too.",
+      "description": "Run read-only SQL (SQL drivers only — PG · MySQL/MariaDB · SQLite). The input is either `sql` (text) or `file`\n(an SQL file path relative to the project root — Pitwall reads it when it runs). The statements are split by the\ndialect and run in order in one read-only transaction, with one result per statement (columns · rows ·\n`truncated` · duration). **Only queries run** — if any statement is not a query (a write · DDL · `SET` ·\ntransaction control · `ATTACH` · text that cannot be parsed), nothing runs and the call is refused (`notAQuery`\n— writes go through `db_execute`). If a statement fails, it stops there and returns the results so far with\n`error` (statement index · line). Rows are limited to `maxRows` per statement (default 100), cells are cut at 4\nKiB (`truncated` values). The whole response is limited to about 192 KiB — when the rows fill it, that statement\nis `truncated` and the later statements do not run and are reported as `notRun` (`count` from `index`, `reason:\n\"responseBudget\"`). **There is no next page** — if a result was cut, narrow the WHERE · LIMIT · columns and call\nagain (a new call sees a different snapshot).\nUses only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`) and\ndoes not use a target marked production — for MySQL · MariaDB, any database on the same server · user\n(`productionBlocked`) — unless the person set production targets to ask, and then each call shows its statements\nto the person and waits for approval in Pitwall. The result's `audit` is the detail kept in the audit log\n(statement count · grade · hashes) and is shown to the agent too.",
       "kind": "unary",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -13716,7 +14446,8 @@
           "projectId",
           "connectionId"
         ],
-        "type": "object"
+        "type": "object",
+        "x-pitwall-planned": true
       },
       "result": {
         "$defs": {
@@ -14365,7 +15096,7 @@
       "tier": "read"
     },
     "db.tool.schema": {
-      "description": "Read a DB schema (SQL drivers only — PG · MySQL/MariaDB · SQLite). Without `object`, one page of one level's\nlist (`kind`: `database` · `schema` · `table` (default) · `view`, etc. — object lists are within `database` ·\n`schema` and filtered by `filter`); with it, that object's columns (name · type · null · default · primary key)\n· indexes · foreign keys, or its DDL text with `detail: \"ddl\"`. Sees the same as Pitwall's DB explorer. Uses\nonly connections the person opened in Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` —\ntry again after the person has opened it once) and never uses connections marked production. For a Redis\nconnection, `unsupported` — use `db_kv_scan`.",
+      "description": "Read a DB schema (SQL drivers only — PG · MySQL/MariaDB · SQLite). Without `object`, one page of one level's\nlist (`kind`: `database` · `schema` · `table` (default) · `view`, etc. — object lists are within `database` ·\n`schema` and filtered by `filter`); with it, that object's columns (name · type · null · default · primary key)\n· indexes · foreign keys, or its DDL text with `detail: \"ddl\"`. Sees the same as Pitwall's DB explorer. Uses\nonly connections the person opened in Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` —\ntry again after the person has opened it once) and does not use connections marked production\n(`productionBlocked`) — unless the person set them to ask, and then each call waits for the person's approval in\nPitwall. For a Redis connection, `unsupported` — use `db_kv_scan`.",
       "kind": "unary",
       "params": {
         "$defs": {
@@ -14496,7 +15227,8 @@
           "projectId",
           "connectionId"
         ],
-        "type": "object"
+        "type": "object",
+        "x-pitwall-planned": true
       },
       "result": {
         "$defs": {

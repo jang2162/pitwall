@@ -5,8 +5,11 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use pw_core::config::mcp_policy::{self, Production};
+use pw_core::registry::Project;
 use pw_core::registry::agent::AgentGrant;
 use pw_core::registry::path::simplify;
+use pw_core::registry::plan::Approved;
 use pw_db_types::DriverKind;
 use pw_rpc::{RpcError, code as rpc_code};
 use serde_json::json;
@@ -17,7 +20,8 @@ use crate::session::DbSessions;
 
 /// `data.reason`: 사람이 이번 앱 실행에서 그 프로젝트 창으로 (그 연결 id, 지금 대상)을 연 적이 없다.
 pub const NOT_OPENED_BY_USER: &str = "notOpenedByUser";
-/// `data.reason`: 프로덕션 표지가 있는 대상이다(`[mcp.policy] production` 의 `block` — `ask` 갈래는 M5-18).
+/// `data.reason`: 프로덕션 표지가 있는 대상이다(`[mcp.policy] production` 의 `block` — 기본). `ask` 면 사람이 연 연결에 한해
+/// 호출마다 승인을 청한다([`DbGrant::needs_approval`]).
 pub const PRODUCTION_BLOCKED: &str = "productionBlocked";
 
 /// 푼 대상 — 「사람이 연 연결」 의 열쇠(표지의 열쇠는 [`DbTarget::mark_key`]). 드라이버 · 호스트 · 포트(적지 않았으면 드라이버
@@ -25,7 +29,8 @@ pub const PRODUCTION_BLOCKED: &str = "productionBlocked";
 /// 가리킨다). 호스트는 소문자로 맞춘다(DNS 이름은 대소문자를 가리지 않는다 — `DB.example.com` 으로 표지를 비껴가지 못하게). TLS
 /// 설정은 넣지 않는다 — 같은 서버 · DB 를 `sslmode` 만 바꿔 가리켜 표지를 비껴가지 못하게(TLS 의 확인은 `crate::trust` 가 따로 본다).
 /// 남는 한계: 호스트 별칭(`localhost` · `127.0.0.1`), 터널 목적지의 다른 표기, DB 이름의 대소문자는 다른 대상으로 본다.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DbTarget {
     pub driver: DriverKind,
     pub host: Option<String>,
@@ -116,7 +121,8 @@ impl DbTarget {
 const REDIS_DEFAULT_USER: &str = "default";
 
 /// 에이전트에게 적용하는 표지(결정 M5-D37). 조여지기만 한다([`DbMarks::tighten`]).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DbMarks {
     pub production: bool,
     pub read_only: bool,
@@ -196,9 +202,47 @@ impl OpenedMemory {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentBinding {
     pub(super) connection_id: String,
+    /// 연결 이름(설정의 `name` — 승인 요청이 보인다).
+    pub(super) name: String,
     pub(super) worktree: Option<String>,
     pub(super) target: DbTarget,
     pub(super) marks: DbMarks,
+    pub(super) approval: AgentApproval,
+}
+
+impl AgentBinding {
+    /// 이 판정으로 쓰는 호출마다 승인을 청한다(프로덕션 대상 · `production = "ask"`).
+    pub fn asks_approval(&self) -> bool {
+        self.approval == AgentApproval::Required
+    }
+}
+
+/// 프로덕션 `ask` 의 승인(16-m5-plan M5-18 ④ — 「프로덕션 태그 연결의 판정」 표).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum AgentApproval {
+    /// 프로덕션 대상이 아니다 — 승인 없이 쓴다(쓰기 툴은 제 등급으로 따로 묻는다).
+    NotNeeded,
+    /// 프로덕션 대상이고 `production = "ask"` 다 — 이 호출의 승인([`DbGrant::approve`])을 받기 전에는 연결을 열지 않는다.
+    Required,
+    /// 그 승인을 받았다(계획 해시).
+    Given(String),
+}
+
+/// 그 프로젝트의 `[mcp.policy] production`(사람의 설정에서만 — 읽는 함수는 MCP 세션과 같은 [`mcp_policy::read_project_over`],
+/// 메인 판정 2026-11-17). 전역 설정 스토어가 없는 Host(시험 등)는 프로젝트 설정만 본다. 경고는 로그에 남긴다. 블로킹이다.
+pub(crate) fn production_policy(sessions: &DbSessions, project: &Project) -> Production {
+    let Ok(host) = sessions.connections.host() else {
+        return Production::Block;
+    };
+    let global = sessions.connections.settings.store().map(|s| s.snapshot());
+    let global_mcp = global
+        .as_ref()
+        .and_then(|g| g.get("settings", mcp_policy::MCP_KEY));
+    let (policy, warnings) = mcp_policy::read_project_over(&host.paths, global_mcp, project);
+    for w in warnings {
+        tracing::warn!(target: "pw_db", project = %project.id, "{w}");
+    }
+    policy.production
 }
 
 /// `PERMISSION_DENIED`(`data.reason = "notOpenedByUser"`).
@@ -272,12 +316,15 @@ pub(crate) const UNREADABLE_SETTINGS: &str =
     "cannot read the project's settings files; open the project in Pitwall to see why";
 
 /// 연결 하나에 대한 에이전트의 판정(신뢰 게이트는 부른 쪽이 지났다). `database` 는 호출이 설정의 DB 대신 고른 DB — 그 대상의
-/// 표지도 본다.
+/// 표지도 본다. `production` 은 그 프로젝트의 `[mcp.policy] production`([`production_policy`]): 프로덕션 대상이면 `block` 은
+/// 거절(`productionBlocked`), `ask` 는 「사람이 연 연결」 판정을 그대로 지난 뒤 승인을 청하는 증거다(연 적 없으면 `ask` 여도
+/// `notOpenedByUser` — 결정 M5-D21).
 pub(crate) fn judge_for_agent(
     sessions: &DbSessions,
     loaded: &Loaded,
     connection: &LoadedConnection,
     database: Option<&str>,
+    production: Production,
 ) -> Result<AgentBinding, RpcError> {
     let project_id = loaded.project.id.as_str();
     let config = connection
@@ -290,7 +337,7 @@ pub(crate) fn judge_for_agent(
     if database.is_some_and(|db| config.database.as_deref() != Some(db)) {
         marks = marks.tighten(marks_memory.get(&target.with_database(database)));
     }
-    if marks.production {
+    if marks.production && production == Production::Block {
         tracing::info!(target: "pw_db", project = project_id, connection = %connection.id, "agent db access refused: production target");
         return Err(production_blocked(project_id, &connection.id));
     }
@@ -303,17 +350,24 @@ pub(crate) fn judge_for_agent(
     }
     Ok(AgentBinding {
         connection_id: connection.id.clone(),
+        name: config.name.clone(),
         worktree: None,
         target,
         marks,
+        approval: if marks.production {
+            AgentApproval::Required
+        } else {
+            AgentApproval::NotNeeded
+        },
     })
 }
 
 /// MCP 세션의 DB 입구(가칭 `db_grant_for_agent` 그대로). `agent` 는 `pw_core::registry::agent::agent_grant` 를 지난 증거,
 /// `worktree` 는 호출의 활성 워크트리 꼭대기(없으면 메인 체크아웃), `database` 는 호출이 설정의 DB 대신 고를 DB(없으면 설정의 것).
 ///
-/// 신뢰 게이트(`untrusted`) → 연결 설정 읽기(메인 체크아웃 · 그 워크트리 — 표지를 더한다) → 프로덕션 표지(`productionBlocked`) →
-/// 「사람이 연 연결」(`notOpenedByUser`). 없는 연결은 not found, 틀린 설정은 invalid params. 돌려준 증거는 그 연결 id · 워크트리 ·
+/// 신뢰 게이트(`untrusted`) → 연결 설정 읽기(메인 체크아웃 · 그 워크트리 — 표지를 더한다) → 프로덕션 표지(`[mcp.policy]
+/// production` 이 `block` 이면 `productionBlocked`) → 「사람이 연 연결」(`notOpenedByUser`). 프로덕션 대상을 `ask` 로 지난 증거는
+/// [`DbGrant::needs_approval`] 이고, 툴은 계획을 만들어 승인([`DbGrant::approve`])을 받기 전에는 그 증거로 연결을 열 수 없다. 없는 연결은 not found, 틀린 설정은 invalid params. 돌려준 증거는 그 연결 id · 워크트리 ·
 /// 대상에만 쓰인다 — 연결을 여는 자리가 그때 설정을 다시 읽어 견준다. 블로킹이다(설정 파일 · 레지스트리) — 블로킹 스레드에서 부른다.
 pub fn db_grant_for_agent(
     sessions: &DbSessions,
@@ -332,7 +386,8 @@ pub fn db_grant_for_agent(
     let connection = loaded
         .get(connection_id)
         .ok_or_else(|| crate::config::not_found(connection_id))?;
-    let mut binding = judge_for_agent(sessions, &loaded, connection, database)?;
+    let production = production_policy(sessions, agent.project());
+    let mut binding = judge_for_agent(sessions, &loaded, connection, database, production)?;
     binding.worktree = worktree.map(str::to_owned);
     Ok(DbGrant {
         project_id: project_id.to_owned(),
@@ -340,7 +395,49 @@ pub fn db_grant_for_agent(
     })
 }
 
+/// 승인 계획이 해시에 넣는 대상 값(16-m5-plan M5-12 ② — 연결의 푼 대상 · 표지. 방언은 부른 쪽이 따로 넣는다).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DbPlanTarget<'a> {
+    pub connection_id: &'a str,
+    pub worktree: Option<&'a str>,
+    pub target: &'a DbTarget,
+    pub marks: DbMarks,
+}
+
 impl DbGrant {
+    /// 프로덕션 대상을 `production = "ask"` 로 지난 에이전트의 증거다 — 툴은 이 호출의 계획을 만들어 승인을 받아야 한다
+    /// ([`DbGrant::approve`]). 그 전에는 연결을 여는 자리 · 스키마 캐시가 이 증거를 받지 않는다.
+    pub fn needs_approval(&self) -> bool {
+        self.agent
+            .as_deref()
+            .is_some_and(|a| a.approval == AgentApproval::Required)
+    }
+
+    /// 계획의 승인([`Approved`] — `pw_core::registry::plan::approve` 밖에서는 만들 수 없다)을 이 증거에 단다.
+    pub fn approve(&mut self, approved: &Approved) {
+        if let Some(binding) = self.agent.as_deref_mut()
+            && binding.approval == AgentApproval::Required
+        {
+            binding.approval = AgentApproval::Given(approved.hash().to_owned());
+        }
+    }
+
+    /// 에이전트의 증거가 묶인 연결 이름. 창의 증거면 `None`.
+    pub fn agent_connection_name(&self) -> Option<&str> {
+        self.agent.as_deref().map(|a| a.name.as_str())
+    }
+
+    /// 승인 계획의 대상 값(에이전트의 증거만).
+    pub fn plan_target(&self) -> Option<DbPlanTarget<'_>> {
+        self.agent.as_deref().map(|a| DbPlanTarget {
+            connection_id: &a.connection_id,
+            worktree: a.worktree.as_deref(),
+            target: &a.target,
+            marks: a.marks,
+        })
+    }
+
     /// 연결을 여는 자리 · 캐시를 보는 자리에서: 에이전트의 증거면 그 연결 id · 워크트리 · 지금 설정의 대상이 판정한 것과 같아야 한다.
     /// 아니면 `notOpenedByUser`(그사이 설정이 바뀌었다). 창의 증거는 늘 지난다.
     pub(crate) fn check_agent_use(
@@ -353,6 +450,13 @@ impl DbGrant {
             return Ok(());
         };
         let id = connection_id.unwrap_or("(draft)");
+        if binding.approval == AgentApproval::Required {
+            // 툴이 승인을 지나지 않고 프로덕션 대상을 열려 했다(프로그래밍 오류) — 열지 않는다(fail-closed).
+            tracing::error!(target: "pw_db", project = %self.project_id, connection = id, "agent db access refused: a production target without the call's approval");
+            return Err(RpcError::internal(
+                "this db call needs approval in Pitwall before it opens a production connection",
+            ));
+        }
         if connection_id != Some(binding.connection_id.as_str())
             || worktree != binding.worktree.as_deref()
             || *target != binding.target

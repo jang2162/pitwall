@@ -37,6 +37,7 @@ mod project_write;
 /// 앱 Host 가 내는 툴 전부. 이름순.
 const APP_TOOLS: &[&str] = &[
     "db_connection_list",
+    "db_execute",
     "db_kv_get",
     "db_kv_scan",
     "db_query",
@@ -607,6 +608,16 @@ mod fake {
     fake!(Korean, "korean", KoreanQuery, KoreanFound, "한글 설명");
 }
 
+/// 설정이 없을 때(프리셋 `standard` — `read` · `write`) 앱 세션의 `tools/list`: [`APP_TOOLS`] 에서 `exec` · `dangerous` 를 뺀 것
+/// (`db_execute` — 16-m5-plan M5-18 — 는 `full` 이나 `[mcp.tools] db_execute = true` 에서만 보인다).
+fn standard_tools(host: &ToolHost) -> Vec<&'static str> {
+    APP_TOOLS
+        .iter()
+        .copied()
+        .filter(|t| matches!(host.tool(t).tier, pw_rpc::Tier::Read | pw_rpc::Tier::Write))
+        .collect()
+}
+
 /// 도우미 자체: 진짜 세션에서 목록 · 그룹 · 등급 · 호출 · 감사 행이 보인다. 툴 행의 시험은 이 꼴을 따른다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_tool_round_trip_helper_lists_calls_and_reads_the_audit_log() {
@@ -616,7 +627,7 @@ async fn the_tool_round_trip_helper_lists_calls_and_reads_the_audit_log() {
 
     let listed = session.list().await;
     let names: Vec<_> = listed.iter().map(|t| t.name.to_string()).collect();
-    assert_eq!(names, APP_TOOLS);
+    assert_eq!(names, standard_tools(&host));
     let info = host.tool("project_info");
     assert_eq!((info.group, info.tier), ("project", pw_rpc::Tier::Read));
     let schema = &listed
@@ -652,9 +663,8 @@ async fn a_group_turned_off_in_the_app_hides_its_tools() {
         .iter()
         .map(|t| t.name.to_string())
         .collect();
-    let others: Vec<&str> = APP_TOOLS
-        .iter()
-        .copied()
+    let others: Vec<&str> = standard_tools(&host)
+        .into_iter()
         .filter(|t| host.tool(t).group != "project")
         .collect();
     assert_eq!(listed, others, "다른 그룹의 툴만 남는다");

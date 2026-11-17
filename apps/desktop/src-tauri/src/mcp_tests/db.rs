@@ -279,3 +279,196 @@ async fn redis_tools_are_db_reads_without_a_command_input() {
     );
     session.close().await;
 }
+
+/// 그 프로젝트 창이 승인 요청 하나를 받아 `answer` 로 답한다(창의 `mcp.approval.answer` 와 같은 판정 — 그 프로젝트 창의 범위).
+async fn window_answers(
+    host: &ToolHost,
+    listener: &mut pw_mcp::approval::Listener,
+    project: &str,
+    answer: pw_mcp::approval::McpApprovalAnswer,
+) -> pw_mcp::approval::McpApprovalRequest {
+    // 앞 요청의 거둠(`Closed`)은 건너뛴다.
+    let request = loop {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(10), listener.recv())
+            .await
+            .expect("no approval request")
+            .unwrap();
+        if let pw_mcp::approval::McpApprovalEvent::Open { request } = event {
+            break request;
+        }
+    };
+    host.services
+        .sessions
+        .approvals()
+        .answer(
+            &pw_mcp::approval::Answerer {
+                scope: &pw_rpc::ConnectionScope::Project(project.to_owned()),
+                connection: pw_mcp::approval::Connection::named("window"),
+            },
+            request.id,
+            answer,
+        )
+        .unwrap();
+    *request
+}
+
+/// `db_execute`(16-m5-plan M5-18)를 진짜 세션으로: 그룹 `db` · 등급 `dangerous` 라 프리셋 `standard` 의 `tools/list` 에 없고
+/// `[mcp.tools] db_execute = true` 면 있다(입력 스키마에 승인 키가 없다). 호출마다 그 프로젝트 창에 묻는다 — `auto_approve` 에
+/// `write` · `exec` 가 있어도, 답은 [거절] · [이번만 허용] 둘이고 계획은 SQL 갈래(문장 · 등급 · 연결)다. 앱의 실 SQLite 로 트랜잭션
+/// 하나에 커밋 · 실패면 롤백. 감사 행은 승인 방식 `once` · 계획 해시 · 문장 수 · 등급이고 SQL 원문이 없다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn db_execute_asks_every_time_and_runs_one_transaction() {
+    use pw_mcp::approval::{Connection, McpApprovalAnswer};
+    let host = ToolHost::app();
+    let alpha = host.project("alpha");
+    host.host
+        .registry()
+        .unwrap()
+        .set_trust(&alpha, true)
+        .unwrap();
+    let root = host.base.join("work").join("alpha");
+    std::fs::write(root.join("app.db"), "").unwrap();
+    std::fs::create_dir_all(root.join(".pitwall/db")).unwrap();
+    std::fs::write(
+        root.join(".pitwall/db/lite.toml"),
+        "schema = 1\nname = \"lite\"\ndriver = \"sqlite\"\npath = \"app.db\"\n",
+    )
+    .unwrap();
+    let tool = host.tool("db_execute");
+    assert_eq!((tool.group, tool.tier), ("db", pw_rpc::Tier::Dangerous));
+
+    let session = host.session(SessionRequest::default()).await;
+    assert!(
+        !session.list().await.iter().any(|t| t.name == "db_execute"),
+        "프리셋 standard 에는 없다"
+    );
+    session.close().await;
+    host.global_settings(
+        "[mcp]\nauto_approve = [\"write\", \"exec\"]\n[mcp.tools]\ndb_execute = true\n",
+    );
+    let session = host.session(SessionRequest::default()).await;
+    let listed = session.list().await;
+    let tool = listed
+        .iter()
+        .find(|t| t.name == "db_execute")
+        .expect("db_execute = true 면 보인다");
+    let schema = serde_json::to_value(&tool.input_schema).unwrap();
+    assert!(schema["properties"].get("sql").is_some(), "{schema}");
+    assert!(
+        schema["properties"]
+            .get(pw_core::registry::plan::APPROVAL_KEY)
+            .is_none(),
+        "{schema}"
+    );
+    assert!(schema.get(pw_core::registry::plan::PLANNED_MARK).is_none());
+
+    host.window_call(
+        &alpha,
+        "db.schema.objects",
+        serde_json::json!({ "projectId": alpha, "connectionId": "lite", "kind": "table", "limit": 10 }),
+    )
+    .await
+    .unwrap();
+    let mut window =
+        host.services
+            .sessions
+            .approvals()
+            .listen(Some(&alpha), None, Connection::named("window"));
+    const LITERAL: &str = "row-literal-77c1";
+    let create = serde_json::json!({ "projectId": alpha, "connectionId": "lite",
+        "sql": format!("CREATE TABLE t (v text);\nINSERT INTO t VALUES ('{LITERAL}')") });
+    let (ran, request) = tokio::join!(
+        session.call("db_execute", create),
+        window_answers(&host, &mut window, &alpha, McpApprovalAnswer::Once)
+    );
+    assert_ne!(ran.is_error, Some(true), "{ran:?}");
+    assert_eq!(structured(&ran)["transaction"], "committed");
+    assert_eq!(request.tier, pw_rpc::Tier::Dangerous);
+    assert_eq!(
+        request.answers,
+        [McpApprovalAnswer::Deny, McpApprovalAnswer::Once]
+    );
+    let change = serde_json::to_value(&request.plan.changes[0]).unwrap();
+    assert_eq!(change["kind"], "sql");
+    assert_eq!(change["connection"]["name"], "lite");
+    assert_eq!(change["statements"][0]["grade"], "ddl");
+    assert_eq!(change["statements"][1]["grade"], "write");
+
+    // 둘째 문장이 실패하면 첫 문장도 남지 않는다.
+    let failing = serde_json::json!({ "projectId": alpha, "connectionId": "lite",
+        "sql": "INSERT INTO t VALUES ('b');\nINSERT INTO missing VALUES (1)" });
+    let (rolled, _) = tokio::join!(
+        session.call("db_execute", failing),
+        window_answers(&host, &mut window, &alpha, McpApprovalAnswer::Once)
+    );
+    let rolled = structured(&rolled);
+    assert_eq!(rolled["transaction"], "rolledBack", "{rolled:?}");
+    assert_eq!(rolled["error"]["index"], 1);
+    let count = structured(
+        &session
+            .call(
+                "db_query",
+                serde_json::json!({ "projectId": alpha, "connectionId": "lite", "sql": "SELECT count(*) FROM t" }),
+            )
+            .await,
+    );
+    assert_eq!(count["results"][0]["rows"][0][0]["int"], 1, "{count:?}");
+
+    // 거절하면 돌지 않는다.
+    let (denied, _) = tokio::join!(
+        session.call(
+            "db_execute",
+            serde_json::json!({ "projectId": alpha, "connectionId": "lite", "sql": "DELETE FROM t WHERE v = 'x'" }),
+        ),
+        window_answers(&host, &mut window, &alpha, McpApprovalAnswer::Deny)
+    );
+    assert_eq!(
+        denied
+            .meta
+            .as_ref()
+            .and_then(|m| pw_mcp::marker::Mark::read(m)),
+        Some(pw_mcp::marker::Mark::denied(
+            pw_mcp::marker::Reason::ApprovalDenied
+        ))
+    );
+
+    let rows = host.audit_rows(4);
+    let rows: Vec<_> = rows.iter().filter(|r| r.tool == "db_execute").collect();
+    assert_eq!(
+        rows.iter().map(|r| r.outcome.as_str()).collect::<Vec<_>>(),
+        ["ok", "ok", "denied"]
+    );
+    let detail = rows[0].detail.clone().unwrap_or_default();
+    assert!(
+        detail.starts_with("statements=2 grade=ddl sql=sha256:"),
+        "{detail}"
+    );
+    for row in &rows {
+        let all = format!("{} {}", row.args, row.detail.clone().unwrap_or_default());
+        assert!(!all.contains(LITERAL), "{all}");
+        assert!(!row.args.contains("INSERT"), "{}", row.args);
+    }
+    let approvals: Vec<(Option<String>, bool)> = {
+        let conn = rusqlite::Connection::open_with_flags(
+            host.services.audit.file(),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let mut stmt = conn
+            .prepare("SELECT approval, plan_hash IS NOT NULL FROM calls WHERE tool = 'db_execute' ORDER BY id")
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    assert_eq!(
+        approvals,
+        [
+            (Some("once".to_owned()), true),
+            (Some("once".to_owned()), true),
+            (None, false)
+        ]
+    );
+    session.close().await;
+}

@@ -29,7 +29,11 @@
 //!
 //! [`db_grant_for_agent`] 는 `pw_core::registry::agent::agent_grant` 를 지난 호출(MCP 세션의 툴 메서드)에만 [`DbGrant`] 를 준다.
 //! 판정 순서: 연결 id 꼴 → 신뢰 게이트(`untrusted`) → 연결 설정 읽기(메인 체크아웃 · 그 워크트리 — 둘 다 표지를 기억에 더한다) →
-//! 표지(`productionBlocked` — 그 대상에서 이번 실행 중 본 가장 엄한 것) → 「사람이 연 연결」(`notOpenedByUser`). 거절은 모두
+//! 표지(그 대상에서 이번 실행 중 본 가장 엄한 것 — 프로덕션이면 `[mcp.policy] production` 이 `block`(기본)일 때
+//! `productionBlocked`) → 「사람이 연 연결」(`notOpenedByUser`). 프로덕션 대상을 `ask` 로 지난 증거는 **호출마다 승인을 청한다**
+//! (16-m5-plan M5-18 ④): 툴은 계획(`pw_core::registry::plan`)을 만들어 승인을 받고 [`DbGrant::approve`] 로 그 증거에 단다 — 그
+//! 전에는 연결을 여는 자리 · 스키마 캐시가 그 증거를 거절한다(fail-closed). 정책은 MCP 세션과 같은 함수로 읽는다
+//! (`pw_core::config::mcp_policy` — 사람의 설정에서만, 메인 판정 2026-11-17). 거절은 모두
 //! `PERMISSION_DENIED` 이고 `data.reason` 이 까닭이다. 그 증거는 (연결 id · 워크트리 · 푼 대상)에 묶인다 — 연결을 여는 자리
 //! (`crate::connection` 의 드라이버 연결 직전, `crate::schema` 의 캐시 앞)가 그때 다시 읽은 설정의 대상이 증거와 다르면 연결을
 //! 열지 않고 `notOpenedByUser` 로 거절한다(판정과 열기 사이에 설정 파일이 바뀌는 틈).
@@ -470,11 +474,12 @@ pub(crate) fn refuse_untranslatable(statements: &[Planned]) -> Result<(), RpcErr
 mod agent;
 
 pub use agent::{
-    AgentBinding, DbMarks, DbTarget, NOT_OPENED_BY_USER, PRODUCTION_BLOCKED, db_grant_for_agent,
-    not_opened_by_user, production_blocked,
+    AgentBinding, DbMarks, DbPlanTarget, DbTarget, NOT_OPENED_BY_USER, PRODUCTION_BLOCKED,
+    db_grant_for_agent, not_opened_by_user, production_blocked,
 };
 pub(crate) use agent::{
     MarkMemory, OpenedMemory, UNREADABLE_SETTINGS, agent_view, invalid_settings, judge_for_agent,
+    production_policy,
 };
 
 #[cfg(test)]
