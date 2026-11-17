@@ -2,7 +2,7 @@
 //! 설정 창의 DB 페이지(`pw-db` 의 `db.settings.set`, 14-m3-plan.md M3-20)가 쓴다. 값의 판정은 부르는 쪽의 몫이다 — 여기는 파일만
 //! 다룬다.
 //!
-//! - 주석 · 서식 · 다른 키는 그대로 둔다(toml_edit). 값이 이미 같으면 쓰지 않는다. 있던 값의 앞뒤 공백 · 꼬리 주석은 남긴다.
+//! - 주석 · 서식 · 다른 키는 그대로 둔다(toml_edit). 값이 이미 같으면 쓰지 않는다. 있던 값의 앞뒤 공백 · 꼬리 주석과 그 키 위의 주석 줄은 남긴다(값만 그 자리에서 바꾼다).
 //! - 파일이 없으면 `schema = 1` 과 그 키만으로 만든다(지우기면 만들지 않는다). 파일을 읽거나 TOML 로 읽을 수 없으면 **쓰지 않고**
 //!   오류다 — 사람이 고치다 만 파일을 덮지 않는다. 설정 계층이 손대지 않는 파일(`schema` 가 앱보다 새 버전이거나 정수가 아님,
 //!   [`super::migrate`])도 쓰지 않는다 — 새 버전 Pitwall 이 쓴 파일에 옛 모양의 키를 섞지 않는다. 옛 버전(`schema` 없음)은 고쳐
@@ -577,10 +577,18 @@ fn with_key(
         table = next;
     }
     let mut next = value.clone();
-    if let Some(old) = table.get(name).and_then(Item::as_value) {
-        *next.decor_mut() = old.decor().clone();
+    match table.get_mut(name) {
+        // 있던 값은 그 자리에서 바꾼다 — `insert` 는 키까지 새로 만들어 키 위의 주석 줄(키의 장식)을 지운다(16-m5-plan M5-15).
+        Some(item @ Item::Value(_)) => {
+            if let Some(old) = item.as_value() {
+                *next.decor_mut() = old.decor().clone();
+            }
+            *item = Item::Value(next);
+        }
+        _ => {
+            table.insert(name, Item::Value(next));
+        }
     }
-    table.insert(name, Item::Value(next));
     Ok(doc.to_string())
 }
 
@@ -607,6 +615,23 @@ mod tests {
             "schema = 1\n[ui]\nlanguage = \"ko\"\n\n[db]\ngrid_max_rows = 500 # 내 값\n"
         );
         assert!(!write_setting(dir.path(), "db.grid_max_rows", int(500)).unwrap());
+    }
+
+    /// 바꾼 키 위의 주석 줄도 남는다 — 키를 새로 만들지 않고 값만 바꾼다(16-m5-plan M5-15 — 설정 창 「MCP」 쪽에서 찾음).
+    #[test]
+    fn a_comment_line_above_the_changed_key_stays() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(SETTINGS_FILE);
+        fs::write(
+            &file,
+            "schema = 1\n[mcp]\n# 프리셋 주석\npreset = \"standard\" # 꼬리\n",
+        )
+        .unwrap();
+        assert!(write_setting(dir.path(), "mcp.preset", Some("full".into())).unwrap());
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "schema = 1\n[mcp]\n# 프리셋 주석\npreset = \"full\" # 꼬리\n"
+        );
     }
 
     #[test]
