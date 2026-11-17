@@ -36,7 +36,9 @@
 //!   나눈다(`db_query` read · `db_execute` dangerous — 결정 M5-D4).
 //! - **계획**(결정 M5-D30 — 16-m5-plan M5-12): `write` 이상 툴(과 호출마다 승인을 청하는 `read` 툴)은 입력을
 //!   `pw_core::registry::plan::Planned<P>` 로 감싸고, 부작용 전에 [`ToolPlan`](pw_core::registry::plan::ToolPlan) 을 만들어
-//!   `Planned::approve` 를 지난다. 승인 표 없이 불리면 **아무것도 바꾸지 않고** 계획을 실은 「승인 필요」 로 돌아온다 — 입력이 틀려
+//!   `Planned::approve` 를 지난다. `approve` 뒤의 부작용은 계획을 만들 때 읽은 값(해시에 넣은 값)으로 한다 — 다시 읽지 않는다.
+//!   계획의 `method` 는 그 툴의 RPC 이름, `tier` 는 선언 등급 이하여야 한다(세션이 보고 어기면 돌리지 않는다).
+//!   승인 표 없이 불리면 **아무것도 바꾸지 않고** 계획을 실은 「승인 필요」 로 돌아온다 — 입력이 틀려
 //!   계획을 만들 수 없으면 그 오류를 그대로 낸다(승인을 묻기 전에 거절). 계획에는 서버가 채운 입력 전체와 툴이 더하는 대상 값
 //!   (`PlanBuilder::target` — 고치기 전 파일 내용, DB 의 푼 대상 · 표지)을 넣는다. 해시 판정을 따로 두지 않는다. `write` 이상인데
 //!   입력이 `Planned` 가 아니면 [`Catalog::linked`] 가 시작 때 실패한다.

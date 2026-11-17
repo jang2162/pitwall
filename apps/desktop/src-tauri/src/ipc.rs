@@ -236,6 +236,10 @@ pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
         if let Some(files) = window.try_state::<FileWindows>() {
             files.forget(window.label());
         }
+        // MCP 승인의 포커스 순서에서 뺀다(pw_mcp::approval).
+        if let Some(mcp) = window.try_state::<pw_mcp::sessions::Sessions>() {
+            mcp.approvals().window_closed(window.label());
+        }
     }
     // MCP 승인의 「가장 최근에 앞에 있던 창」(pw_mcp::approval — 프로젝트 없는 요청이 갈 창). 시험 앱에는 없다.
     if let (WindowEvent::Focused(true), Some(mcp)) =

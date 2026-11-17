@@ -55,12 +55,42 @@ mod fake {
 
     // 헤드리스 Host 가 처리한다: 풀어 줄 때까지 돈다.
     fake!(Slow, "handover.slow", "handover_slow");
+
+    #[derive(
+        Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type, schemars::JsonSchema,
+    )]
+    pub struct WriteParams {}
+
+    /// 앱 Host 만 처리하는 쓰기 툴: 계획을 만들고 승인 표가 맞을 때만 돈다(16-m5-plan M5-12).
+    #[derive(Debug, Clone, Copy)]
+    pub struct Write;
+    impl Method for Write {
+        type Params = pw_core::registry::plan::Planned<WriteParams>;
+        const META: MethodMeta = MethodMeta {
+            name: "handover.write",
+            kind: MethodKind::Unary,
+            tier: Tier::Write,
+            roles: RoleSet::default_for(Tier::Write),
+            params: "",
+            output: "",
+            doc: "Fake tool `handover_write`.",
+            mcp: Some(McpTool {
+                group: Some("project"),
+                name: Some("handover_write"),
+            }),
+            file_scope: false,
+        };
+    }
+    impl UnaryMethod for Write {
+        type Result = ();
+    }
     // 앱 Host 만 처리한다: 부른 연결의 범위를 적는다.
     fake!(AppOnly, "handover.appOnly", "handover_app_only");
 }
 
 const SLOW: &str = "handover_slow";
 const APP_ONLY: &str = "handover_app_only";
+const WRITE: &str = "handover_write";
 
 /// 헤드리스 · 앱 두 Host 와 그 세션 자리. 둘은 같은 `$STATE`(같은 감사 로그 파일)를 쓴다 — 진짜 `pitwall mcp` 와 앱처럼.
 struct Fixture {
@@ -76,17 +106,28 @@ struct Fixture {
     app_up: Arc<AtomicBool>,
     dials: Arc<AtomicUsize>,
     cancel: CancellationToken,
+    /// 앱 쪽 세션 등록부 — 그 승인 허브를 창 자리에서 듣는다.
+    app_sessions: pw_mcp::sessions::Sessions,
+    /// 승인을 지나 돈 쓰기 툴 수.
+    writes: Arc<AtomicUsize>,
 }
 
 fn linked() -> Catalog {
     let fakes = [
         MethodInfo::unary::<fake::Slow>(),
         MethodInfo::unary::<fake::AppOnly>(),
+        MethodInfo::unary::<fake::Write>(),
     ];
     Catalog::from_methods(fakes.iter().chain(pw_rpc::methods())).unwrap()
 }
 
-fn services(paths: &AppPaths, host: &Arc<LocalHost>, kind: HostKind) -> Arc<Services> {
+/// 앱 · 헤드리스 세션 자리. 승인 길은 `mcp::services` 와 같은 규칙이다(`Approval::for_host` — 앱만 그 등록부의 허브).
+fn services(
+    paths: &AppPaths,
+    host: &Arc<LocalHost>,
+    kind: HostKind,
+    sessions: pw_mcp::sessions::Sessions,
+) -> Arc<Services> {
     let router = Arc::new(HostRouter::new());
     router.add_host(host.clone()).unwrap();
     Arc::new(Services {
@@ -97,10 +138,10 @@ fn services(paths: &AppPaths, host: &Arc<LocalHost>, kind: HostKind) -> Arc<Serv
         bus: host.bus().clone(),
         audit: Arc::new(AuditLog::under_state(&paths.state)),
         catalog: Arc::new(linked().routed_by(host.router())),
-        approval: Approval::Unavailable,
+        approval: Approval::for_host(kind, &sessions),
         transport: "test",
         host_kind: kind,
-        sessions: Default::default(),
+        sessions,
     })
 }
 
@@ -142,6 +183,8 @@ impl Fixture {
         );
         let scopes = Arc::new(Mutex::new(Vec::new()));
         let seen = scopes.clone();
+        let writes = Arc::new(AtomicUsize::new(0));
+        let wrote = writes.clone();
         let app_host = Arc::new(
             LocalHost::builder(crate::LOCAL_HOST_ID)
                 .config(paths.clone())
@@ -150,6 +193,24 @@ impl Fixture {
                         seen.lock().unwrap().push(ctx.scope().clone());
                         async { Ok::<(), RpcError>(()) }
                     });
+                    router.unary(
+                        fake::Write,
+                        move |_ctx, p: pw_core::registry::plan::Planned<fake::WriteParams>| {
+                            let plan = pw_core::registry::plan::ToolPlan::builder(
+                                "handover.write",
+                                pw_rpc::Tier::Write,
+                                &p.params,
+                            )
+                            .summary("write")
+                            .build();
+                            let wrote = wrote.clone();
+                            async move {
+                                p.approve(plan)?;
+                                wrote.fetch_add(1, Ordering::SeqCst);
+                                Ok::<(), RpcError>(())
+                            }
+                        },
+                    );
                 })
                 .build(),
         );
@@ -157,9 +218,17 @@ impl Fixture {
         app_host
             .watch_config(&tokio::runtime::Handle::current())
             .unwrap();
+        let app_sessions = pw_mcp::sessions::Sessions::new();
         Self {
-            headless: services(&paths, &headless_host, HostKind::Headless),
-            app: services(&paths, &app_host, HostKind::App),
+            headless: services(
+                &paths,
+                &headless_host,
+                HostKind::Headless,
+                pw_mcp::sessions::Sessions::new(),
+            ),
+            app: services(&paths, &app_host, HostKind::App, app_sessions.clone()),
+            app_sessions,
+            writes,
             _tmp: tmp,
             paths,
             started,
@@ -1014,4 +1083,63 @@ async fn a_subscription_moved_before_its_acknowledgment_is_acknowledged_first() 
         )
         .await;
     assert!(before.is_empty(), "늦은 헤드리스 수락이 갔다: {before:?}");
+}
+
+/// 넘겨 붙은 앱 세션도 승인 경로를 받는다(16-m5-plan M5-12 — 넘긴 세션이 승인 없는 세션이 되면 안 된다): 넘기기 전 헤드리스의
+/// 쓰기 툴은 없고, 넘긴 뒤의 쓰기 툴 호출은 앱의 승인 허브를 듣는 창에 요청으로 뜬다. 요청의 클라이언트는 처음 보낸
+/// `initialize` 의 이름이다. 허용하면 돈다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_handed_over_session_asks_for_approval() {
+    let f = Fixture::new();
+    let (mut client, running) = f.start();
+    client.initialize().await;
+    // 앱이 뜬다 — 다음 tools 요청이 넘긴다.
+    f.app_up.store(true, Ordering::SeqCst);
+    let (listed, _) = client
+        .until_after(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+            1,
+        )
+        .await;
+    assert!(tool_names(&listed).contains(&WRITE.to_owned()), "{listed}");
+
+    // 세션 프로젝트가 없는 세션이다 — 프로젝트 없는 요청으로 가장 최근 창에 묻는다.
+    let mut window = f.app_sessions.approvals().listen(
+        None,
+        Some("welcome"),
+        pw_mcp::approval::Connection::named("welcome"),
+    );
+    client
+        .send(json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": WRITE, "arguments": {}},
+        }))
+        .await;
+    let request = match tokio::time::timeout(Duration::from_secs(10), window.recv())
+        .await
+        .expect("넘겨 붙은 세션이 승인을 묻지 않았다")
+    {
+        Some(pw_mcp::approval::McpApprovalEvent::Open { request }) => *request,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(request.tool, WRITE);
+    assert_eq!(request.client.as_deref(), Some("handover-test 1.0"));
+    assert!(!request.cli);
+    assert_eq!(f.writes.load(Ordering::SeqCst), 0, "묻기 전에 돌았다");
+    f.app_sessions
+        .approvals()
+        .answer(
+            &pw_mcp::approval::Answerer {
+                scope: &ConnectionScope::Host,
+                connection: pw_mcp::approval::Connection::named("welcome"),
+            },
+            request.id,
+            pw_mcp::approval::McpApprovalAnswer::Once,
+        )
+        .unwrap();
+    let (answer, _) = client.until(2).await;
+    assert_eq!(answer["result"]["isError"], json!(false), "{answer}");
+    assert_eq!(f.writes.load(Ordering::SeqCst), 1);
+    client.close();
+    let _ = tokio::time::timeout(Duration::from_secs(10), running).await;
 }

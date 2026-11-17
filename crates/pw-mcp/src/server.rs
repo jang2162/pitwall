@@ -50,7 +50,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-use crate::approval::{ApprovalAsk, AskError, McpApprovalAnswer};
+use crate::approval::{Allowance, ApprovalAsk, AskError, McpApprovalAnswer};
 use crate::audit::{AuditApproval, AuditLog, Entry, Outcome, summarize};
 use crate::catalog::{Catalog, PROJECT_ID, Tool};
 use crate::client::{CallError, HostClient};
@@ -263,8 +263,8 @@ struct Inner {
     audit: std::sync::mpsc::Sender<AuditJob>,
     /// 클라이언트가 끊었거나 세션이 끝났다([`WatchEof`] · `cancel` 의 자식). 승인 대기는 이것이 취소되면 거둔다.
     closed: CancellationToken,
-    /// 「이 세션 동안 허용」: (프로젝트, 툴 이름 또는 계획의 열쇠).
-    allowed: Mutex<BTreeSet<(Option<String>, String)>>,
+    /// 「이 세션 동안 허용」: (프로젝트, 툴 이름 · 계획의 열쇠).
+    allowed: Mutex<BTreeSet<(Option<String>, Allowance)>>,
 }
 
 /// 승인을 지난 호출의 승인 방식과 계획 해시.
@@ -607,7 +607,31 @@ impl Session {
             }
             Err(CallError::Rpc { code, data, .. }) if code == i64::from(APPROVAL_REQUIRED) => {
                 match data.and_then(|d| serde_json::from_value::<ApprovalRequired>(d).ok()) {
-                    Some(required) => required.plan,
+                    Some(required) => match plan_problem(tool, &required.plan) {
+                        None => required.plan,
+                        // 툴이 규약을 어겼다(프로그래밍 오류) — 묻지 않고 돌리지 않는다.
+                        Some(problem) => {
+                            tracing::error!(
+                                tool = name,
+                                problem,
+                                "a tool sent a plan that does not fit it"
+                            );
+                            let message = format!(
+                                "`{name}` sent an approval plan that does not fit it ({problem}); this is a Pitwall bug, please report it"
+                            );
+                            self.audit(
+                                None,
+                                &name,
+                                &args,
+                                project_id,
+                                Outcome::Error,
+                                Some(message.clone()),
+                                None,
+                                started,
+                            );
+                            return Ok(failed(message, Mark::error(None)));
+                        }
+                    },
                     None => {
                         let message = format!("`{name}` sent a plan Pitwall cannot read");
                         self.audit(
@@ -678,16 +702,25 @@ impl Session {
             ));
         };
         let policy = self.policy_for(project_id, cancel).await?;
-        let dangerous = tool.tier == Tier::Dangerous || plan.tier == Tier::Dangerous;
-        if !dangerous && plan.rules.auto_approve && policy.auto_approves(tool.tier) {
+        // 선언 등급과 계획 등급 가운데 높은 쪽(계획이 선언보다 높으면 `planned` 가 이미 거절했다).
+        let tier = tool.tier.max(plan.tier);
+        let dangerous = tier == Tier::Dangerous;
+        if !dangerous && plan.rules.auto_approve && policy.auto_approves(tier) {
             return Ok(AuditApproval::Auto);
         }
+        // 기억하는 단위는 늘 그 툴의 것이다 — 같은 열쇠를 내는 다른 툴에 닿지 않는다.
         let key = if dangerous {
             None
         } else {
             match &plan.rules.remember {
-                Remember::Tool => Some(name.clone()),
-                Remember::Key { key } => Some(key.clone()),
+                Remember::Tool => Some(Allowance {
+                    tool: name.clone(),
+                    key: None,
+                }),
+                Remember::Key { key } => Some(Allowance {
+                    tool: name.clone(),
+                    key: Some(key.clone()),
+                }),
                 Remember::Never => None,
             }
         };
@@ -716,7 +749,7 @@ impl Session {
             client: self.client(),
             cli,
             tool: name.clone(),
-            tier: tool.tier,
+            tier,
             plan: plan.clone(),
             answers,
             remember: if cli { key.clone() } else { None },
@@ -802,12 +835,12 @@ impl Session {
         ))
     }
 
-    fn session_allows(&self, project_id: Option<&str>, key: &str) -> bool {
+    fn session_allows(&self, project_id: Option<&str>, key: &Allowance) -> bool {
         self.inner
             .allowed
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .contains(&(project_id.map(str::to_owned), key.to_owned()))
+            .contains(&(project_id.map(str::to_owned), key.clone()))
     }
 
     fn client(&self) -> Option<String> {
@@ -1200,6 +1233,24 @@ impl Session {
         sessions.recorded(row, entry.project_id.as_deref());
         Ok(row)
     }
+}
+
+/// 툴이 보낸 계획이 그 툴의 것이 아닌 까닭(권고 1 — 16-m5-plan M5-12 리뷰): 다른 메서드의 계획이거나 선언 등급보다 높은
+/// 등급이다(「등급은 그 툴이 도달할 수 있는 가장 높은 등급」 — `pw-mcp` 머리 주석 「툴 메서드 규약」). 맞으면 `None`.
+fn plan_problem(tool: &Tool, plan: &ToolPlan) -> Option<String> {
+    if plan.method != tool.method {
+        return Some(format!(
+            "the plan is for `{}`, not `{}`",
+            plan.method, tool.method
+        ));
+    }
+    (plan.tier > tool.tier).then(|| {
+        format!(
+            "the plan tier `{}` is above the declared tier `{}`",
+            policy::tier_name(plan.tier),
+            policy::tier_name(tool.tier)
+        )
+    })
 }
 
 /// 툴이 결과(또는 오류 `data`) 최상위에 실은 감사 상세 글(`audit` — 「툴 메서드 규약」). 감사 행의 상세 칸으로 간다(길이는

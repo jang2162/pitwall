@@ -43,6 +43,9 @@ pub struct ToolParams {
     pub file: Option<String>,
     #[serde(default)]
     pub tag: String,
+    /// 승인을 청하는 조회 툴이 계획에 싣는 기억 열쇠(`Remember::Key`). 없으면 `tag`.
+    #[serde(default)]
+    pub key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
@@ -103,6 +106,46 @@ rpc_method! {
         result: ToolResult,
         tier: Read,
         mcp: { group: "project", name: "fake_open" },
+    }
+
+    /// `fake_open` 과 같은 열쇠를 내는 다른 조회 툴(허용이 툴을 넘지 않는지 본다).
+    pub FakeOpenOther: "approvaltest.openOther" {
+        params: Planned<ToolParams>,
+        result: ToolResult,
+        tier: Read,
+        mcp: { group: "project", name: "fake_open_other" },
+    }
+
+    /// 규약을 어긴 쓰기 툴: 승인 표 없이 돈다(첫 호출에 부작용).
+    pub FakeRogue: "approvaltest.rogue" {
+        params: Planned<ToolParams>,
+        result: ToolResult,
+        tier: Write,
+        mcp: { group: "project", name: "fake_rogue" },
+    }
+
+    /// 규약을 어긴 쓰기 툴: 선언(`write`)보다 높은 등급(`tag` — `exec` · `dangerous`)의 계획을 낸다.
+    pub FakeOverTier: "approvaltest.overTier" {
+        params: Planned<ToolParams>,
+        result: ToolResult,
+        tier: Write,
+        mcp: { group: "project", name: "fake_over_tier" },
+    }
+
+    /// 규약을 어긴 쓰기 툴: 다른 메서드(`approvaltest.write`)의 계획을 낸다.
+    pub FakeWrongMethod: "approvaltest.wrongMethod" {
+        params: Planned<ToolParams>,
+        result: ToolResult,
+        tier: Write,
+        mcp: { group: "project", name: "fake_wrong_method" },
+    }
+
+    /// `dangerous` 로 선언했지만 이 호출의 계획은 `write` 다(입력에 따라 등급이 낮은 호출).
+    pub FakeDangerousLow: "approvaltest.dangerousLow" {
+        params: Planned<ToolParams>,
+        result: ToolResult,
+        tier: Dangerous,
+        mcp: { group: "project", name: "fake_dangerous_low" },
     }
 }
 
@@ -194,30 +237,81 @@ fn register_tools(router: &mut pw_rpc::Router, probe: &Probe) {
             })
         }
     });
-    let open = probe.clone();
-    router.unary(FakeOpen, move |_ctx, p: Planned<ToolParams>| {
-        let probe = open.clone();
-        async move {
-            if !p.params.tag.starts_with("ask") {
-                probe.runs.fetch_add(1, Ordering::SeqCst);
-                return Ok(ToolResult {
-                    audit: "no approval".into(),
-                });
+    for method in ["approvaltest.open", "approvaltest.openOther"] {
+        let probe = probe.clone();
+        let handler = move |_ctx, p: Planned<ToolParams>| {
+            let probe = probe.clone();
+            async move {
+                if !p.params.tag.starts_with("ask") {
+                    probe.runs.fetch_add(1, Ordering::SeqCst);
+                    return Ok(ToolResult {
+                        audit: "no approval".into(),
+                    });
+                }
+                let rules = PlanRules {
+                    auto_approve: false,
+                    remember: Remember::Key {
+                        key: p.params.key.clone().unwrap_or_else(|| p.params.tag.clone()),
+                    },
+                };
+                let plan = plan_of(method, Tier::Read, rules, &p.params);
+                execute(probe, plan, p).await
             }
-            let rules = PlanRules {
-                auto_approve: false,
-                remember: Remember::Key {
-                    key: format!("connection:{}", p.params.tag),
-                },
-            };
-            let plan = plan_of("approvaltest.open", Tier::Read, rules, &p.params);
-            execute(probe, plan, p).await
+        };
+        match method {
+            "approvaltest.open" => router.unary(FakeOpen, handler),
+            _ => router.unary(FakeOpenOther, handler),
+        };
+    }
+    let rogue = probe.clone();
+    router.unary(FakeRogue, move |_ctx, p: Planned<ToolParams>| {
+        let probe = rogue.clone();
+        async move {
+            probe.runs.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, RpcError>(ToolResult {
+                audit: format!("secret result {}", p.params.tag),
+            })
         }
+    });
+    let over = probe.clone();
+    router.unary(FakeOverTier, move |_ctx, p: Planned<ToolParams>| {
+        let tier = if p.params.tag == "dangerous" {
+            Tier::Dangerous
+        } else {
+            Tier::Exec
+        };
+        let plan = plan_of(
+            "approvaltest.overTier",
+            tier,
+            PlanRules::default(),
+            &p.params,
+        );
+        execute(over.clone(), plan, p)
+    });
+    let wrong = probe.clone();
+    router.unary(FakeWrongMethod, move |_ctx, p: Planned<ToolParams>| {
+        let plan = plan_of(
+            "approvaltest.write",
+            Tier::Write,
+            PlanRules::default(),
+            &p.params,
+        );
+        execute(wrong.clone(), plan, p)
+    });
+    let low = probe.clone();
+    router.unary(FakeDangerousLow, move |_ctx, p: Planned<ToolParams>| {
+        let plan = plan_of(
+            "approvaltest.dangerousLow",
+            Tier::Write,
+            PlanRules::default(),
+            &p.params,
+        );
+        execute(low.clone(), plan, p)
     });
 }
 
 /// `[mcp.tools]` 의 공통 줄 — `dangerous` 툴은 프리셋 `standard` 에 없다.
-const TOOLS: &str = "[mcp.tools]\nfake_dangerous = true\n";
+const TOOLS: &str = "[mcp.tools]\nfake_dangerous = true\nfake_dangerous_low = true\n";
 
 struct Fixture {
     _tmp: tempfile::TempDir,
@@ -1487,4 +1581,135 @@ async fn the_approval_required_error_never_reaches_the_agent() {
         !body.contains("sha256:") && !body.contains("\"plan\""),
         "{body}"
     );
+}
+
+/// 허용은 툴을 넘지 않는다: 같은 열쇠를 내는 다른 툴, 다른 툴의 이름과 같은 열쇠를 내는 툴 모두 다시 묻는다(세션 허용 · CLI 허용).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_allowance_never_reaches_another_tool() {
+    let f = Fixture::new();
+    let mut window = f.window(&f.alpha);
+    for client in ["agent", pw_mcp::server::CLI_CLIENT] {
+        let third = if client == "agent" {
+            McpApprovalAnswer::Session
+        } else {
+            McpApprovalAnswer::Window
+        };
+        let agent = f.agent(client, &f.work("alpha")).await;
+        // `fake_open` 의 열쇠 `k` 를 허용한다.
+        let call = agent.spawn("fake_open", json!({"tag": "ask", "key": "k"}));
+        let request = window.opened().await;
+        window.answer(request.id, third).unwrap();
+        assert_eq!(mark(&within(call).await.unwrap()), Mark::ok());
+        window.closed(request.id).await;
+        // CLI 는 호출마다 새 세션이다 — 다음 호출은 다른 세션에서.
+        let next = f.agent(client, &f.work("alpha")).await;
+        let same = if client == "agent" { &agent } else { &next };
+        assert_eq!(
+            mark(
+                &same
+                    .call("fake_open", json!({"tag": "ask", "key": "k"}))
+                    .await
+            ),
+            Mark::ok(),
+            "{client}: 같은 툴 · 같은 열쇠는 묻지 않는다"
+        );
+        assert!(window.quiet());
+        // 같은 열쇠를 내는 다른 툴: 묻는다.
+        let call = same.spawn("fake_open_other", json!({"tag": "ask", "key": "k"}));
+        let asked = window.opened().await;
+        assert_eq!(asked.tool, "fake_open_other", "{client}");
+        window.answer(asked.id, McpApprovalAnswer::Deny).unwrap();
+        within(call).await.unwrap();
+        window.closed(asked.id).await;
+        // `fake_write`(열쇠 없는 툴 단위)를 허용해도, 그 이름을 열쇠로 내는 다른 툴은 묻는다.
+        let call = same.spawn("fake_write", json!({"tag": client}));
+        let asked = window.opened().await;
+        window.answer(asked.id, third).unwrap();
+        assert_eq!(mark(&within(call).await.unwrap()), Mark::ok());
+        window.closed(asked.id).await;
+        let call = same.spawn("fake_open", json!({"tag": "ask", "key": "fake_write"}));
+        let asked = window.opened().await;
+        assert_eq!(asked.tool, "fake_open", "{client}");
+        window.answer(asked.id, McpApprovalAnswer::Deny).unwrap();
+        within(call).await.unwrap();
+        window.closed(asked.id).await;
+    }
+}
+
+/// CLI 요청에 [이번만 허용] 으로 답하면 기억하지 않는다 — 다른 CLI 세션의 같은 툴은 다시 묻는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn allowing_a_cli_call_once_is_not_remembered() {
+    let f = Fixture::new();
+    let mut window = f.window(&f.alpha);
+    let first = f.agent(pw_mcp::server::CLI_CLIENT, &f.work("alpha")).await;
+    let call = first.spawn("fake_write", json!({"tag": "1"}));
+    let request = window.opened().await;
+    window.answer(request.id, McpApprovalAnswer::Once).unwrap();
+    assert_eq!(mark(&within(call).await.unwrap()), Mark::ok());
+    window.closed(request.id).await;
+    let second = f.agent(pw_mcp::server::CLI_CLIENT, &f.work("alpha")).await;
+    let call = second.spawn("fake_write", json!({"tag": "2"}));
+    let asked = window.opened().await;
+    window.answer(asked.id, McpApprovalAnswer::Deny).unwrap();
+    assert_eq!(
+        mark(&within(call).await.unwrap()),
+        Mark::denied(Reason::ApprovalDenied)
+    );
+}
+
+/// 계획을 청하는 쓰기 툴이 승인 표 없이 돌았다(규약 위반 — 첫 호출의 부작용): 결과를 에이전트에게 주지 않고 「Pitwall bug」
+/// 오류로 끝내고 감사 행은 `error` 다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_planned_tool_that_runs_without_a_ticket_is_reported_as_a_bug() {
+    let f = Fixture::with_global("[mcp]\nauto_approve = [\"write\"]\n");
+    let _window = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let result = agent.call("fake_rogue", json!({"tag": "x"})).await;
+    assert_eq!(mark(&result), Mark::error(None));
+    assert!(text(&result).contains("Pitwall bug"), "{}", text(&result));
+    assert!(
+        !serde_json::to_string(&result)
+            .unwrap()
+            .contains("secret result"),
+        "툴의 결과가 나갔다"
+    );
+    let rows = f.rows(1);
+    assert_eq!(
+        (rows[0].tool.as_str(), rows[0].outcome.as_str()),
+        ("fake_rogue", "error")
+    );
+    assert!(rows[0].detail.as_deref().unwrap().contains("Pitwall bug"));
+}
+
+/// 세션은 툴의 계획을 검증한다: 다른 메서드의 계획이나 선언보다 높은 등급의 계획은 묻지도 돌리지도 않고 「Pitwall bug」 오류다
+/// (`auto_approve` 에 선언 등급이 있어도). 계획 등급이 선언보다 낮으면 높은 쪽(선언)으로 판정한다 — `dangerous` 로 선언한 툴의
+/// `write` 계획도 매번 묻고 셋째 답이 없다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_session_checks_the_plan_against_the_tool() {
+    let f = Fixture::with_global("[mcp]\nauto_approve = [\"write\", \"exec\"]\n");
+    let mut window = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    for (tool, tag) in [
+        ("fake_over_tier", "exec"),
+        ("fake_over_tier", "dangerous"),
+        ("fake_wrong_method", "x"),
+    ] {
+        let result = agent.call(tool, json!({"tag": tag})).await;
+        assert_eq!(mark(&result), Mark::error(None), "{tool} {tag}");
+        assert!(text(&result).contains("Pitwall bug"), "{}", text(&result));
+    }
+    assert!(window.quiet(), "규약을 어긴 계획으로 물었다");
+    assert_eq!(f.runs(), 0);
+
+    let call = agent.spawn("fake_dangerous_low", json!({"tag": "x"}));
+    let request = window.opened().await;
+    assert_eq!(request.tier, Tier::Dangerous);
+    assert_eq!(request.plan.tier, Tier::Write);
+    assert_eq!(
+        request.answers,
+        [McpApprovalAnswer::Deny, McpApprovalAnswer::Once]
+    );
+    window.answer(request.id, McpApprovalAnswer::Once).unwrap();
+    assert_eq!(mark(&within(call).await.unwrap()), Mark::ok());
+    assert_eq!(f.runs(), 1);
 }

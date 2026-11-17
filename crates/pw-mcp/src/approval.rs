@@ -12,7 +12,10 @@
 //!   — 앱이 창 포커스를 알린다. 포커스를 모르면 가장 최근에 듣기 시작한 창). 요청에 「이 프로젝트의 것이 아니다」 표지
 //!   (`notThisProject`)가 실린다. 그 창의 연결만 답한다. 그 창이 떠나면 다음 창으로 옮기고, 창이 하나도 없으면 거절한다.
 //! - **CLI 허용**(결정 M5-D5): CLI 요청에 [`McpApprovalAnswer::Window`] 로 답하면 「그 프로젝트 창이 열려 있는 동안 CLI 로 온
-//!   호출 전부」 에 그 툴(또는 그 열쇠)을 묻지 않는다([`Approvals::cli_allowed`]). 그 프로젝트를 듣는 창이 모두 떠나면 사라진다.
+//!   호출 전부」 에 그 툴(계획이 열쇠를 정하면 그 툴의 그 열쇠 — [`Allowance`])을 묻지 않는다([`Approvals::cli_allowed`]). 그
+//!   프로젝트를 듣는 창이 모두 떠나면 사라진다.
+//! - **프로젝트 없는 요청의 후보는 창의 연결뿐이다** — 창 식별자([`Approvals::listen`] 의 `window`)가 없는 연결(창 없는 Host
+//!   범위 연결 등)에는 보내지 않는다. 창이 사라지면 앱이 [`Approvals::window_closed`] 로 포커스 순서에서 뺀다.
 //! - 한 창의 대기는 id 순서로 보인다(화면이 차례로 띄운다).
 //! - 앱이 끝날 때 [`Approvals::shutdown`] 이 대기를 모두 거둔다.
 //!
@@ -40,7 +43,7 @@ pub enum McpApprovalAnswer {
     Deny,
     /// [이번만 허용].
     Once,
-    /// [이 세션 동안 허용] — 그 세션 · 그 프로젝트 · 그 툴(계획이 열쇠를 정하면 그 열쇠).
+    /// [이 세션 동안 허용] — 그 세션 · 그 프로젝트 · 그 툴(계획이 열쇠를 정하면 그 툴의 그 열쇠).
     Session,
     /// CLI 요청의 [이 프로젝트 창이 열려 있는 동안 CLI 허용](결정 M5-D5).
     Window,
@@ -99,6 +102,14 @@ pub enum McpApprovalEvent {
     },
 }
 
+/// 허용이 기억하는 단위(프로젝트를 뺀 부분): 툴 이름과 계획이 정한 열쇠(`Remember::Key` — 없으면 그 툴 전부). 툴 이름이 늘
+/// 들어 있어 한 툴의 허용이 같은 열쇠를 내는 다른 툴에 닿지 않는다.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Allowance {
+    pub tool: String,
+    pub key: Option<String>,
+}
+
 /// 세션이 청하는 것. [`Approvals::ask`].
 #[derive(Debug, Clone)]
 pub struct ApprovalAsk {
@@ -110,8 +121,8 @@ pub struct ApprovalAsk {
     pub tier: Tier,
     pub plan: ToolPlan,
     pub answers: Vec<McpApprovalAnswer>,
-    /// [`McpApprovalAnswer::Window`] 로 답하면 기억할 열쇠(툴 이름 또는 계획의 열쇠).
-    pub remember: Option<String>,
+    /// [`McpApprovalAnswer::Window`] 로 답하면 기억할 것.
+    pub remember: Option<Allowance>,
     pub timeout: Duration,
 }
 
@@ -185,7 +196,7 @@ struct State {
     focus: HashMap<String, u64>,
     pending: BTreeMap<u64, Pending>,
     /// CLI 허용: (프로젝트, 열쇠).
-    cli: BTreeSet<(String, String)>,
+    cli: BTreeSet<(String, Allowance)>,
     closed: bool,
 }
 
@@ -207,7 +218,7 @@ enum Route {
 struct Pending {
     request: McpApprovalRequest,
     route: Route,
-    remember: Option<String>,
+    remember: Option<Allowance>,
     reply: Option<oneshot::Sender<Result<McpApprovalAnswer, AskError>>>,
 }
 
@@ -221,9 +232,11 @@ impl State {
             .any(|(_, l)| l.project.as_deref() == Some(project))
     }
 
-    /// 프로젝트 없는 요청을 보일 창: 가장 최근에 앞에 온 창의 가장 최근 듣기, 포커스를 모르면 가장 최근 듣기.
+    /// 프로젝트 없는 요청을 보일 창: 가장 최근에 앞에 온 창의 가장 최근 듣기, 포커스를 모르면 가장 최근 듣기. 창 식별자가 없는
+    /// 연결은 후보가 아니다.
     fn front(&self) -> Option<u64> {
         self.live()
+            .filter(|(_, l)| l.window.is_some())
             .max_by_key(|(id, l)| {
                 let focus = l
                     .window
@@ -312,10 +325,10 @@ impl Approvals {
     }
 
     /// 그 프로젝트 창이 열려 있는 동안의 CLI 허용이 있는가.
-    pub fn cli_allowed(&self, project: &str, key: &str) -> bool {
+    pub fn cli_allowed(&self, project: &str, allowance: &Allowance) -> bool {
         self.lock()
             .cli
-            .contains(&(project.to_owned(), key.to_owned()))
+            .contains(&(project.to_owned(), allowance.clone()))
     }
 
     /// 대기 중인 요청 수.
@@ -412,8 +425,8 @@ impl Approvals {
             return Err(AnswerError::NotOffered);
         }
         let remember = match (&pending.route, &pending.remember, answer) {
-            (Route::Project(project), Some(key), McpApprovalAnswer::Window) => {
-                Some((project.clone(), key.clone()))
+            (Route::Project(project), Some(allowance), McpApprovalAnswer::Window) => {
+                Some((project.clone(), allowance.clone()))
             }
             _ => None,
         };
@@ -587,9 +600,23 @@ mod tests {
                     McpApprovalAnswer::Session
                 },
             ],
-            remember: Some("fake_write".into()),
+            remember: Some(fake_write()),
             timeout: Duration::from_secs(300),
         }
+    }
+
+    fn fake_write() -> Allowance {
+        Allowance {
+            tool: "fake_write".into(),
+            key: None,
+        }
+    }
+
+    /// 실패가 멈춤이 아니라 실패로 나오게 시한을 둔다.
+    async fn within<F: Future>(f: F) -> F::Output {
+        tokio::time::timeout(Duration::from_secs(10), f)
+            .await
+            .expect("timed out")
     }
 
     fn conn(n: u64) -> Connection {
@@ -597,7 +624,7 @@ mod tests {
     }
 
     async fn opened(listener: &mut Listener) -> McpApprovalRequest {
-        match listener.recv().await {
+        match within(listener.recv()).await {
             Some(McpApprovalEvent::Open { request }) => *request,
             other => panic!("{other:?}"),
         }
@@ -607,14 +634,14 @@ mod tests {
     async fn no_window_of_the_project_is_an_immediate_refusal() {
         let approvals = Approvals::default();
         assert_eq!(
-            approvals.ask(ask(Some("p"), false)).await,
+            within(approvals.ask(ask(Some("p"), false))).await,
             Err(AskError::NoWindow)
         );
         // 다른 프로젝트의 창 · 프로젝트 없는 창은 그 프로젝트의 요청을 받지 않는다.
         let _other = approvals.listen(Some("q"), Some("w-q"), conn(1));
         let _welcome = approvals.listen(None, Some("welcome"), conn(2));
         assert_eq!(
-            approvals.ask(ask(Some("p"), false)).await,
+            within(approvals.ask(ask(Some("p"), false))).await,
             Err(AskError::NoWindow)
         );
         // 프로젝트 없는 요청은 창이 하나도 없으면 거절이다.
@@ -662,9 +689,12 @@ mod tests {
         approvals
             .answer(&by, request.id, McpApprovalAnswer::Session)
             .unwrap();
-        assert_eq!(asking.await.unwrap(), Ok(McpApprovalAnswer::Session));
         assert_eq!(
-            window.recv().await,
+            within(asking).await.unwrap(),
+            Ok(McpApprovalAnswer::Session)
+        );
+        assert_eq!(
+            within(window.recv()).await,
             Some(McpApprovalEvent::Closed { id: request.id })
         );
         assert_eq!(
@@ -689,9 +719,9 @@ mod tests {
         tokio::time::advance(Duration::from_secs(299)).await;
         assert_eq!(approvals.pending(), 1);
         tokio::time::advance(Duration::from_secs(2)).await;
-        assert_eq!(asking.await.unwrap(), Err(AskError::TimedOut));
+        assert_eq!(within(asking).await.unwrap(), Err(AskError::TimedOut));
         assert_eq!(
-            window.recv().await,
+            within(window.recv()).await,
             Some(McpApprovalEvent::Closed { id: request.id })
         );
     }
@@ -709,7 +739,7 @@ mod tests {
         asking.abort();
         let _ = asking.await;
         assert_eq!(
-            window.recv().await,
+            within(window.recv()).await,
             Some(McpApprovalEvent::Closed { id: request.id })
         );
         let mine = ConnectionScope::Project("p".into());
@@ -725,7 +755,7 @@ mod tests {
             Err(AnswerError::NotFound)
         );
         assert!(
-            !approvals.cli_allowed("p", "fake_write"),
+            !approvals.cli_allowed("p", &fake_write()),
             "거둔 요청의 CLI 허용을 기억했다"
         );
     }
@@ -751,18 +781,24 @@ mod tests {
                 McpApprovalAnswer::Window,
             )
             .unwrap();
-        assert_eq!(asking.await.unwrap(), Ok(McpApprovalAnswer::Window));
-        assert!(approvals.cli_allowed("p", "fake_write"));
-        assert!(!approvals.cli_allowed("p", "other_tool"));
-        assert!(!approvals.cli_allowed("q", "fake_write"));
+        assert_eq!(within(asking).await.unwrap(), Ok(McpApprovalAnswer::Window));
+        assert!(approvals.cli_allowed("p", &fake_write()));
+        assert!(!approvals.cli_allowed(
+            "p",
+            &Allowance {
+                tool: "other_tool".into(),
+                key: None
+            }
+        ));
+        assert!(!approvals.cli_allowed("q", &fake_write()));
         drop(first);
         assert!(
-            approvals.cli_allowed("p", "fake_write"),
+            approvals.cli_allowed("p", &fake_write()),
             "아직 그 프로젝트 창이 듣는다"
         );
         drop(second);
         assert!(
-            !approvals.cli_allowed("p", "fake_write"),
+            !approvals.cli_allowed("p", &fake_write()),
             "창을 닫으면 사라진다"
         );
     }
@@ -779,7 +815,7 @@ mod tests {
             tokio::task::yield_now().await;
         }
         drop(window);
-        assert_eq!(asking.await.unwrap(), Err(AskError::WindowLeft));
+        assert_eq!(within(asking).await.unwrap(), Err(AskError::WindowLeft));
     }
 
     /// 프로젝트 없는 요청은 가장 최근에 앞에 온 창 하나에 「이 프로젝트의 것이 아니다」 로 보이고 그 창의 연결만 답한다.
@@ -825,14 +861,14 @@ mod tests {
                 McpApprovalAnswer::Deny,
             )
             .unwrap();
-        assert_eq!(asking.await.unwrap(), Ok(McpApprovalAnswer::Deny));
+        assert_eq!(within(asking).await.unwrap(), Ok(McpApprovalAnswer::Deny));
     }
 
     #[tokio::test]
     async fn without_focus_the_latest_listener_gets_the_projectless_request() {
         let approvals = Approvals::default();
-        let mut older = approvals.listen(None, None, conn(1));
-        let mut newer = approvals.listen(Some("p"), None, conn(2));
+        let mut older = approvals.listen(None, Some("w-old"), conn(1));
+        let mut newer = approvals.listen(Some("p"), Some("w-new"), conn(2));
         let asking = {
             let approvals = approvals.clone();
             tokio::spawn(async move { approvals.ask(ask(None, false)).await })
@@ -841,7 +877,7 @@ mod tests {
         assert!(older.try_recv().is_none());
         drop(newer);
         drop(older);
-        assert_eq!(asking.await.unwrap(), Err(AskError::WindowLeft));
+        assert_eq!(within(asking).await.unwrap(), Err(AskError::WindowLeft));
     }
 
     #[tokio::test]
@@ -864,11 +900,93 @@ mod tests {
                 approvals.shutdown_and_wait(Instant::now() + Duration::from_secs(5))
             })
         };
-        assert_eq!(asking.await.unwrap(), Err(AskError::Shutdown));
+        assert_eq!(within(asking).await.unwrap(), Err(AskError::Shutdown));
         assert!(waiter.join().unwrap());
         assert_eq!(
-            approvals.ask(ask(Some("p"), false)).await,
+            within(approvals.ask(ask(Some("p"), false))).await,
             Err(AskError::Shutdown)
         );
+    }
+
+    /// 창 식별자가 없는 연결(창 없는 Host 범위 연결 등)은 프로젝트 없는 요청의 후보가 아니다.
+    #[tokio::test]
+    async fn a_connection_without_a_window_never_gets_a_projectless_request() {
+        let approvals = Approvals::default();
+        let mut windowless = approvals.listen(None, None, conn(1));
+        assert_eq!(
+            within(approvals.ask(ask(None, false))).await,
+            Err(AskError::NoWindow),
+            "창이 없는 연결만 있다"
+        );
+        let mut window = approvals.listen(Some("p"), Some("w-p"), conn(2));
+        let later = approvals.listen(None, None, conn(3));
+        let asking = {
+            let approvals = approvals.clone();
+            tokio::spawn(async move { approvals.ask(ask(None, false)).await })
+        };
+        let request = opened(&mut window).await;
+        assert!(request.not_this_project);
+        assert!(windowless.try_recv().is_none());
+        drop(later);
+        // 창이 떠나면 창 없는 연결로 옮기지 않고 거절한다.
+        drop(window);
+        assert_eq!(within(asking).await.unwrap(), Err(AskError::WindowLeft));
+        assert!(windowless.try_recv().is_none());
+    }
+
+    /// 사라진 창은 포커스 순서에서 빠진다 — 같은 식별자의 듣기가 남아 있어도 앞에 온 순번을 잃는다.
+    #[tokio::test]
+    async fn a_closed_window_leaves_the_focus_order() {
+        let approvals = Approvals::default();
+        let mut a = approvals.listen(None, Some("w-a"), conn(1));
+        let mut b = approvals.listen(None, Some("w-b"), conn(2));
+        approvals.focused("w-b");
+        approvals.focused("w-a");
+        approvals.window_closed("w-a");
+        let asking = {
+            let approvals = approvals.clone();
+            tokio::spawn(async move { approvals.ask(ask(None, false)).await })
+        };
+        let request = opened(&mut b).await;
+        assert!(a.try_recv().is_none(), "닫힌 창의 순번이 남았다");
+        drop(b);
+        let moved = opened(&mut a).await;
+        assert_eq!(moved.id, request.id);
+        drop(a);
+        assert_eq!(within(asking).await.unwrap(), Err(AskError::WindowLeft));
+    }
+
+    /// [이번만 허용] · [거절] 은 CLI 허용으로 기억하지 않는다 — [창이 열려 있는 동안 CLI 허용] 만.
+    #[tokio::test]
+    async fn only_the_window_answer_is_remembered_for_the_cli() {
+        let approvals = Approvals::default();
+        let mut window = approvals.listen(Some("p"), Some("w-p"), conn(1));
+        let scope = ConnectionScope::Project("p".into());
+        for answer in [McpApprovalAnswer::Once, McpApprovalAnswer::Deny] {
+            let asking = {
+                let approvals = approvals.clone();
+                tokio::spawn(async move { approvals.ask(ask(Some("p"), true)).await })
+            };
+            let request = opened(&mut window).await;
+            approvals
+                .answer(
+                    &Answerer {
+                        scope: &scope,
+                        connection: conn(1),
+                    },
+                    request.id,
+                    answer,
+                )
+                .unwrap();
+            assert_eq!(within(asking).await.unwrap(), Ok(answer));
+            assert_eq!(
+                within(window.recv()).await,
+                Some(McpApprovalEvent::Closed { id: request.id })
+            );
+            assert!(
+                !approvals.cli_allowed("p", &fake_write()),
+                "{answer:?} 를 CLI 허용으로 기억했다"
+            );
+        }
     }
 }
