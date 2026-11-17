@@ -58,6 +58,8 @@ beforeAll(() => {
 });
 
 const T = dbConnectionStrings(bundledTranslator("ko"));
+const NO_MARKS = { production: false, readOnly: false };
+const PRODUCTION = { production: true, readOnly: false };
 const SECRET = "pw-dialog-secret-5e1b77";
 const ALL_SSL: SslMode[] = ["disable", "allow", "prefer", "require", "verify-ca", "verify-full"];
 
@@ -143,6 +145,7 @@ beforeEach(() => {
     "db.secret.set": () => null,
     "db.secret.clear": () => null,
     "db.connection.test": () => ({ version: "17.6", tls: "verified" }),
+    "db.connection.marks": () => ({ remembered: NO_MARKS, configured: NO_MARKS }),
   };
   for (const level of ["log", "info", "warn", "error", "debug"] as const) {
     vi.spyOn(console, level).mockImplementation((...args: unknown[]) => {
@@ -913,6 +916,113 @@ describe("the agent's password request (16-m5-plan M5-17 ②)", () => {
       expect(S.title("Main DB")).toContain("Main DB");
       expect(S.body).not.toMatch(/^mcp-/);
       expect(S.action).not.toMatch(/^mcp-/);
+    }
+  });
+});
+
+describe("the agent mark memory (decision M5-D37 — M5-17b)", () => {
+  const prod: DbConnectionConfig = { name: "prod", driver: "postgres", host: "db.prod.example" };
+
+  it("shows nothing for a new connection or a target with no remembered mark", async () => {
+    await open();
+    expect(calledWith("db.connection.marks")).toHaveLength(0);
+    expect(testid("db-conn-marks")).toBeNull();
+    act(() => root?.unmount());
+    answers["db.connection.list"] = () => list({ connections: [entryOf("prod", prod)] });
+    await open("prod");
+    expect(calledWith("db.connection.marks")[0]!.params).toEqual({
+      projectId: "p1",
+      worktree: "/work/wt",
+      connectionId: "prod",
+    });
+    expect(testid("db-conn-marks")).toBeNull();
+  });
+
+  it("forgets a remembered mark only after the confirmation, then says what the agents follow", async () => {
+    answers["db.connection.list"] = () => list({ connections: [entryOf("prod", prod)] });
+    let remembered = PRODUCTION;
+    answers["db.connection.marks"] = () => ({ remembered, configured: NO_MARKS });
+    answers["db.connection.forgetMarks"] = () => {
+      const before = remembered;
+      remembered = NO_MARKS;
+      return { remembered: before, configured: NO_MARKS };
+    };
+    await open("prod");
+    await tab("options");
+    expect(testid("db-conn-marks")?.dataset.remembered).toBe("production");
+    expect(testid("db-conn-marks")?.textContent).toContain(T.marks.remembered("production"));
+    expect(testid("db-conn-marks-configured")).toBeNull();
+
+    // 취소하면 부르지 않는다. 확인 다이얼로그의 처음 포커스는 [취소] 다.
+    await click(testid("db-conn-marks-forget"));
+    expect(testid("db-conn-marks-confirm")?.textContent).toContain(T.marks.confirmTitle("prod"));
+    expect(document.activeElement).toBe(testid("db-conn-marks-cancel"));
+    await click(testid("db-conn-marks-cancel"));
+    expect(testid("db-conn-marks-confirm")).toBeNull();
+    expect(calledWith("db.connection.forgetMarks")).toHaveLength(0);
+
+    await click(testid("db-conn-marks-forget"));
+    await click(testid("db-conn-marks-confirm-forget"));
+    await act(() => new Promise((r) => setTimeout(r, 0)));
+    expect(calledWith("db.connection.forgetMarks")[0]!.params).toEqual({
+      projectId: "p1",
+      worktree: "/work/wt",
+      connectionId: "prod",
+    });
+    expect(testid("db-conn-marks")?.dataset.remembered).toBe("none");
+    expect(testid("db-conn-marks-note")?.dataset.note).toBe("forgotten");
+    expect(testid("db-conn-marks-forget")).toBeNull();
+    // 연결 설정은 쓰지 않는다.
+    expect(calledWith("db.connection.upsert")).toHaveLength(0);
+  });
+
+  it("says that a mark the saved settings still carry is remembered again", async () => {
+    answers["db.connection.list"] = () =>
+      list({ connections: [entryOf("prod", { ...prod, production: true })] });
+    answers["db.connection.marks"] = () => ({ remembered: PRODUCTION, configured: PRODUCTION });
+    answers["db.connection.forgetMarks"] = () => ({
+      remembered: PRODUCTION,
+      configured: PRODUCTION,
+    });
+    await open("prod");
+    await tab("options");
+    expect(testid("db-conn-marks-configured")?.textContent).toBe(T.marks.configured);
+    await click(testid("db-conn-marks-forget"));
+    await click(testid("db-conn-marks-confirm-forget"));
+    await act(() => new Promise((r) => setTimeout(r, 0)));
+    expect(testid("db-conn-marks-note")?.dataset.note).toBe("again");
+    expect(testid("db-conn-marks")?.dataset.remembered).toBe("production");
+  });
+
+  it("shows the host's refusal when the mark cannot be forgotten", async () => {
+    answers["db.connection.list"] = () => list({ connections: [entryOf("prod", prod)] });
+    answers["db.connection.marks"] = () => ({ remembered: PRODUCTION, configured: NO_MARKS });
+    answers["db.connection.forgetMarks"] = () =>
+      new RpcCallError({
+        code: ERROR_CODE.STORAGE_UNAVAILABLE,
+        message: "storage unavailable",
+        data: "state.db is read-only",
+      });
+    await open("prod");
+    await click(testid("db-conn-marks-forget"));
+    await click(testid("db-conn-marks-confirm-forget"));
+    await act(() => new Promise((r) => setTimeout(r, 0)));
+    const note = testid("db-conn-marks-note");
+    expect(note?.dataset.note).toBe("failed");
+    expect(note?.textContent).toBe(T.marks.failed("state.db is read-only"));
+    expect(testid("db-conn-marks")?.dataset.remembered).toBe("production");
+  });
+
+  it("has its strings in both languages", async () => {
+    for (const lang of ["ko", "en"] as const) {
+      const S = dbConnectionStrings(bundledTranslator(lang)).marks;
+      for (const kind of ["production", "readOnly", "both"] as const)
+        expect(S.remembered(kind)).not.toMatch(/^db-conn-/);
+      expect(S.confirmTitle("Main DB")).toContain("Main DB");
+      for (const text of [S.title, S.configured, S.forget, S.confirmBody, S.confirm, S.forgotten])
+        expect(text).not.toMatch(/^db-conn-/);
+      expect(S.forgottenAgain).not.toMatch(/^db-conn-/);
+      expect(S.failed("x")).toContain("x");
     }
   });
 });

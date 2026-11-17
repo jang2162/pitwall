@@ -145,3 +145,20 @@ db-conn-test-approval = Something must be confirmed before connecting ({ $kind -
 db-conn-save-failed = Could not save: { $message }
 db-conn-secret-failed = The settings were saved but the password was not: { $message }
 db-conn-saved = Saved the connection “{ $name }”
+
+## Agent mark memory (16-m5-plan decision M5-D37 — M5-17b). A target that was once production or read-only stays so across app runs.
+
+db-conn-marks-title = Agent mark memory
+db-conn-marks-remembered = { $marks ->
+    [both] Pitwall remembers this connection's target as production and read-only for agents — even after the mark leaves the settings or the app restarts
+    [readOnly] Pitwall remembers this connection's target as read-only for agents — even after the mark leaves the settings or the app restarts
+   *[production] Pitwall remembers this connection's target as production for agents — even after the mark leaves the settings or the app restarts
+}
+db-conn-marks-configured = The saved connection settings still mark this target, so forgetting it is undone right away — turn the mark off in Options and save first
+db-conn-marks-forget = Forget the remembered mark…
+db-conn-marks-confirm-title = Forget the remembered mark of “{ $name }”'s target?
+db-conn-marks-confirm-body = Agents will then treat this target (and any other connection to the same server) only as the connection settings say — without a mark in the settings, one “Open this connection” approval can open it. Only forget it when the target is no longer production or read-only.
+db-conn-marks-confirm = Forget
+db-conn-marks-forgotten = Forgot the remembered mark — agents now follow only the marks in the connection settings
+db-conn-marks-forgotten-again = Forgot the remembered mark, but the saved settings still mark the target, so it is remembered again
+db-conn-marks-failed = Could not forget the remembered mark: { $message }

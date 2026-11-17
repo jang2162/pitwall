@@ -11,6 +11,7 @@
 // - [연결 테스트] 는 저장 전 초안이다(`db.connection.test { draft, secret }`) — 파일을 쓰지 않는다(crates/pw-db/tests/dialog.rs).
 // - 목록의 `stateProblem`(확인 기록 `db.json` 이 깨짐)이 있으면 비밀번호를 묻기 전에 그 문제와 기록 파일 경로를 먼저 보인다
 //   (M3-02 재리뷰 N2 — 그동안 `secretRequired` 는 그 탓일 수 있다).
+// - 「옵션」 탭: 저장한 연결이면 그 대상의 에이전트용 표지 기억을 보이고 사람이 푼다(remembered-marks.tsx — M5-17b).
 
 import * as Dialog from "@radix-ui/react-dialog";
 import {
@@ -51,6 +52,7 @@ import {
   tabsFor,
   UNVERIFIED_MODES,
 } from "./form";
+import { RememberedMarks } from "./remembered-marks";
 import { type DbConnectionStrings, useDbConnectionStrings } from "./strings";
 
 export const SHEET =
@@ -840,6 +842,9 @@ function ConnectionEditor({
           {T.options.production}
         </label>
         <p className={HINT}>{T.options.productionHint}</p>
+        {editing && (
+          <RememberedMarks deps={deps} connectionId={entry.id} name={entry.config.name} />
+        )}
         <Row label={T.options.color}>
           <select className={INPUT} {...register("color")} data-field="color">
             <option value="">{T.options.colorNone}</option>

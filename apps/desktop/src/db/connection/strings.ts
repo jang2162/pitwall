@@ -107,6 +107,20 @@ export function dbConnectionStrings(t: Translate) {
       connectTimeout: t("db-conn-connect-timeout"),
       connectTimeoutHint: t("db-conn-connect-timeout-hint"),
     },
+    // 에이전트용 표지 기억(결정 M5-D37 — M5-17b).
+    marks: {
+      title: t("db-conn-marks-title"),
+      remembered: (marks: "production" | "readOnly" | "both") =>
+        t("db-conn-marks-remembered", { marks }),
+      configured: t("db-conn-marks-configured"),
+      forget: t("db-conn-marks-forget"),
+      confirmTitle: (name: string) => t("db-conn-marks-confirm-title", { name }),
+      confirmBody: t("db-conn-marks-confirm-body"),
+      confirm: t("db-conn-marks-confirm"),
+      forgotten: t("db-conn-marks-forgotten"),
+      forgottenAgain: t("db-conn-marks-forgotten-again"),
+      failed: (message: string) => t("db-conn-marks-failed", { message }),
+    },
     location: {
       label: t("db-conn-location"),
       shared: (id: string) => t("db-conn-location-shared", { id }),

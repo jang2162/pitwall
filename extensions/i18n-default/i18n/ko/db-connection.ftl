@@ -145,3 +145,20 @@ db-conn-test-approval = 연결하기 전에 확인이 필요하다({ $kind ->
 db-conn-save-failed = 저장하지 못했다: { $message }
 db-conn-secret-failed = 설정은 저장했지만 비밀번호를 저장하지 못했다: { $message }
 db-conn-saved = 연결 「{ $name }」 을 저장했다
+
+## 에이전트용 표지 기억(16-m5-plan 결정 M5-D37 — M5-17b). 한 번 프로덕션 · 읽기 전용이었던 대상은 앱을 다시 켜도 기억한다.
+
+db-conn-marks-title = 에이전트용 표지 기억
+db-conn-marks-remembered = { $marks ->
+    [both] 에이전트에게 이 연결의 대상을 프로덕션 · 읽기 전용으로 기억하고 있다 — 설정에서 표지가 빠지거나 앱을 다시 켜도 그대로다
+    [readOnly] 에이전트에게 이 연결의 대상을 읽기 전용으로 기억하고 있다 — 설정에서 표지가 빠지거나 앱을 다시 켜도 그대로다
+   *[production] 에이전트에게 이 연결의 대상을 프로덕션으로 기억하고 있다 — 설정에서 표지가 빠지거나 앱을 다시 켜도 그대로다
+}
+db-conn-marks-configured = 저장된 연결 설정이 아직 이 대상에 표지를 달고 있어, 풀어도 곧바로 다시 기억된다 — 먼저 옵션에서 표지를 끄고 저장한다
+db-conn-marks-forget = 표지 기억 풀기…
+db-conn-marks-confirm-title = 「{ $name }」 대상의 표지 기억을 풀까?
+db-conn-marks-confirm-body = 풀면 에이전트는 이 대상(같은 서버를 가리키는 다른 연결도)을 연결 설정이 말하는 대로만 다룬다 — 설정에 표지가 없으면 「이 연결 열기」 승인 한 번으로 열릴 수 있다. 대상이 더는 프로덕션 · 읽기 전용이 아닐 때만 푼다.
+db-conn-marks-confirm = 풀기
+db-conn-marks-forgotten = 표지 기억을 풀었다 — 이제 에이전트는 연결 설정의 표지만 따른다
+db-conn-marks-forgotten-again = 표지 기억을 풀었지만 저장된 설정이 표지를 달고 있어 다시 기억했다
+db-conn-marks-failed = 표지 기억을 풀지 못했다: { $message }
