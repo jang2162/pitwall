@@ -1316,7 +1316,7 @@ async fn a_dropped_session_cancels_its_running_calls() {
     );
 }
 
-/// ⑥ 헤드리스 Host 에 붙은 세션의 안내문에 「앱을 켠 뒤 MCP 서버를 다시 시작」 이 있고 앱 세션에는 없다. 헤드리스의 `write` 이상
+/// ⑥ 헤드리스 Host 에 붙은 세션의 안내문에 「앱을 켜면 다시 시작하지 않아도 나머지 툴이 나온다」 가 있고 앱 세션에는 없다. 헤드리스의 `write` 이상
 /// 툴 거절은 까닭 `headless_write` 다. 판정은 연결 방식이 아니라 `Services::host_kind` 다 — 이 시험의 세션은 둘 다 프로세스 안
 /// duplex(`transport: "test"`)로 붙는다(앱 없는 CLI 가 헤드리스 Host 에 붙는 꼴).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1337,7 +1337,9 @@ async fn only_a_headless_session_tells_the_agent_to_start_the_app() {
         "{}",
         instructions(&headless)
     );
-    assert!(instructions(&headless).contains("restart this MCP server"));
+    assert!(instructions(&headless).contains("Start the Pitwall app"));
+    // 넘겨 붙기(M5-20) 뒤로 다시 시작하라고 하지 않는다.
+    assert!(!instructions(&headless).contains("restart this MCP server"));
     let write = call(&headless, "mcptest_write", json!({})).await;
     assert_eq!(mark(&write), Some(Mark::denied(Reason::HeadlessWrite)));
     headless.cancel().await.unwrap();

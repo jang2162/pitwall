@@ -72,9 +72,9 @@ pub enum HostKind {
     Headless,
 }
 
-/// 헤드리스 세션의 서버 안내문(결정 M5-D3). 앱 세션에는 싣지 않는다. 넘겨 붙기(16-m5-plan M5-20)가 들어오면 그 행이 바꾼다.
+/// 헤드리스 세션의 서버 안내문(결정 M5-D3). 앱 세션에는 싣지 않는다. 앱이 뜨면 `pitwall mcp` 가 앱으로 넘겨 붙는다(16-m5-plan M5-20).
 pub const HEADLESS_NOTICE: &str = "The Pitwall app is not running, so only the core tools are available. \
-Start the Pitwall app, then restart this MCP server to get the rest.";
+Start the Pitwall app and the rest of the tools appear in this session without a restart.";
 
 /// 세션들이 함께 쓰는 것. 앱에서는 앱의 Host · 전역 설정 · 버스를, 앱 없이 뜬 `pitwall mcp` 는 자기가 만든 것을 넣는다.
 pub struct Services {
