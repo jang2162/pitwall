@@ -39,7 +39,13 @@ mod instance;
 
 /// `mcp::handover::CHECK_LOG` 와 같은 문장.
 const CHECK_LOG: &str = "mcp handover: looking for the Pitwall app";
-const CORE_TOOLS: [&str; 3] = ["project_info", "project_list", "settings_get"];
+/// 헤드리스가 내는 코어 툴. `project_register`(write)는 목록에 있고 부르면 `headless_write` 로 거절된다(16-m5-plan M5-16).
+const CORE_TOOLS: [&str; 4] = [
+    "project_info",
+    "project_list",
+    "project_register",
+    "settings_get",
+];
 
 rpc_method! {
     /// 시험용: 앱에만 있고 오래 돈다.
@@ -513,7 +519,7 @@ fn the_app_session_keeps_the_session_project() {
     let (list, _) = mcp.request(1, "tools/list", json!({}));
     assert_eq!(
         tool_names(&list),
-        ["project_info", "project_list"],
+        ["project_info", "project_list", "project_register"],
         "헤드리스 세션에 alpha 의 좁히기가 걸린다"
     );
 

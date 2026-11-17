@@ -139,11 +139,21 @@ fn headless_tool_writes_only_results_to_stdout() {
         .collect();
     assert_eq!(
         names,
-        ["project_info", "project_list", "settings_get"],
+        [
+            "project_info",
+            "project_list",
+            "project_register",
+            "settings_get"
+        ],
         "{stdout}"
     );
     for line in stdout.lines() {
-        assert_eq!(line.split_whitespace().nth(1), Some("read"), "{line}");
+        let tier = if line.starts_with("project_register ") {
+            "write"
+        } else {
+            "read"
+        };
+        assert_eq!(line.split_whitespace().nth(1), Some(tier), "{line}");
     }
 
     let (code, stdout, stderr) = tool(&dir, &["project_list"], &dir);
@@ -205,6 +215,24 @@ fn an_app_tool_without_the_app_is_refused_without_calling() {
     );
     // 부르지 않았다 — 거절도 서버가 하지 않았으니 감사 행이 늘지 않는다.
     assert_eq!(audit_tools(&paths), ["project_list"]);
+}
+
+/// 헤드리스의 `write` 툴(`project_register` — 16-m5-plan M5-16)은 승인 경로가 없어 거절(종료 코드 3)이고 등록하지 않는다.
+#[test]
+fn a_headless_write_tool_is_refused_and_registers_nothing() {
+    let (_tmp, dir, paths) = workspace();
+    let fresh = dir.join("work").join("fresh");
+    std::fs::create_dir_all(&fresh).unwrap();
+    let db = paths.data.join("state.db");
+    let before = std::fs::read(&db).unwrap();
+    let root = fresh.display().to_string();
+    let (code, stdout, stderr) = tool(&dir, &["project_register", "--root", &root], &dir);
+    assert_eq!((code, stdout.as_str()), (Some(3), ""), "stderr: {stderr}");
+    assert!(
+        stderr.contains("this session has no approval route"),
+        "{stderr}"
+    );
+    assert_eq!(std::fs::read(&db).unwrap(), before, "레지스트리가 바뀌었다");
 }
 
 #[cfg(unix)]
