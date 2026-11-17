@@ -7251,7 +7251,16 @@ export type PlanChange =
 /**  파일 하나의 앞뒤 내용. 없던 파일이면 `before` 가, 지우는 파일이면 `after` 가 `null`. */
 { kind: "file"; path: string; before: string | null; after: string | null } | 
 /**  이름 붙은 글(SQL 문장 · 명령 정의 등). */
-{ kind: "text"; label: string; text: string };
+{ kind: "text"; label: string; text: string } | 
+/**
+ *  DB 에 보낼 SQL 문장들(16-m5-plan M5-18 의 `db_execute` 가 채운다 — 꼴은 메인 판정 2026-11-17, M5-14 · M5-18 이 같이
+ *  쓴다). 승인 다이얼로그(M5-14)는 문장마다 등급을 보이고, 등급이 [`SqlGrade::Destructive`] 인 문장이 하나라도 있으면
+ *  연결 이름을 쳐야 허용할 수 있다. `irreversible` 이면 「되돌릴 수 없다」 를 보인다(트랜잭션 밖에서 커밋되는 문장 — MySQL 의
+ *  DDL 등).
+ */
+{ kind: "sql"; connection: SqlTarget; 
+/**  `file` 입력으로 읽은 SQL 이면 그 파일. */
+file: SqlFile | null; statements: SqlStatement[]; irreversible: boolean };
 
 export type PlanFormat = "json" | "text";
 
@@ -7912,6 +7921,16 @@ export type SizeClass =
 /**  SQL 방언 — 위험도 분류(M3-03)와 문장 나누기(M3-04)가 고른다. MariaDB 는 MySQL 이다. */
 export type SqlDialect = "postgres" | "mysql" | "sqlite";
 
+/**  SQL 을 읽은 파일. */
+export type SqlFile = {
+	path: string,
+	/**  읽은 내용의 sha256(hex). */
+	sha256: string,
+};
+
+/**  문장의 위험도 등급 — `pw_db_types::RiskGrade` 와 같은 이름 · 같은 직렬화(pw-core 는 DB 크레이트에 의존하지 않는다). */
+export type SqlGrade = "read" | "write" | "unboundedWrite" | "ddl" | "destructive";
+
 export type SqlInsertTextParams = {
 	dialect: SqlDialect,
 	/**  테이블. 모르면(콘솔 결과) `null` — 자리표시 이름 [`PLACEHOLDER_TABLE`]. */
@@ -7940,6 +7959,16 @@ export type SqlSplitResult = {
 	statements: SqlRange[],
 };
 
+/**  문장 하나. */
+export type SqlStatement = {
+	/**  0 기준 문장 순서. */
+	index: number,
+	/**  문장이 시작하는 줄(1 기준). */
+	line: number,
+	grade: SqlGrade,
+	text: string,
+};
+
 export type SqlStatementAtParams = {
 	dialect: SqlDialect,
 	sql: string,
@@ -7956,6 +7985,13 @@ export type SqlStatementRef = {
 	/**  `db.sql.split` 의 몇 번째 문장인가. */
 	index: number,
 	range: SqlRange,
+};
+
+/**  문장을 보낼 연결(사람이 보는 이름과 표지). */
+export type SqlTarget = {
+	name: string,
+	production: boolean,
+	readOnly: boolean,
 };
 
 /**  libpq 의 `sslmode` 뜻 그대로(결정 M3-D10). 드라이버마다 받는 값은 [`crate::Capabilities::ssl_modes`]. */
