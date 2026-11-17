@@ -208,3 +208,9 @@ mcp-settings-refused-unknown-group = 툴 그룹이 아니다.
 mcp-settings-refused-unknown-tool = 이 앱의 툴이 아니다.
 mcp-settings-refused-retention = 0 이상의 정수 일수를 넣는다.
 mcp-settings-refused-bad-value = Host 가 이 값을 받지 않았다.
+
+## DB 연결의 비밀 입력 요청(16-m5-plan M5-17 ②)
+# $name: 연결 이름
+mcp-db-secret-request-title = 연결 「{ $name }」 의 비밀번호를 입력
+mcp-db-secret-request-body = 에이전트가 이 연결을 쓰려면 비밀번호가 필요하다. 비밀번호는 여기서만 넣는다 — 에이전트에게 전달되지 않는다.
+mcp-db-secret-request-action = 비밀번호 입력

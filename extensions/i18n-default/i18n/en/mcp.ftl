@@ -231,3 +231,9 @@ mcp-settings-refused-unknown-group = Not a tool group.
 mcp-settings-refused-unknown-tool = Not a tool of this app.
 mcp-settings-refused-retention = Enter a whole number of days, 0 or more.
 mcp-settings-refused-bad-value = The host did not take this value.
+
+## Password request for a DB connection (16-m5-plan M5-17 ②)
+# $name: connection name
+mcp-db-secret-request-title = Enter the password for connection “{ $name }”
+mcp-db-secret-request-body = An agent needs this connection's password. Enter it here only — it is not passed to the agent.
+mcp-db-secret-request-action = Enter password

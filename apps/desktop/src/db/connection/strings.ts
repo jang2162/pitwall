@@ -14,6 +14,12 @@ export function dbConnectionStrings(t: Translate) {
       add: t("action-db-connection-add"),
       edit: t("action-db-connection-edit"),
     },
+    // 에이전트의 비밀 입력 요청(16-m5-plan M5-17 ②) — 리소스는 mcp.ftl(접두 `mcp-`).
+    secretRequest: {
+      title: (name: string) => t("mcp-db-secret-request-title", { name }),
+      body: t("mcp-db-secret-request-body"),
+      action: t("mcp-db-secret-request-action"),
+    },
     title: {
       new: t("db-conn-title-new"),
       edit: (name: string) => t("db-conn-title-edit", { name }),

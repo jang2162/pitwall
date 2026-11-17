@@ -23,7 +23,12 @@ import { bundledLocalization, bundledTranslator } from "../../i18n/testing";
 import type { NotificationInput } from "../../notifications/notifications";
 import { act, endTest, it } from "../../test-support/ended-test";
 import { ConnectionDialog, type ConnectionDialogDeps } from "./connection-dialog";
-import { connectionActions, editArgs } from "./connection-feature";
+import {
+  connectionActions,
+  editArgs,
+  followSecretRequests,
+  SECRET_REQUESTED_TOPIC,
+} from "./connection-feature";
 import { dbConnectionStrings } from "./strings";
 
 declare global {
@@ -158,7 +163,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-async function open(connectionId?: string, closed: () => void = () => {}) {
+async function open(connectionId?: string, closed: () => void = () => {}, focusSecret = false) {
   const deps: ConnectionDialogDeps = {
     client: client(),
     projectId: "p1",
@@ -174,6 +179,7 @@ async function open(connectionId?: string, closed: () => void = () => {}) {
         <ConnectionDialog
           deps={deps}
           {...(connectionId !== undefined && { connectionId })}
+          focusSecret={focusSecret}
           onClose={closed}
         />
       </LocalizationProvider>,
@@ -831,5 +837,82 @@ describe("actions", () => {
     void edit!.run("prod");
     expect(opened).toEqual([undefined, "prod"]);
     expect(editArgs({ connectionId: "" })).toBeUndefined();
+  });
+});
+
+describe("the agent's password request (16-m5-plan M5-17 ②)", () => {
+  it("follows db.secretRequested of this project only and hands each request over", async () => {
+    let handler: ((event: { topic: string; payload: unknown }) => void) | undefined;
+    const subscribed: unknown[] = [];
+    let unsubscribed = 0;
+    const fake = {
+      subscribe: async (filter: unknown, on: typeof handler) => {
+        subscribed.push(filter);
+        handler = on;
+        return { unsubscribe: async () => void unsubscribed++ };
+      },
+    } as unknown as RpcClient;
+    const seen: unknown[] = [];
+    const stop = followSecretRequests(fake, "p1", (r) => seen.push(r));
+    expect(subscribed).toEqual([{ projectId: "p1", topics: [SECRET_REQUESTED_TOPIC] }]);
+    const request = { connectionId: "kc", name: "Keychain DB", worktree: null };
+    handler!({ topic: SECRET_REQUESTED_TOPIC, payload: request });
+    handler!({ topic: "db.schemaChanged", payload: request });
+    handler!({ topic: SECRET_REQUESTED_TOPIC, payload: { nope: 1 } });
+    expect(seen).toEqual([request]);
+    stop();
+    await act(() => new Promise((r) => setTimeout(r, 0)));
+    expect(unsubscribed).toBe(1);
+    handler!({ topic: SECRET_REQUESTED_TOPIC, payload: request });
+    expect(seen).toHaveLength(1);
+  });
+
+  it("opens the existing connection with the focus in the password field", async () => {
+    const config: DbConnectionConfig = {
+      name: "kc",
+      driver: "postgres",
+      host: "db.internal",
+      password: { kind: "keychain" },
+    };
+    answers["db.connection.list"] = () =>
+      list({
+        connections: [
+          entryOf("kc", config, {
+            state: {
+              kind: "secretRequired",
+              reason: "missing",
+              target: null as never,
+              previous: null,
+            },
+          }),
+        ],
+      });
+    await open("kc", () => {}, true);
+    await act(() => new Promise((r) => setTimeout(r, 0)));
+    const input = testid<HTMLInputElement>("db-conn-password")!;
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe("");
+  });
+
+  it("does not move the focus when opened the usual way", async () => {
+    const config: DbConnectionConfig = {
+      name: "kc",
+      driver: "postgres",
+      host: "db.internal",
+      password: { kind: "keychain" },
+    };
+    answers["db.connection.list"] = () => list({ connections: [entryOf("kc", config)] });
+    await open("kc");
+    await act(() => new Promise((r) => setTimeout(r, 0)));
+    expect(document.activeElement).not.toBe(testid("db-conn-password"));
+  });
+
+  it("has its strings in both languages", async () => {
+    for (const lang of ["ko", "en"] as const) {
+      const S = dbConnectionStrings(bundledTranslator(lang)).secretRequest;
+      expect(S.title("Main DB")).toContain("Main DB");
+      expect(S.body).not.toMatch(/^mcp-/);
+      expect(S.action).not.toMatch(/^mcp-/);
+    }
   });
 });

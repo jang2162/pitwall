@@ -124,10 +124,13 @@ type Load =
 export function ConnectionDialog({
   deps,
   connectionId,
+  focusSecret = false,
   onClose,
 }: {
   deps: ConnectionDialogDeps;
   connectionId?: string;
+  /** 열자마자 비밀번호 칸으로 간다(에이전트의 비밀 입력 요청 — 16-m5-plan M5-17 ②). */
+  focusSecret?: boolean;
   onClose(): void;
 }) {
   const T = useDbConnectionStrings();
@@ -229,6 +232,7 @@ export function ConnectionDialog({
             | (DbConnectionEntry & { config: NonNullable<DbConnectionEntry["config"]> })
             | undefined
         }
+        focusSecret={focusSecret}
         onClose={onClose}
       />
     );
@@ -304,11 +308,13 @@ function ConnectionEditor({
   deps,
   loaded,
   entry,
+  focusSecret,
   onClose,
 }: {
   deps: ConnectionDialogDeps;
   loaded: Loaded;
   entry: (DbConnectionEntry & { config: NonNullable<DbConnectionEntry["config"]> }) | undefined;
+  focusSecret: boolean;
   onClose(): void;
 }) {
   const T = useDbConnectionStrings();
@@ -340,6 +346,12 @@ function ConnectionEditor({
   const directChosen = useRef(false);
   const [direct, setDirect] = useState(() => initial.hostRef !== "");
   const password = useRef<HTMLInputElement>(null);
+  // 비밀 입력 요청으로 열렸으면 처음 한 번 비밀번호 칸(「일반」 탭)으로 간다.
+  useEffect(() => {
+    if (!focusSecret) return;
+    setTab("general");
+    queueMicrotask(() => password.current?.focus());
+  }, [focusSecret]);
   // 사람이 sslmode 를 골랐는가. 저장한 연결이 sslmode 를 적어 두었으면 고른 것으로 본다.
   // 저장한 값이 저장한 호스트의 기본값이면 다이얼로그가 적은 것으로 본다(새 연결은 기본값을 파일에 적는다) — 그러지 않으면
   // `localhost` 로 만든 연결의 호스트를 원격으로 고쳐도 `disable` 이 남아 비밀번호가 평문 연결의 대상에 묶인다.

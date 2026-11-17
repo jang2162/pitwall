@@ -5,9 +5,14 @@
 //   우클릭 「연결 편집」 이 `registry.run("db.connection.edit", { connectionId })` 로 부른다.
 //
 // 키 바인딩은 두지 않는다. 부르는 연결은 프로젝트 창의 연결이다 — 설정 쓰기 · 비밀 쓰기 · 연결 테스트가 그 창의 범위를 지난다.
+//
+// **비밀 입력 요청**(16-m5-plan M5-17 ②): 에이전트의 DB 툴이 비밀이 필요한 연결에 닿으면 Host 가 그 프로젝트 범위로
+// `db.secretRequested`(crates/pw-db/src/connection_tool.rs)를 낸다. 이 창은 「이 연결의 비밀번호를 입력」 알림을 띄우고, 그 단추가
+// 기존 연결 편집 다이얼로그를 비밀번호 칸에 포커스를 두고 연다. 비밀은 에이전트를 거치지 않는다 — 사람이 이 칸에 넣어 저장한다.
 
 import type { Action } from "@pitwall/keymap";
-import { useMemo, useRef, useState } from "react";
+import type { DbSecretRequested, EventMessage, RpcClient } from "@pitwall/rpc-client";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useRegisterActions } from "../../keymap/keymap-provider";
 import { useNotify } from "../../notifications/notifications";
@@ -50,12 +55,45 @@ export function connectionActions(
   ];
 }
 
+/** 비밀 입력 요청의 토픽(crates/pw-db/src/connection_tool.rs 의 `TOPIC_SECRET_REQUESTED`). */
+export const SECRET_REQUESTED_TOPIC = "db.secretRequested";
+
+/** 그 프로젝트의 비밀 입력 요청을 구독해 `show` 로 넘긴다. 돌려준 함수가 구독을 걷는다. */
+export function followSecretRequests(
+  client: RpcClient,
+  projectId: string,
+  show: (request: DbSecretRequested) => void,
+): () => void {
+  let disposed = false;
+  const opened = client.subscribe(
+    { projectId, topics: [SECRET_REQUESTED_TOPIC] },
+    (event: EventMessage) => {
+      if (disposed || event.topic !== SECRET_REQUESTED_TOPIC) return;
+      const payload = event.payload as unknown as DbSecretRequested;
+      if (typeof payload?.connectionId !== "string") return;
+      show(payload);
+    },
+  );
+  opened.catch((error: unknown) => console.warn("[db] could not follow secret requests", error));
+  return () => {
+    disposed = true;
+    opened.then((s) => s.unsubscribe()).catch(() => {});
+  };
+}
+
+interface OpenDialog {
+  connectionId: string | undefined;
+  seq: number;
+  /** 비밀 입력 요청으로 열었다 — 그 요청의 워크트리 설정으로 열고 비밀번호 칸으로 간다. */
+  secret?: { worktree: string | null };
+}
+
 export function DbConnectionFeature({ projectId }: { projectId: string }) {
   const T = useDbConnectionStrings();
   const { client } = useHost();
   const notify = useNotify();
   // 열린 다이얼로그. `seq` 는 같은 연결을 다시 열 때 새로 읽게 한다.
-  const [open, setOpen] = useState<{ connectionId: string | undefined; seq: number }>();
+  const [open, setOpen] = useState<OpenDialog>();
   const seq = useRef(0);
   const actions = useMemo(
     () =>
@@ -63,13 +101,35 @@ export function DbConnectionFeature({ projectId }: { projectId: string }) {
     [T],
   );
   useRegisterActions(actions);
+  const secretT = useRef(T.secretRequest);
+  secretT.current = T.secretRequest;
+  useEffect(() => {
+    if (!client) return;
+    return followSecretRequests(client, projectId, (request) =>
+      notify({
+        level: "warning",
+        title: secretT.current.title(request.name),
+        body: secretT.current.body,
+        action: {
+          label: secretT.current.action,
+          run: () =>
+            setOpen({
+              connectionId: request.connectionId,
+              seq: ++seq.current,
+              secret: { worktree: request.worktree },
+            }),
+        },
+      }),
+    );
+  }, [client, projectId, notify]);
   if (!open || !client) return null;
-  const worktree = activeWorktree();
+  const worktree = open.secret ? (open.secret.worktree ?? undefined) : activeWorktree();
   return (
     <ConnectionDialog
       key={open.seq}
       deps={{ client, projectId, ...(worktree !== undefined && { worktree }), notify }}
       {...(open.connectionId !== undefined && { connectionId: open.connectionId })}
+      focusSecret={open.secret !== undefined}
       onClose={() => setOpen(undefined)}
     />
   );
