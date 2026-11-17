@@ -37,8 +37,11 @@ export interface FakeLspOptions {
   changeDelay?: number | ((version: number) => number);
   /** 주면 `open` 이 이것이 풀릴 때까지 답하지 않는다(여는 중에 고치는 시험 — 재리뷰 N-2). */
   openGate?: Promise<unknown>;
-  /** 주면 `change` 가 이것이 풀릴 때까지 답하지 않는다(Host 가 편집에 답하지 않음 — 재리뷰 N-3). */
-  changeGate?: Promise<unknown>;
+  /**
+   * 주면 `change` 가 이것이 풀릴 때까지 답하지 않는다(Host 가 편집에 답하지 않음 — 재리뷰 N-3). 함수면 버전마다 고른다 —
+   * 「편집이 아직 닿지 않은 사이」 를 실시간(`changeDelay`)이 아니라 시험이 풀 때까지로 붙잡는다.
+   */
+  changeGate?: Promise<unknown> | ((version: number) => Promise<unknown> | undefined);
 }
 
 export function fakeLspServer(options: FakeLspOptions = {}) {
@@ -74,7 +77,9 @@ export function fakeLspServer(options: FakeLspOptions = {}) {
           ? options.changeDelay(params.version)
           : options.changeDelay;
       if (delay) await new Promise((r) => setTimeout(r, delay));
-      await options.changeGate;
+      await (typeof options.changeGate === "function"
+        ? options.changeGate(params.version)
+        : options.changeGate);
       const doc = docs.get(params.docId);
       if (!doc) throw notFound(params.docId);
       if (params.version <= doc.version)

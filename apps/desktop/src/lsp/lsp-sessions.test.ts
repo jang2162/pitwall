@@ -140,9 +140,13 @@ describe("request helper (③)", () => {
   });
 
   it("asks only after the edit made in the same tick reached the Host, so a completion right after `.` is kept (H-1)", async () => {
+    // 둘째 편집(버전 2)은 시험이 풀 때까지 Host 에 닿지 않는다 — 실시간으로 늦추면 부하에서 `settle()` 이 그 시간을 넘겨
+    // 「기다리는 사이」 가 사라진다.
+    let deliverSecond!: () => void;
+    const secondGate = new Promise<void>((r) => (deliverSecond = r));
     const { server, documents, sessions } = setup(
       { "/p/a.rs": "fn a() { x }" },
-      { changeDelay: 5 },
+      { changeDelay: 5, changeGate: (version: number) => (version === 2 ? secondGate : undefined) },
     );
     const { document } = sessions.acquire("/p/a.rs", "Rust");
     await settle();
@@ -163,6 +167,7 @@ describe("request helper (③)", () => {
     const pending = document.request("completion", call);
     await settle();
     documents.edit("/p/a.rs", 12, 12, "e");
+    deliverSecond();
     expect(await pending).toBeUndefined();
     expect(call).not.toHaveBeenCalled();
   });
