@@ -1331,16 +1331,88 @@ async fn a_failed_commit_is_an_error_not_a_commit() {
         .await;
     let err = ran.expect_err("a failed commit is an error");
     assert_eq!(err.code, pw_db::gate::code::DB_ERROR, "{err:?}");
+    // DB 가 COMMIT 을 거절했다 — 커밋되지 않은 것을 안다.
+    assert!(!err.message.contains("outcome unknown"), "{err:?}");
     let data = err.data.unwrap();
     assert_eq!(data["error"]["code"], "23503", "{data}");
-    assert!(
-        data["audit"]
-            .as_str()
-            .unwrap()
-            .starts_with("statements=1 grade=write"),
-        "{data}"
-    );
+    let audit = data["audit"].as_str().unwrap();
+    assert!(audit.starts_with("statements=1 grade=write"), "{data}");
+    assert!(audit.ends_with(" transaction=rolledBack"), "{data}");
     assert_eq!(e.pg.committed(), Vec::<String>::new());
+}
+
+/// COMMIT 을 보낸 뒤 시한이 지났거나 연결이 끊기면 커밋됐는지 모른다(16-m5-plan M5-18b — 리뷰 F1). 오류이되 에이전트에게 가는 글이
+/// 「커밋을 보냈고 결과를 모른다 — `db_query` 로 확인하라」 이고 감사 상세 끝이 `transaction=unknown` 이다 — 「커밋되지 않았다」
+/// 로 읽히지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_commit_that_timed_out_or_lost_the_connection_is_an_unknown_outcome() {
+    for error in [
+        DbError::new(DbErrorKind::Disconnected, "connection reset by peer"),
+        DbError::timeout("commit"),
+    ] {
+        let e = env();
+        e.pg.fail_commit(Some(error.clone()));
+        e.human_opens("dev").await;
+        let mut agent = e.agent();
+        let (_, ran) = e
+            .ask_and_run(
+                &mut agent,
+                "db.tool.execute",
+                "dev",
+                json!({ "sql": "INSERT INTO child VALUES (1, 99)" }),
+            )
+            .await;
+        let err = ran.expect_err("an unknown commit is an error");
+        assert_eq!(err.code, pw_db::gate::code::DB_ERROR, "{err:?}");
+        assert!(
+            err.message.starts_with("commit sent, outcome unknown: "),
+            "{err:?}"
+        );
+        assert!(err.message.contains("db_query"), "{err:?}");
+        assert!(err.message.contains(&error.message), "{err:?}");
+        let data = err.data.unwrap();
+        assert!(
+            data["audit"]
+                .as_str()
+                .unwrap()
+                .ends_with(" transaction=unknown"),
+            "{data}"
+        );
+    }
+}
+
+/// 커밋 결과는 연결 닫기를 기다리지 않고 답한다(16-m5-plan M5-18b — 리뷰 R2): 닫기가 느려도(터널 · 끊긴 네트워크) 표지 뒤의 답이
+/// MCP 세션의 시한(5 s)을 넘기지 않는다. 닫기는 답한 뒤에 끝난다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_answer_does_not_wait_for_the_connection_to_close() {
+    let e = env();
+    e.pg.respond("UPDATE users", FakeResponse::write(1));
+    e.human_opens("dev").await;
+    let mut agent = e.agent();
+    let tool = e.connects() as u32;
+    e.pg.hold_close(true);
+    let (_, ran) = tokio::time::timeout(
+        Duration::from_secs(5),
+        e.ask_and_run(
+            &mut agent,
+            "db.tool.execute",
+            "dev",
+            json!({ "sql": "UPDATE users SET a = 1 WHERE id = 1" }),
+        ),
+    )
+    .await
+    .expect("the answer waited for the connection to close");
+    assert_eq!(ran.unwrap()["transaction"], "committed");
+    assert!(
+        !e.pg.calls_of(tool).contains(&FakeCall::Close),
+        "the connection is still closing"
+    );
+    e.pg.hold_close(false);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !e.pg.calls_of(tool).contains(&FakeCall::Close) {
+        assert!(tokio::time::Instant::now() < deadline, "{:?}", e.pg.calls());
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 /// 끼워 넣는 자리에서 호출을 취소한 뒤 실행 태스크를 보내고, 그 호출의 응답을 돌려준다. 태스크가 연결을 닫을 때까지 기다린다.

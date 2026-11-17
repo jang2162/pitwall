@@ -548,6 +548,10 @@ async fn a_db_execute_whose_commit_fails_is_an_error_in_the_result_and_the_audit
             .contains("statements=1 grade=write"),
         "{row:?}"
     );
+    // SQLite 가 COMMIT 을 `busy` 로 거절했다 — 커밋되지 않은 것을 안다(「모름」 이 아니다).
+    let detail = row.detail.as_deref().unwrap_or_default();
+    assert!(detail.ends_with(" transaction=rolledBack"), "{row:?}");
+    assert!(!detail.contains("outcome unknown"), "{row:?}");
     session.close().await;
 }
 
@@ -655,6 +659,9 @@ async fn a_db_execute_cancelled_after_its_commit_point_is_committed_in_the_audit
                 tokio::time::timeout(std::time::Duration::from_secs(10), cancelled.cancelled())
                     .await
                     .expect("the cancel never reached the host");
+                // Host 는 취소를 적용한 뒤 그 확인(`null`)을 보낸다 — 커밋의 답이 그 확인을 앞지르지 않게 조금 둔다(앞지르면 세션은
+                // 「취소가 닿기 전에 끝났다」 로 본다 — `pw_mcp::client` 머리 주석).
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             })
         }));
     let handle = send("INSERT INTO t VALUES ('after')").await;

@@ -225,6 +225,8 @@ struct State {
     interrupt_rolls_back: AtomicBool,
     /// `true` 인 동안 메타데이터 메서드가 호출을 기록한 뒤 답하지 않고 기다린다([`FakeDriver::hold_metadata`]).
     metadata_hold: tokio::sync::watch::Sender<bool>,
+    /// `true` 인 동안 `close` 가 끝나지 않고 기다린다([`FakeDriver::hold_close`]).
+    close_hold: tokio::sync::watch::Sender<bool>,
     script: Mutex<Script>,
     /// (연결 번호, 호출).
     calls: Mutex<Vec<(u32, FakeCall)>>,
@@ -301,6 +303,7 @@ impl FakeDriver {
                 capabilities,
                 interrupt_rolls_back: AtomicBool::new(false),
                 metadata_hold: tokio::sync::watch::Sender::new(false),
+                close_hold: tokio::sync::watch::Sender::new(false),
                 script: Mutex::default(),
                 calls: Mutex::default(),
                 committed: Mutex::default(),
@@ -381,6 +384,11 @@ impl FakeDriver {
     /// 호출은 그 future 를 버리면(RPC 취소 · 연결 버림) 그 자리에서 끝난다.
     pub fn hold_metadata(&self, hold: bool) {
         self.state.metadata_hold.send_replace(hold);
+    }
+
+    /// `true` 인 동안 연결의 `close` 가 끝나지 않는다(느린 닫기 — 터널 · 끊긴 네트워크). 풀면 닫기가 끝나고 `Close` 가 기록된다.
+    pub fn hold_close(&self, hold: bool) {
+        self.state.close_hold.send_replace(hold);
     }
 
     /// 연결 하나(`connect` 순서대로 0 부터)의 열린 트랜잭션을 파이프라인 모르게 되돌린다 — 정리 예산을 넘겨 버려진 문장이 나중에
@@ -975,6 +983,8 @@ impl SqlConnection for FakeConnection {
 
     fn close(self: Box<Self>) -> BoxFuture<'static, DbResult<()>> {
         Box::pin(async move {
+            let mut hold = self.driver.state.close_hold.subscribe();
+            let _ = hold.wait_for(|held| !held).await;
             self.record(FakeCall::Close);
             Ok(())
         })

@@ -397,7 +397,10 @@ impl DbSessions {
         let no_return = ctx.point_of_no_return();
         let hooks = self.test_hooks.take_commit_hooks();
         let call_cancel = ctx.cancellation().clone();
-        let run = {
+        // 태스크는 커밋 · 롤백을 마치면 곧바로 답을 넘기고 연결 닫기는 그 뒤에 한다 — 닫기(터널 · 끊긴 네트워크)가 느려도 답이 늦지
+        // 않게. 표지 뒤의 답을 기다리는 MCP 세션의 시한(5 s)을 닫기가 먹지 않는다.
+        let (answer, answered) = tokio::sync::oneshot::channel();
+        {
             let (source, planned) = (source.clone(), planned.clone());
             let (sessions, project, connection) = (
                 Arc::clone(self),
@@ -440,9 +443,9 @@ impl DbSessions {
                                     project = %project,
                                     connection = %connection,
                                     committed = committed.is_ok(),
-                                    "db_execute was dropped after its commit was sent; no answer was sent, but the \
+                                    "db_execute was dropped after its commit was sent; no answer was sent, and the \
                                      transaction {}",
-                                    if committed.is_ok() { "committed" } else { "did not commit" }
+                                    commit_outcome(&committed)
                                 );
                             }
                             Some(committed)
@@ -460,9 +463,8 @@ impl DbSessions {
                         None
                     }
                 };
-                let _ = within(Budget::PAGE.connect, "close", conn.close()).await;
                 // DDL 이상이 시작됐으면(실패 포함 — MySQL 은 실패한 DDL 도 암묵 커밋한다) 스키마 캐시를 버린다. 호출이 버려졌어도
-                // 한다 — 창의 탐색기가 새로 읽는다.
+                // 한다 — 창의 탐색기가 새로 읽는다. 답보다 먼저 — 답을 받은 에이전트가 곧바로 읽는 스키마가 새것이게.
                 if let Ok(ran) = &ran {
                     let reached = ran
                         .error
@@ -476,16 +478,19 @@ impl DbSessions {
                         sessions.schema_changed(&project, &connection);
                     }
                 }
-                (ran, ended)
-            })
-        };
-        let (ran, committed) = run
-            .await
-            .map_err(|e| with_audit(RpcError::internal(e.to_string())))?;
+                let _ = answer.send((ran, ended));
+                let _ = within(Budget::PAGE.connect, "close", conn.close()).await;
+            });
+        }
+        let (ran, committed) = answered.await.map_err(|_| {
+            with_audit(RpcError::internal(
+                "the db_execute task ended without an answer",
+            ))
+        })?;
         guard.disarm();
         let ran = ran.map_err(|e| with_audit(db_error(e)))?;
         if let Some(Err(e)) = committed {
-            return Err(with_audit(db_error(e)));
+            return Err(commit_failed(e, &audit));
         }
         let transaction = match (mode, &ran.error) {
             (ScriptMode::ReadOnly, _) => DbToolTransaction::ReadOnly,
@@ -524,6 +529,47 @@ impl DbSessions {
         fit_rows(&mut result.results, fixed);
         Ok(result)
     }
+}
+
+/// 커밋 오류가 시한 초과 · 끊김 · 중단이면 COMMIT 을 보낸 뒤라 DB 가 그것을 적용했는지 모른다. DB 가 답한 거절(제약 위반 · `busy`
+/// 등 — 연결을 닫으면 트랜잭션이 버려진다)과 트랜잭션이 되돌려졌다는 표시가 있는 오류는 커밋되지 않았다.
+fn commit_outcome_unknown(error: &DbError) -> bool {
+    !error.rolled_back
+        && matches!(
+            error.kind,
+            DbErrorKind::Timeout
+                | DbErrorKind::Disconnected
+                | DbErrorKind::Cancelled
+                | DbErrorKind::Connect
+        )
+}
+
+/// 커밋의 끝을 로그 문구로.
+fn commit_outcome(committed: &Result<(), DbError>) -> &'static str {
+    match committed {
+        Ok(()) => "committed",
+        Err(e) if commit_outcome_unknown(e) => "may or may not have committed",
+        Err(_) => "did not commit",
+    }
+}
+
+/// 커밋이 실패한 호출의 오류. 감사 상세 끝에 트랜잭션의 끝(`transaction=rolledBack` · `unknown`)을 싣고, 끝을 모르면 에이전트에게
+/// 「커밋을 보냈고 결과를 모른다 — `db_query` 로 확인하라」 를 말한다(16-m5-plan M5-18b — 리뷰 F1).
+fn commit_failed(error: DbError, audit: &str) -> RpcError {
+    let unknown = commit_outcome_unknown(&error);
+    let audit = format!(
+        "{audit} transaction={}",
+        if unknown { "unknown" } else { "rolledBack" }
+    );
+    let mut rpc = db_error(error);
+    if unknown {
+        rpc.message = format!(
+            "commit sent, outcome unknown: {}. The changes may or may not be in the database; check with \
+             db_query before calling again",
+            rpc.message
+        );
+    }
+    crate::tools::with_audit(rpc, &audit)
 }
 
 /// 툴 메서드를 붙인다(`crate::session::register` 가 부른다).
