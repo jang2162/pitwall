@@ -1116,6 +1116,16 @@ impl Session {
                         .and_then(Value::as_str),
                 ))
             }
+            // DB 툴의 표지 기억을 쓰거나 읽지 못해 돌리지 않았다(fail-closed) — 고장이 아니라 거절이다(감사 까닭으로 찾게).
+            CallError::Rpc { code, data, .. }
+                if *code == i64::from(pw_rpc::code::STORAGE_UNAVAILABLE) =>
+            {
+                Reason::of_storage_unavailable(
+                    data.as_ref()
+                        .and_then(|d| d.get("reason"))
+                        .and_then(Value::as_str),
+                )
+            }
             _ => None,
         };
         // 승인 뒤 다시 만든 계획의 해시가 다르다(파일 · 워크트리 · 대상이 바뀜) — 다시 묻지 않고 거절한다. 「승인 필요」 오류와

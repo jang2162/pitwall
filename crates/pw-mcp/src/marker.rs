@@ -62,6 +62,9 @@ pub enum Reason {
     /// (거절) 선기록하는 호출(`write` 이상 · 승인을 지난 호출)인데 실행 전의 감사 행을 쓰지 못했다 — 돌리지 않았다(16-m5-plan
     /// 결정 M5-D11).
     AuditUnavailable,
+    /// (거절) DB 툴인데 Host 가 프로덕션 · read-only 표지 기억을 상태 DB 에 쓰거나 읽지 못한다 — 돌리지 않았다(16-m5-plan 결정
+    /// M5-D37 · M5-17b, fail-closed). Host 오류 코드는 `STORAGE_UNAVAILABLE` 이고 `data.reason = "markMemoryUnavailable"` 이다.
+    MarkMemoryUnavailable,
 }
 
 impl Reason {
@@ -82,6 +85,7 @@ impl Reason {
         Reason::ProductionBlocked,
         Reason::RateLimited,
         Reason::AuditUnavailable,
+        Reason::MarkMemoryUnavailable,
     ];
 
     /// Host RPC 의 `PERMISSION_DENIED` 오류가 싣는 `data.reason`(camelCase) ↔ 까닭 코드. 거절 까닭을 더하는 행은 [`Reason`] 과 이
@@ -94,6 +98,18 @@ impl Reason {
         // 승인(해시 확인)을 지난 뒤 · 부작용 직전에 대상이 바뀌어 돌지 않았다(16-m5-plan M5-16 — 계획 때 읽은 파일 내용 · 푼 루트).
         ("planChanged", Reason::PlanChanged),
     ];
+
+    /// 거절로 셀 `STORAGE_UNAVAILABLE` 오류의 `data.reason`(camelCase) ↔ 까닭 코드. 여기 없는 저장소 오류는 결과 `error` 다.
+    const FROM_STORAGE: &'static [(&'static str, Reason)] =
+        &[("markMemoryUnavailable", Reason::MarkMemoryUnavailable)];
+
+    /// `STORAGE_UNAVAILABLE` 오류의 `data.reason` 이 거절로 세는 것이면 그 까닭 코드.
+    pub fn of_storage_unavailable(rpc_reason: Option<&str>) -> Option<Self> {
+        Self::FROM_STORAGE
+            .iter()
+            .find(|(r, _)| Some(*r) == rpc_reason)
+            .map(|(_, reason)| *reason)
+    }
 
     /// `PERMISSION_DENIED` 오류의 `data.reason` 을 까닭 코드로. 모르거나 없으면 [`Reason::PermissionDenied`].
     pub fn of_permission_denied(rpc_reason: Option<&str>) -> Self {
@@ -121,6 +137,7 @@ impl Reason {
             Reason::ProductionBlocked => "production_blocked",
             Reason::RateLimited => "rate_limited",
             Reason::AuditUnavailable => "audit_unavailable",
+            Reason::MarkMemoryUnavailable => "mark_memory_unavailable",
         }
     }
 
@@ -257,9 +274,15 @@ mod tests {
             Reason::PermissionDenied
         );
         assert_eq!(Reason::of_permission_denied(None), Reason::PermissionDenied);
-        for (rpc, reason) in Reason::FROM_RPC {
+        for (rpc, reason) in Reason::FROM_RPC.iter().chain(Reason::FROM_STORAGE) {
             assert!(Reason::ALL.contains(reason), "{rpc}");
         }
+        assert_eq!(
+            Reason::of_storage_unavailable(Some("markMemoryUnavailable")),
+            Some(Reason::MarkMemoryUnavailable)
+        );
+        assert_eq!(Reason::of_storage_unavailable(Some("other")), None);
+        assert_eq!(Reason::of_storage_unavailable(None), None);
     }
 
     #[test]

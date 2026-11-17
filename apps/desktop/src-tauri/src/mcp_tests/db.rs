@@ -969,3 +969,50 @@ async fn the_session_allowance_to_open_is_bound_to_the_target() {
     );
     session.close().await;
 }
+
+/// 표지 기억(16-m5-plan 결정 M5-D37 · M5-17b)을 상태 DB 에서 읽지 못하면 DB 툴은 돌지 않고, 결과 표지는 고장(`error`)이 아니라
+/// `denied` · `mark_memory_unavailable` 이다(감사 행도 거절). 에이전트에게는 까닭이 오류 글로 간다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn db_tools_are_denied_when_the_mark_memory_is_unavailable() {
+    let host = ToolHost::app();
+    let alpha = host.project("alpha");
+    host.host
+        .registry()
+        .unwrap()
+        .set_trust(&alpha, true)
+        .unwrap();
+    let file = host.paths.data.join(pw_core::registry::store::FILE_NAME);
+    pw_core::registry::store::open(&file, std::time::Duration::from_secs(2))
+        .conn
+        .execute_batch("DROP TABLE db_marks")
+        .unwrap();
+    let session = host.session(SessionRequest::default()).await;
+    let refused = session
+        .call(
+            "db_connection_list",
+            serde_json::json!({ "projectId": alpha }),
+        )
+        .await;
+    assert_eq!(refused.is_error, Some(true));
+    assert_eq!(
+        refused
+            .meta
+            .as_ref()
+            .and_then(|m| pw_mcp::marker::Mark::read(m)),
+        Some(pw_mcp::marker::Mark::denied(
+            pw_mcp::marker::Reason::MarkMemoryUnavailable
+        )),
+        "{refused:?}"
+    );
+    assert!(
+        text(&refused).contains("markMemoryUnavailable"),
+        "{}",
+        text(&refused)
+    );
+    let rows = host.audit_rows(1);
+    assert_eq!(
+        (rows[0].tool.as_str(), rows[0].outcome.as_str()),
+        ("db_connection_list", "denied")
+    );
+    session.close().await;
+}
