@@ -544,6 +544,46 @@ it("shows connecting, connected and disconnected, and reconnects only when expan
   expect(statusOf("pg")).toBe("connected");
 });
 
+it("connects a SQLite connection when its row is expanded, though its groups need no Host call", async () => {
+  let release: () => void = () => {};
+  host.override.set(
+    "db.schema.objects",
+    (params) => new Promise((r) => (release = () => r(objectPage(params)))),
+  );
+  await mount();
+  await expand("connection", "lite");
+  // 묶음은 곧바로 그리고, 「테이블」 의 첫 쪽을 읽어 연결을 연다 — Host 가 「사람이 연 연결」 로 적는 것은 이 읽기다.
+  expect(rowsOf("group")).toEqual(["테이블", "뷰"]);
+  expect(statusOf("lite")).toBe("connecting");
+  expect(
+    called("db.schema.objects").map((c) => [c.params.connectionId, c.params.kind, c.params.cursor]),
+  ).toEqual([["lite", "table", null]]);
+  await act(async () => release());
+  await settle();
+  expect(statusOf("lite")).toBe("connected");
+  // 묶음은 접힌 채다. 펼치면 읽어 둔 것을 보이고 다시 읽지 않는다.
+  expect(rowsOf("object")).toEqual([]);
+  host.override.delete("db.schema.objects");
+  host.calls.length = 0;
+  await mouse(
+    document.querySelector<HTMLElement>(`[data-row="group"][data-connection="lite"]`)!
+      .firstElementChild!,
+    "click",
+  );
+  expect(rowsOf("object")).toEqual(["t00000", "t00001", "t00002"]);
+  expect(opens()).toEqual([]);
+
+  // 우클릭 「연결」 도 같다 — 끊은 뒤 다시 연결하면 다시 읽는다.
+  await mouse(row("connection", "lite")!, "contextmenu");
+  await mouse(document.querySelector<HTMLElement>(`[data-menu="disconnect"]`)!, "click");
+  expect(statusOf("lite")).toBe("idle");
+  host.calls.length = 0;
+  await mouse(row("connection", "lite")!, "contextmenu");
+  await mouse(document.querySelector<HTMLElement>(`[data-menu="connect"]`)!, "click");
+  expect(called("db.schema.objects").map((c) => c.params.kind)).toEqual(["table"]);
+  expect(statusOf("lite")).toBe("connected");
+});
+
 it("drops a connection whose settings changed and reads nothing until it is expanded again", async () => {
   await mount();
   const events = fakeEvents();

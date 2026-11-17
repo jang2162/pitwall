@@ -617,6 +617,13 @@ export class ExplorerModel {
     if (sync) {
       this.setKids(id, sync, null);
       this.changed();
+      // 연결 아래가 곧바로 묶음인 드라이버(SQLite)는 묶음을 그리는 데 Host 를 부르지 않는다 — 그대로면 연결 행을 펼쳐도 연결이
+      // 열리지 않는다(「연결 안 됨」 이고 Host 는 「사람이 연 연결」 로 적지 않는다 — 16-m5-plan M5-06). 「테이블」 묶음의 첫 쪽을
+      // 미리 읽어 연결을 연다. 묶음은 접힌 채이고, 펼치면 읽어 둔 것을 보인다.
+      if (node.kind === "connection" && this.statusOf(node.connectionId).kind !== "connected") {
+        const first = sync[0];
+        if (first) await this.load(first.id, false);
+      }
       return;
     }
     const token = ++this.token;
