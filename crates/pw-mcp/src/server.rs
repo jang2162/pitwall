@@ -18,7 +18,9 @@
 //!    계획이 승인을 청하지 않은 `read` 호출은 그 첫 호출의 결과가 곧 결과다.
 //! 6. Host RPC(선기록 — 결정 M5-D11). MCP 의 취소 알림이 오거나 세션이 끝나면 그 RPC 를 거둔다(`request.cancel` —
 //!    [`crate::client`]). 승인을 기다리는 동안 클라이언트가 끊으면(읽기가 끝남) 곧바로 요청을 거둔다 — rmcp 가 끊긴 뒤 5초 동안
-//!    핸들러를 돌리는 사이(05 「호출 취소」)에 사람이 [허용] 을 눌러도 돌지 않는다.
+//!    핸들러를 돌리는 사이(05 「호출 취소」)에 사람이 [허용] 을 눌러도 돌지 않는다. 선기록한 호출은 취소 뒤에도 Host 의 답을
+//!    [`SETTLE_AFTER_CANCEL`] 까지 기다려 그 답으로 행을 끝낸다 — 되돌릴 수 없는 지점(`db_execute` 의 커밋)을 넘은 호출은 결과
+//!    `ok`(상세에 [`CANCELLED_AFTER_THE_POINT`]), 답이 없으면 취소(상세에 [`CANCELLED_UNSETTLED`]) — 16-m5-plan M5-18b.
 //! 7. 응답 상한 [`MAX_RESPONSE_BYTES`] — 넘으면 「범위를 좁혀라」 오류(결정 M5-D34).
 //!
 //! 결과는 모두 `_meta` 에 결과 표지([`crate::marker`])를 단다.
@@ -28,7 +30,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use pw_core::config::{AppPaths, ConfigSource, ConfigStore, TOPIC_CHANGED};
 use pw_core::registry::methods::{PathParams, ProjectIdParams};
@@ -55,7 +57,7 @@ use crate::approval::{
 };
 use crate::audit::{AuditApproval, AuditLog, Entry, Outcome, summarize};
 use crate::catalog::{Catalog, PROJECT_ID, Tool};
-use crate::client::{CallError, HostClient};
+use crate::client::{CallError, HostClient, Settled};
 use crate::exposure::{self, Exposure};
 use crate::marker::{Mark, Reason};
 use crate::policy::{self, Approval, Decision, Policy};
@@ -64,6 +66,19 @@ use crate::sessions::Sessions;
 /// 툴 응답 한 건의 상한: 직렬화한 결과 JSON 의 바이트 수(결정 M5-D34 — 출발값이다). 툴 메서드는 이것을 넘지 않게 자르고
 /// (`truncated` 와 다음 `cursor`), 그래도 넘은 응답은 세션이 「범위를 좁혀라」 오류로 바꾼다.
 pub const MAX_RESPONSE_BYTES: usize = 256 * 1024;
+
+/// 선기록한 호출을 취소한 뒤 Host 의 답을 기다리는 시한(16-m5-plan M5-18b). rmcp 가 클라이언트가 끊긴 뒤 핸들러의 응답을 기다리는
+/// 시간(rmcp 3.9 의 drain 5 s — 05-mcp.md 「호출 취소」)과 같다. 넘기면 결과를 모른다 — 감사 행은 취소이고 상세가
+/// [`CANCELLED_UNSETTLED`] 다.
+pub const SETTLE_AFTER_CANCEL: Duration = Duration::from_secs(5);
+
+/// 취소 뒤 Host 가 결과로 답한 호출의 감사 상세 꼬리 — 되돌릴 수 없는 지점(`db_execute` 의 커밋)을 넘어 끝까지 돌았다.
+pub const CANCELLED_AFTER_THE_POINT: &str =
+    "cancelled by the client after the point of no return; it ran to the end";
+
+/// 취소 뒤 [`SETTLE_AFTER_CANCEL`] 까지 답이 없던 호출의 감사 상세 꼬리 — 「취소됨」 과 달리 효과가 났는지 모른다.
+pub const CANCELLED_UNSETTLED: &str = "no answer from the host within 5 s after the cancel; \
+     whether it took effect (for db_execute, whether it committed) is unknown";
 
 /// 목록 툴의 `limit` 기본값(결정 M5-D34) — 툴 메서드 규약의 값이라 정본은 `pw_rpc` 에 있다(기능 크레이트가 쓴다). 툴마다
 /// 다르게 둘 수 있다(`git_log` · `symbol_search` 50, `git_status` 200).
@@ -538,7 +553,9 @@ impl Session {
                     );
                     return Ok(failed(reason, Mark::denied(Reason::NotExposed)));
                 }
-                Err(e) => return Ok(self.call_failed(None, &name, &args, project_id, e, started)),
+                Err(e) => {
+                    return Ok(self.call_failed(None, &name, &args, project_id, e, started, None));
+                }
             }
         }
         if let Decision::Deny(reason) = policy::decide(tool.tier, &self.inner.services.approval) {
@@ -587,7 +604,9 @@ impl Session {
         let plan = match first {
             // 이 호출에는 승인을 청하지 않았다(`read` 툴).
             Ok(result) if tool.tier == Tier::Read => {
-                return Ok(self.finished(None, &name, &args, project_id, tool, result, started));
+                return Ok(
+                    self.finished(None, &name, &args, project_id, tool, result, started, None)
+                );
             }
             Ok(_) => {
                 // 툴이 승인 표 없이 돌았다 — 규약 위반(프로그래밍 오류). 결과를 에이전트에게 주지 않는다.
@@ -650,7 +669,7 @@ impl Session {
                     }
                 }
             }
-            Err(e) => return Ok(self.call_failed(None, &name, &args, project_id, e, started)),
+            Err(e) => return Ok(self.call_failed(None, &name, &args, project_id, e, started, None)),
         };
         // 앱이 끝날 때(`Sessions::shutdown`) 이 호출이 거절 기록을 큐에 넣을 때까지 기다리게 한다.
         let hold = match &self.inner.services.approval {
@@ -928,18 +947,83 @@ impl Session {
         // 클라이언트가 취소하거나 세션이 끝나면 Host RPC 를 거둔다 — `HostClient` 가 그 요청 id 로 `request.cancel` 을 보낸다.
         // 세션의 끝을 따로 보지 않는다: rmcp 의 요청 토큰(`cancel`)은 [`serve`] 가 `serve_with_ct` 에 넘긴 세션 토큰의 자손이라,
         // 세션 토큰이 취소되거나 전송이 닫혀 서비스 루프가 끝나면 함께 취소된다(rmcp 3.9 `serve_inner` 의 `serve_loop_ct`).
-        match self
-            .inner
-            .client
-            .call_until(tool.method, params, cancel)
-            .await
-        {
-            Ok(result) => Ok(self.finished(row, &name, &args, project_id, tool, result, started)),
-            Err(e) => Ok(self.call_failed(row, &name, &args, project_id, e, started)),
+        //
+        // 선기록한 호출은 취소 뒤에도 Host 의 답을 [`SETTLE_AFTER_CANCEL`] 까지 기다린다(16-m5-plan M5-18b): 「되돌릴 수 없는
+        // 지점」(`pw_rpc::PointOfNoReturn` — `db_execute` 의 커밋)을 넘은 핸들러는 버려지지 않고 끝까지 돌아 답한다. 그 답으로 행을
+        // 끝내 감사가 사실과 맞게 한다. 그 결과는 에이전트에게 가지 않을 수 있다 — rmcp 는 취소된 요청의 늦은 응답을 버린다(rmcp 3.9
+        // `serve_inner` 의 `local_ct_pool`). 그래서 감사 행이 정본이다.
+        let settled = if row.is_some() {
+            self.inner
+                .client
+                .call_until_settled(tool.method, params, cancel, SETTLE_AFTER_CANCEL)
+                .await
+        } else {
+            Settled::Answered(
+                self.inner
+                    .client
+                    .call_until(tool.method, params, cancel)
+                    .await,
+            )
+        };
+        let after_cancel = Some(CANCELLED_AFTER_THE_POINT);
+        match settled {
+            Settled::Answered(Ok(result)) => {
+                Ok(self.finished(row, &name, &args, project_id, tool, result, started, None))
+            }
+            Settled::Answered(Err(e)) => {
+                Ok(self.call_failed(row, &name, &args, project_id, e, started, None))
+            }
+            Settled::AnsweredAfterCancel(answer) => {
+                tracing::warn!(
+                    tool = name,
+                    ok = answer.is_ok(),
+                    "the client cancelled a call after it passed its point of no return; it ran to the end"
+                );
+                Ok(match answer {
+                    Ok(result) => self.finished(
+                        row,
+                        &name,
+                        &args,
+                        project_id,
+                        tool,
+                        result,
+                        started,
+                        after_cancel,
+                    ),
+                    Err(e) => {
+                        self.call_failed(row, &name, &args, project_id, e, started, after_cancel)
+                    }
+                })
+            }
+            Settled::Cancelled => Ok(self.call_failed(
+                row,
+                &name,
+                &args,
+                project_id,
+                CallError::Cancelled,
+                started,
+                None,
+            )),
+            Settled::Unsettled => {
+                tracing::warn!(
+                    tool = name,
+                    "the client cancelled a call and the host did not answer in time; whether it took effect is unknown"
+                );
+                Ok(self.call_failed(
+                    row,
+                    &name,
+                    &args,
+                    project_id,
+                    CallError::Cancelled,
+                    started,
+                    Some(CANCELLED_UNSETTLED),
+                ))
+            }
         }
     }
 
-    /// Host RPC 가 성공한 호출의 감사 행과 결과(응답 상한을 본다).
+    /// Host RPC 가 성공한 호출의 감사 행과 결과(응답 상한을 본다). `note` 는 감사 상세 끝에 덧붙는다(취소 뒤의 답 —
+    /// [`CANCELLED_AFTER_THE_POINT`]).
     #[allow(clippy::too_many_arguments)] // 감사 행의 열과 호출 하나의 결과다.
     fn finished(
         &self,
@@ -950,9 +1034,11 @@ impl Session {
         tool: &Tool,
         result: Value,
         started: Instant,
+        note: Option<&str>,
     ) -> CallToolResult {
         let size = result.to_string().len();
-        let detail = audit_detail(&result);
+        let noted = audit_detail(&result).map(|d| with_detail(d.to_owned(), note));
+        let detail = noted.as_deref().or(note);
         if size > MAX_RESPONSE_BYTES {
             let message = format!(
                 "the response is {size} bytes, over the {} KiB limit for one tool response; \
@@ -989,7 +1075,9 @@ impl Session {
         marked(result, Mark::ok())
     }
 
-    /// Host RPC 가 실패한 호출(취소 포함)의 감사 행과 결과.
+    /// Host RPC 가 실패한 호출(취소 포함)의 감사 행과 결과. `note` 는 감사 상세 끝에 덧붙는다(취소 뒤의 답 · 시한까지 답이 없음 —
+    /// [`CANCELLED_AFTER_THE_POINT`] · [`CANCELLED_UNSETTLED`]).
+    #[allow(clippy::too_many_arguments)] // 감사 행의 열과 호출 하나의 결과다.
     fn call_failed(
         &self,
         row: Option<i64>,
@@ -998,6 +1086,7 @@ impl Session {
         project_id: Option<String>,
         error: CallError,
         started: Instant,
+        note: Option<&str>,
     ) -> CallToolResult {
         let cancelled = match &error {
             CallError::Cancelled => true,
@@ -1086,7 +1175,7 @@ impl Session {
             args,
             project_id,
             mark.outcome,
-            Some(logged),
+            Some(with_detail(logged, note)),
             None,
             started,
         );

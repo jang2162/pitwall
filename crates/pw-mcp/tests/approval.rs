@@ -147,6 +147,31 @@ rpc_method! {
         tier: Dangerous,
         mcp: { group: "project", name: "fake_dangerous_low" },
     }
+
+    /// 승인 뒤 「되돌릴 수 없는 지점」(`pw_rpc::PointOfNoReturn` — `db_execute` 의 커밋 자리)을 세우는 쓰기 툴. 시험이
+    /// [`PointGate`] 로 그 앞뒤를 쥔다.
+    pub FakeIrreversible: "approvaltest.irreversible" {
+        params: Planned<ToolParams>,
+        result: ToolResult,
+        tier: Write,
+        mcp: { group: "project", name: "fake_irreversible" },
+    }
+}
+
+/// [`FakeIrreversible`] 의 앞뒤를 쥐는 자리. 효과를 내는 쪽은 핸들러가 버려져도 도는 태스크다(`db_execute` 의 실행 태스크처럼).
+#[derive(Default)]
+struct PointGate {
+    /// 승인을 지나 지점 앞에 왔다.
+    reached: tokio::sync::Notify,
+    /// 지점을 세우러 간다.
+    go: tokio::sync::Notify,
+    /// 세웠는가(세우려 한 뒤).
+    passed: std::sync::Mutex<Option<bool>>,
+    decided: tokio::sync::Notify,
+    /// 세운 뒤 Host 의 호출 토큰이 취소됐다(`request.cancel` 이 Host 에 닿았다).
+    saw_cancel: tokio::sync::Notify,
+    /// 끝낸다.
+    finish: tokio::sync::Notify,
 }
 
 /// 가짜 툴이 불린 수.
@@ -156,6 +181,8 @@ struct Probe {
     plans: Arc<AtomicUsize>,
     /// 승인을 지나 실제로 돈 수.
     runs: Arc<AtomicUsize>,
+    /// `fake_irreversible` 의 앞뒤.
+    gate: Arc<PointGate>,
 }
 
 fn target_file(p: &ToolParams) -> Option<PathBuf> {
@@ -297,6 +324,42 @@ fn register_tools(router: &mut pw_rpc::Router, probe: &Probe) {
             &p.params,
         );
         execute(wrong.clone(), plan, p)
+    });
+    let irreversible = probe.clone();
+    router.unary(FakeIrreversible, move |ctx, p: Planned<ToolParams>| {
+        let probe = irreversible.clone();
+        let point = ctx.point_of_no_return();
+        let token = ctx.cancellation().clone();
+        async move {
+            probe.plans.fetch_add(1, Ordering::SeqCst);
+            let plan = plan_of(
+                "approvaltest.irreversible",
+                Tier::Write,
+                PlanRules::default(),
+                &p.params,
+            );
+            let approved = p.approve(plan)?;
+            let gate = Arc::clone(&probe.gate);
+            let task = tokio::spawn(async move {
+                gate.reached.notify_one();
+                gate.go.notified().await;
+                let passed = point.pass();
+                *gate.passed.lock().unwrap() = Some(passed);
+                gate.decided.notify_one();
+                if passed {
+                    token.cancelled().await;
+                    gate.saw_cancel.notify_one();
+                    gate.finish.notified().await;
+                }
+                passed
+            });
+            if task.await.unwrap() {
+                probe.runs.fetch_add(1, Ordering::SeqCst);
+            }
+            Ok::<_, RpcError>(ToolResult {
+                audit: format!("irreversible {}", approved.hash()),
+            })
+        }
     });
     let low = probe.clone();
     router.unary(FakeDangerousLow, move |_ctx, p: Planned<ToolParams>| {
@@ -1298,6 +1361,104 @@ async fn cancelling_the_call_withdraws_the_request() {
         ("error", Some("cancelled"))
     );
     assert_eq!(f.runs(), 0);
+}
+
+/// 승인을 지난 `fake_irreversible` 을 띄우고 지점 앞까지 데려간다. 취소할 수 있는 요청의 손잡이를 돌려준다.
+async fn irreversible_at_the_point(
+    f: &Fixture,
+    window: &mut Window,
+    agent: &Agent,
+) -> rmcp::service::RequestHandle<RoleClient> {
+    let handle = agent
+        .running
+        .peer()
+        .send_cancellable_request(
+            ClientRequest::CallToolRequest(CallToolRequest::new(
+                CallToolRequestParams::new("fake_irreversible")
+                    .with_arguments(json!({"tag": "x"}).as_object().unwrap().clone()),
+            )),
+            PeerRequestOptions::no_options(),
+        )
+        .await
+        .unwrap();
+    let request = window.opened().await;
+    window.answer(request.id, McpApprovalAnswer::Once).unwrap();
+    within(f.probe.gate.reached.notified()).await;
+    handle
+}
+
+/// 「되돌릴 수 없는 지점」 을 넘은 뒤 클라이언트가 취소하면(16-m5-plan M5-18b) Host 는 핸들러를 버리지 않고 끝까지 돌려 답하고,
+/// 세션은 그 답을 기다려 선기록한 행을 결과 `ok` 로 끝낸다 — 상세는 툴의 상세 뒤에 「취소됐지만 끝까지 돌았다」.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancel_after_the_point_of_no_return_finishes_the_row_with_the_result() {
+    let f = Fixture::new();
+    let mut window = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let handle = irreversible_at_the_point(&f, &mut window, &agent).await;
+    f.probe.gate.go.notify_one();
+    within(f.probe.gate.decided.notified()).await;
+    assert_eq!(*f.probe.gate.passed.lock().unwrap(), Some(true));
+    handle.cancel(Some("test".into())).await.unwrap();
+    // 취소가 Host 의 핸들러에 닿은 뒤에 끝낸다 — 취소 뒤의 답이다.
+    within(f.probe.gate.saw_cancel.notified()).await;
+    f.probe.gate.finish.notify_one();
+    let rows = f.rows(1);
+    let detail = rows[0].detail.clone().unwrap_or_default();
+    assert_eq!(rows[0].outcome, "ok", "{rows:?}");
+    assert!(detail.starts_with("irreversible "), "{detail}");
+    assert!(
+        detail.ends_with(&format!(" · {}", pw_mcp::server::CANCELLED_AFTER_THE_POINT)),
+        "{detail}"
+    );
+    assert_eq!(rows[0].approval.as_deref(), Some("once"));
+    assert_eq!(f.runs(), 1);
+}
+
+/// 지점 전의 취소는 지금처럼 버려진다 — Host 가 `cancelled` 로 답하고 행은 결과 `error` · 상세 `cancelled`, 태스크는 지점을 세우지
+/// 못한다(효과를 내지 않는다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancel_before_the_point_of_no_return_is_a_cancel() {
+    let f = Fixture::new();
+    let mut window = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let handle = irreversible_at_the_point(&f, &mut window, &agent).await;
+    handle.cancel(Some("test".into())).await.unwrap();
+    let rows = f.rows(1);
+    assert_eq!(
+        (rows[0].outcome.as_str(), rows[0].detail.as_deref()),
+        ("error", Some("cancelled"))
+    );
+    f.probe.gate.go.notify_one();
+    within(f.probe.gate.decided.notified()).await;
+    assert_eq!(*f.probe.gate.passed.lock().unwrap(), Some(false));
+    assert_eq!(f.runs(), 0);
+}
+
+/// 지점 뒤에 취소했는데 Host 가 [`pw_mcp::server::SETTLE_AFTER_CANCEL`](5 s) 안에 답하지 않으면 지금처럼 취소로 끝내되, 상세가
+/// 「효과가 났는지 모른다」 다 — 「취소됨」(위)과 구분된다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancel_whose_answer_does_not_come_in_time_is_logged_as_unknown() {
+    let f = Fixture::new();
+    let mut window = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let handle = irreversible_at_the_point(&f, &mut window, &agent).await;
+    f.probe.gate.go.notify_one();
+    within(f.probe.gate.decided.notified()).await;
+    let cancelled = std::time::Instant::now();
+    handle.cancel(Some("test".into())).await.unwrap();
+    within(f.probe.gate.saw_cancel.notified()).await;
+    let rows = f.rows(1);
+    assert!(
+        cancelled.elapsed() >= pw_mcp::server::SETTLE_AFTER_CANCEL,
+        "{:?}",
+        cancelled.elapsed()
+    );
+    assert_eq!(rows[0].outcome, "error", "{rows:?}");
+    assert_eq!(
+        rows[0].detail.as_deref(),
+        Some(format!("cancelled · {}", pw_mcp::server::CANCELLED_UNSETTLED).as_str())
+    );
+    f.probe.gate.finish.notify_one();
 }
 
 /// 끊긴 세션의 요청에 사람이 [허용] 을 눌러도 돌지 않는다. rmcp 는 끊긴 뒤 5초까지 핸들러를 돌리지만, 세션은 읽기가 끝나는 것을

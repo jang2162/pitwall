@@ -71,5 +71,5 @@ pub mod settings;
 pub mod socket;
 
 pub use catalog::{Catalog, Tool};
-pub use client::{CallError, HostClient};
+pub use client::{CallError, HostClient, Settled};
 pub use server::{HostKind, ServeError, Services, SessionRequest, serve};
