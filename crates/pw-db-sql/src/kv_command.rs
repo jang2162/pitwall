@@ -17,6 +17,8 @@
 //! - 서버를 오래 붙잡는 명령은 그 등급 그대로 확인이다(14 M3-22): `LCS`, `COUNT n ANY`(n ≤ [`MAX_GEO_ANY_COUNT`])로 묶지 않은 `GEOSEARCH` · `GEORADIUS`
 //!   류(DBX 는 허용 · 쓰기). 읽기는 `Confirm(Read)` 라 read-only 연결에서도 확인 뒤 돈다. `SORT_RO` 는 비용이 목록 길이에
 //!   비례하므로 분류가 아니라 드라이버의 길이 사전 확인이 묶는다(`SORT` 는 늘 확인).
+//! - `MEMORY USAGE <key>`(선택 `SAMPLES n`, 1 ≤ n ≤ [`MAX_MEMORY_SAMPLES`])를 읽기로 더했다(16-m5-plan.md M5-19 — 키 브라우저 ·
+//!   에이전트의 `db_kv_scan` 이 키마다 보내는 크기 읽기, 메인 판정 2026-11-17). 다른 `MEMORY` 하위 명령은 그대로 거절이다.
 //! - 거절에 까닭([`BlockReason`])을 싣고, 여러 줄 묶음의 분류([`classify_script`])를 여기 하나에 둔다.
 //! - DBX 데스크톱의 「안전 확인 건너뛰기」 는 옮기지 않았다. 토크나이저는 오류 글만 그대로다.
 //!
@@ -231,9 +233,17 @@ pub fn classify_argv<A: AsRef<[u8]>>(argv: &[A]) -> KvCommandClass {
     let Ok(name) = std::str::from_utf8(name.as_ref()) else {
         return KvCommandClass::Blocked(BlockReason::NotAllowed);
     };
-    let class = classify_command(name);
     let args: Vec<&[u8]> = argv[1..].iter().map(|a| a.as_ref()).collect();
     let upper = name.to_ascii_uppercase();
+    // `MEMORY` 는 이름으로 허용하지 않는다 — 하위 명령 가운데 키 하나의 크기 읽기(`USAGE`)만 받는다([`memory_usage`]).
+    if upper == "MEMORY" {
+        return if memory_usage(&args) {
+            KvCommandClass::Allowed
+        } else {
+            KvCommandClass::Blocked(BlockReason::NotAllowed)
+        };
+    }
+    let class = classify_command(name);
     let refused = match upper.as_str() {
         "XREAD" => stream_read_options(&args, 0),
         "XREADGROUP" => match args.first() {
@@ -270,6 +280,28 @@ pub fn classify_argv<A: AsRef<[u8]>>(argv: &[A]) -> KvCommandClass {
             KvCommandClass::Confirm(class.grade().unwrap_or(RiskGrade::Read))
         }
         class => class,
+    }
+}
+
+/// `MEMORY USAGE` 의 `SAMPLES n` 상한 — 서버 기본(5)과 같은 비용까지. `SAMPLES 0` 은 컬렉션의 원소를 모두 센다(키 하나를 통째로
+/// 도는 서버 작업이다).
+pub const MAX_MEMORY_SAMPLES: u64 = 5;
+
+/// `MEMORY USAGE <key>` · `MEMORY USAGE <key> SAMPLES n`(1 ≤ n ≤ [`MAX_MEMORY_SAMPLES`])인가 — 허용하는 `MEMORY` 는 이 꼴뿐이다
+/// (16-m5-plan.md M5-19 — 에이전트의 Redis 스캔이 보내는 키 크기 읽기 · 메인 판정 2026-11-17). 다른 하위 명령(`DOCTOR` · `PURGE`
+/// · `STATS` · `MALLOC-STATS` …) · `SAMPLES 0` · 상한 초과 · 인자 수가 틀린 꼴은 거절이다.
+fn memory_usage(args: &[&[u8]]) -> bool {
+    match args {
+        [sub, _key] => sub.eq_ignore_ascii_case(b"USAGE"),
+        [sub, _key, word, n] => {
+            sub.eq_ignore_ascii_case(b"USAGE")
+                && word.eq_ignore_ascii_case(b"SAMPLES")
+                && std::str::from_utf8(n)
+                    .ok()
+                    .and_then(|n| n.parse::<u64>().ok())
+                    .is_some_and(|n| (1..=MAX_MEMORY_SAMPLES).contains(&n))
+        }
+        _ => false,
     }
 }
 

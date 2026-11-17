@@ -527,3 +527,45 @@ fn a_console_line_splits_like_redis_cli() {
         }
     }
 }
+
+/// `MEMORY` 는 키 하나의 크기 읽기(`MEMORY USAGE <key>`, `SAMPLES n` 은 1 ~ 5)만 읽기다 — 키 브라우저 · 에이전트의 `db_kv_scan` 이
+/// 키마다 보내는 명령이다(16-m5-plan.md M5-19). 다른 하위 명령 · `SAMPLES 0`(원소를 모두 센다) · 5 초과 · 인자 수가 틀린 꼴은
+/// 거절이다.
+#[test]
+fn memory_usage_of_one_key_is_a_read_and_the_rest_of_memory_is_refused() {
+    for allowed in [
+        "MEMORY USAGE user:1",
+        "memory usage user:1",
+        "MEMORY USAGE \"a key\" SAMPLES 1",
+        "MEMORY USAGE k samples 5",
+        // 키 이름이 낱말이어도 자리로 가른다.
+        "MEMORY USAGE SAMPLES",
+        "MEMORY USAGE USAGE SAMPLES 3",
+    ] {
+        assert_eq!(class_of(allowed), KvCommandClass::Allowed, "{allowed}");
+    }
+    for refused in [
+        "MEMORY",
+        "MEMORY USAGE",
+        "MEMORY USAGE k SAMPLES 0",
+        "MEMORY USAGE k SAMPLES 6",
+        "MEMORY USAGE k SAMPLES 18446744073709551616",
+        "MEMORY USAGE k SAMPLES -1",
+        "MEMORY USAGE k SAMPLES",
+        "MEMORY USAGE k SAMPLES five",
+        "MEMORY USAGE k COUNT 1",
+        "MEMORY USAGE k SAMPLES 1 extra",
+        "MEMORY DOCTOR",
+        "MEMORY PURGE",
+        "MEMORY STATS",
+        "MEMORY MALLOC-STATS",
+        "MEMORY HELP",
+        "MEMORY DOCTOR k",
+    ] {
+        assert_eq!(class_of(refused), BLOCKED, "{refused}");
+    }
+    assert_eq!(
+        classify_argv(&[b"MEMORY".as_slice(), b"USAGE", b"\xffbin"]),
+        KvCommandClass::Allowed
+    );
+}
