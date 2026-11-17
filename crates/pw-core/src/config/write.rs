@@ -59,6 +59,10 @@ pub enum WriteError {
         path: PathBuf,
         message: String,
     },
+    /// 계획([`PlannedEdit`])을 만든 뒤 파일이 바뀌었다 — 계획한 내용을 쓰지 않았다([`apply_planned`]).
+    Changed {
+        path: PathBuf,
+    },
 }
 
 /// 쓸 파일이 심볼릭 링크일 때.
@@ -81,6 +85,11 @@ impl std::fmt::Display for WriteError {
             WriteError::Busy { path } => write!(
                 f,
                 "{}: the file kept changing while it was being written; try again",
+                path.display()
+            ),
+            WriteError::Changed { path } => write!(
+                f,
+                "{}: the file changed after the edit was planned, so the planned edit was not written",
                 path.display()
             ),
         }
@@ -342,14 +351,107 @@ fn create(path: &Path, contents: &str) -> io::Result<()> {
     file.sync_all()
 }
 
-/// `current`(없으면 새 파일)의 키 `keys` 를 `value` 로 바꾸거나(`None` 이면 지운) 내용.
-fn with_key(
-    current: Option<&str>,
+/// 디스크에 쓰지 않고 만든 고칠 계획([`plan_table`]). 승인을 청하는 툴(16-m5-plan M5-16 `open_with_upsert`)이 `before` · `after`
+/// 를 계획의 diff 로 보이고, 승인 뒤 [`apply_planned`] 로 **그 내용 그대로** 쓴다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedEdit {
+    pub path: PathBuf,
+    /// 계획 때 읽은 내용. 없는 파일이면 `None`.
+    pub before: Option<String>,
+    /// 고친 뒤 내용.
+    pub after: String,
+}
+
+/// 설정 파일 `file`(종류 `kind`)의 표 `tables`(조각들 — [`write_key`] 와 같은 규칙)를 `entries` 로 **통째로** 바꾼 내용을
+/// 만든다. 쓰지 않는다. 그 표에 있던 다른 키 · 아래 표는 남지 않고, 표 위의 주석과 문서 안 자리는 남는다. 있던 것이 인라인
+/// 표(또는 인라인 표 안)면 인라인 표로 둔다. 새로 만드는 바깥 표는 머리글을 두지 않는다(`[open_with.tools.zed]` 한 줄). 파일을
+/// 읽거나 TOML 로 읽을 수 없으면, 앱보다 새 `schema` 면 [`write_key`] 와 같은 오류다.
+pub fn plan_table(
+    file: &Path,
     kind: &str,
-    keys: &[&str],
-    value: Option<&toml_edit::Value>,
-) -> Result<String, String> {
-    let mut doc: DocumentMut = match current {
+    tables: &[&str],
+    entries: &[(&str, serde_json::Value)],
+) -> Result<PlannedEdit, WriteError> {
+    let path = file.to_path_buf();
+    let entries = entries
+        .iter()
+        .map(|(k, v)| Ok((*k, toml_value(v)?)))
+        .collect::<Result<Vec<_>, String>>()
+        .map_err(|message| WriteError::Invalid {
+            path: path.clone(),
+            message,
+        })?;
+    let before = read(&path).map_err(|error| WriteError::Io {
+        path: path.clone(),
+        error,
+    })?;
+    let after = with_table(before.as_deref(), kind, tables, &entries).map_err(|message| {
+        WriteError::Invalid {
+            path: path.clone(),
+            message,
+        }
+    })?;
+    Ok(PlannedEdit {
+        path,
+        before,
+        after,
+    })
+}
+
+/// 계획한 내용을 쓴다 — 지금 파일이 계획 때 읽은 [`PlannedEdit::before`] 와 같을 때만. 다르면(없던 파일이 생겼거나 그 반대
+/// 포함) 쓰지 않고 [`WriteError::Changed`] 다. [`write_key`] 와 달리 **다시 만들지 않는다** — 승인을 지난 쓰기는 사람이 본 diff
+/// 말고는 쓰지 않는다(`crate::registry::plan` 머리 주석의 TOCTOU 규약). 같은 프로세스의 다른 쓰기와는 [`IN_PROCESS`] 로 한 줄로
+/// 서고, 비교 뒤 rename 까지의 틈은 다른 프로세스에 대해서만 남는다([`write_key`] 와 같다). `links` 는 [`write_key`] 와 같다.
+pub fn apply_planned(edit: &PlannedEdit, links: Links) -> Result<(), WriteError> {
+    let _one_at_a_time = IN_PROCESS.lock().unwrap_or_else(PoisonError::into_inner);
+    let path = &edit.path;
+    let io_err = |error| WriteError::Io {
+        path: path.clone(),
+        error,
+    };
+    if links == Links::Refuse {
+        refuse_link(path)?;
+    }
+    if read(path).map_err(io_err)? != edit.before {
+        return Err(WriteError::Changed { path: path.clone() });
+    }
+    match &edit.before {
+        Some(_) => write_atomic(path, &edit.after).map_err(io_err),
+        None => match create(path, &edit.after) {
+            Ok(()) => Ok(()),
+            // 비교 뒤 다른 쪽이 먼저 만들었다 — 계획 때 없던 파일이다.
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                Err(WriteError::Changed { path: path.clone() })
+            }
+            Err(e) => Err(io_err(e)),
+        },
+    }
+}
+
+/// JSON 값을 TOML 값으로. TOML 에 없는 `null` 과 표(object — 이 쓰기는 값만 받는다)는 오류다.
+fn toml_value(value: &serde_json::Value) -> Result<toml_edit::Value, String> {
+    use serde_json::Value as J;
+    Ok(match value {
+        J::String(s) => s.as_str().into(),
+        J::Bool(b) => (*b).into(),
+        J::Number(n) => match (n.as_i64(), n.as_f64()) {
+            (Some(i), _) => i.into(),
+            (None, Some(f)) => f.into(),
+            (None, None) => return Err(format!("{n} does not fit a TOML number")),
+        },
+        J::Array(items) => toml_edit::Value::Array(
+            items
+                .iter()
+                .map(toml_value)
+                .collect::<Result<toml_edit::Array, String>>()?,
+        ),
+        J::Null | J::Object(_) => return Err(format!("{value} cannot be written as a TOML value")),
+    })
+}
+
+/// `current`(없으면 새 파일)를 읽어 `schema` 를 본 문서.
+fn parse_doc(current: Option<&str>, kind: &str) -> Result<DocumentMut, String> {
+    let doc: DocumentMut = match current {
         Some(text) => text
             .parse()
             .map_err(|e: toml_edit::TomlError| format!("not valid TOML, not changing it: {e}"))?,
@@ -357,14 +459,89 @@ fn with_key(
     };
     let supported = Schemas::builtin().get(kind).map_or(0, |m| m.current());
     match schema_of(&doc) {
-        Ok(version) if version <= supported => {}
-        Ok(version) => {
+        Ok(version) if version <= supported => Ok(doc),
+        Ok(version) => Err(format!(
+            "`schema = {version}` is newer than this app reads (up to {supported}), not changing it"
+        )),
+        Err(e) => Err(format!("{e}, not changing it")),
+    }
+}
+
+/// [`plan_table`] 의 내용.
+fn with_table(
+    current: Option<&str>,
+    kind: &str,
+    tables: &[&str],
+    entries: &[(&str, toml_edit::Value)],
+) -> Result<String, String> {
+    let mut doc = parse_doc(current, kind)?;
+    let Some((name, parents)) = tables.split_last() else {
+        return Err("no table to write".to_owned());
+    };
+    let shown = |upto: usize| tables[..=upto].join(".");
+    let mut item: &mut Item = doc.as_item_mut();
+    for (i, t) in parents.iter().enumerate() {
+        let Some(table) = item.as_table_like_mut() else {
+            return Err(format!("`{}` is not a table, not changing it", shown(i)));
+        };
+        item = table.entry(t).or_insert_with(|| {
+            let mut new = Table::new();
+            new.set_implicit(true);
+            Item::Table(new)
+        });
+        if !item.is_table_like() {
+            return Err(format!("`{}` is not a table, not changing it", shown(i)));
+        }
+    }
+    let mut fresh = Table::new();
+    for (key, value) in entries {
+        fresh.insert(key, Item::Value(value.clone()));
+    }
+    match item {
+        Item::Value(toml_edit::Value::InlineTable(parent)) => {
+            parent.insert(
+                *name,
+                toml_edit::Value::InlineTable(fresh.into_inline_table()),
+            );
+        }
+        Item::Table(parent) => match parent.get(name) {
+            Some(Item::Value(old)) if old.is_inline_table() => {
+                let mut next = toml_edit::Value::InlineTable(fresh.into_inline_table());
+                *next.decor_mut() = old.decor().clone();
+                parent.insert(name, Item::Value(next));
+            }
+            Some(old) if !old.is_table() => {
+                return Err(format!(
+                    "`{}` is not a table, not changing it",
+                    tables.join(".")
+                ));
+            }
+            old => {
+                if let Some(old) = old.and_then(Item::as_table) {
+                    *fresh.decor_mut() = old.decor().clone();
+                    fresh.set_position(old.position());
+                }
+                parent.insert(name, Item::Table(fresh));
+            }
+        },
+        _ => {
             return Err(format!(
-                "`schema = {version}` is newer than this app reads (up to {supported}), not changing it"
+                "`{}` is not a table, not changing it",
+                parents.join(".")
             ));
         }
-        Err(e) => return Err(format!("{e}, not changing it")),
     }
+    Ok(doc.to_string())
+}
+
+/// `current`(없으면 새 파일)의 키 `keys` 를 `value` 로 바꾸거나(`None` 이면 지운) 내용.
+fn with_key(
+    current: Option<&str>,
+    kind: &str,
+    keys: &[&str],
+    value: Option<&toml_edit::Value>,
+) -> Result<String, String> {
+    let mut doc = parse_doc(current, kind)?;
     let Some((name, tables)) = keys.split_last().filter(|(_, t)| !t.is_empty()) else {
         return Err(format!("`{}` is not a `table.key` setting", keys.join(".")));
     };
@@ -654,5 +831,113 @@ mod tests {
                 .unwrap()
                 .contains("enabled = false")
         );
+    }
+
+    fn zed_entries() -> Vec<(&'static str, serde_json::Value)> {
+        vec![
+            ("label", "Zed".into()),
+            ("command", serde_json::json!(["zed", "{project_root}"])),
+        ]
+    }
+
+    const TOOL: [&str; 3] = ["open_with", "tools", "zed"];
+
+    /// 계획은 디스크에 쓰지 않는다. 있던 표는 통째로 바뀌고(옛 키가 남지 않는다) 주석 · 다른 표는 그대로다.
+    #[test]
+    fn plan_table_replaces_the_whole_table_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(SETTINGS_FILE);
+        let text = "schema = 1\n[ui]\nlanguage = \"ko\"\n\n# my zed\n[open_with.tools.zed]\ncommand = [\"/opt/zed\", \"{project_root}\"]\nplatforms = [\"macos\"]\n\n[db]\ngrid_max_rows = 10\n";
+        fs::write(&file, text).unwrap();
+        let edit = plan_table(&file, SETTINGS_KIND, &TOOL, &zed_entries()).unwrap();
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            text,
+            "계획이 파일을 고쳤다"
+        );
+        assert_eq!(edit.before.as_deref(), Some(text));
+        assert_eq!(
+            edit.after,
+            "schema = 1\n[ui]\nlanguage = \"ko\"\n\n# my zed\n[open_with.tools.zed]\nlabel = \"Zed\"\ncommand = [\"zed\", \"{project_root}\"]\n\n[db]\ngrid_max_rows = 10\n"
+        );
+        apply_planned(&edit, Links::Follow).unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), edit.after);
+    }
+
+    /// 없는 파일 · 없는 표는 `schema = 1` 과 그 표 하나로(바깥 표 머리글 없이). 인라인 표였으면 인라인 표로.
+    #[test]
+    fn plan_table_creates_the_file_and_keeps_inline_tables_inline() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(SETTINGS_FILE);
+        let edit = plan_table(&file, SETTINGS_KIND, &TOOL, &zed_entries()).unwrap();
+        assert!(!file.exists(), "계획이 파일을 만들었다");
+        assert_eq!(edit.before, None);
+        assert_eq!(
+            edit.after,
+            "schema = 1\n\n[open_with.tools.zed]\nlabel = \"Zed\"\ncommand = [\"zed\", \"{project_root}\"]\n"
+        );
+        apply_planned(&edit, Links::Follow).unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), edit.after);
+
+        fs::write(
+            &file,
+            "schema = 1\n[open_with.tools]\nzed = { command = [\"x\"] }\n",
+        )
+        .unwrap();
+        let edit = plan_table(&file, SETTINGS_KIND, &TOOL, &zed_entries()).unwrap();
+        let doc: DocumentMut = edit.after.parse().unwrap();
+        assert!(
+            doc["open_with"]["tools"]["zed"].is_inline_table(),
+            "{}",
+            edit.after
+        );
+        assert_eq!(
+            doc["open_with"]["tools"]["zed"]["label"].as_str(),
+            Some("Zed")
+        );
+        assert!(doc["open_with"]["tools"]["zed"].get("command").is_some());
+
+        for bad in [
+            "schema = 1\nopen_with = 3\n",
+            "schema = 1\n[open_with]\ntools = []\n",
+            "schema = 99\n",
+            "not toml [",
+        ] {
+            fs::write(&file, bad).unwrap();
+            let e = plan_table(&file, SETTINGS_KIND, &TOOL, &zed_entries()).unwrap_err();
+            assert!(matches!(e, WriteError::Invalid { .. }), "{bad}: {e}");
+        }
+    }
+
+    /// 계획 뒤 파일이 바뀌었으면(내용 · 새로 생김 · 지워짐) 쓰지 않는다 — 새 내용으로 다시 만들지도 않는다(TOCTOU 규약).
+    #[test]
+    fn apply_planned_refuses_a_file_that_changed_after_the_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(SETTINGS_FILE);
+        fs::write(&file, "schema = 1\n").unwrap();
+        let edit = plan_table(&file, SETTINGS_KIND, &TOOL, &zed_entries()).unwrap();
+        fs::write(&file, "schema = 1\n[ui]\nlanguage = \"en\"\n").unwrap();
+        let e = apply_planned(&edit, Links::Follow).unwrap_err();
+        assert!(matches!(e, WriteError::Changed { .. }), "{e}");
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "schema = 1\n[ui]\nlanguage = \"en\"\n"
+        );
+
+        fs::remove_file(&file).unwrap();
+        let fresh = plan_table(&file, SETTINGS_KIND, &TOOL, &zed_entries()).unwrap();
+        fs::write(&file, "schema = 1\n").unwrap();
+        assert!(matches!(
+            apply_planned(&fresh, Links::Follow).unwrap_err(),
+            WriteError::Changed { .. }
+        ));
+        assert_eq!(fs::read_to_string(&file).unwrap(), "schema = 1\n");
+
+        fs::remove_file(&file).unwrap();
+        assert!(matches!(
+            apply_planned(&edit, Links::Follow).unwrap_err(),
+            WriteError::Changed { .. }
+        ));
+        assert!(!file.exists());
     }
 }

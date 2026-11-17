@@ -9,6 +9,7 @@
 //! - [`state`]: 프로젝트 창의 상태 파일(`$DATA/projects/<id>/state.json`).
 //! - [`trust`]: 프로젝트 신뢰(F1-7 최소판) — 런타임 제공자 게이트가 읽는다.
 //! - [`methods`]: 레지스트리 RPC(`project.*`).
+//! - [`tool`]: `project_register` 툴 메서드(승인을 지나 등록한다 — 신뢰는 주지 않는다).
 //!
 //! 레지스트리는 처음 쓰일 때 파일을 연다. Host 를 만들기만 해서는 `$DATA` 에 아무것도 생기지 않는다.
 //! 변경은 [`Scope::Host`] 의 [`TOPIC_CHANGED`] 이벤트로 나간다.
@@ -25,6 +26,7 @@ pub mod resolve;
 pub mod slug;
 pub mod state;
 pub mod store;
+pub mod tool;
 pub mod trust;
 
 use std::collections::HashMap;

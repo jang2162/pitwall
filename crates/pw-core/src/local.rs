@@ -144,6 +144,7 @@ impl LocalHost {
         // 코어 툴 메서드(결정 M5-D3 — 헤드리스 Host 도 처리한다).
         if let (Some(config), Some(registry)) = (&config, &registry) {
             crate::config::tool::register(&mut router, config.paths.clone(), registry.clone());
+            crate::registry::tool::register(&mut router, registry.clone());
         }
         // 창을 열 수 있는 Host(앱)만 — 헤드리스 Host 에는 없다(결정 M5-D3 · M5-D24).
         if let (Some(requests), Some(registry)) = (open_requests, &registry) {

@@ -91,6 +91,8 @@ impl Reason {
         ("untrusted", Reason::Untrusted),
         ("productionBlocked", Reason::ProductionBlocked),
         ("rateLimited", Reason::RateLimited),
+        // 승인(해시 확인)을 지난 뒤 · 부작용 직전에 대상이 바뀌어 돌지 않았다(16-m5-plan M5-16 — 계획 때 읽은 파일 내용 · 푼 루트).
+        ("planChanged", Reason::PlanChanged),
     ];
 
     /// `PERMISSION_DENIED` 오류의 `data.reason` 을 까닭 코드로. 모르거나 없으면 [`Reason::PermissionDenied`].
@@ -245,6 +247,10 @@ mod tests {
         assert_eq!(
             Reason::of_permission_denied(Some("rateLimited")),
             Reason::RateLimited
+        );
+        assert_eq!(
+            Reason::of_permission_denied(Some("planChanged")),
+            Reason::PlanChanged
         );
         assert_eq!(
             Reason::of_permission_denied(Some("notProjectWindow")),
