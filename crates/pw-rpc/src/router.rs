@@ -435,3 +435,30 @@ impl Router {
         self.entries.get(name)
     }
 }
+
+#[cfg(test)]
+mod point_tests {
+    use super::PointOfNoReturn;
+    use tokio_util::sync::CancellationToken;
+
+    /// 호출 토큰이 이미 취소됐으면 세션이 아직 그 취소를 보지 못했어도 표지는 서지 않는다 — 먼저 온 취소가 이긴다(리뷰 R15).
+    #[test]
+    fn a_cancelled_call_cannot_pass_even_before_the_session_abandons_it() {
+        let token = CancellationToken::new();
+        let point = PointOfNoReturn::new(token.clone());
+        token.cancel();
+        assert!(!point.pass());
+        assert!(point.abandon(), "the session then drops the handler");
+    }
+
+    /// 선 뒤에는 세션이 버리지 못하고, 두 번 세워도 같은 답이다.
+    #[test]
+    fn a_passed_point_is_not_abandoned() {
+        let token = CancellationToken::new();
+        let point = PointOfNoReturn::new(token.clone());
+        assert!(point.pass());
+        token.cancel();
+        assert!(!point.abandon());
+        assert!(point.pass());
+    }
+}

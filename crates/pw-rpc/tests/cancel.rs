@@ -377,3 +377,50 @@ async fn the_point_of_no_return_never_passes_in_a_stream() {
     let chunk: StreamChunk = h.next_notification(STREAM_CHUNK).await;
     assert_eq!(chunk.data, json!(false));
 }
+
+rpc_method! {
+    /// 버려질 때 느리게 정리하는 핸들러(정리가 끝나면 플래그를 세운다).
+    SlowDrop: "test.slowDrop" { params: (), result: (), tier: Read }
+}
+
+/// 버려질 때 잠깐 걸려 정리하고 플래그를 세운다.
+struct Cleanup(Arc<AtomicBool>);
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        std::thread::sleep(Duration::from_millis(100));
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+/// 표지 전의 취소는 핸들러를 **버린 뒤에** 답한다(리뷰 R12) — 취소 응답을 받은 쪽은 핸들러의 정리(`db_execute` 의 `CancelOnDrop`
+/// 이 보내는 인터럽트 등)가 이미 끝났다고 믿어도 된다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_handler_is_dropped_before_the_cancel_is_answered() {
+    let cleaned = Arc::new(AtomicBool::new(false));
+    let started = Arc::new(Notify::new());
+    let mut router = base_router();
+    let (flag, start) = (Arc::clone(&cleaned), Arc::clone(&started));
+    router.unary(SlowDrop, move |_ctx, ()| {
+        let guard = Cleanup(Arc::clone(&flag));
+        let start = Arc::clone(&start);
+        async move {
+            let _guard = guard;
+            start.notify_one();
+            std::future::pending::<()>().await;
+            Ok::<_, RpcError>(())
+        }
+    });
+    let mut h = Harness::new(router, Role::Owner);
+    h.request(1, "test.slowDrop", Value::Null);
+    timeout(Duration::from_secs(1), started.notified())
+        .await
+        .expect("handler never started");
+    h.notify("request.cancel", json!({"id": 1}));
+    let res = h.next_response().await;
+    assert_eq!(err_code(&res), code::CANCELLED);
+    assert!(
+        cleaned.load(Ordering::SeqCst),
+        "the cancel was answered before the handler was dropped"
+    );
+}
