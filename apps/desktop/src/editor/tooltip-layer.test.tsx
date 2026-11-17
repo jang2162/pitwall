@@ -107,6 +107,8 @@ it("lets the tooltip text be selected under the body's user-select: none", () =>
 });
 
 it("hides the layer while a modal Radix dialog marks the rest aria-hidden, and shows it again after", async () => {
+  // 그래서 모달 안 에디터(찾기 미리보기 · 일괄 편집 미리보기)는 층에 넣지 않는다 — 넣으면 그 툴팁이 모달 동안 보이지 않는다
+  // (tooltip-layer.ts 머리 주석, 메인 판정 2026-11-17).
   const drop = layerRules();
   const { view, root } = mountEditor();
   const layer = document.getElementById(TOOLTIP_LAYER_ID)!;
