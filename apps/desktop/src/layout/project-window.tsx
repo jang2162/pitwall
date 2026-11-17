@@ -108,6 +108,7 @@ import { SymbolSearchFeature } from "../search-everywhere/symbol-tab";
 import { createRecentFiles } from "../search-everywhere/recent-files";
 import { SearchResultsToolWindow } from "../search/search-results";
 import { StructureToolWindow } from "../structure/structure-tool-window";
+import { AgentActivityToolWindow } from "../mcp/agent-activity";
 import { McpStatus } from "../mcp/mcp-status";
 import { RuntimeStatus } from "../runtime/runtime-status";
 import {
@@ -162,6 +163,7 @@ const ICONS: Record<string, LucideIcon> = {
  * 요소에 `data-tool-window={api.id}` 와 `tabIndex={-1}` 을 단다 — 키맵 컨텍스트의 툴 윈도우 층이다(src/keymap/context.ts).
  */
 const TOOL_WINDOWS: Readonly<Record<string, ComponentType<IDockviewPanelProps>>> = {
+  agent: AgentActivityToolWindow,
   commit: CommitToolWindow,
   database: DbExplorerToolWindow,
   git: GitLogToolWindow,

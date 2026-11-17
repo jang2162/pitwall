@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 // MCP 상태 표시(16-m5-plan M5-10 ⑤): 프로젝트 창(App kind="project", `?project=p1`)의 상태바 「MCP n」 — 이 프로젝트를 세션
-// 프로젝트로 가진 세션 수, 0 이면 항목이 없다, 누르면 세션 목록 팝업. 세션이 열리고 닫히면(`mcp.sessionsChanged`, Host 범위)
+// 프로젝트로 가진 세션 수, 0 이면 항목이 없다, 누르면 「에이전트 활동」 툴 윈도우(M5-13 — 그 전에는 세션 목록 팝업). 세션이 열리고 닫히면(`mcp.sessionsChanged`, Host 범위)
 // 다시 읽는다. 웰컴 창(App kind="welcome")의 아래 줄 「MCP: 연결 n」 은 세션 전부의 수다.
 
 import type {
@@ -104,6 +104,10 @@ vi.mock("../tauri-transport", async () => {
           case "mcp.sessions":
             host.reads += 1;
             return reply(host.sessions);
+          case "mcp.tools.list":
+            return reply([]);
+          case "mcp.audit.list":
+            return reply({ entries: [], nextCursor: null });
           case "events.subscribe": {
             const id = next++;
             subs.set(id, m.params as { projectId?: string; topics: string[] });
@@ -240,20 +244,6 @@ it("shows the number of sessions on this project, and nothing at zero", async ()
   expect(document.querySelector('[data-status-item="mcp"]')?.childElementCount).toBe(0);
 });
 
-// 팝업이 열린 채 마지막 세션이 닫히면 팝업은 빈 목록으로 남고, 상태바에 「MCP 0」 단추가 생기지 않는다.
-it("keeps the popup but shows no MCP 0 item when the last session closes while it is open", async () => {
-  host.sessions = [session("a", "p1")];
-  await mount("project");
-  await act(async () => item()!.click());
-  host.sessions = [];
-  await act(async () => host.emitHost("mcp.sessionsChanged", { total: 0 }));
-  await settle();
-  const popup = document.querySelector<HTMLElement>("[data-testid=mcp-sessions-popup]");
-  expect(popup?.textContent).toContain(T.sessions.empty);
-  expect(item()).toBeNull();
-  expect(document.body.textContent).not.toContain(T.status.label(0));
-});
-
 it("has no item when no session is on this project", async () => {
   host.sessions = [session("c", "p2")];
   await mount("project");
@@ -261,21 +251,37 @@ it("has no item when no session is on this project", async () => {
   expect(item()).toBeNull();
 });
 
-it("lists the project's sessions when clicked", async () => {
+it("opens the Agent Activity tool window listing the project's sessions when clicked", async () => {
   host.sessions = [
     session("a", "p1", { calls: 3 }),
     session("b", "p1", { client: null }),
     session("c", "p2"),
   ];
   await mount("project");
+  expect(item()?.getAttribute("title")).toBe(T.status.hint(2));
   await act(async () => item()!.click());
-  const popup = document.querySelector<HTMLElement>("[data-testid=mcp-sessions-popup]")!;
-  expect(popup.textContent).toContain(T.sessions.title);
-  const rows = [...popup.querySelectorAll<HTMLElement>("[data-testid=mcp-session]")];
+  await settle();
+  const panel = await vi.waitFor(() => {
+    const el = document.querySelector<HTMLElement>('[data-tool-window="agent"]');
+    expect(el).not.toBeNull();
+    return el!;
+  });
+  expect(document.querySelector("[data-testid=mcp-sessions-popup]")).toBeNull();
+  const agents = panel.querySelector<HTMLElement>("[data-testid=mcp-agents]")!;
+  expect(agents.textContent).toContain(T.sessions.title);
+  const rows = [...agents.querySelectorAll<HTMLElement>("[data-testid=mcp-session]")];
   expect(rows).toHaveLength(2);
   expect(rows[0]!.textContent).toContain("claude-code 2.1.0");
   expect(rows[0]!.textContent).toContain(T.sessions.calls(3));
   expect(rows[1]!.textContent).toContain(T.sessions.unknownClient);
+
+  // 마지막 세션이 닫히면 상태바 항목은 사라지고 패널은 빈 목록을 보이며 남는다 — 「MCP 0」 은 없다.
+  host.sessions = [];
+  await act(async () => host.emitHost("mcp.sessionsChanged", { total: 0 }));
+  await settle();
+  expect(item()).toBeNull();
+  expect(agents.textContent).toContain(T.sessions.empty);
+  expect(document.body.textContent).not.toContain(T.status.label(0));
 });
 
 it("counts every session in the welcome window", async () => {
