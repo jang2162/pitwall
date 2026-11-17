@@ -1225,10 +1225,7 @@ async fn only_the_project_window_forgets_a_remembered_mark() {
         .await
         .unwrap();
     assert_eq!(forgot["configured"]["production"], true, "{forgot}");
-    assert_eq!(
-        w.call("db.connection.marks", params.clone()).await.unwrap()["remembered"]["production"],
-        true
-    );
+    // 그 사이 다른 읽기 없이(목록 · 이 창의 `db.connection.marks` 도 설정을 읽어 다시 기억한다) 파일에서 지우고 다시 켠다.
     e.f.edit_db("prod.toml", "production = true\n", "");
     e.restart();
     let mut agent = e.agent();
