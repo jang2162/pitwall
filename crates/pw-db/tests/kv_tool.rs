@@ -770,3 +770,35 @@ async fn scan_repeats_are_dropped_within_a_page() {
     all.dedup();
     assert_eq!(all.len(), 300);
 }
+
+/// 리뷰 R1: 프로덕션 표지가 사용자를 적지 않은 Redis 연결에 있으면, 같은 서버를 `user = ""` · `user = "default"` 로 가리키는
+/// 사람이 연 연결도 프로덕션이다(셋은 같은 `default` 사용자다). 다른 사용자는 다른 대상이다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_default_user_spellings_share_the_production_mark() {
+    let base = "schema = 1\ndriver = \"redis\"\nhost = \"cache.example\"\ndatabase = \"1\"\n";
+    for (marked, other) in [
+        ("", "user = \"\"\n"),
+        ("", "user = \"default\"\n"),
+        ("user = \"default\"\n", ""),
+        ("user = \"\"\n", "user = \"default\"\n"),
+    ] {
+        let e = env(true);
+        e.f.write_db(
+            "prod.toml",
+            &format!("{base}name = \"prod\"\n{marked}production = true\n"),
+        );
+        e.f.write_db("dev.toml", &format!("{base}name = \"dev\"\n{other}"));
+        e.f.write_db(
+            "reader.toml",
+            &format!("{base}name = \"reader\"\nuser = \"reader\"\n"),
+        );
+        e.human_opens("dev", None).await;
+        e.human_opens("reader", None).await;
+        let mut agent = e.agent();
+        refused(
+            e.scan(&mut agent, "dev", json!({})).await,
+            "productionBlocked",
+        );
+        e.scan(&mut agent, "reader", json!({})).await.unwrap();
+    }
+}

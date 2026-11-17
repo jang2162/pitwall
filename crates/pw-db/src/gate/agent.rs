@@ -78,10 +78,22 @@ impl DbTarget {
     /// `SELECT` 로 다른 번호로 옮겨 가고 번호 사이에 권한 경계가 없다. 번호를 열쇠에 두면 같은 번호의 다른 표기(`database` 입력
     /// `"00"` · `"+0"`, 설정에서 뺀 번호와 `"0"`)로 표지를 비껴간다 — 드라이버는 그 모두를 같은 번호로 읽는다. PG 는 DB 이름을
     /// 둔다(한 연결이 다른 DB 를 읽지 못한다). SQLite 는 파일이 열쇠다(`ATTACH` 는 실행 분류의 몫 — M5-07).
+    ///
+    /// Redis 는 사용자도 맞춘다(메인 판정 2026-11-17 — M5-19 리뷰 R1): 사용자를 적지 않은 것 · 빈 글 · `default` 는 모두 Redis 의
+    /// `default` 사용자다(드라이버는 빈 사용자를 적지 않은 것으로 다룬다). ACL 사용자 이름은 대소문자를 가리므로 `Default` 는 다른
+    /// 사용자다.
     pub fn mark_key(&self) -> Self {
         match self.driver {
-            DriverKind::Mysql | DriverKind::Redis => Self {
+            DriverKind::Mysql => Self {
                 database: None,
+                ..self.clone()
+            },
+            DriverKind::Redis => Self {
+                database: None,
+                user: self
+                    .user
+                    .clone()
+                    .filter(|u| !u.is_empty() && u != REDIS_DEFAULT_USER),
                 ..self.clone()
             },
             _ => self.clone(),
@@ -99,6 +111,9 @@ impl DbTarget {
         }
     }
 }
+
+/// Redis 에서 사용자를 적지 않은 `AUTH` 가 쓰는 사용자.
+const REDIS_DEFAULT_USER: &str = "default";
 
 /// 에이전트에게 적용하는 표지(결정 M5-D37). 조여지기만 한다([`DbMarks::tighten`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

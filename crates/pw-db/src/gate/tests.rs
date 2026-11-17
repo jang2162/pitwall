@@ -447,3 +447,37 @@ fn redis_mark_keys_drop_the_database_number() {
     assert_ne!(base.mark_key(), redis(Some("0"), None, 6380).mark_key());
     assert_ne!(base, redis(Some("7"), None, 6379));
 }
+
+/// Redis 의 표지 열쇠는 사용자를 적지 않은 것 · 빈 글 · `default` 를 같은 사용자로 본다(메인 판정 2026-11-17 — M5-19 리뷰 R1).
+/// `Default`(대소문자) · 다른 사용자는 다르다. 「사람이 연 연결」 의 열쇠(대상 전체)는 그대로 가른다.
+#[test]
+fn redis_mark_keys_treat_the_default_user_spellings_as_one() {
+    let redis = |user: Option<&str>| {
+        let mut value = json!({ "name": "r", "driver": "redis", "host": "cache.example" });
+        if let Some(user) = user {
+            value["user"] = json!(user);
+        }
+        agent::DbTarget::of(
+            &crate::config::from_file_value(&value).unwrap(),
+            std::path::Path::new("/r"),
+        )
+    };
+    let none = redis(None).mark_key();
+    assert_eq!(none, redis(Some("")).mark_key());
+    assert_eq!(none, redis(Some("default")).mark_key());
+    assert_ne!(none, redis(Some("Default")).mark_key());
+    assert_ne!(none, redis(Some("reader")).mark_key());
+    assert_ne!(redis(None), redis(Some("default")));
+    // MySQL 의 사용자는 그대로다.
+    let my = |user: &str| {
+        agent::DbTarget::of(
+            &crate::config::from_file_value(
+                &json!({ "name": "m", "driver": "mysql", "host": "db", "user": user }),
+            )
+            .unwrap(),
+            std::path::Path::new("/r"),
+        )
+        .mark_key()
+    };
+    assert_ne!(my(""), my("default"));
+}
