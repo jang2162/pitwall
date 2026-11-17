@@ -126,6 +126,16 @@ fn parse_tool_setting(
     Ok(out)
 }
 
+/// 설정의 도구 하나(`[open_with.tools.<id>]` 의 값)를 목록이 읽는 규칙 그대로 검사한다 — 형식 오류면 목록이 그 도구에 다는 문제
+/// 글(`open_with_upsert` 가 승인을 묻기 전에 거절하는 까닭). 모르는 키는 경고에 더한다.
+pub(crate) fn check_tool_setting(
+    id: &str,
+    value: &Value,
+    warnings: &mut Vec<String>,
+) -> Result<(), String> {
+    parse_tool_setting(id, value, warnings).map(|_| ())
+}
+
 fn on(platforms: &[Platform], platform: Platform) -> bool {
     platforms.is_empty() || platforms.contains(&platform)
 }

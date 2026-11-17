@@ -1,5 +1,6 @@
 //! 외부 도구 RPC. `openWith.list` 는 05 의 `open_with_list` 툴과 이름 · 등급 · 입력 꼴(`projectId` · `worktree` 선택)이 같아 그대로
-//! 툴이다(16-m5-plan M5-09 ② — 툴 메서드 규약). 실행(`openWith.run`)은 툴이 아니고 `open_with_upsert` 는 이후다.
+//! 툴이다(16-m5-plan M5-09 ② — 툴 메서드 규약). 실행(`openWith.run`)은 툴이 아니다. `open_with_upsert` 는 따로 선언한 툴 메서드
+//! `openWith.tool.upsert`([`crate::upsert`])이고 여기서 함께 붙인다.
 //!
 //! 웹뷰는 도구 id 와 문맥(프로젝트, 활성 워크트리, 있으면 파일 · 줄 · 열)만 넘긴다. 명령을 만들고 띄우는 것은 이 Host 다.
 
@@ -9,6 +10,8 @@ use pw_rpc::{ConnectionScope, Router, RpcError, rpc_method};
 use serde::{Deserialize, Serialize};
 
 use crate::OpenWith;
+use crate::upsert::{OpenWithToolUpsert, OpenWithUpsertParams};
+use pw_core::registry::plan::Planned;
 
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
@@ -200,8 +203,18 @@ pub fn register(router: &mut Router, open_with: Arc<OpenWith>) {
                 blocking(move || s.list(&params))
             },
         )
-        .unary(OpenWithRun, move |ctx, params: OpenWithRunParams| {
-            let (s, scope) = (Arc::clone(&open_with), ctx.scope().clone());
-            blocking(move || s.run(&scope, &params))
-        });
+        .unary(OpenWithRun, {
+            let open_with = Arc::clone(&open_with);
+            move |ctx, params: OpenWithRunParams| {
+                let (s, scope) = (Arc::clone(&open_with), ctx.scope().clone());
+                blocking(move || s.run(&scope, &params))
+            }
+        })
+        .unary(
+            OpenWithToolUpsert,
+            move |ctx, input: Planned<OpenWithUpsertParams>| {
+                let (s, scope) = (Arc::clone(&open_with), ctx.scope().clone());
+                blocking(move || s.upsert(&scope, &input))
+            },
+        );
 }
