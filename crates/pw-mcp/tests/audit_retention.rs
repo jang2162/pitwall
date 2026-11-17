@@ -191,3 +191,31 @@ fn pruning_without_a_file_creates_nothing() {
     assert_eq!(audit::prune_by_settings(&f.log(), &f.global()), 0);
     assert!(!Path::new(f.log().file()).exists());
 }
+
+/// 보관 정리 태스크(`keep_pruned` — 앱이 시작할 때 띄운다)는 띄우자마자 한 번 지운다 — 하루를 기다리지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_prune_task_prunes_as_soon_as_it_starts() {
+    let f = Fixture::new("");
+    let kept = f.row(None, 1);
+    f.row(None, 91);
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let task = tokio::spawn(audit::keep_pruned(
+        Arc::new(f.log()),
+        f.global(),
+        cancel.clone(),
+    ));
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while f.ids() != [kept] {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the start-up prune did not run: {:?}",
+            f.ids()
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    cancel.cancel();
+    tokio::time::timeout(std::time::Duration::from_secs(5), task)
+        .await
+        .expect("the prune task did not stop when cancelled")
+        .unwrap();
+}

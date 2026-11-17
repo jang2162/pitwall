@@ -6,8 +6,8 @@
 //! - 결과 **내용은 남기지 않는다**(크기와 상태만). 인자는 [`summarize`] 의 요약만 남긴다.
 //! - 여러 프로세스(앱, 앱 없이 뜬 `pitwall mcp` 여럿)가 같은 파일에 쓴다. 쓰기는 `BEGIN IMMEDIATE` 와 2초 대기다.
 //! - **`read` 호출은 끝난 뒤 한 번 쓰고**, 기록이 실패해도 호출은 실패시키지 않는다 — 경고 로그를 남긴다(감사 로그가 깨졌다고
-//!   조회 툴이 멈추면 안 된다). **`write` 이상은 실행 전에 행을 `started` 로 쓰고([`AuditLog::begin`]) 못 쓰면 실행하지
-//!   않는다**(16-m5-plan 결정 M5-D11 — 쓰기의 흔적이 없으면 사람이 무엇이 바뀌었는지 뒤에 볼 길이 없다). 끝나면 **같은 행**을
+//!   조회 툴이 멈추면 안 된다). **`write` 이상과 승인을 지난 호출은 실행 전에 행을 `started` 로 쓰고([`AuditLog::begin`]) 못
+//!   쓰면 실행하지 않는다**(16-m5-plan 결정 M5-D11 — 쓰기의 흔적이 없으면 사람이 무엇이 바뀌었는지 뒤에 볼 길이 없다). 끝나면 **같은 행**을
 //!   고친다([`AuditLog::finish`]). 끝을 못 쓴 행(그 사이 프로세스가 죽음)은 `started` 로 남는다 — 화면은 「끝을 모름」 이다.
 //! - **보관**(결정 M5-D10): 기본 [`DEFAULT_RETENTION_DAYS`](90)일, `[mcp.audit] retention_days`(0 은 지우지 않음).
 //!   **`[mcp.audit]` 은 전역 설정에서만 읽는다**([`retention_days`] 는 전역 `[mcp]` 만 받는다) — 감사 파일이 하나라
@@ -1026,6 +1026,59 @@ mod tests {
         drop(log);
         assert_eq!(all(&AuditLog::at(file.clone())).len(), 3);
         assert_eq!(version(&file), SCHEMA_VERSION);
+    }
+
+    /// 여러 연결(프로세스 여럿 — 앱과 헤드리스 `pitwall mcp`)이 첫째 판 파일을 **동시에 처음 열어도** 모두 열리고 쓴다. 판
+    /// 올림은 `user_version` 을 읽은 뒤 쓰므로 `BEGIN IMMEDIATE` 여야 한다 — `DEFERRED` 면 읽기 잠금을 쥔 채 쓰기 잠금을 기다리는
+    /// 연결에 SQLite 가 바쁨 대기 없이 곧바로 `database is locked` 를 준다. 그 연결의 선기록이 실패하면 쓰기 호출이 거절된다.
+    #[test]
+    fn many_connections_upgrade_a_first_version_file_at_once() {
+        const CONNECTIONS: usize = 8;
+        const OLD_ROWS: i64 = 2000;
+        for round in 0..20 {
+            let tmp = tempfile::tempdir().unwrap();
+            let file = tmp.path().join("audit.db");
+            {
+                let mut conn = Connection::open(&file).unwrap();
+                conn.execute_batch(MIGRATIONS[0]).unwrap();
+                conn.pragma_update(None, "user_version", 1).unwrap();
+                let tx = conn.transaction().unwrap();
+                for _ in 0..OLD_ROWS {
+                    tx.execute(
+                        "INSERT INTO calls (at, session, tool, args, outcome, duration_ms)
+                         VALUES (1000, 's0', 't', '{}', 'ok', 0)",
+                        [],
+                    )
+                    .unwrap();
+                }
+                tx.commit().unwrap();
+            }
+            let barrier = Arc::new(std::sync::Barrier::new(CONNECTIONS));
+            let results: Vec<Result<(i64, i64), String>> = (0..CONNECTIONS)
+                .map(|_| {
+                    let (file, barrier) = (file.clone(), Arc::clone(&barrier));
+                    std::thread::spawn(move || {
+                        let log = AuditLog::at(file);
+                        barrier.wait();
+                        Ok((
+                            log.begin(&entry("fake_write", None))?,
+                            log.record(&entry("t", None))?,
+                        ))
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|t| t.join().unwrap())
+                .collect();
+            let failed: Vec<&String> = results.iter().filter_map(|r| r.as_ref().err()).collect();
+            assert!(failed.is_empty(), "round {round}: {failed:?}");
+            assert_eq!(version(&file), SCHEMA_VERSION, "round {round}");
+            let total: i64 = Connection::open(&file)
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM calls", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(total, OLD_ROWS + 2 * CONNECTIONS as i64, "round {round}");
+        }
     }
 
     /// 행 id 는 다시 쓰이지 않는다(R5): 가장 큰 id 를 지워도(보관 정리 · 지우기) 새 행은 더 큰 id 다 — 커서와 `mcp.activity` 가

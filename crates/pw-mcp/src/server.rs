@@ -458,10 +458,10 @@ impl Session {
             .await
     }
 
-    /// 정책을 지난 호출을 돌린다: `write` 이상이면 **선기록** — 실행 전에 감사 행을 `started` 로 쓰고([`Self::begin`] — 큐를
-    /// 지나지 않고 기다린다) 못 쓰면 돌리지 않고 거절한다(결정 M5-D11). 그 뒤 Host RPC, 끝나면 같은 행을 결과 · 상세 · 크기 ·
-    /// 소요로 고친다(큐로). `read` 는 끝난 뒤 새 행 하나다(큐로 — 실패는 경고만). 승인을 지난 호출은 `approval` · `plan_hash` 를
-    /// 그 행에 남긴다.
+    /// 정책을 지난 호출을 돌린다: `write` 이상이거나 승인을 지난 호출(`approval` · `plan_hash` 를 받음 — 등급과 무관)이면
+    /// **선기록** — 실행 전에 감사 행을 `started` 로 쓰고([`Self::begin`] — 큐를 지나지 않고 기다린다) 못 쓰면 돌리지 않고
+    /// 거절한다(결정 M5-D11). 그 뒤 Host RPC, 끝나면 같은 행을 결과 · 상세 · 크기 · 소요로 고친다(큐로). 승인 칸은 그 행에 남는다.
+    /// 승인을 지나지 않은 `read` 는 끝난 뒤 새 행 하나다(큐로 — 실패는 경고만).
     #[allow(clippy::too_many_arguments)] // 감사 행의 열과 호출 하나의 입력이다.
     async fn run(
         &self,
@@ -474,7 +474,11 @@ impl Session {
         plan_hash: Option<String>,
     ) -> Result<CallToolResult, ErrorData> {
         let name = tool.name.clone();
-        let row = if tool.tier == Tier::Read {
+        // 선기록의 기준: `write` 이상이거나 승인을 지난 호출(승인 방식 · 계획 해시를 받음). 승인을 청하는 `read` 호출(「이 연결
+        // 열기」, 프로덕션 `ask` 의 조회)도 승인을 지났으면 행을 먼저 쓰고 승인 칸을 그 행에 남긴다(메인 판정 2026-11-17 —
+        // 16-m5-plan M5-12 ⑧). 승인 없는 `read` 는 끝난 뒤 한 번이다.
+        let approved = approval.is_some() || plan_hash.is_some();
+        let row = if tool.tier == Tier::Read && !approved {
             None
         } else {
             match self
@@ -483,10 +487,10 @@ impl Session {
             {
                 Ok(row) => Some(row),
                 Err(e) => {
-                    tracing::warn!(%e, tool = name, "cannot write the mcp audit row before a write call; refusing it");
+                    tracing::warn!(%e, tool = name, "cannot write the mcp audit row before the call; refusing it");
                     let reason = format!(
-                        "`{name}` changes something, and Pitwall could not write its audit log entry first, \
-                         so it did not run; check that the Pitwall state directory is writable"
+                        "`{name}` needs its audit log entry written before it runs, and Pitwall could not \
+                         write it, so it did not run; check that the Pitwall state directory is writable"
                     );
                     self.audit(
                         None,
@@ -1134,6 +1138,15 @@ mod tests {
             mcp: { group: "project", name: "fake_write" },
         }
 
+        /// 시험용 조회 툴: 불린 수를 세고(쓰기 툴과 같은 수) `tag` 를 감사 상세로 싣는다. 승인을 청하는 `read` 호출(「이 연결 열기」
+        /// 등)의 자리다.
+        pub FakeRead: "mcptest.fakeRead" {
+            params: FakeWriteParams,
+            result: FakeWriteResult,
+            tier: Read,
+            mcp: { group: "project", name: "fake_read" },
+        }
+
         /// 시험용 쓰기 툴: 불리면 알리고 끝나지 않는다.
         pub HangingWrite: "mcptest.hangingWrite" {
             params: FakeWriteParams,
@@ -1162,6 +1175,15 @@ mod tests {
                 LocalHost::builder("local")
                     .config(paths.clone())
                     .methods(move |router| {
+                        let read_runs = Arc::clone(&r);
+                        router.unary(FakeRead, move |_ctx, p: FakeWriteParams| {
+                            read_runs.fetch_add(1, Ordering::SeqCst);
+                            async move {
+                                Ok::<_, RpcError>(FakeWriteResult {
+                                    audit: format!("tag={}", p.tag),
+                                })
+                            }
+                        });
                         router.unary(FakeWrite, move |_ctx, p: FakeWriteParams| {
                             r.fetch_add(1, Ordering::SeqCst);
                             async move {
@@ -1191,6 +1213,11 @@ mod tests {
 
         /// 세션 하나. 감사 로그는 세션마다 따로 연다 — 프로세스 둘이 같은 파일에 쓰는 것과 같다(연결이 다르다).
         async fn session(&self) -> Session {
+            self.session_with(Sessions::new()).await
+        }
+
+        /// [`Self::session`] 에 세션 등록부를 넣은 것(호출 수 · `mcp.activity` 를 보려고).
+        async fn session_with(&self, sessions: Sessions) -> Session {
             let router = Arc::new(HostRouter::new());
             router.add_host(self.host.clone()).unwrap();
             let services = Arc::new(Services {
@@ -1204,7 +1231,7 @@ mod tests {
                 approval: Approval::Unavailable,
                 transport: "test",
                 host_kind: HostKind::App,
-                sessions: Sessions::new(),
+                sessions,
             });
             Session::open(
                 services,
@@ -1232,6 +1259,17 @@ mod tests {
 
     /// 정책을 지난 쓰기 호출 하나 — 승인 경로(M5-12)가 답을 받은 뒤 부르는 자리.
     async fn write(session: &Session, name: &str, tag: &str) -> CallToolResult {
+        approved(session, name, tag, None, None).await
+    }
+
+    /// 정책 · 승인을 지난 호출 하나 — 승인 방식 · 계획 해시를 함께 넘긴다(M5-12 가 승인 뒤 넘기는 값).
+    async fn approved(
+        session: &Session,
+        name: &str,
+        tag: &str,
+        approval: Option<AuditApproval>,
+        plan_hash: Option<&str>,
+    ) -> CallToolResult {
         let tool = session
             .inner
             .services
@@ -1250,8 +1288,8 @@ mod tests {
                 None,
                 Instant::now(),
                 &CancellationToken::new(),
-                None,
-                None,
+                approval,
+                plan_hash.map(str::to_owned),
             )
             .await
             .unwrap()
@@ -1391,5 +1429,110 @@ mod tests {
             assert_eq!(detail.as_deref(), Some(format!("tag={tag}").as_str()));
             assert_eq!(row_session, &owner.inner.id, "{tag}");
         }
+    }
+
+    fn approval_columns(f: &Fixture) -> Vec<(String, String, Option<String>, Option<String>)> {
+        let conn = rusqlite::Connection::open(f.paths.state.join("mcp/audit.db")).unwrap();
+        conn.prepare("SELECT tool, outcome, approval, plan_hash FROM calls ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    /// 승인을 지난 `read` 호출(「이 연결 열기」 · 프로덕션 `ask` 의 조회 — 메인 판정 2026-11-17, 16-m5-plan M5-12 ⑧)도 선기록되고
+    /// 승인 방식 · 계획 해시가 그 행에 남는다. 감사 행을 먼저 쓰지 못하면 돌지 않는다. 승인 없는 `read` 는 그대로(행 하나, 칸 없음).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_approved_read_call_is_recorded_first_and_keeps_its_approval() {
+        let f = Fixture::new();
+        let session = f.session().await;
+        let result = approved(
+            &session,
+            "fake_read",
+            "r",
+            Some(AuditApproval::Once),
+            Some("sha256:plan"),
+        )
+        .await;
+        assert_eq!(mark(&result), Mark::ok(), "{result:?}");
+        write(&session, "fake_read", "plain").await;
+        flush_audit(&session.inner.audit).await;
+        assert_eq!(
+            approval_columns(&f),
+            [
+                (
+                    "fake_read".to_owned(),
+                    "ok".to_owned(),
+                    Some("once".to_owned()),
+                    Some("sha256:plan".to_owned())
+                ),
+                ("fake_read".to_owned(), "ok".to_owned(), None, None),
+            ]
+        );
+        assert_eq!(f.runs.load(Ordering::SeqCst), 2);
+
+        // 감사 DB 를 쓸 수 없으면 승인을 지난 `read` 도 돌지 않는다 — 승인 없는 `read` 는 돈다.
+        let broken = Fixture::new();
+        std::fs::create_dir_all(&broken.paths.state).unwrap();
+        std::fs::write(
+            broken.paths.state.join(crate::audit::DIR),
+            "not a directory",
+        )
+        .unwrap();
+        let session = broken.session().await;
+        let refused = approved(
+            &session,
+            "fake_read",
+            "r",
+            Some(AuditApproval::Session),
+            None,
+        )
+        .await;
+        assert_eq!(mark(&refused), Mark::denied(Reason::AuditUnavailable));
+        assert_eq!(broken.runs.load(Ordering::SeqCst), 0, "툴이 돌았다");
+        assert_eq!(
+            mark(&write(&session, "fake_read", "plain").await),
+            Mark::ok()
+        );
+        assert_eq!(broken.runs.load(Ordering::SeqCst), 1);
+    }
+
+    /// 선기록한 호출은 호출 수를 한 번 세고(시작 때), `mcp.activity` 를 같은 id 로 두 번(시작 행 · 끝 고침) 낸다. 선기록하지 않은
+    /// `read` 는 한 번 세고 한 번 낸다.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_pre_recorded_call_counts_once_and_publishes_its_row_twice() {
+        use pw_core::{Filter, Received};
+        let f = Fixture::new();
+        let sessions = Sessions::new();
+        sessions.attach(f.host.bus().clone());
+        let mut events = f
+            .host
+            .bus()
+            .subscribe(Filter::all().topics([crate::sessions::TOPIC_ACTIVITY]));
+        let session = f.session_with(sessions.clone()).await;
+        let _registered = sessions.register(&session.inner.id, None, None, "test");
+
+        write(&session, "fake_write", "w").await;
+        flush_audit(&session.inner.audit).await;
+        assert_eq!(sessions.list()[0].calls, 1, "쓰기 호출 하나는 한 번 센다");
+        let ids = |events: &mut pw_core::Subscription| -> Vec<i64> {
+            std::iter::from_fn(|| events.try_recv())
+                .map(|r| match r {
+                    Received::Event(e) => e.payload["id"].as_i64().unwrap(),
+                    Received::Lagged(n) => panic!("lagged {n}"),
+                })
+                .collect()
+        };
+        let written: i64 = rusqlite::Connection::open(f.paths.state.join("mcp/audit.db"))
+            .unwrap()
+            .query_row("SELECT id FROM calls", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ids(&mut events), [written, written], "시작과 끝, 같은 id");
+
+        write(&session, "fake_read", "r").await;
+        flush_audit(&session.inner.audit).await;
+        assert_eq!(sessions.list()[0].calls, 2);
+        assert_eq!(ids(&mut events).len(), 1, "선기록 없는 read 는 한 번");
     }
 }

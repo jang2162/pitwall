@@ -52,7 +52,8 @@ pub enum Reason {
     ProductionBlocked,
     /// (거절) Host 전체의 호출 빈도를 넘었다(16-m5-plan M5-09 — `project_open`, `data.reason = "rateLimited"`). 잠시 뒤 다시 부른다.
     RateLimited,
-    /// (거절) `write` 이상의 호출인데 실행 전의 감사 행을 쓰지 못했다 — 돌리지 않았다(16-m5-plan 결정 M5-D11).
+    /// (거절) 선기록하는 호출(`write` 이상 · 승인을 지난 호출)인데 실행 전의 감사 행을 쓰지 못했다 — 돌리지 않았다(16-m5-plan
+    /// 결정 M5-D11).
     AuditUnavailable,
 }
 
