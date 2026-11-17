@@ -2,6 +2,7 @@
 // 상태바의 런타임 항목(M1-16): 프로젝트 창(App kind="project", `?project=p1`)을 가짜 Host 에 붙여 `runtime.get` 의 상태별 표시를
 // 본다 — 물러났으면 경고(mise 미신뢰 등)와 원문 이유, mise 가 만들었으면 「mise」, 로그인 셸만이면 없음. Host 가 그 프로젝트에
 // `runtime.changed` 를 내면 다시 읽고, 누르면 「환경 다시 읽기」(`runtime.reload`)다.
+// 같은 창 꾸밈으로 제목 줄이 그 프로젝트의 이름(`project.get`)인 것도 본다 — 프로젝트 창을 띄우는 시험 꾸밈이 여기 있다.
 
 import type {
   ConfigView,
@@ -230,6 +231,11 @@ it("warns when mise fell back, and follows runtime.changed to the mise environme
   await act(async () => host.emit("p2", "runtime.changed", { reason: "files" }));
   await settle();
   expect(host.gets).toBe(after);
+});
+
+it("titles the window bar with the project's name", async () => {
+  await mount();
+  expect(document.querySelector(".titlebar")?.textContent).toBe("demo");
 });
 
 it("shows nothing for the plain login shell environment", async () => {

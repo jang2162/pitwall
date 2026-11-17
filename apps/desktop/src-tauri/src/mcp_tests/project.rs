@@ -183,6 +183,12 @@ async fn project_open_opens_the_file_without_bringing_the_window_forward() {
         [false],
         "포커스 없이 만든다"
     );
+    // 창 제목은 레지스트리의 프로젝트 이름이다 — `launch::open_project_as` 가 넘기는 값을 본다(이름은 루트 폴더 이름).
+    assert_eq!(
+        windows::tests::built_titles(&label),
+        ["m5-09-open-target"],
+        "창 제목은 프로젝트 이름"
+    );
     assert_eq!(w.take_queue(&id), [file(10)]);
 
     let second = session
