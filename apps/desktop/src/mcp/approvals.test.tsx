@@ -19,7 +19,7 @@ import { afterEach, beforeEach, expect, vi } from "vitest";
 
 import { bundledLocalization, bundledTranslator } from "../i18n/testing";
 import { act, endTest, it } from "../test-support/ended-test";
-import { STATEMENTS_SHOWN } from "./approval-dialog";
+import { ARM_DELAY_MS, STATEMENTS_SHOWN } from "./approval-dialog";
 import type { ApprovalNative, ApprovalNotice } from "./approval-native";
 import { createApprovalStore, type ApprovalStore } from "./approvals";
 import { CLOCK_MS, WindowApprovals } from "./approvals-host";
@@ -84,9 +84,10 @@ function fakeHost() {
     streams,
     async push(...events: McpApprovalEvent[]) {
       queue.push(...events);
+      // 마이크로태스크만 흘린다 — 가짜 시계(setTimeout)를 쓰는 시험에서도 돈다.
       await act(async () => {
         wake?.();
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        for (let i = 0; i < 50; i++) await Promise.resolve();
       });
     },
   };
@@ -132,7 +133,8 @@ function request(over: Partial<McpApprovalRequest> = {}): McpApprovalRequest {
 
 const open = (r: McpApprovalRequest): McpApprovalEvent => ({ kind: "open", request: r });
 
-async function mount(projectId: string | null = "p1") {
+/** 잠금 시간은 기본 0(허용 단추가 곧바로 켜진다) — 잠금을 보는 시험만 `ARM_DELAY_MS` 를 준다. */
+async function mount(projectId: string | null = "p1", { armDelayMs = 0 } = {}) {
   const host = fakeHost();
   const native = fakeNative();
   const store: ApprovalStore = createApprovalStore();
@@ -147,6 +149,7 @@ async function mount(projectId: string | null = "p1") {
           projectId={projectId}
           native={native.native}
           store={store}
+          armDelayMs={armDelayMs}
         />
         <PendingApprovals projectId="p1" store={store} />
       </LocalizationProvider>,
@@ -423,11 +426,8 @@ it("a destructive SQL statement needs the connection name before allowing", asyn
   expect(f.answers).toEqual([{ id: 1, answer: "once" }]);
 });
 
-it("SQL without a destructive statement does not ask for the name; long lists are cut", async () => {
+it("SQL without a destructive statement does not ask for the name", async () => {
   const f = await mount();
-  const many = Array.from({ length: STATEMENTS_SHOWN + 3 }, (_, i) =>
-    stmt(i, "write", `INSERT INTO t VALUES (${i})`),
-  );
   await f.push(
     open(
       request({
@@ -435,17 +435,66 @@ it("SQL without a destructive statement does not ask for the name; long lists ar
         answers: ["deny", "once"],
         plan: {
           ...request().plan,
-          changes: [sql(many, { connection: { name: "dev", production: false, readOnly: false } })],
+          changes: [
+            sql([stmt(0, "write", "INSERT INTO t VALUES (1)")], {
+              connection: { name: "dev", production: false, readOnly: false },
+            }),
+          ],
         },
       }),
     ),
   );
   expect(dialog()!.querySelector("[data-testid=mcp-approval-name]")).toBeNull();
   expect(button("once")!.disabled).toBe(false);
-  expect(dialog()!.querySelectorAll("[data-testid=mcp-approval-statement]")).toHaveLength(
-    STATEMENTS_SHOWN,
+});
+
+const grades = () =>
+  [...dialog()!.querySelectorAll<HTMLElement>("[data-testid=mcp-approval-statement]")].map(
+    (s) => s.dataset.grade,
   );
-  expect(dialog()!.textContent).toContain(T.sql.more(3));
+
+it("statements that are not reads are all shown; only reads past the limit are folded", async () => {
+  const f = await mount();
+  // 쓰기 59개 사이 56번째(0 기준 55)가 파괴: 50개 밖이어도 보인다(M5-14 리뷰 F1).
+  const writes = Array.from({ length: 60 }, (_, i) =>
+    i === 55
+      ? stmt(i, "destructive", "DROP TABLE users")
+      : stmt(i, "write", `UPDATE t SET a = ${i} WHERE id = ${i}`),
+  );
+  await f.push(
+    open(
+      request({
+        tier: "dangerous",
+        answers: ["deny", "once"],
+        plan: { ...request().plan, changes: [sql(writes)] },
+      }),
+    ),
+  );
+  expect(grades()).toHaveLength(60);
+  expect(grades()[55]).toBe("destructive");
+  expect(dialog()!.textContent).toContain("DROP TABLE users");
+  expect(dialog()!.querySelector("[data-testid=mcp-approval-folded]")).toBeNull();
+  await act(async () => button("deny")!.click());
+  // 조회 문장은 앞 `STATEMENTS_SHOWN` 개만, 넘는 것은 접고 수를 보인다. 조회 사이의 쓰기 · 파괴는 그대로 보인다.
+  const mixed = Array.from({ length: STATEMENTS_SHOWN + 10 }, (_, i) =>
+    stmt(i, "read", `SELECT ${i}`),
+  );
+  mixed.push(stmt(STATEMENTS_SHOWN + 10, "destructive", "TRUNCATE audit"));
+  mixed.push(stmt(STATEMENTS_SHOWN + 11, "read", "SELECT last"));
+  await f.push(
+    open(
+      request({
+        id: 2,
+        tier: "dangerous",
+        answers: ["deny", "once"],
+        plan: { ...request().plan, changes: [sql(mixed)] },
+      }),
+    ),
+  );
+  expect(grades().filter((g) => g === "read")).toHaveLength(STATEMENTS_SHOWN);
+  expect(grades().filter((g) => g === "destructive")).toHaveLength(1);
+  expect(dialog()!.textContent).toContain("TRUNCATE audit");
+  expect(text("mcp-approval-folded")).toBe(T.sql.foldedReads(11));
 });
 
 it("Escape only closes the dialog; the request stays in the pending list and reopens from it", async () => {
@@ -554,4 +603,248 @@ it("planDiff turns the before and after text into hunks", async () => {
   expect(planDiff("/w/gone.txt", "x\n", null).file.status).toBe("deleted");
   // 보이지 않는 글자는 두 쪽 모두 표지로.
   expect(planDiff("/w/a", "a\u200b\n", "a\n").oldText).toBe("a⟨U+200B⟩\n");
+});
+
+// --- 허용 단추의 잠금(M5-14 리뷰 B1). 가짜 시계로 `ARM_DELAY_MS` 를 센다. ---
+
+const fakeClock = () =>
+  vi.useFakeTimers({
+    toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
+  });
+const advance = (ms: number) => act(async () => vi.advanceTimersByTime(ms));
+const clickAt = (el: HTMLElement) =>
+  act(async () => {
+    // 포인터로 누른 클릭(`detail` 1) — 누름은 따로 보낸다(`pointerDown`).
+    el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+  });
+const pointerDown = (el: Element) =>
+  act(() => {
+    el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+  });
+
+it("allow buttons are locked for a moment after a request shows; Deny works at once", async () => {
+  fakeClock();
+  const f = await mount("p1", { armDelayMs: ARM_DELAY_MS });
+  await f.push(open(request({ id: 1 })), open(request({ id: 2 })));
+  expect(button("once")!.disabled).toBe(true);
+  expect(button("session")!.disabled).toBe(true);
+  expect(button("once")!.dataset.locked).toBe("true");
+  expect(button("once")!.querySelector("[data-testid=mcp-approval-lock]")).not.toBeNull();
+  expect(button("once")!.title).toBe(T.locked);
+  expect(button("deny")!.disabled).toBe(false);
+  // 잠긴 동안의 Enter(키보드 누름 — `detail` 0)는 무시된다.
+  await act(async () => button("once")!.click());
+  expect(f.answers).toEqual([]);
+  await advance(ARM_DELAY_MS - 1);
+  expect(button("once")!.disabled).toBe(true);
+  await advance(1);
+  expect(button("once")!.disabled).toBe(false);
+  expect(button("once")!.dataset.locked).toBeUndefined();
+  expect(button("once")!.querySelector("[data-testid=mcp-approval-lock]")).toBeNull();
+  // [거절] 은 뜬 순간에도 된다 — 둘째 요청에서 본다.
+  await act(async () => button("once")!.click());
+  expect(f.answers).toEqual([{ id: 1, answer: "once" }]);
+  expect(button("once")!.disabled).toBe(true);
+  await act(async () => button("deny")!.click());
+  expect(f.answers).toEqual([
+    { id: 1, answer: "once" },
+    { id: 2, answer: "deny" },
+  ]);
+});
+
+it("typing Tab then Enter while the dialog appears does not allow", async () => {
+  fakeClock();
+  const f = await mount("p1", { armDelayMs: ARM_DELAY_MS });
+  await f.push(open(request()));
+  // 에디터에서 들여쓰기를 치던 사람: 키를 누를 때마다 잠금을 처음부터 다시 센다.
+  for (let i = 0; i < 4; i++) {
+    await advance(ARM_DELAY_MS / 2);
+    press("Tab", dialog());
+    press("Enter", button("once"));
+    await act(async () => button("once")!.click());
+  }
+  expect(f.answers).toEqual([]);
+  expect(button("once")!.disabled).toBe(true);
+  // 키가 멈추고 잠금 시간이 지나야 켜진다.
+  await advance(ARM_DELAY_MS - 1);
+  expect(button("once")!.disabled).toBe(true);
+  await advance(1);
+  expect(button("once")!.disabled).toBe(false);
+});
+
+it("a double click does not answer the next request too", async () => {
+  fakeClock();
+  const f = await mount("p1", { armDelayMs: ARM_DELAY_MS });
+  await f.push(open(request({ id: 1 })), open(request({ id: 2, tool: "second" })));
+  await advance(ARM_DELAY_MS);
+  pointerDown(button("once")!);
+  await clickAt(button("once")!);
+  expect(f.answers).toEqual([{ id: 1, answer: "once" }]);
+  // 같은 자리의 둘째 누름 — 새 요청의 [이번만 허용] 은 다시 잠겼다.
+  expect(dialog()!.dataset.request).toBe("2");
+  pointerDown(button("once")!);
+  await clickAt(button("once")!);
+  expect(f.answers).toEqual([{ id: 1, answer: "once" }]);
+  expect(button("once")!.disabled).toBe(true);
+});
+
+it("a click meant for a request the Host just closed does not answer the next one", async () => {
+  fakeClock();
+  const f = await mount("p1", { armDelayMs: ARM_DELAY_MS });
+  await f.push(open(request({ id: 1 })), open(request({ id: 2, tool: "second" })));
+  await advance(ARM_DELAY_MS);
+  // 사람이 #1 의 [이번만 허용] 에 손을 내리는 순간 Host 가 #1 을 거둔다(시한 · 세션 끊김).
+  const target = button("once")!;
+  await f.push({ kind: "closed", id: 1 });
+  expect(dialog()!.dataset.request).toBe("2");
+  await clickAt(target.isConnected ? target : button("once")!);
+  await act(async () => button("once")!.click());
+  expect(f.answers).toEqual([]);
+});
+
+it("a mouse press that began before the lock ended does not allow on release", async () => {
+  fakeClock();
+  const f = await mount("p1", { armDelayMs: ARM_DELAY_MS });
+  await f.push(open(request()));
+  await advance(ARM_DELAY_MS / 2);
+  // 잠긴 동안 내려간 누름은 잠금을 다시 센다 — 떼기는 풀린 뒤에 온다.
+  pointerDown(button("once")!);
+  await advance(ARM_DELAY_MS);
+  expect(button("once")!.disabled).toBe(false);
+  await clickAt(button("once")!);
+  expect(f.answers).toEqual([]);
+  // 풀린 뒤에 그 단추에서 다시 누르면 받는다.
+  pointerDown(button("once")!);
+  await clickAt(button("once")!);
+  expect(f.answers).toEqual([{ id: 1, answer: "once" }]);
+});
+
+it("reopening a dismissed request locks its allow buttons again", async () => {
+  fakeClock();
+  const f = await mount("p1", { armDelayMs: ARM_DELAY_MS });
+  await f.push(open(request({ id: 5 })));
+  await advance(ARM_DELAY_MS);
+  expect(button("once")!.disabled).toBe(false);
+  press("Escape", dialog());
+  f.reveal(5);
+  expect(dialog()!.dataset.request).toBe("5");
+  expect(button("once")!.disabled).toBe(true);
+  await act(async () => rows()[0]!.click());
+  await advance(ARM_DELAY_MS);
+  expect(button("once")!.disabled).toBe(false);
+});
+
+it("typing the connection name does not keep the buttons locked", async () => {
+  fakeClock();
+  const f = await mount("p1", { armDelayMs: ARM_DELAY_MS });
+  await f.push(
+    open(
+      request({
+        tier: "dangerous",
+        answers: ["deny", "once"],
+        plan: { ...request().plan, changes: [sql([stmt(0, "destructive", "DROP TABLE t")])] },
+      }),
+    ),
+  );
+  const name = dialog()!.querySelector<HTMLInputElement>("[data-testid=mcp-approval-name]")!;
+  await advance(ARM_DELAY_MS / 2);
+  press("p", name);
+  type(name, "prod-main");
+  await advance(ARM_DELAY_MS / 2);
+  expect(button("once")!.disabled).toBe(false);
+  await act(async () => button("once")!.click());
+  expect(f.answers).toEqual([{ id: 1, answer: "once" }]);
+});
+
+// --- 이름 칸(M5-14 리뷰 F3). ---
+
+const destructive = (id: number, name = "prod-main") =>
+  request({
+    id,
+    tier: "dangerous",
+    answers: ["deny", "once"],
+    plan: {
+      ...request().plan,
+      changes: [
+        sql([stmt(0, "destructive", "DROP TABLE t")], {
+          connection: { name, production: true, readOnly: false },
+        }),
+      ],
+    },
+  });
+
+it("a typed name does not carry over to the next request on the same connection", async () => {
+  const f = await mount();
+  await f.push(open(destructive(1)), open(destructive(2)));
+  type(dialog()!.querySelector<HTMLInputElement>("[data-testid=mcp-approval-name]")!, "prod-main");
+  await act(async () => button("once")!.click());
+  expect(f.answers).toEqual([{ id: 1, answer: "once" }]);
+  expect(dialog()!.dataset.request).toBe("2");
+  expect(dialog()!.querySelector<HTMLInputElement>("[data-testid=mcp-approval-name]")!.value).toBe(
+    "",
+  );
+  expect(button("once")!.disabled).toBe(true);
+  await act(async () => button("once")!.click());
+  expect(f.answers).toEqual([{ id: 1, answer: "once" }]);
+});
+
+it("the name must match exactly — no trimming, case folding or look-alike characters", async () => {
+  const f = await mount();
+  await f.push(open(destructive(1)));
+  const name = dialog()!.querySelector<HTMLInputElement>("[data-testid=mcp-approval-name]")!;
+  for (const v of [
+    " prod-main",
+    "prod-main ",
+    "PROD-MAIN",
+    "Prod-main",
+    "prod‐main",
+    "prod-main​",
+    "prod–main",
+    "prod-mai",
+  ]) {
+    type(name, v);
+    expect(button("once")!.disabled, JSON.stringify(v)).toBe(true);
+  }
+  type(name, "prod-main");
+  expect(button("once")!.disabled).toBe(false);
+});
+
+it("every connection with a destructive statement needs its own name", async () => {
+  const f = await mount();
+  await f.push(
+    open(
+      request({
+        tier: "dangerous",
+        answers: ["deny", "once"],
+        plan: {
+          ...request().plan,
+          changes: [
+            sql([stmt(0, "destructive", "DROP TABLE a")], {
+              connection: { name: "prod-a", production: true, readOnly: false },
+            }),
+            sql([stmt(0, "destructive", "DROP TABLE b")], {
+              connection: { name: "prod-b", production: true, readOnly: false },
+            }),
+          ],
+        },
+      }),
+    ),
+  );
+  const names = [
+    ...dialog()!.querySelectorAll<HTMLInputElement>("[data-testid=mcp-approval-name]"),
+  ];
+  expect(names).toHaveLength(2);
+  type(names[0]!, "prod-a");
+  expect(button("once")!.disabled).toBe(true);
+  type(names[1]!, "prod-b");
+  expect(button("once")!.disabled).toBe(false);
+});
+
+it("a reopened later request shows its own place in the queue", async () => {
+  const f = await mount();
+  await f.push(open(request({ id: 1 })), open(request({ id: 2, tool: "second" })));
+  press("Escape", dialog());
+  press("Escape", dialog());
+  await act(async () => rows()[1]!.click());
+  expect(text("mcp-approval-position")).toBe(T.position(2, 2));
 });

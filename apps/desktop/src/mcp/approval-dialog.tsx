@@ -6,10 +6,17 @@
 //   실은 `answers` 에 없는 답도 그리지 않는다 — 둘 다 맞아야 보인다.
 // - **처음 포커스는 [거절]**(신뢰 확인 · 위험 작업 확인과 같은 규칙) — 뜬 순간 친 Enter · Space 가 허용이 되지 않게. `Esc` 는
 //   다이얼로그만 닫는다(요청은 「에이전트 활동」 의 「승인 대기」 에 남는다). 바깥을 눌러도 닫히지 않는다.
+// - **허용 단추의 잠금**(M5-14 리뷰 B1): 요청이 보이기 시작하면(다이얼로그가 뜨거나 다른 요청으로 바뀌거나 목록 · 알림으로 다시
+//   열면 — 요청마다 새로 그린다) 허용 계열 단추(이번만 · 세션 · CLI)를 `ARM_DELAY_MS` 동안 잠근다. 잠긴 동안 창에 키 · 포인터가
+//   눌리면 다시 센다 — 에디터에서 치던 `Tab` … `Enter`, 더블클릭의 둘째 누름, 앞 요청이 닫히는 순간의 클릭이 새 요청의 허용에
+//   닿지 않는다. 포인터로 누른 허용은 잠금이 풀린 뒤에 그 단추에서 내려간 누름이어야 한다(뜨기 전 · 잠긴 동안의 마우스 다운이 풀린
+//   뒤의 떼기로 이어지지 않게). [거절] 은 잠그지 않는다. 잠금 시간은 브라우저 권한 창 · Firefox 의 설치 확인
+//   (`security.dialog_enable_delay`)과 같은 꼴이다.
 // - 에이전트가 보낸 글(클라이언트 이름 · 요약 · 경로 · 바뀔 글 · 문장)은 테두리 친 칸 안에만 그리고 넓은 규칙(agent-text.ts)으로
 //   거른다 — 한 줄 자리는 줄바꿈도 표지가 되고, 여러 줄 자리는 높이를 묶어 그 안에서 굴린다. 단추 줄은 굴리는 칸 밖(아래)에
 //   늘 있다. 그래서 긴 글 · 줄바꿈 · 단추처럼 꾸민 글이 다이얼로그의 칸이나 단추처럼 보이지 않고 단추를 화면 밖으로 밀지 못한다.
-// - SQL(`PlanChange` 의 `sql`): 연결 표지(프로덕션 · 읽기 전용), 파일이면 경로, 「되돌릴 수 없다」, 문장마다 등급. 파괴 등급 문장이
+// - SQL(`PlanChange` 의 `sql`): 연결 표지(프로덕션 · 읽기 전용), 파일이면 경로, 「되돌릴 수 없다」, 문장마다 등급. 조회가 아닌
+//   문장은 수와 상관없이 모두 보이고 넘는 조회 문장만 접는다(접은 수를 보인다). 파괴 등급 문장이
 //   하나라도 있으면 그 연결 이름을 쳐야 허용 단추가 켜진다(위험 쿼리 확인과 같은 부품 — db/safety/name-confirm.tsx).
 // - 남은 시한과 「n개 중 k」 를 보인다. 시한이 지나면 approvals.ts 가 요청을 빼 다이얼로그가 내려간다.
 
@@ -21,8 +28,8 @@ import type {
   SqlStatement,
   ToolPlan,
 } from "@pitwall/rpc-client";
-import { TriangleAlert } from "lucide-react";
-import { type ReactNode, useMemo, useState } from "react";
+import { Lock, TriangleAlert } from "lucide-react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
 import { ConnectionMark } from "../db/safety/connection-mark";
 import { ConnectionNameField } from "../db/safety/name-confirm";
@@ -37,7 +44,9 @@ import { type McpStrings, useMcpStrings } from "./strings";
 
 type Strings = McpStrings["approval"];
 
-/** 문장 목록에 보이는 문장 수. 넘는 것은 「그리고 n개 더」(승인은 모든 문장에 닿는다). */
+/** 허용 단추를 잠그는 시간(밀리초). 잠긴 동안의 키 · 포인터 누름은 이 시간을 처음부터 다시 센다. */
+export const ARM_DELAY_MS = 1000;
+/** 조회 문장을 보이는 수. 조회가 아닌 문장(쓰기 · 파괴 등)은 수와 상관없이 모두 보이고, 넘는 조회 문장만 접는다. */
 export const STATEMENTS_SHOWN = 50;
 /** 문장 하나의 원문을 보일 글자 상한. */
 export const STATEMENT_CHARS = 2000;
@@ -64,6 +73,49 @@ export function namesRequired(plan: ToolPlan): string[] {
     if (!names.includes(change.connection.name)) names.push(change.connection.name);
   }
   return names;
+}
+
+/**
+ * 허용 단추의 잠금. `delayMs` 동안 `false` 이고, 그동안 창에 키 · 포인터가 눌리면 처음부터 다시 센다(입력 칸 안의 키는 빼고). 컴포넌트가 요청마다 새로
+ * 그려지므로(approvals-host.tsx 의 `key`) 요청이 바뀔 때마다 다시 잠긴다. `delayMs` 가 0 이하면 처음부터 풀려 있다.
+ */
+export function useArmed(delayMs: number): boolean {
+  const [armed, setArmed] = useState(delayMs <= 0);
+  useEffect(() => {
+    if (delayMs <= 0) return;
+    let done = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const start = (event?: Event) => {
+      // 이름 칸에 치는 글자는 사람이 이 다이얼로그에 뜻을 두고 친 것이다 — 다시 세지 않는다.
+      if (done || event?.target instanceof HTMLInputElement) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        done = true;
+        setArmed(true);
+      }, delayMs);
+    };
+    start();
+    window.addEventListener("keydown", start, true);
+    window.addEventListener("pointerdown", start, true);
+    window.addEventListener("mousedown", start, true);
+    return () => {
+      done = true;
+      clearTimeout(timer);
+      window.removeEventListener("keydown", start, true);
+      window.removeEventListener("pointerdown", start, true);
+      window.removeEventListener("mousedown", start, true);
+    };
+  }, [delayMs]);
+  return armed;
+}
+
+/**
+ * 목록에 보일 문장(원래 순서): 조회가 아닌 문장은 모두, 조회 문장은 앞에서부터 `STATEMENTS_SHOWN` 개까지. 파괴 · 쓰기 문장이 목록
+ * 밖에 숨어 「이름을 쳐라」 만 보이는 일이 없게(M5-14 리뷰 F1) — 접히는 것은 조회 문장뿐이다.
+ */
+export function shownStatements(statements: readonly SqlStatement[]): SqlStatement[] {
+  let reads = 0;
+  return statements.filter((s) => s.grade !== "read" || ++reads <= STATEMENTS_SHOWN);
 }
 
 /** `m:ss`. */
@@ -160,8 +212,8 @@ function FileChange({
 
 function SqlChange({ change, T }: { change: Extract<PlanChange, { kind: "sql" }>; T: Strings }) {
   const grade = useDbSafetyStrings().grade;
-  const shown = change.statements.slice(0, STATEMENTS_SHOWN);
-  const hidden = change.statements.length - shown.length;
+  const shown = shownStatements(change.statements);
+  const folded = change.statements.length - shown.length;
   return (
     <div data-testid="mcp-approval-sql" className="flex flex-col gap-1">
       <span className="flex flex-wrap items-center gap-2">
@@ -217,7 +269,11 @@ function SqlChange({ change, T }: { change: Extract<PlanChange, { kind: "sql" }>
             />
           </li>
         ))}
-        {hidden > 0 && <li className="text-ui-muted-foreground">{T.sql.more(hidden)}</li>}
+        {folded > 0 && (
+          <li data-testid="mcp-approval-folded" className="text-ui-muted-foreground">
+            {T.sql.foldedReads(folded)}
+          </li>
+        )}
       </ol>
     </div>
   );
@@ -262,6 +318,8 @@ export interface ApprovalDialogProps {
   onAnswer(answer: McpApprovalAnswer): void;
   /** `Esc` — 다이얼로그만 닫는다. */
   onDismiss(): void;
+  /** 허용 단추를 잠그는 시간(기본 `ARM_DELAY_MS`). 시험만 바꾼다. */
+  armDelayMs?: number;
 }
 
 export function ApprovalDialog({
@@ -271,6 +329,7 @@ export function ApprovalDialog({
   now,
   onAnswer,
   onDismiss,
+  armDelayMs = ARM_DELAY_MS,
 }: ApprovalDialogProps) {
   const T = useMcpStrings().approval;
   useKeymapPopup(true);
@@ -279,8 +338,17 @@ export function ApprovalDialog({
   const required = useMemo(() => namesRequired(plan), [plan]);
   const [typed, setTyped] = useState<Record<string, string>>({});
   const namesOk = required.every((name) => typed[name] === name);
-  const allow = (answer: McpApprovalAnswer) => {
-    if (namesOk) onAnswer(answer);
+  const armed = useArmed(armDelayMs);
+  /** 잠금이 풀린 뒤 포인터가 내려간 허용 단추 — 포인터로 누른 허용은 이 단추여야 받는다. */
+  const pressed = useRef<McpApprovalAnswer | undefined>(undefined);
+  const press = (answer: McpApprovalAnswer) => {
+    pressed.current = armed ? answer : undefined;
+  };
+  const allow = (answer: McpApprovalAnswer, event: { detail: number }) => {
+    if (!armed || !namesOk) return;
+    // `detail` 이 0 이면 키보드(Enter · Space)나 프로그램의 누름이다. 포인터 누름은 풀린 뒤에 이 단추에서 시작했어야 한다.
+    if (event.detail > 0 && pressed.current !== answer) return;
+    onAnswer(answer);
   };
   const phrases = useMemo(() => ({ "$ unchanged lines": T.unchangedLines }), [T]);
   const dangerous = request.tier === "dangerous";
@@ -406,10 +474,14 @@ export function ApprovalDialog({
               <button
                 type="button"
                 data-answer="once"
-                disabled={!namesOk}
-                className={`${BUTTON} border-ui-accent`}
-                onClick={() => allow("once")}
+                data-locked={armed ? undefined : "true"}
+                disabled={!armed || !namesOk}
+                title={armed ? undefined : T.locked}
+                className={`${BUTTON} inline-flex items-center gap-1 border-ui-accent`}
+                onPointerDown={() => press("once")}
+                onClick={(e) => allow("once", e)}
               >
+                {!armed && <Lock size={12} aria-hidden data-testid="mcp-approval-lock" />}
                 {T.once}
               </button>
             )}
@@ -417,10 +489,14 @@ export function ApprovalDialog({
               <button
                 type="button"
                 data-answer={third}
-                disabled={!namesOk}
-                className={BUTTON}
-                onClick={() => allow(third)}
+                data-locked={armed ? undefined : "true"}
+                disabled={!armed || !namesOk}
+                title={armed ? undefined : T.locked}
+                className={`${BUTTON} inline-flex items-center gap-1`}
+                onPointerDown={() => press(third)}
+                onClick={(e) => allow(third, e)}
               >
+                {!armed && <Lock size={12} aria-hidden data-testid="mcp-approval-lock" />}
                 {third === "window" ? T.window : T.session}
               </button>
             )}

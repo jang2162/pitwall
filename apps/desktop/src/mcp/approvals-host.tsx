@@ -70,12 +70,15 @@ export function WindowApprovals({
   projectId,
   native = tauriApprovalNative,
   store = approvalStore,
+  armDelayMs,
 }: {
   client: RpcClient;
   /** 프로젝트 창이면 그 프로젝트, 웰컴 · 설정 창이면 `null`. */
   projectId: string | null;
   native?: ApprovalNative;
   store?: ApprovalStore;
+  /** 허용 단추를 잠그는 시간(approval-dialog.tsx 의 `ARM_DELAY_MS`). 시험만 바꾼다. */
+  armDelayMs?: number;
 }) {
   const T = useMcpStrings().approval;
   // 알림 글은 요청이 온 때의 언어로 — 언어가 바뀌어도 스트림을 다시 열지 않는다.
@@ -102,6 +105,7 @@ export function WindowApprovals({
       now={now}
       onAnswer={(answer) => answerApproval(client, store, current.id, answer)}
       onDismiss={() => dismiss(store, current.id)}
+      armDelayMs={armDelayMs}
     />
   );
 }

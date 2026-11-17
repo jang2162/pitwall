@@ -126,16 +126,17 @@ mcp-approval-sql-statements =
     }
 # $n: statement number (from 1), $line: first line
 mcp-approval-sql-statement = Statement { $n } · line { $line }
-# $count: statements not shown in the list
-mcp-approval-sql-more =
+# $count: read statements folded away (statements that are not reads are always all shown)
+mcp-approval-sql-folded-reads =
     { $count ->
-        [one] and 1 more statement
-       *[other] and { $count } more statements
+        [one] and 1 more read statement, folded — every statement that is not a read is shown
+       *[other] and { $count } more read statements, folded — every statement that is not a read is shown
     }
 # $time: time left (minutes:seconds)
 mcp-approval-remaining = { $time } left
 # $index: this request's place, $total: requests waiting in this window
 mcp-approval-position = { $index } of { $total }
+mcp-approval-locked = Available in a moment — locked so that a key or click from before the dialog cannot allow it
 mcp-approval-deny = Deny
 mcp-approval-once = Allow once
 mcp-approval-session = Allow for this session

@@ -107,12 +107,13 @@ mcp-approval-sql-irreversible = 되돌릴 수 없다 — 트랜잭션 밖에서 
 mcp-approval-sql-statements = 문장 { $count }개
 # $n: 문장 번호(1 기준), $line: 시작 줄
 mcp-approval-sql-statement = 문장 { $n } · { $line }줄
-# $count: 목록에 보이지 않은 문장 수
-mcp-approval-sql-more = 그리고 문장 { $count }개 더
+# $count: 접어 보이지 않은 조회 문장 수(조회가 아닌 문장은 늘 모두 보인다)
+mcp-approval-sql-folded-reads = 그리고 조회 문장 { $count }개는 접었다 — 조회가 아닌 문장은 모두 보인다
 # $time: 남은 시간(분:초)
 mcp-approval-remaining = 남은 시간 { $time }
 # $index: 이 요청의 차례, $total: 이 창의 대기 수
 mcp-approval-position = { $total }개 중 { $index }
+mcp-approval-locked = 잠시 뒤 누를 수 있다 — 뜬 순간의 키 · 클릭이 허용이 되지 않게 잠갔다
 mcp-approval-deny = 거절
 mcp-approval-once = 이번만 허용
 mcp-approval-session = 이 세션 동안 허용
