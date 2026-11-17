@@ -556,7 +556,9 @@ async fn a_redis_connection_is_unsupported() {
         .unwrap_err();
     assert_eq!(error.code, pw_db::gate::code::DB_ERROR);
     assert_eq!(error.data.unwrap()["error"]["kind"], "unsupported");
-    assert!(error.message.contains("db_kv_scan"), "{}", error.message);
+    for tool in ["db_kv_scan", "db_kv_get"] {
+        assert!(error.message.contains(tool), "{}", error.message);
+    }
 }
 
 /// `db_connection_list` 에는 비밀이 없다(키체인 비밀 · env 변수의 값).

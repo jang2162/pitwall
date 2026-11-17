@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::value::DbValue;
 
-/// 키. UTF-8 이면 문자열 그대로, 아니면 `{ "hex": "0x…" }`.
+/// A key: the text itself when UTF-8, otherwise `{ "hex": "0x…" }`.
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
@@ -23,7 +23,7 @@ pub enum KvKey {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct KvKeyBytes {
-    /// `0x` 로 시작하는 소문자 hex.
+    /// Lowercase hex starting with `0x`.
     pub hex: String,
 }
 
@@ -59,7 +59,7 @@ impl KvKey {
     }
 }
 
-/// 값의 타입.
+/// Type of a value.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
@@ -73,7 +73,7 @@ pub enum KvType {
     Stream,
     /// RedisJSON(`ReJSON-RL`).
     Json,
-    /// 그 밖의 모듈 타입. `TYPE` 이 돌려준 이름.
+    /// Another module type: the name `TYPE` returned.
     Other(String),
 }
 
@@ -109,10 +109,10 @@ pub struct KvScanPage {
 pub struct KvKeyInfo {
     pub key: KvKey,
     pub kind: KvType,
-    /// 남은 수명(밀리초). 만료가 없으면 `None`.
+    /// Remaining TTL (milliseconds). `null` when the key has no expiry.
     #[specta(type = Option<JsNumber>)]
     pub ttl_ms: Option<u64>,
-    /// 크기(바이트, `MEMORY USAGE` — 없으면 타입별 길이). 모르면 `None`.
+    /// Size (bytes from `MEMORY USAGE`, or the type's length when the server has no `MEMORY`). `null` if unknown.
     #[specta(type = Option<JsNumber>)]
     pub size: Option<u64>,
 }
@@ -140,11 +140,11 @@ pub struct KvValuePage {
     pub next_cursor: Option<String>,
 }
 
-/// 타입별 값. 원소는 UTF-8 이면 텍스트, 아니면 바이트 [`DbValue`].
+/// A value by type. Elements are text when UTF-8, otherwise bytes ([`DbValue`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum KvValue {
-    /// 키가 없다(그사이 지워졌거나 만료).
+    /// The key does not exist (deleted or expired).
     Missing,
     String(DbValue),
     Hash(Vec<KvField>),
@@ -166,7 +166,7 @@ pub struct KvField {
 #[serde(rename_all = "camelCase")]
 pub struct KvScored {
     pub member: DbValue,
-    /// 점수(Redis 가 준 글 그대로 — `inf` 등).
+    /// Score (the text Redis returned — `inf`, etc.).
     pub score: String,
 }
 

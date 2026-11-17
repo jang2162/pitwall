@@ -518,7 +518,7 @@ impl DbSessions {
             return Err(db_error(DbError::new(
                 DbErrorKind::Unsupported,
                 format!(
-                    "db_schema reads SQL databases only; `{}` is a key-value store — use db_kv_scan",
+                    "db_schema reads SQL databases only; `{}` is a key-value store — use db_kv_scan and db_kv_get",
                     p.connection_id
                 ),
             )));
@@ -664,7 +664,7 @@ impl DbSessions {
                 return Err(db_error(DbError::new(
                     DbErrorKind::Unsupported,
                     format!(
-                        "db_query runs SQL databases only; `{}` is a key-value store — use db_kv_get",
+                        "db_query runs SQL databases only; `{}` is a key-value store — use db_kv_scan and db_kv_get",
                         p.connection_id
                     ),
                 )));

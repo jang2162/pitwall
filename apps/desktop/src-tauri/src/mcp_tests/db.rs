@@ -205,3 +205,77 @@ async fn db_query_runs_sql_and_files_and_audits_hashes_not_sql() {
     }
     session.close().await;
 }
+
+/// Redis 조회 툴(16-m5-plan M5-19)을 진짜 세션으로: 둘 다 그룹 `db` · 등급 `read` 이고 입력에 명령 칸이 없다. 사람이 그 프로젝트
+/// 창에서 연 적 없는 Redis 연결은 서버에 붙지 않고 `denied` · `not_opened_by_user` 다(앱의 실 Redis 드라이버 — 서버 없이 관문에서
+/// 끝난다). 실 Redis 왕복은 `pw-db` 의 `kv_live.rs`(`live_redis_kv_tool_*`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn redis_tools_are_db_reads_without_a_command_input() {
+    let host = ToolHost::app();
+    let alpha = host.project("alpha");
+    host.host
+        .registry()
+        .unwrap()
+        .set_trust(&alpha, true)
+        .unwrap();
+    let root = host.base.join("work").join("alpha");
+    std::fs::create_dir_all(root.join(".pitwall/db")).unwrap();
+    std::fs::write(
+        root.join(".pitwall/db/cache.toml"),
+        "schema = 1\nname = \"cache\"\ndriver = \"redis\"\nhost = \"127.0.0.1\"\nport = 1\nsslmode = \"disable\"\n",
+    )
+    .unwrap();
+    for name in ["db_kv_scan", "db_kv_get"] {
+        let tool = host.tool(name);
+        assert_eq!(
+            (tool.group, tool.tier),
+            ("db", pw_rpc::Tier::Read),
+            "{name}"
+        );
+    }
+    let session = host.session(SessionRequest::default()).await;
+    let listed = session.list().await;
+    for name in ["db_kv_scan", "db_kv_get"] {
+        let tool = listed.iter().find(|t| t.name == name).unwrap();
+        let properties = tool
+            .input_schema
+            .get("properties")
+            .unwrap()
+            .as_object()
+            .unwrap();
+        for command in ["argv", "command", "commands"] {
+            assert!(!properties.contains_key(command), "{name}: {command}");
+        }
+    }
+    for (name, extra) in [
+        ("db_kv_scan", serde_json::json!({ "match": "user:*" })),
+        ("db_kv_get", serde_json::json!({ "key": "user:1" })),
+    ] {
+        let mut args = serde_json::json!({ "projectId": alpha, "connectionId": "cache" });
+        args.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let refused = session.call(name, args).await;
+        assert_eq!(refused.is_error, Some(true), "{name}");
+        assert_eq!(
+            refused
+                .meta
+                .as_ref()
+                .and_then(|m| pw_mcp::marker::Mark::read(m)),
+            Some(pw_mcp::marker::Mark::denied(
+                pw_mcp::marker::Reason::NotOpenedByUser
+            )),
+            "{name}: {refused:?}"
+        );
+    }
+    let rows = host.audit_rows(2);
+    let outcomes: Vec<_> = rows
+        .iter()
+        .map(|r| (r.tool.as_str(), r.outcome.as_str()))
+        .collect();
+    assert_eq!(
+        outcomes,
+        [("db_kv_scan", "denied"), ("db_kv_get", "denied")]
+    );
+    session.close().await;
+}

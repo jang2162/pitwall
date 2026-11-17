@@ -270,6 +270,27 @@ export type UnaryMethods = {
 	 */
 	"db.tool.connectionList": { params: DbToolConnectionListParams; result: DbToolConnectionList };
 	/**
+	 * Read one page of a Redis key's value, by type: a string in byte windows, a hash · set in scan pages, a list ·
+	 * zset by index, a stream by entry id, a RedisJSON document whole. `nextCursor` reads the next page; a missing key
+	 * is `"missing"`. Values that are not UTF-8 come as hex bytes. The response is limited to about 192 KiB — a page
+	 * holds fewer elements to fit, and an element too large on its own is cut (`truncated`). There is no command
+	 * input — this tool only reads. Uses only connections the person opened in Pitwall's DB explorer during this app
+	 * run (`notOpenedByUser`) and never uses a Redis server marked production (`productionBlocked`). Redis connections
+	 * only.
+	 */
+	"db.tool.kvGet": { params: DbToolKvGetParams; result: DbToolKvGet };
+	/**
+	 * Find Redis keys, one page at a time (Redis `SCAN` with an optional glob `match`): each key with its type · TTL ·
+	 * size, and `nextCursor` for the next page — call again with it until `nextCursor` is missing. A page may hold
+	 * fewer keys than `limit`, even none, while more pages remain. Keys are not repeated within one page, but **a key
+	 * can appear again on a later page** (Redis `SCAN` may return a key twice); keys that exist for the whole scan are
+	 * never missed. There is no command input — this tool only reads. Uses only connections the person opened in
+	 * Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` — try again after the person has opened
+	 * it once) and never uses a Redis server marked production — any database number on the same server · user
+	 * (`productionBlocked`). Redis connections only — for SQL databases use `db_schema` · `db_query`.
+	 */
+	"db.tool.kvScan": { params: DbToolKvScanParams; result: DbToolKvScan };
+	/**
 	 * Run read-only SQL (SQL drivers only — PG · MySQL/MariaDB · SQLite). The input is either `sql` (text) or `file`
 	 * (an SQL file path relative to the project root — Pitwall reads it when it runs). The statements are split by the
 	 * dialect and run in order in one read-only transaction, with one result per statement (columns · rows ·
@@ -1219,6 +1240,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"db.sql.statementAt": {"name":"db.sql.statementAt","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlStatementAtParams","output":"SqlStatementAtResult","doc":" 커서(UTF-16 오프셋)의 「현재 문장」 — 빈 줄이 아니라 구분자 기준. 두 문장 사이면 앞 문장, 첫 문장 앞이면 첫 문장.\n 오프셋이 `sql` 의 길이를 넘으면 `INVALID_PARAMS`.\n","mcp":null,"fileScope":false},
 	"db.ssh.hosts": {"name":"db.ssh.hosts","kind":"unary","tier":"read","roles":["owner"],"params":"DbProjectParams","output":"DbSshHosts","doc":" `~/.ssh/config`(과 그 `Include`)의 `Host` 이름 — 와일드카드 · 부정 패턴이 없고 터널 목적지로 쓸 수 있는 것만. 다른 값은\n 읽지 않는다. 읽지 못하면 빈 목록. 그 프로젝트 창의 연결 + 신뢰한 프로젝트만.\n","mcp":null,"fileScope":false},
 	"db.tool.connectionList": {"name":"db.tool.connectionList","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolConnectionListParams","output":"DbToolConnectionList","doc":" This project's DB connections (no secrets): id · name · driver · target (host · port · database · SQLite path) ·\n read-only · production · state, plus whether the agent DB tools can use it now (`usable`) and why not. The agent\n DB tools use only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`)\n and never use connections marked production (`productionBlocked`). Does not open any connection.\n","mcp":{"group":"db","name":"db_connection_list"},"fileScope":false},
+	"db.tool.kvGet": {"name":"db.tool.kvGet","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolKvGetParams","output":"DbToolKvGet","doc":" Read one page of a Redis key's value, by type: a string in byte windows, a hash · set in scan pages, a list ·\n zset by index, a stream by entry id, a RedisJSON document whole. `nextCursor` reads the next page; a missing key\n is `\"missing\"`. Values that are not UTF-8 come as hex bytes. The response is limited to about 192 KiB — a page\n holds fewer elements to fit, and an element too large on its own is cut (`truncated`). There is no command\n input — this tool only reads. Uses only connections the person opened in Pitwall's DB explorer during this app\n run (`notOpenedByUser`) and never uses a Redis server marked production (`productionBlocked`). Redis connections\n only.\n","mcp":{"group":"db","name":"db_kv_get"},"fileScope":false},
+	"db.tool.kvScan": {"name":"db.tool.kvScan","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolKvScanParams","output":"DbToolKvScan","doc":" Find Redis keys, one page at a time (Redis `SCAN` with an optional glob `match`): each key with its type · TTL ·\n size, and `nextCursor` for the next page — call again with it until `nextCursor` is missing. A page may hold\n fewer keys than `limit`, even none, while more pages remain. Keys are not repeated within one page, but **a key\n can appear again on a later page** (Redis `SCAN` may return a key twice); keys that exist for the whole scan are\n never missed. There is no command input — this tool only reads. Uses only connections the person opened in\n Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` — try again after the person has opened\n it once) and never uses a Redis server marked production — any database number on the same server · user\n (`productionBlocked`). Redis connections only — for SQL databases use `db_schema` · `db_query`.\n","mcp":{"group":"db","name":"db_kv_scan"},"fileScope":false},
 	"db.tool.query": {"name":"db.tool.query","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolQueryParams","output":"DbToolQuery","doc":" Run read-only SQL (SQL drivers only — PG · MySQL/MariaDB · SQLite). The input is either `sql` (text) or `file`\n (an SQL file path relative to the project root — Pitwall reads it when it runs). The statements are split by the\n dialect and run in order in one read-only transaction, with one result per statement (columns · rows ·\n `truncated` · duration). **Only queries run** — if any statement is not a query (a write · DDL · `SET` ·\n transaction control · `ATTACH` · text that cannot be parsed), nothing runs and the call is refused (`notAQuery`\n — writes go through `db_execute`). If a statement fails, it stops there and returns the results so far with\n `error` (statement index · line). Rows are limited to `maxRows` per statement (default 100), cells are cut at 4\n KiB (`truncated` values). The whole response is limited to about 192 KiB — when the rows fill it, that statement\n is `truncated` and the later statements do not run and are reported as `notRun` (`count` from `index`, `reason:\n \"responseBudget\"`). **There is no next page** — if a result was cut, narrow the WHERE · LIMIT · columns and call\n again (a new call sees a different snapshot).\n Uses only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`) and\n never uses a target marked production — for MySQL · MariaDB, any database on the same server · user\n (`productionBlocked`). The result's `audit` is the detail kept in the audit log (statement count · grade ·\n hashes) and is shown to the agent too.\n","mcp":{"group":"db","name":"db_query"},"fileScope":false},
 	"db.tool.schema": {"name":"db.tool.schema","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolSchemaParams","output":"DbToolSchema","doc":" Read a DB schema (SQL drivers only — PG · MySQL/MariaDB · SQLite). Without `object`, one page of one level's\n list (`kind`: `database` · `schema` · `table` (default) · `view`, etc. — object lists are within `database` ·\n `schema` and filtered by `filter`); with it, that object's columns (name · type · null · default · primary key)\n · indexes · foreign keys, or its DDL text with `detail: \"ddl\"`. Sees the same as Pitwall's DB explorer. Uses\n only connections the person opened in Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` —\n try again after the person has opened it once) and never uses connections marked production. For a Redis\n connection, `unsupported` — use `db_kv_scan`.\n","mcp":{"group":"db","name":"db_schema"},"fileScope":false},
 	"diag.collect": {"name":"diag.collect","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"DiagnosticsText","doc":" 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.\n 경로 · 비밀 · 홈 디렉터리 이름은 가린다.\n","mcp":null,"fileScope":false},
@@ -2948,6 +2971,82 @@ export type DbToolConnectionState =
 "secretRequired" | 
 /**  The person's confirmation is needed — the person confirms it in Pitwall. */
 "approvalRequired" | "ready";
+
+export type DbToolKvGet = {
+	/**  The key's type (`null` when the key is missing). */
+	kind: KvType | null,
+	/**  Remaining TTL in milliseconds (`null` = no expiry or missing). */
+	ttlMs: number | null,
+	/**
+	 *  One page of the value by type (`"missing"` when the key does not exist): `string` (text, or bytes as hex) ·
+	 *  `hash` (field · value pairs) · `list` · `set` · `zset` (member · score) · `stream` (entry id · fields) · `json`.
+	 */
+	value: KvValue,
+	/**  Whole length (elements; bytes for a string). `null` if unknown. */
+	total: number | null,
+	/**  Cursor of the next page (pass it back as `cursor`). Missing means this is the last page. */
+	nextCursor: string | null,
+	/**  Some element values of this page were cut to fit the response (those values are marked `truncated`). */
+	truncated: boolean,
+};
+
+export type DbToolKvGetParams = {
+	projectId: string,
+	/**
+	 *  Top of the worktree (absolute path). Connection settings are read from that worktree. Empty means the session's
+	 *  worktree, or else the main checkout.
+	 */
+	worktree?: string | null,
+	/**  Connection id from `db_connection_list` (a Redis connection). */
+	connectionId: string,
+	/**  Redis database number (`"0"`, `"1"`, …). Empty means the connection settings' database. */
+	database?: string | null,
+	/**  Key name as `db_kv_scan` returned it: text, or `{ "hex": "0x…" }` for bytes that are not UTF-8. */
+	key: KvKey,
+	/**  `nextCursor` from the previous page of this key's value. Empty for the first page. */
+	cursor?: string | null,
+	/**
+	 *  Elements per page for hash · list · set · zset · stream (1 – 500, default 100). A string is read in windows of
+	 *  up to 64 KiB. A page can hold fewer elements so that the response fits.
+	 */
+	limit?: number | null,
+};
+
+export type DbToolKvScan = {
+	/**
+	 *  Keys of this page: name (text, or `{ "hex": "0x…" }` when not UTF-8 — pass it back as is to `db_kv_get`), type,
+	 *  remaining TTL in milliseconds (`null` = no expiry) and size (bytes from `MEMORY USAGE`, or the type's length when
+	 *  the server has no `MEMORY`).
+	 */
+	keys: KvKeyInfo[],
+	/**  Cursor of the next page (pass it back as `cursor`). Missing means the scan is complete. */
+	nextCursor: string | null,
+};
+
+export type DbToolKvScanParams = {
+	projectId: string,
+	/**
+	 *  Top of the worktree (absolute path). Connection settings are read from that worktree. Empty means the session's
+	 *  worktree, or else the main checkout.
+	 */
+	worktree?: string | null,
+	/**  Connection id from `db_connection_list` (a Redis connection). */
+	connectionId: string,
+	/**  Redis database number (`"0"`, `"1"`, …). Empty means the connection settings' database. */
+	database?: string | null,
+	/**
+	 *  Glob pattern for key names (Redis `MATCH` — `*`, `?`, `[abc]`; `\` escapes). Empty means all keys. Sent as one
+	 *  argument, never as command text.
+	 */
+	match?: string | null,
+	/**  `nextCursor` from the previous page. Empty for the first page. */
+	cursor?: string | null,
+	/**
+	 *  About how many keys per page (1 – 500, default 100). A page can hold fewer — even none — while `nextCursor` is
+	 *  set, and a few more when one Redis `SCAN` step returns them together.
+	 */
+	limit?: number | null,
+};
 
 export type DbToolQuery = {
 	/**  Number of statements after splitting. */
@@ -5461,20 +5560,20 @@ export type KvField = {
 	value: DbValue,
 };
 
-/**  키. UTF-8 이면 문자열 그대로, 아니면 `{ "hex": "0x…" }`. */
+/**  A key: the text itself when UTF-8, otherwise `{ "hex": "0x…" }`. */
 export type KvKey = string | KvKeyBytes;
 
 export type KvKeyBytes = {
-	/**  `0x` 로 시작하는 소문자 hex. */
+	/**  Lowercase hex starting with `0x`. */
 	hex: string,
 };
 
 export type KvKeyInfo = {
 	key: KvKey,
 	kind: KvType,
-	/**  남은 수명(밀리초). 만료가 없으면 `None`. */
+	/**  Remaining TTL (milliseconds). `null` when the key has no expiry. */
 	ttlMs: number | null,
-	/**  크기(바이트, `MEMORY USAGE` — 없으면 타입별 길이). 모르면 `None`. */
+	/**  Size (bytes from `MEMORY USAGE`, or the type's length when the server has no `MEMORY`). `null` if unknown. */
 	size: number | null,
 };
 
@@ -5568,7 +5667,7 @@ export type KvScanRequest = {
 
 export type KvScored = {
 	member: DbValue,
-	/**  점수(Redis 가 준 글 그대로 — `inf` 등). */
+	/**  Score (the text Redis returned — `inf`, etc.). */
 	score: string,
 };
 
@@ -5577,16 +5676,16 @@ export type KvStreamEntry = {
 	fields: KvField[],
 };
 
-/**  값의 타입. */
+/**  Type of a value. */
 export type KvType = "string" | "hash" | "list" | "set" | "zset" | "stream" | 
 /**  RedisJSON(`ReJSON-RL`). */
 "json" | 
-/**  그 밖의 모듈 타입. `TYPE` 이 돌려준 이름. */
+/**  Another module type: the name `TYPE` returned. */
 { other: string };
 
-/**  타입별 값. 원소는 UTF-8 이면 텍스트, 아니면 바이트 [`DbValue`]. */
+/**  A value by type. Elements are text when UTF-8, otherwise bytes ([`DbValue`]). */
 export type KvValue = 
-/**  키가 없다(그사이 지워졌거나 만료). */
+/**  The key does not exist (deleted or expired). */
 "missing" | ({ string: DbValue }) & { hash?: never; json?: never; list?: never; set?: never; stream?: never; zset?: never } | ({ hash: KvField[] }) & { json?: never; list?: never; set?: never; stream?: never; string?: never; zset?: never } | ({ list: DbValue[] }) & { hash?: never; json?: never; set?: never; stream?: never; string?: never; zset?: never } | ({ set: DbValue[] }) & { hash?: never; json?: never; list?: never; stream?: never; string?: never; zset?: never } | ({ zset: KvScored[] }) & { hash?: never; json?: never; list?: never; set?: never; stream?: never; string?: never } | ({ stream: KvStreamEntry[] }) & { hash?: never; json?: never; list?: never; set?: never; string?: never; zset?: never } | ({ json: DbValue }) & { hash?: never; list?: never; set?: never; stream?: never; string?: never; zset?: never };
 
 /**  값 한 쪽. */

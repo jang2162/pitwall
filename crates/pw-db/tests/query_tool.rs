@@ -782,6 +782,10 @@ async fn the_gate_is_the_agent_entry() {
         .await
         .unwrap_err();
     assert_eq!(error.code, pw_db::gate::code::DB_ERROR);
+    // Redis 조회 툴을 가리킨다(16-m5-plan M5-19 ④).
+    for tool in ["db_kv_scan", "db_kv_get"] {
+        assert!(error.message.contains(tool), "{}", error.message);
+    }
     assert_eq!(error.data.unwrap()["error"]["kind"], "unsupported");
 }
 
