@@ -16,6 +16,8 @@ rusqlite = { version = "0.41.1", features = ["bundled"] }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+# 툴 계획의 승인 해시(registry::plan — 결정 M5-D30).
+sha2 = "0.10.9"
 specta = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["rt", "sync", "macros", "time"] }
 tokio-util = { workspace = true }

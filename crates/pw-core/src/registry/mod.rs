@@ -20,6 +20,7 @@ pub mod exec;
 pub mod info;
 pub mod methods;
 pub mod path;
+pub mod plan;
 pub mod resolve;
 pub mod slug;
 pub mod state;
