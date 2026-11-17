@@ -803,18 +803,20 @@ impl ToolHost {
         }
     }
 
-    /// 감사 로그의 행이 `n` 개가 될 때까지 기다려 전부 돌려준다(기록은 응답 뒤에 따로 끝난다). 오래된 것부터.
+    /// 감사 로그의 행이 `n` 개가 되고 모두 끝 기록을 받을 때까지 기다려 전부 돌려준다. 오래된 것부터. 기록은 응답 뒤에 따로
+    /// 끝난다 — 선기록한 행(`write` 이상 · 승인을 지난 호출)은 결과가 나간 뒤 큐로 `started` 에서 끝난 결과로 고쳐지므로, 행 수만
+    /// 보고 읽으면 아직 `started` 일 수 있다(부하에서 흔들렸다).
     pub fn audit_rows(&self, n: usize) -> Vec<AuditRow> {
         let file = self.services.audit.file().to_path_buf();
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
             let rows = read_audit(&file);
-            if rows.len() >= n {
+            if rows.len() >= n && rows.iter().all(|r| r.outcome != "started") {
                 return rows;
             }
             assert!(
                 std::time::Instant::now() < deadline,
-                "감사 행이 {n} 개가 되지 않았다: {rows:?}"
+                "감사 행이 {n} 개가 되어 끝나지 않았다: {rows:?}"
             );
             std::thread::sleep(Duration::from_millis(20));
         }
