@@ -170,13 +170,31 @@ async fn project_register_asks_the_front_window_and_registers_an_untrusted_proje
     }
     assert!(!registry.is_trusted(&id));
 
-    let rows = host.audit_rows(1);
+    let rows = settled_rows(&host, |rows| {
+        rows.iter()
+            .any(|r| r.tool == "project_register" && r.outcome != "started")
+    });
     let row = rows.iter().find(|r| r.tool == "project_register").unwrap();
     assert_eq!(
         (row.outcome.as_str(), row.project_id.as_deref()),
         ("ok", None)
     );
     Arc::into_inner(session).unwrap().close().await;
+}
+
+/// 감사 행이 `done` 을 만족할 때까지(선기록된 행의 결과는 응답 뒤에 따로 채워진다) 기다려 돌려준다. 5초 안에 안 되면 그때의 행.
+fn settled_rows(
+    host: &ToolHost,
+    done: impl Fn(&[super::AuditRow]) -> bool,
+) -> Vec<super::AuditRow> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let rows = host.audit_rows(1);
+        if done(&rows) || std::time::Instant::now() >= deadline {
+            return rows;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// 에이전트 범위(MCP 세션의 연결)로 Host RPC 하나를 부른다.
@@ -315,13 +333,13 @@ async fn open_with_upsert_always_asks_and_offers_no_session_allowance() {
             after
         );
     }
-    let rows = host.audit_rows(3);
-    assert_eq!(
+    let upserts = |rows: &[super::AuditRow]| {
         rows.iter()
             .filter(|r| r.tool == "open_with_upsert" && r.outcome == "ok")
-            .count(),
-        2
-    );
+            .count()
+    };
+    let rows = settled_rows(&host, |rows| upserts(rows) == 2);
+    assert_eq!(upserts(&rows), 2, "{rows:?}");
     Arc::into_inner(session).unwrap().close().await;
 }
 
