@@ -108,6 +108,7 @@ import { SymbolSearchFeature } from "../search-everywhere/symbol-tab";
 import { createRecentFiles } from "../search-everywhere/recent-files";
 import { SearchResultsToolWindow } from "../search/search-results";
 import { StructureToolWindow } from "../structure/structure-tool-window";
+import { McpStatus } from "../mcp/mcp-status";
 import { RuntimeStatus } from "../runtime/runtime-status";
 import {
   STATUS_SLOTS,
@@ -931,6 +932,7 @@ function ProjectWindowBody({
           {projectId !== undefined && <GitLogReveal workspace={workspace} />}
           {projectId !== undefined && <ProjectRuntimeActions projectId={projectId} />}
           {projectId !== undefined && <RuntimeStatus projectId={projectId} />}
+          {projectId !== undefined && <McpStatus projectId={projectId} />}
           {projectId !== undefined && (
             <DbStatus projectId={projectId} workspace={workspace} api={api} />
           )}

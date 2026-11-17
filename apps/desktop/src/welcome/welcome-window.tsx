@@ -24,6 +24,7 @@ import {
 
 import { useAppStrings } from "../i18n/app-strings";
 import { useKeymap, useKeymapPopup, useRegisterActions } from "../keymap/keymap-provider";
+import { McpConnections } from "../mcp/mcp-status";
 import { useOpenWith } from "../open-with/open-with";
 import { useHost, useRpcQuery } from "../rpc/host";
 import { rpcQueryKey } from "../rpc/queries";
@@ -482,6 +483,10 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
             {T.buttons.openFolder}
             <Kbd text={shortcuts("project.openFolder")[0]?.text} />
           </button>
+        </div>
+        {/* 아래 줄(10-ui.md 「S1. 웰컴」 그림). 지금은 MCP 연결 수만 있다 — CLI 설치 · 업데이트 칸은 그 기능이 더한다. */}
+        <div className="flex flex-none gap-3 border-t border-ui-border px-3 py-0.5 text-[12px] text-ui-muted-foreground">
+          <McpConnections />
         </div>
       </section>
       {dropping && (

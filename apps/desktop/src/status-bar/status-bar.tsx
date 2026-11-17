@@ -43,6 +43,8 @@ export const STATUS_SLOTS = {
   /** 단일 파일 창의 「단일 파일」 · 「프로젝트로 열기」(M1-24). 그 창에는 Host 항목이 없다. */
   fileWindow: { side: "left", order: 50 },
   host: { side: "left", order: 100 },
+  /** 이 프로젝트에 붙은 MCP 세션 수 「MCP 2」 — 0 이면 없다(M5-10, src/mcp/mcp-status.tsx). 10-ui §2.4 그림의 Host 다음. */
+  mcp: { side: "left", order: 150 },
   /** 프로젝트 신뢰 · 「런타임 환경 미적용」(M1-05). */
   trust: { side: "left", order: 200 },
   /** 파일 감시가 OS 한도를 넘어 폴링으로 봄(M1-06). */

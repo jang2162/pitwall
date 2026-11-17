@@ -36,11 +36,18 @@ export function hostInvalidations(host: string): readonly InvalidationRule[] {
   // 시간을 넘겼던 로그인 셸이 백그라운드 재시도로 살아나면 Host 범위에도 `runtime.changed`(loginShell)가 온다 — 설정 창의
   // 「Orca 에서 Pitwall 열기」 검사(`cli.status`)가 로그인 셸 PATH 를 다시 본다(crates/pw-runtime/src/runtime.rs).
   const runtime = [rpcQueryKey(host, "cli.status"), rpcQueryKey(host, "runtime.get")];
+  // MCP 세션이 열리고 닫히면(`mcp.sessionsChanged`) 세션 목록을, 프로젝트 없는 호출의 감사 행이 쓰이면(`mcp.activity` 의 Host
+  // 범위) 세션의 호출 수와 감사 로그를 다시 읽는다(crates/pw-mcp/src/sessions.rs). 프로젝트 범위의 `mcp.activity` 는 그 패널(M5-13)이
+  // 구독한다.
+  const mcpSessions = [rpcQueryKey(host, "mcp.sessions")];
+  const mcpActivity = [rpcQueryKey(host, "mcp.sessions"), rpcQueryKey(host, "mcp.audit.list")];
   return [
     { topic: "config.changed", keys: config },
     { topic: "config.error", keys: config },
     { topic: "project.changed", keys: projects },
     { topic: "runtime.changed", keys: runtime },
+    { topic: "mcp.sessionsChanged", keys: mcpSessions },
+    { topic: "mcp.activity", keys: mcpActivity },
   ];
 }
 
