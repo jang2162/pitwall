@@ -547,7 +547,11 @@ export function FileTree({
             {root === undefined ? (
               <p className="p-2 text-ui-muted-foreground">{strings.noRoot}</p>
             ) : (
-              <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+              <div
+                role="presentation"
+                className="relative w-full"
+                style={{ height: virtualizer.getTotalSize() }}
+              >
                 {virtualizer.getVirtualItems().map((item) => {
                   const row = rows[item.index];
                   if (!row) return null;

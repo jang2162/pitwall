@@ -33,6 +33,7 @@ import { createThemeStore } from "../theme/theme-store";
 import { ThemeStoreProvider } from "../theme/theme-switcher";
 import { parseTheme } from "../theme/tokens";
 import { resetFindWindow } from "./find-in-files";
+import { ariaTreeProblems } from "../test-support/aria-tree";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -555,6 +556,8 @@ it("pins the results to the Search Results tool window with ⌘Enter and opens a
   expect(panel().textContent).toContain("「TODO」");
 
   const tree = panel().querySelector<HTMLElement>("[role=tree]")!;
+  // 항목과 트리 사이에 역할 없는 상자가 없다 — macOS 의 WebKit 이 트리로 내보인다(src/test-support/aria-tree.ts).
+  expect(ariaTreeProblems(tree)).toEqual([]);
   tree.focus();
   await press({ code: "ArrowDown", key: "ArrowDown" }, tree);
   await press({ code: "ArrowDown", key: "ArrowDown" }, tree);

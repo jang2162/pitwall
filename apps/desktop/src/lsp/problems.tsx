@@ -550,7 +550,11 @@ function ProblemsView({
           onKeyDown={onKeyDown}
           className="min-h-0 flex-1 overflow-auto text-[12px] outline-none"
         >
-          <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+          <div
+            role="presentation"
+            className="relative w-full"
+            style={{ height: virtualizer.getTotalSize() }}
+          >
             {virtualizer.getVirtualItems().map((item) => {
               const row = rows[item.index];
               if (!row) return null;

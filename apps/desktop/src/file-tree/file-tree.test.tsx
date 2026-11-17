@@ -12,6 +12,7 @@ import { bundledLocalization } from "../i18n/testing";
 import { FileTree, type FileTreeHandlers } from "./file-tree";
 import { fakeTreeLayout } from "./testing";
 import { FileTreeModel } from "./tree-model";
+import { ariaTreeProblems } from "../test-support/aria-tree";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -173,6 +174,8 @@ it("moves with the keyboard like IntelliJ: arrows, expand and collapse, parent",
   expect(selectedPath()).toBe("/r/a");
   await key(tree(), "ArrowRight"); // 펼친다
   expect(row("/r/a/b")).not.toBeNull();
+  // 항목과 트리 사이에 역할 없는 상자가 없다 — macOS 의 WebKit 이 트리로 내보인다(src/test-support/aria-tree.ts).
+  expect(ariaTreeProblems(tree())).toEqual([]);
   expect(selectedPath()).toBe("/r/a");
   await key(tree(), "ArrowRight"); // 첫 자식으로
   expect(selectedPath()).toBe("/r/a/b");

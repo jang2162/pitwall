@@ -35,6 +35,7 @@ import { parseTheme } from "../theme/tokens";
 import type { fakeSyntaxServer } from "../editor/syntax-testing";
 import { fakeLspServer } from "./lsp-testing";
 import { withTooltips } from "../test-support/editor-tooltips";
+import { ariaTreeProblems } from "../test-support/aria-tree";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -479,6 +480,8 @@ it("draws only the visible rows of 10,000 diagnostics in 2,000 files, reading th
   expect(problemRows().length).toBeLessThanOrEqual(50);
   const tree = document.querySelector<HTMLElement>('[data-tool-window="problems"] [role="tree"]')!;
   expect((tree.firstElementChild as HTMLElement).style.height).toBe(`${12_000 * 22}px`);
+  // 항목과 트리 사이에 역할 없는 상자가 없다 — macOS 의 WebKit 이 트리로 내보인다(src/test-support/aria-tree.ts).
+  expect(ariaTreeProblems(tree)).toEqual([]);
   const pages = host.diagnosticCalls.filter(
     ([m, p]) => m === "lsp.diagnostics.list" && !(p as { path?: string }).path,
   );

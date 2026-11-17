@@ -35,6 +35,7 @@ import { type DbDocumentSpec, dbDocumentKey } from "../documents/spec";
 import { dbSafetyStrings } from "../safety/strings";
 import { dbRedisStrings } from "./strings";
 import { PAGE_COUNT } from "./value-view";
+import { ariaTreeProblems } from "../../test-support/aria-tree";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -497,6 +498,8 @@ describe("the Redis key document", () => {
     host.keys = [info("a", "string"), info("b", "string")];
     host.pages.set("b@", { value: { string: { text: "1" } }, total: 1, nextCursor: null });
     await openConnected();
+    // 항목과 트리 사이에 역할 없는 상자가 없다 — macOS 의 WebKit 이 트리로 내보인다(src/test-support/aria-tree.ts).
+    expect(ariaTreeProblems($("[data-testid=redis-key-tree]")!)).toEqual([]);
     await click($("[data-testid=redis-key-tree] [data-key=a]"));
     await act(async () =>
       $("[data-testid=redis-key-tree]")!.dispatchEvent(

@@ -24,6 +24,7 @@ import { afterEach, beforeEach, expect, vi } from "vitest";
 
 import { fakeTreeLayout } from "../../file-tree/testing";
 import { bundledLocalization } from "../../i18n/testing";
+import { ariaTreeProblems } from "../../test-support/aria-tree";
 import { act, endTest, it } from "../../test-support/ended-test";
 import { tokenCssVar } from "../../theme/tokens";
 import { DbExplorerView, FILTER_DELAY_MS, type ExplorerOps } from "./db-explorer";
@@ -542,6 +543,30 @@ it("shows connecting, connected and disconnected, and reconnects only when expan
   await expand("connection", "pg"); // 다시 펼치면 새로 읽는다
   expect(called("db.schema.databases")).toHaveLength(1);
   expect(statusOf("pg")).toBe("connected");
+});
+
+it("is a tree WebKit exposes: expandable treeitems that → expands, an error row included", async () => {
+  host.override.set("db.schema.objects", (params) => {
+    if (params.kind === "view") throw new Error("views are broken");
+    return objectPage(params);
+  });
+  await mount();
+  const connection = row("connection", "lite")!;
+  expect(connection.getAttribute("role")).toBe("treeitem");
+  expect(connection.getAttribute("aria-expanded")).toBe("false");
+  await mouse(connection, "click"); // 고른다
+  await press({ key: "ArrowRight" });
+  expect(row("connection", "lite")!.getAttribute("aria-expanded")).toBe("true");
+  expect(statusOf("lite")).toBe("connected");
+  // 뷰 묶음의 오류 행까지 트리 항목이고, 항목과 트리 사이에 역할 없는 상자가 없다.
+  const views = document.querySelectorAll<HTMLElement>(
+    `[data-row="group"][data-connection="lite"]`,
+  )[1]!;
+  await mouse(views.firstElementChild!, "click");
+  const error = document.querySelector<HTMLElement>("[data-row=error]")!;
+  expect(error.getAttribute("role")).toBe("treeitem");
+  expect(error.querySelector("[role=alert]")?.textContent).toContain("views are broken");
+  expect(ariaTreeProblems(tree())).toEqual([]);
 });
 
 it("connects a SQLite connection when its row is expanded, though its groups need no Host call", async () => {

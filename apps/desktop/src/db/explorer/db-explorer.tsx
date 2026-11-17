@@ -326,9 +326,12 @@ function RowView({
             ? T.more
             : T.none;
     return (
-      <div {...common} data-row={row.kind} role={row.kind === "error" ? "alert" : "treeitem"}>
+      <div {...common} data-row={row.kind}>
         <span className="w-4 flex-none" />
+        {/* 오류도 트리 항목이다 — `alert` 를 행에 달면 WebKit 이 트리를 틀린 트리로 보고 모든 행을 펼칠 수 없는 group 으로 내린다
+            (src/test-support/aria-tree.ts). 알림은 행 안의 글이 낸다. */}
         <span
+          role={row.kind === "error" ? "alert" : undefined}
           className={`truncate text-[12px] ${
             row.kind === "more"
               ? "text-ui-accent underline-offset-2 hover:underline"
@@ -777,7 +780,13 @@ export function DbExplorerView({ model, registry, ops, focusRequest = 0 }: DbExp
         </div>
       );
     return (
-      <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+      // 높이 상자는 `presentation` 이다 — 역할 없는 div 가 트리와 항목 사이에 있으면 macOS 의 WebKit 이 트리를 generic 으로 내려
+      // 행을 접근성 트리에서 펼칠 수 없다(src/test-support/aria-tree.ts).
+      <div
+        role="presentation"
+        className="relative w-full"
+        style={{ height: virtualizer.getTotalSize() }}
+      >
         {virtualizer.getVirtualItems().map((item) => {
           const row = rows[item.index];
           if (!row) return null;

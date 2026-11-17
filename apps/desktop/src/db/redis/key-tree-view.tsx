@@ -190,7 +190,10 @@ export function KeyTreeView({
           {rows.items.length === 0 && !loading && (
             <p className="p-2 text-ui-muted-foreground">{T.tree.empty}</p>
           )}
-          <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+          <div
+            role="presentation"
+            style={{ height: virtualizer.getTotalSize(), position: "relative" }}
+          >
             {virtualizer.getVirtualItems().map((v) => {
               const item = rows.items[v.index]!;
               const depth = rows.depths[v.index] ?? 0;
