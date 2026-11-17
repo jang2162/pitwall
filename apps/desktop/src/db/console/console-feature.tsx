@@ -121,8 +121,10 @@ export function DbConsoleFeature({
   const prompt = useTransactionPrompt();
   const notify = useNotify();
   const { client } = useHost();
-  const latest = useRef({ notify, T });
-  latest.current = { notify, T };
+  // 시각은 고른 UI 언어로(07-extensibility.md §4.1).
+  const locale = useI18n().locales[0];
+  const latest = useRef({ notify, T, locale });
+  latest.current = { notify, T, locale };
 
   useEffect(() => {
     consoleWindow.setState({ projectId, askTransaction: prompt.ask });
@@ -170,7 +172,7 @@ export function DbConsoleFeature({
         if (!live) return;
         const since = seenUntil(projectId);
         const fresh = records.filter((r) => r.rolledBackAt > since);
-        const { notify, T } = latest.current;
+        const { notify, T, locale } = latest.current;
         for (const r of fresh)
           notify({
             level: "warning",
@@ -178,7 +180,11 @@ export function DbConsoleFeature({
             body:
               r.since === null || r.keptMinutes === 0
                 ? T.unattended.bodyUnknown(r.name)
-                : T.unattended.body(r.name, new Date(r.since).toLocaleString(), r.keptMinutes),
+                : T.unattended.body(
+                    r.name,
+                    new Date(r.since).toLocaleString(locale),
+                    r.keptMinutes,
+                  ),
           });
         const last = Math.max(since, ...fresh.map((r) => r.rolledBackAt));
         if (last > since) markSeen(projectId, last);

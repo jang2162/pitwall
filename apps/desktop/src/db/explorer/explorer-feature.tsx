@@ -14,6 +14,7 @@ import type { IDockviewPanelProps } from "dockview-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { useEditorWorkspace } from "../../editor/editor-workspace";
+import { useI18n } from "../../i18n/i18n-provider";
 import { useGitDialogs } from "../../git/dialogs/git-dialogs";
 import { useKeymap, useRegisterActions } from "../../keymap/keymap-provider";
 import { useNotify, usePanelVisible } from "../../notifications/notifications";
@@ -121,6 +122,8 @@ function DbExplorerPanel() {
   const access = useDbAccessPrompt();
   const resolveAccess = useRef(access.resolve);
   resolveAccess.current = access.resolve;
+  const locale = useRef<string | undefined>(undefined);
+  locale.current = useI18n().locales[0];
 
   const model = useMemo(() => {
     if (!client || !projectId) return undefined;
@@ -128,6 +131,7 @@ function DbExplorerPanel() {
       calls: client,
       projectId,
       worktree,
+      locale: () => locale.current,
       access: (error, connectionId) =>
         resolveAccess.current(error, {
           calls: client,

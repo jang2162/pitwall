@@ -127,6 +127,8 @@ export interface ExplorerDeps {
    * 창은 `useDbAccessPrompt`(src/db/safety/access-prompt.tsx)를 잇는다.
    */
   access?(error: unknown, connectionId: string): Promise<boolean>;
+  /** 고른 UI 언어(`useI18n().locales[0]`) — 행 수를 그 언어로 묶어 쓴다(07-extensibility.md §4.1). */
+  locale?(): string | undefined;
 }
 
 /** 드라이버의 지원 플래그(`db.driver.list`)에서 트리 모양. */
@@ -513,7 +515,9 @@ export class ExplorerModel {
     const value = page.rows[0]?.[0];
     if (value && typeof value === "object") {
       if ("int" in value && value.int !== undefined)
-        return typeof value.int === "number" ? value.int.toLocaleString() : value.int;
+        return typeof value.int === "number"
+          ? value.int.toLocaleString(this.deps.locale?.())
+          : value.int;
       if ("decimal" in value && value.decimal !== undefined) return value.decimal;
       if ("text" in value && value.text !== undefined) return value.text;
     }

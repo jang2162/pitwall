@@ -14,6 +14,7 @@
 // - 커밋 상세 탭 · 두 커밋 비교 탭 · 리비전 파일 열기는 M2-15 의 액션을 id 로 부른다(`registry.run(id, args)`). 셋 다 인자가
 //   있어야 도는 액션이라 `isEnabled` 는 늘 거짓이다 — 메뉴 항목 · 버튼을 둘지는 `isAvailable` 로 정한다(없는 창이면 감춘다).
 
+import { useI18n } from "../../i18n/i18n-provider";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import type { GitRefMove, GitRefs, LogRef, LogRow, ResetMode } from "@pitwall/rpc-client";
 import type { IDockviewPanelProps } from "dockview-react";
@@ -79,8 +80,14 @@ function listFont(): string {
   return `12px ${family || "system-ui, sans-serif"}`;
 }
 
-const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" });
-const formatDate = (seconds: number) => dateFormat.format(new Date(seconds * 1000));
+/** 커밋 시각(유닉스 초)을 고른 UI 언어로 쓰는 함수(07-extensibility.md §4.1 — 시스템 로캘이 아니다). */
+function useFormatDate(): (seconds: number) => string {
+  const locale = useI18n().locales[0];
+  return useMemo(() => {
+    const format = new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "short" });
+    return (seconds: number) => format.format(new Date(seconds * 1000));
+  }, [locale]);
+}
 
 /** 고르기: 클릭 · ⌘ · ⇧ 를 고른 해시 목록(로그 차례)으로. */
 export function selectRows(
@@ -153,6 +160,7 @@ export function GitLogToolWindow({ api }: IDockviewPanelProps) {
 
 export function GitLogView({ onDrawn, load = true }: GitLogViewProps) {
   const T = useGitLogStrings();
+  const formatDate = useFormatDate();
   const { client, target } = useHost();
   const projectId = "projectId" in target ? target.projectId : undefined;
   const worktree = useActiveWorktree();

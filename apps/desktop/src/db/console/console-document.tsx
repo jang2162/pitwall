@@ -11,6 +11,7 @@
 // - DB · 스키마 목록은 세션을 연 뒤에만 읽는다 — 목록을 읽는 것도 연결을 여는 일이라 사람이 [연결] 을 누르기 전에는 하지 않는다
 //   (결정 M3-D13). 트랜잭션이 열려 있으면 연결 · DB · 스키마 고르기를 끈다.
 
+import { useI18n } from "../../i18n/i18n-provider";
 import type { DbSessionChanged, DbSessionMode, ExplainPlan, RpcClient } from "@pitwall/rpc-client";
 import { Play, Square } from "lucide-react";
 import {
@@ -41,7 +42,7 @@ import {
   useDbTabSession,
 } from "../safety/db-status";
 import { useDbAccessPrompt } from "../safety/access-prompt";
-import { DbRefusalMessage, dbNoticeText, dbRefusal } from "../safety/messages";
+import { DbRefusalMessage, dbNoticeText, dbRefusal, timeIn } from "../safety/messages";
 import { useRiskConfirm } from "../safety/risk-confirm";
 import { useDbSafetyStrings } from "../safety/strings";
 import { ConsoleEditor } from "./console-editor";
@@ -677,6 +678,7 @@ function ConsoleNotices({
   onReload(): void;
 }) {
   const S = useDbSafetyStrings();
+  const locale = useI18n().locales[0];
   const { opened, error, notice, resumed } = useStore(store);
   const kind = opened?.session.state.kind;
   const lines: { key: string; text: string; warning?: boolean }[] = [];
@@ -687,7 +689,12 @@ function ConsoleNotices({
   if (kind === "disconnected") lines.push({ key: "lost", text: T.bar.disconnected, warning: true });
   if (kind === "configChanged")
     lines.push({ key: "config", text: T.bar.configChanged, warning: true });
-  if (notice) lines.push({ key: "notice", text: dbNoticeText(notice, S.notice), warning: true });
+  if (notice)
+    lines.push({
+      key: "notice",
+      text: dbNoticeText(notice, S.notice, timeIn(locale)),
+      warning: true,
+    });
   if (fileError) lines.push({ key: "file", text: T.error.save(fileError), warning: true });
   const refused = error !== undefined && dbRefusal(error) !== undefined;
   if (error !== undefined && !refused)

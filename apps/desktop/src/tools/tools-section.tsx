@@ -6,6 +6,7 @@
 // [설치] 를 누른 때만 그 값을 실어 다시 부른다. registry 의 글(설명 · 라이선스 · 주소)은 글로만 그리고 링크는 http(s) 만이다.
 // 설치는 Host 가 판정한다(설정 창 · 프로젝트 창만, tier exec — M4-04) — 이 쪽은 그 답을 보일 뿐이다.
 
+import { useI18n } from "../i18n/i18n-provider";
 import type {
   ToolInstalledInfo,
   ToolLog,
@@ -77,13 +78,19 @@ function LogDialog({ name, log, onClose }: { name: string; log: ToolLog; onClose
   );
 }
 
-function checkedText(status: ToolsRegistryStatus, T: ToolsStrings["manage"]): string {
+function checkedText(
+  status: ToolsRegistryStatus,
+  T: ToolsStrings["manage"],
+  locale: string | undefined,
+): string {
   if (status.fetchedAtMs === null) return T.registrySnapshot;
-  return T.registryChecked(new Date(Number(status.fetchedAtMs)).toLocaleString());
+  // 시각은 고른 UI 언어로(07-extensibility.md §4.1).
+  return T.registryChecked(new Date(Number(status.fetchedAtMs)).toLocaleString(locale));
 }
 
 export function ToolsSection() {
   const S = useToolsStrings();
+  const locale = useI18n().locales[0];
   const T = S.manage;
   const { client } = useHost();
   const call = useMemo<ToolsCall | undefined>(
@@ -236,7 +243,7 @@ export function ToolsSection() {
           <span>
             {T.registry}: {T.registryVersion(data.registry.version, data.registry.pinnedVersion)}
           </span>
-          <span className={NOTE}>{checkedText(data.registry, T)}</span>
+          <span className={NOTE}>{checkedText(data.registry, T, locale)}</span>
           {data.registry.fetching && <span className={NOTE}>{T.registryFetching}</span>}
           {data.registry.lastError && (
             <span className="text-[12px] text-ui-accent">

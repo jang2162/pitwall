@@ -302,8 +302,14 @@ export function HostNotifications({ projectId }: { projectId?: string }) {
 
 const ICONS = { info: Info, warning: TriangleAlert, error: CircleAlert } as const;
 
-function time(at: number) {
-  return new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+function firstLocale(bundles: Iterable<{ locales: string[] }>): string | undefined {
+  for (const b of bundles) return b.locales[0];
+  return undefined;
+}
+
+/** 시각은 고른 UI 언어로(07-extensibility.md §4.1 — 시스템 로캘이 아니다). */
+function time(at: number, locale: string | undefined) {
+  return new Date(at).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
 }
 
 /** 패널이 화면에 보이는가. 탭이 뒤에 있거나 dock 이 접혀 있으면 아니다. 패널이 다른 그룹으로 옮겨지면 그 그룹을 본다. */
@@ -336,6 +342,9 @@ export function usePanelVisible(api: IDockviewPanelProps["api"]): boolean {
  */
 export function NotificationsToolWindow({ api }: IDockviewPanelProps) {
   const T = useProjectStrings().notifications;
+  // 고른 UI 언어 — Fluent 번들은 `useI18n().locales` 순서로 만든다(i18n-provider.tsx). 이 창은 도킹 영역만 그리는 시험에서
+  // `I18nProvider` 없이도 그려지므로 `useI18n` 대신 번들에서 읽는다.
+  const locale = firstLocale(useLocalization().l10n.bundles);
   const items = useNotifications((s) => s.items);
   const markSeen = useNotifications((s) => s.markSeen);
   const clear = useNotifications((s) => s.clear);
@@ -382,7 +391,7 @@ export function NotificationsToolWindow({ api }: IDockviewPanelProps) {
                 <div className="min-w-0 flex-1">
                   <div className="flex gap-2">
                     <span className="min-w-0 flex-1 font-medium">{n.title}</span>
-                    <time className="flex-none text-ui-muted-foreground">{time(n.at)}</time>
+                    <time className="flex-none text-ui-muted-foreground">{time(n.at, locale)}</time>
                   </div>
                   {n.body && <div className="break-words text-ui-muted-foreground">{n.body}</div>}
                   {n.action && (

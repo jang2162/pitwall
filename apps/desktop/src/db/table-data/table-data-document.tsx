@@ -12,6 +12,7 @@
 // - **복원된 탭은 연결하지 않은 채 열린다**(결정 M3-D13) — 마운트만으로는 연결 · 세션 RPC 를 부르지 않는다. 이 창에서 사람이 연
 //   탭만 곧바로 연결한다(`takeOpenedHere`).
 
+import { useI18n } from "../../i18n/i18n-provider";
 import type { DbSessionChanged, DbValue } from "@pitwall/rpc-client";
 import { Minus, Plus } from "lucide-react";
 import {
@@ -42,7 +43,7 @@ import {
   type DbActiveSession,
   useDbTabSession,
 } from "../safety/db-status";
-import { DbRefusalMessage, dbNoticeText, dbRefusal } from "../safety/messages";
+import { DbRefusalMessage, dbNoticeText, dbRefusal, timeIn } from "../safety/messages";
 import { useDbSafetyStrings } from "../safety/strings";
 import { editableValue, sameColumnName, sameValue, valueFromInput } from "./changes";
 import { type EditBuffer, isDefaultCell } from "./edit-buffer";
@@ -651,6 +652,7 @@ function Notices({
   S: ReturnType<typeof useDbSafetyStrings>;
 }) {
   const state = useStore(store);
+  const locale = useI18n().locales[0];
   const { opened, error, notice, applied, rowKey } = state;
   const block = store.editBlock();
   const lines: { key: string; text: string; warning?: boolean }[] = [];
@@ -659,7 +661,12 @@ function Notices({
     lines.push({ key: "lost", text: T.bar.disconnected, warning: true });
   if (block && block !== "notConnected" && block !== "loading" && block !== "submitting")
     lines.push({ key: "block", text: T.block[block](errorMessage(rowKey)) });
-  if (notice) lines.push({ key: "notice", text: dbNoticeText(notice, S.notice), warning: true });
+  if (notice)
+    lines.push({
+      key: "notice",
+      text: dbNoticeText(notice, S.notice, timeIn(locale)),
+      warning: true,
+    });
   if (applied)
     lines.push({ key: "applied", text: T.bar.applied(applied.statements, applied.rowsAffected) });
   const refused = error !== undefined && dbRefusal(error) !== undefined;

@@ -108,11 +108,19 @@ export function DbRefusalMessage({ error }: { error: unknown }) {
   );
 }
 
-/** 세션 알림의 문장. `formatTime` 은 `unattended` 의 시각(유닉스 밀리초)을 사람의 시각으로 바꾼다. */
+/** 유닉스 밀리초를 `locale`(고른 UI 언어)의 시각으로. */
+export function timeIn(locale: string | undefined): (ms: number) => string {
+  return (ms) => new Date(ms).toLocaleTimeString(locale);
+}
+
+/**
+ * 세션 알림의 문장. `formatTime` 은 `unattended` 의 시각(유닉스 밀리초)을 사람의 시각으로 바꾼다 — 고른 UI 언어로 쓰게
+ * [`timeIn`] 을 넘긴다(시스템 로캘 기본값은 두지 않는다, 07-extensibility.md §4.1).
+ */
 export function dbNoticeText(
   notice: DbSessionNotice,
   T: DbSafetyStrings["notice"],
-  formatTime: (ms: number) => string = (ms) => new Date(ms).toLocaleTimeString(),
+  formatTime: (ms: number) => string,
 ): string {
   switch (notice.kind) {
     case "rolledBack":

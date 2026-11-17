@@ -10,6 +10,7 @@
 // - 우클릭: Git 로그에서 선택(`git.log.reveal`) · 커밋 상세(`git.showCommit`) · diff 탭 · 리비전의 파일(`git.openRevisionFile`,
 //   지운 커밋은 끈다) · 해시 복사. 다른 행의 액션은 이 창에 있을 때만 둔다(`isAvailable`).
 
+import { useI18n } from "../../i18n/i18n-provider";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import type { FileChangeKind, FileHistoryRow } from "@pitwall/rpc-client";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -41,8 +42,14 @@ const CHANGE: Record<FileChangeKind, { letter: string; tone: string }> = {
   typeChanged: { letter: "T", tone: "text-git-modified" },
 };
 
-const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" });
-const formatDate = (seconds: number) => dateFormat.format(new Date(seconds * 1000));
+/** 커밋 시각(유닉스 초)을 고른 UI 언어로 쓰는 함수(07-extensibility.md §4.1 — 시스템 로캘이 아니다). */
+function useFormatDate(): (seconds: number) => string {
+  const locale = useI18n().locales[0];
+  return useMemo(() => {
+    const format = new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "short" });
+    return (seconds: number) => format.format(new Date(seconds * 1000));
+  }, [locale]);
+}
 
 /** 그 커밋의 그 파일 diff(params.git 의 `diff` — 첫 부모와, 그때 경로로). */
 export function rowDiffSpec(row: FileHistoryRow): GitDocumentSpec {
@@ -108,6 +115,7 @@ function HistoryRow({
   onSelect(row: FileHistoryRow): void;
   onOpen(row: FileHistoryRow): void;
 }) {
+  const formatDate = useFormatDate();
   const change = CHANGE[row.change];
   return (
     <div
@@ -156,6 +164,7 @@ function HistoryRow({
 
 /** diff 칸 위의 머리: 고른 커밋의 제목 · 해시 · 작성자 · 그때 경로. */
 function CommitLine({ row, strings: T }: { row: FileHistoryRow; strings: GitHistoryStrings }) {
+  const formatDate = useFormatDate();
   return (
     <div
       data-git-history-commit={row.hash}
