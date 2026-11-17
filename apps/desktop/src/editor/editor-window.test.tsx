@@ -34,6 +34,7 @@ import { projectOpenInbox } from "../project-open";
 import { createThemeStore } from "../theme/theme-store";
 import { ThemeStoreProvider } from "../theme/theme-switcher";
 import { parseTheme } from "../theme/tokens";
+import { expectOnTooltipLayer, showTestTooltip } from "../test-support/editor-tooltips";
 import { act, endTest, it } from "../test-support/ended-test";
 import { type DbDocumentSpec, dbDocumentKey } from "../db/documents/spec";
 import { EDITOR_PANEL, openTab, tabParams } from "./editor-tabs";
@@ -1450,6 +1451,43 @@ it("shows the banner for an external change over unsaved edits, and Compare show
   expect(document.querySelector("[data-testid=disk-compare]")).toBeNull();
   expect(view!.state.doc.toString()).toBe("theirs\n");
   expect(dirtyTabs()).toEqual([]);
+});
+
+it("draws the disk comparison's tooltips over its tab in the tooltip layer and hides them while another tab covers it", async () => {
+  // 툴팁 층(./tooltip-layer.ts — 16-m5-plan M5-21): 비교 화면의 두 쪽도 패널 경계에 잘리지 않고, 탭이 가려지면 함께 숨는다.
+  await mount();
+  await openRequest(MAIN);
+  const [view] = views();
+  await typeInto(view!, 0, "mine ");
+  putFile(MAIN, "theirs\n");
+  await changed([MAIN]);
+  await vi.waitFor(() => expect(banner()?.dataset.disk).toBe("changed"));
+  await clickButton(banner()!, "비교");
+  const compare = document.querySelector<HTMLElement>("[data-testid=disk-compare]")!;
+  const tab = compare.closest("[data-editor-tab]")!;
+  const sides = [...compare.querySelectorAll<HTMLElement>(".cm-editor")].map((e) =>
+    EditorView.findFromDOM(e)!,
+  );
+  expect(sides).toHaveLength(2);
+  const hosts = [];
+  for (const side of sides) {
+    const tip = await act(async () => showTestTooltip(side));
+    hosts.push(expectOnTooltipLayer(side, tip, tab));
+  }
+  expect(new Set(hosts).size).toBe(2);
+  expect(hosts.map((h) => h.getAttribute("data-keymap-context"))).toEqual([
+    "editorFocus",
+    "editorFocus",
+  ]);
+  expect(hosts.map((h) => h.hidden)).toEqual([false, false]);
+  await openRequest(LIB, 1, 1);
+  expect(activeTabTitle()).toBe("lib.rs");
+  expect(hosts.map((h) => h.hidden)).toEqual([true, true]);
+  await openRequest(MAIN, 1, 1);
+  // 미저장 표시(●)가 붙은 그 탭이다.
+  expect(activeTabTitle()).toBe("●main.rs");
+  expect(document.querySelector("[data-testid=disk-compare]")).toBe(compare);
+  expect(hosts.map((h) => h.hidden)).toEqual([false, false]);
 });
 
 it("stops ⌘S with a conflict and the banner after a change the watch missed (③)", async () => {

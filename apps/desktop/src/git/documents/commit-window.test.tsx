@@ -6,6 +6,8 @@
 //
 // 액션은 다른 행이 부르는 길 그대로 레지스트리로 부른다(`registry.run("git.showCommit", { rev })`).
 
+import { EditorView } from "@codemirror/view";
+
 import { ActionRegistry } from "@pitwall/keymap";
 import type {
   ConfigView,
@@ -28,6 +30,7 @@ import { resetWindowFileTree } from "../../file-tree/project-view";
 import { fakeTreeLayout } from "../../file-tree/testing";
 import type { KeymapNative } from "../../keymap/native";
 import { activeWorktreeStore } from "../../open-with/active-worktree";
+import { expectOnTooltipLayer, showTestTooltip } from "../../test-support/editor-tooltips";
 import { act, endTest, it } from "../../test-support/ended-test";
 import { documentThemeApplier } from "../../theme/adapters";
 import { createThemeStore, type ThemeStore } from "../../theme/theme-store";
@@ -486,4 +489,34 @@ it("git.compareCommits 가 두 커밋 비교 탭을, git.openRevisionFile 이 �
   expect(text).toContain("fn uno() {");
   // 탭 묶음(다시 시작해 되살리는 것)에 git 문서 탭이 들지 않는다 — 파일 읽기(`fs.read` · `fs.stat`)도 하지 않는다.
   expect(host.calls.some((c) => c.method === "fs.stat" || c.method === "fs.read")).toBe(false);
+});
+
+it("draws a revision file's tooltips over its tab in the tooltip layer and hides them while another tab covers it", async () => {
+  // 툴팁 층(editor/tooltip-layer.ts — 16-m5-plan M5-21): 패널 경계에 잘리지 않고, 탭이 가려지면 함께 숨는다.
+  await mount();
+  const openRevision = async () => {
+    await act(
+      async () =>
+        void windowRegistry()!.run("git.openRevisionFile", { rev: "HEAD", path: "src/lib.rs" }),
+    );
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-git-revision-text] .cm-editor")).not.toBeNull(),
+    );
+    return EditorView.findFromDOM(
+      document.querySelector<HTMLElement>("[data-git-revision-text] .cm-editor")!,
+    )!;
+  };
+  const view = await openRevision();
+  const tip = await act(async () => showTestTooltip(view));
+  const tab = view.dom.closest("[data-editor-tab]")!;
+  const tipHost = expectOnTooltipLayer(view, tip, tab);
+  expect(tipHost.getAttribute("data-keymap-context")).toBe("gitDocument");
+  expect(tipHost.hidden).toBe(false);
+  const parent = FIXTURE.show.parents[0]!;
+  await act(async () => void windowRegistry()!.run("git.compareCommits", { a: parent, b: "HEAD" }));
+  await vi.waitFor(() => expect(treeRow("src/lib.rs")).not.toBeNull());
+  expect(tab.isConnected).toBe(false);
+  expect(tipHost.hidden).toBe(true);
+  expect(await openRevision()).toBe(view);
+  expect(tipHost.hidden).toBe(false);
 });

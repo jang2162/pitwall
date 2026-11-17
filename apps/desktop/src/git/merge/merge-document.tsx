@@ -40,6 +40,7 @@ import {
 import { editorTheme } from "../../editor/extensions/theme";
 import { FindBar, findPanel } from "../../editor/find-bar";
 import { createSyntaxSessions, type SyntaxSource } from "../../editor/syntax-sessions";
+import { editorTooltips, followTab, useTooltipTab } from "../../editor/tooltip-layer";
 import { useFileDialogs } from "../../file-tree/file-dialogs";
 import { useNotify } from "../../notifications/notifications";
 import { useHost } from "../../rpc/host";
@@ -342,6 +343,7 @@ function MergeView({
   const resolved = useResolved(panelId, path);
   const appearance = useTheme((s) => s.appearance);
   const font = useEditorFont();
+  const tab = useTooltipTab();
   const hosts = {
     ours: useRef<HTMLDivElement>(null),
     result: useRef<HTMLDivElement>(null),
@@ -523,6 +525,8 @@ function MergeView({
             revisionHighlight(docs?.syntax && revisionSyntax(docs.syntax, language, text)),
             baseCompartments[side].of([]),
             sidePaneExtension(input, side, labels(side), press),
+            // 툴팁은 패널에 잘리지 않게 툴팁 층에(editor/tooltip-layer.ts — 결과 칸은 편집기 확장의 base 가 단다).
+            editorTooltips(),
           ],
         }),
       });
@@ -596,6 +600,8 @@ function MergeView({
 
     // 스크롤을 함께 한다.
     const all = [ours, result, theirs];
+    // 세 칸의 툴팁이 탭의 보임을 따른다(툴팁 층 — 탭과 함께 떨어지지 않는다).
+    const unfollow = all.map((v) => followTab(v, tab));
     let syncing = false;
     const listeners = all.map((from) => {
       const onScroll = () => {
@@ -625,6 +631,7 @@ function MergeView({
 
     return () => {
       for (const off of listeners) off();
+      for (const u of unfollow) u();
       unregister();
       session.state = result.state;
       if (session.save) session.save = undefined;
@@ -633,7 +640,7 @@ function MergeView({
       for (const v of all) v.destroy();
     };
     // 뷰는 마운트마다 한 번 만든다(글은 세션에서 잇는다). 바뀌는 값은 ref · 다시 구성으로 받는다.
-  }, [session, input]);
+  }, [session, input, tab]);
 
   // 마운트가 끝나면(탭이 닫힘 · 다시 마운트) 미저장 표시를 거둔다 — 다음 마운트가 세션을 보고 다시 단다.
   useEffect(() => () => mark(false), [mark]);

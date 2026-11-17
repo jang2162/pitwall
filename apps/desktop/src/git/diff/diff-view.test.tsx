@@ -8,6 +8,8 @@ import { createRoot } from "react-dom/client";
 import { EditorView as View } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { TooltipTab } from "../../editor/tooltip-layer";
+import { expectOnTooltipLayer, showTestTooltip, testTab } from "../../test-support/editor-tooltips";
 import { buildDiffModel } from "./diff-model";
 import {
   activeDiff,
@@ -73,6 +75,7 @@ function mount(
   content: DiffContent,
   initial: DiffMode,
   slots?: Parameters<typeof DiffView>[0]["slots"],
+  tab = testTab(),
 ) {
   const host = document.createElement("div");
   host.style.height = "400px";
@@ -83,15 +86,17 @@ function mount(
     const [mode, setMode] = useState(initial);
     state.setMode = setMode;
     return (
-      <DiffView
-        content={content}
-        mode={mode}
-        phrases={PHRASES}
-        slots={slots}
-        onController={(c) => {
-          if (c) state.controller = c;
-        }}
-      />
+      <TooltipTab.Provider value={tab}>
+        <DiffView
+          content={content}
+          mode={mode}
+          phrases={PHRASES}
+          slots={slots}
+          onController={(c) => {
+            if (c) state.controller = c;
+          }}
+        />
+      </TooltipTab.Provider>
     );
   }
   act(() => root.render(<Harness />));
@@ -103,6 +108,29 @@ function mount(
 }
 
 describe("DiffView", () => {
+  it.each(["split", "unified"] as const)(
+    "%s: draws each side's tooltips over the panel in the tooltip layer and hides them with its tab",
+    (mode) => {
+      // 툴팁 층(editor/tooltip-layer.ts — 16-m5-plan M5-21): 패널 경계에 잘리지 않고, 탭이 가려지면 함께 숨는다.
+      const tab = testTab();
+      const { host, state } = mount(CONTENT, mode, undefined, tab);
+      const views = state.controller!.views();
+      expect(views).toHaveLength(mode === "split" ? 2 : 1);
+      const hosts = views.map((view) => {
+        const tip = showTestTooltip(view);
+        const tipHost = expectOnTooltipLayer(view, tip, host);
+        // F7 · ⇧F7 은 툴팁 안에 포커스가 있어도 diff 의 문맥으로 처리된다.
+        expect(tipHost.getAttribute("data-keymap-context")).toBe("diffFocus");
+        return tipHost;
+      });
+      expect(new Set(hosts).size).toBe(hosts.length);
+      act(() => tab.setVisible(false));
+      expect(hosts.map((h) => h.hidden)).toEqual(hosts.map(() => true));
+      act(() => tab.setVisible(true));
+      expect(hosts.map((h) => h.hidden)).toEqual(hosts.map(() => false));
+    },
+  );
+
   it.each(["split", "unified"] as const)(
     "%s: patch 의 - · + 줄만 칠한다 — 묶음 사이의 빈 줄 · `}` 줄은 칠하지 않는다",
     (mode) => {

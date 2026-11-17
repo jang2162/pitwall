@@ -28,6 +28,7 @@ import { useEditorFont } from "../../editor/editor-font";
 import type { EditorTabParams } from "../../editor/editor-tabs";
 import { fontTheme } from "../../editor/extensions/operations";
 import { editorTheme } from "../../editor/extensions/theme";
+import { editorTooltips, followTab, useTooltipTab } from "../../editor/tooltip-layer";
 import { useI18n } from "../../i18n/i18n-provider";
 import { useKeymap } from "../../keymap/keymap-provider";
 import { useProjectStrings } from "../../layout/strings";
@@ -162,6 +163,7 @@ function RevisionDocument({
   const source = gitDocumentSource((s) => s.source);
   const font = useEditorFont();
   const host = useRef<HTMLDivElement>(null);
+  const tab = useTooltipTab();
   const [text, setText] = useState<
     { side: SideText; language: string | null } | { failed: string } | undefined
   >();
@@ -213,11 +215,17 @@ function RevisionDocument({
             source?.syntax && revisionSyntax(source.syntax, ready.language, content),
           ),
           annotated,
+          // 툴팁은 패널에 잘리지 않게 툴팁 층에(editor/tooltip-layer.ts) — 탭의 보임을 따른다.
+          editorTooltips(),
         ],
       }),
     });
-    return () => view.destroy();
-  }, [ready, source, font, annotated]);
+    const unfollow = followTab(view, tab);
+    return () => {
+      unfollow();
+      view.destroy();
+    };
+  }, [ready, source, font, annotated, tab]);
 
   let body;
   if (!text) body = <Status text={D.loading} />;

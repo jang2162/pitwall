@@ -34,6 +34,7 @@ import {
   type SyntaxSessions,
   type SyntaxSource,
 } from "../../editor/syntax-sessions";
+import { followTab, useTooltipTab } from "../../editor/tooltip-layer";
 import { useTheme } from "../../theme/theme-switcher";
 
 /** 콘솔 글의 판정 — 늘 고칠 수 있는 UTF-8 텍스트이고 강조한다(크기 상한은 구문 세션이 따로 본다). */
@@ -141,6 +142,7 @@ export function ConsoleEditor({
   const firstText = useRef(initial);
   firstText.current ??= initial;
   const textRef = useRef<ConsoleText>(undefined);
+  const tab = useTooltipTab();
   // 글은 처음 읽은 것으로 한 번 만든다 — 그 뒤의 글은 뷰가 쥔다.
   useEffect(() => {
     const parent = host.current;
@@ -162,14 +164,17 @@ export function ConsoleEditor({
         latest.current.onChange(v.state.doc.toString());
       },
     });
+    // 툴팁은 툴팁 층(`base` 의 editorTooltips)에 있어 탭과 함께 떨어지지 않는다 — 탭의 보임을 따른다.
+    const unfollow = followTab(made, tab);
     setView(made);
     latest.current.onView(made);
     return () => {
+      unfollow();
       latest.current.onView(undefined);
       setView(undefined);
       made.destroy();
     };
-  }, [ready]);
+  }, [ready, tab]);
 
   // 구문 세션은 Host 연결이 생기면 연다(뷰를 다시 만들지 않는다).
   useEffect(() => {

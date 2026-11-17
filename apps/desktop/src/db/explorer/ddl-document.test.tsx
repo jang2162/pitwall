@@ -8,7 +8,9 @@ import type { IDockviewPanel } from "dockview-react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 
+import { TooltipTab } from "../../editor/tooltip-layer";
 import { bundledLocalization } from "../../i18n/testing";
+import { expectOnTooltipLayer, showTestTooltip, testTab } from "../../test-support/editor-tooltips";
 import { act, endTest, it } from "../../test-support/ended-test";
 import { isDbDocumentSpec } from "../documents/spec";
 import { RpcCallError } from "@pitwall/rpc-client";
@@ -87,12 +89,14 @@ afterEach(async () => {
 
 const settle = () => act(async () => new Promise((r) => setTimeout(r, 0)));
 
-async function mount(eager: boolean, load: () => Promise<string>) {
+async function mount(eager: boolean, load: () => Promise<string>, tab = testTab()) {
   root = createRoot(element);
   await act(async () =>
     root!.render(
       <LocalizationProvider l10n={bundledLocalization("ko")}>
-        <DdlView spec={SPEC} load={load} eager={eager} />
+        <TooltipTab.Provider value={tab}>
+          <DdlView spec={SPEC} load={load} eager={eager} />
+        </TooltipTab.Provider>
       </LocalizationProvider>,
     ),
   );
@@ -263,4 +267,18 @@ it("asks for the password a restored tab's read needs, and reads again once it i
   });
   expect(editor()!.state.doc.toString()).toBe("CREATE TABLE invoice ();");
   expect(document.querySelector("[data-testid=db-access-prompt]")).toBeNull();
+});
+
+it("draws the DDL's tooltips over its panel in the tooltip layer and hides them with its tab", async () => {
+  // 툴팁 층(editor/tooltip-layer.ts — 16-m5-plan M5-21): 패널 경계에 잘리지 않고, 탭이 가려지면 함께 숨는다.
+  const tab = testTab();
+  await mount(true, async () => "CREATE TABLE invoice ();", tab);
+  const view = editor()!;
+  const tip = await act(async () => showTestTooltip(view));
+  const host = expectOnTooltipLayer(view, tip, element);
+  expect(host.hidden).toBe(false);
+  await act(async () => tab.setVisible(false));
+  expect(host.hidden).toBe(true);
+  await act(async () => tab.setVisible(true));
+  expect(host.hidden).toBe(false);
 });

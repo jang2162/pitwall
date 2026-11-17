@@ -39,7 +39,7 @@ import { fakeLspServer } from "./lsp-testing";
 import { PREVIEW_READ_BYTES } from "./navigation";
 import { currentPopup } from "./popup";
 import { tooltipHostOf } from "../editor/tooltip-layer";
-import { withTooltips } from "../test-support/editor-tooltips";
+import { expectOnTooltipLayer, withTooltips } from "../test-support/editor-tooltips";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -720,6 +720,48 @@ it("opens a location outside the root read-only through its token, asks the same
   expect(recent.textContent).not.toContain("tok-1");
   await keydown({ code: "Escape", key: "Escape" });
   await settle();
+});
+
+it("draws an outside tab's hover over the tab in the tooltip layer and hides it while another tab covers it", async () => {
+  // 툴팁 층(editor/tooltip-layer.ts — 16-m5-plan M5-21): 외부 소스 탭은 따로 만든 EditorView 다 — 그 호버도 패널 경계에 잘리지
+  // 않고, 탭이 가려지면 함께 숨는다.
+  serve();
+  host.lsp!.handle("lsp.definition", async () => answer(loc(VEC, 2, 6, 9, "impl Vec {}", "tok-1")));
+  host.lsp!.handle("lsp.document.read", async () => ({
+    text: "pub struct Vec;\nimpl Vec {}\n",
+    uri: `file://${VEC}`,
+    path: VEC,
+    server: "rust-analyzer",
+  }));
+  host.lsp!.handle("lsp.hover", async () => ({
+    staleVersion: false,
+    hover: { kind: "markdown", value: "struct **Vec**", from: null, to: null },
+  }));
+  await mount();
+  await open(MAIN, 1, 1);
+  await caret(2, 6);
+  await cmd("KeyB", "b");
+  await settle();
+  const tab = document.querySelector<HTMLElement>('[data-outside-source="tok-1"]')!;
+  const outside = view();
+  expect(tab.contains(outside.dom)).toBe(true);
+  await keydown({ code: "F1", key: "F1" }, outside.contentDOM);
+  await settle();
+  const popup = popupDom()!;
+  expect(popup.textContent).toContain("struct Vec");
+  const tipHost = expectOnTooltipLayer(outside, popup, tab);
+  expect(tipHost.getAttribute("data-keymap-context")).toBe("editorFocus");
+  expect(tipHost.hidden).toBe(false);
+  await open(MAIN, 1, 1);
+  expect(here()).toEqual({ path: MAIN, line: 1, column: 1 });
+  expect(tipHost.hidden).toBe(true);
+  // 같은 토큰으로 다시 가면 그 탭이 앞으로 온다.
+  await caret(2, 6);
+  await cmd("KeyB", "b");
+  await settle();
+  expect(here()).toEqual({ path: VEC, line: 2, column: 6 });
+  expect(view()).toBe(outside);
+  expect(tipHost.hidden).toBe(false);
 });
 
 it("opens a location inside the root from an outside tab in the worktree its token came from (review L4)", async () => {

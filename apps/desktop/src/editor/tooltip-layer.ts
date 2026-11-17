@@ -18,11 +18,15 @@
 //   포커스가 팝업 안일 때 「그 에디터」 는 `editorOfElement` 로 찾는다.
 // - `view.dom` 에 단 이벤트 처리는 툴팁 안의 이벤트를 받지 못한다. 그것에 기대는 곳은 `tooltipHostOf` 로 호스트에도 단다
 //   (lsp/navigation.ts 의 호버 `mouseleave`).
-// - 범위: 편집기 확장(`editor/extensions/base.ts`)을 쓰는 메인 에디터만이다. 따로 만든 EditorView(DB 콘솔 · diff · 병합 · DDL ·
-//   찾기 미리보기)의 툴팁은 전처럼 그 뷰 안에 있다.
+// - 범위: 편집기 확장(`editor/extensions/base.ts`)을 쓰는 메인 에디터와, 에디터 탭 안에 따로 만든 EditorView — DB 콘솔(base 를
+//   쓴다) · DDL · diff(커밋 상세 · 비교 · 히스토리 · 스테이징 · git 거터 팝업 안) · 병합 세 칸 · 리비전 파일 · 외부 소스 · 디스크
+//   비교(16-m5-plan M5-21). 따로 만든 뷰는 `editorTooltips()` 를 뷰마다 한 번 부르고(같은 값을 두 뷰에 넣으면 호스트를 나눠 써
+//   한쪽이 내려갈 때 다른 쪽 툴팁도 걷힌다), 뷰를 만든 곳에서 `followTab` 으로 든 탭의 보임을 따른다 — 탭은 에디터 패널
+//   (editor-panel.tsx)이 `TooltipTab` 으로 준다.
 
 import type { Extension } from "@codemirror/state";
 import { EditorView, tooltips, ViewPlugin } from "@codemirror/view";
+import { createContext, useContext } from "react";
 
 export const TOOLTIP_LAYER_ID = "pw-editor-tooltips";
 /** 패널 안의 겹침(`z-10` · `z-20`, dockview 탭 5 · 10, 플로팅 그룹 `999 + 2i`) 위, `OVERLAY_Z` 아래. */
@@ -107,4 +111,29 @@ export function editorOfElement(el: Element | null | undefined): EditorView | un
   if (dom instanceof HTMLElement) return EditorView.findFromDOM(dom) ?? undefined;
   const host = el.closest(`.${TOOLTIP_HOST_CLASS}`);
   return host ? views.get(host) : undefined;
+}
+
+/** 툴팁의 보임을 정하는 탭 — dockview 패널 api(`DockviewPanelApi`)가 이 꼴이다. */
+export interface TooltipTabSource {
+  readonly isVisible: boolean;
+  onDidVisibilityChange(listener: (event: { isVisible: boolean }) => void): { dispose(): void };
+}
+
+/** 에디터 탭의 내용이 든 탭. 에디터 패널(editor-panel.tsx)이 준다 — 따로 만든 EditorView 가 `followTab` 에 넘긴다. */
+export const TooltipTab = createContext<TooltipTabSource | undefined>(undefined);
+
+/** 지금 그리는 내용이 든 에디터 탭. 탭 밖(대화상자 · 시험)이면 `undefined`. */
+export function useTooltipTab(): TooltipTabSource | undefined {
+  return useContext(TooltipTab);
+}
+
+/**
+ * 뷰의 툴팁이 탭의 보임을 따르게 한다 — 탭이 가려지면(dockview 가 그 DOM 을 떼어 낸다) 툴팁도 숨는다(메인 에디터는
+ * text-viewer.tsx 가 같은 일을 한다). 탭이 없으면 아무것도 하지 않는다. 그만 따르는 함수를 돌려준다.
+ */
+export function followTab(view: EditorView, tab: TooltipTabSource | undefined): () => void {
+  if (!tab) return () => {};
+  setTooltipsShown(view, tab.isVisible);
+  const sub = tab.onDidVisibilityChange(({ isVisible }) => setTooltipsShown(view, isVisible));
+  return () => sub.dispose();
 }

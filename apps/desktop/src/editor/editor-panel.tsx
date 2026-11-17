@@ -20,10 +20,20 @@ import { useDocument } from "./documents";
 import type { EditorTabParams } from "./editor-tabs";
 import { useEditorWorkspace } from "./editor-workspace";
 import { EditorNotice } from "./notice";
+import { TooltipTab } from "./tooltip-layer";
 import { chooseViewer } from "./viewer-kinds";
 import { UNREAD_VIEWERS, VIEWERS } from "./viewers";
 
 export function EditorPanel(props: IDockviewPanelProps<EditorTabParams>) {
+  // 탭 안에 따로 만든 EditorView 의 툴팁이 이 탭의 보임을 따른다(tooltip-layer.ts `followTab`).
+  return (
+    <TooltipTab.Provider value={props.api}>
+      <PanelContent {...props} />
+    </TooltipTab.Provider>
+  );
+}
+
+function PanelContent(props: IDockviewPanelProps<EditorTabParams>) {
   const { api, params } = props;
   const T = useProjectStrings().editor;
   if (params.db !== undefined)

@@ -28,6 +28,7 @@ import type { EditorWorkspace } from "../../editor/editor-workspace";
 import type { EditorFont } from "../../editor/extensions";
 import { fontTheme } from "../../editor/extensions/operations";
 import { editorTheme } from "../../editor/extensions/theme";
+import { editorTooltips, followTab, useTooltipTab } from "../../editor/tooltip-layer";
 import { normalizeText } from "../../git/diff/diff-model";
 import {
   revisionHighlight,
@@ -109,6 +110,7 @@ export function DdlView({ spec, load, eager, font = {}, syntax }: DdlViewProps) 
   const [loaded, setLoaded] = useState<Loaded>({ kind: eager ? "loading" : "idle" });
   const host = useRef<HTMLDivElement>(null);
   const token = useRef(0);
+  const tab = useTooltipTab();
 
   const read = useCallback(() => {
     const mine = ++token.current;
@@ -151,11 +153,17 @@ export function DdlView({ spec, load, eager, font = {}, syntax }: DdlViewProps) 
           EditorState.readOnly.of(true),
           EditorState.lineSeparator.of("\n"),
           revisionHighlight(syntax && revisionSyntax(syntax, SQL_LANGUAGE, text)),
+          // 툴팁은 패널에 잘리지 않게 툴팁 층에(editor/tooltip-layer.ts) — 탭의 보임을 따른다.
+          editorTooltips(),
         ],
       }),
     });
-    return () => view.destroy();
-  }, [text, font, syntax]);
+    const unfollow = followTab(view, tab);
+    return () => {
+      unfollow();
+      view.destroy();
+    };
+  }, [text, font, syntax, tab]);
 
   const { object } = spec;
   const name = [object.database, object.schema, object.name].filter(Boolean).join(".");

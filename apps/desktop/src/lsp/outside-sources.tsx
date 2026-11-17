@@ -47,6 +47,7 @@ import { editorContext } from "../editor/extensions/context";
 import { fontTheme } from "../editor/extensions/operations";
 import { editorTheme } from "../editor/extensions/theme";
 import type { NavLocation, NavTarget } from "../editor/navigation";
+import { editorTooltips, followTab, useTooltipTab } from "../editor/tooltip-layer";
 import { revisionHighlight, revisionSyntax } from "../git/diff/revision-syntax";
 import { useProjectStrings } from "../layout/strings";
 import type { LspDocument, LspServices } from "./lsp-sessions";
@@ -235,6 +236,7 @@ export function OutsideSourcePanel({ panelId, spec }: { panelId: string; spec: O
   const workspace = useEditorWorkspace();
   const font = useEditorFont();
   const host = useRef<HTMLDivElement>(null);
+  const tab = useTooltipTab();
   const runtime = outsideSources();
   const text = runtime?.text(spec.token);
   useEffect(() => {
@@ -264,6 +266,8 @@ export function OutsideSourcePanel({ panelId, spec }: { panelId: string; spec: O
           EditorState.readOnly.of(true),
           editorContext.of(context),
           revisionHighlight(syntax && revisionSyntax(syntax, spec.language, text)),
+          // 호버 등 툴팁은 패널에 잘리지 않게 툴팁 층에(editor/tooltip-layer.ts) — 탭의 보임을 따른다.
+          editorTooltips(),
           popupBase,
           navigationExtension(
             tokenSource({
@@ -287,11 +291,13 @@ export function OutsideSourcePanel({ panelId, spec }: { panelId: string; spec: O
     const cursor = runtime?.takeCursor(panelId);
     if (cursor) placeCursor(view, cursor);
     const unregister = workspace.registerView(panelId, view);
+    const unfollow = followTab(view, tab);
     return () => {
+      unfollow();
       unregister();
       view.destroy();
     };
-  }, [runtime, text, spec.token, spec.path, spec.language, panelId, workspace, font]);
+  }, [runtime, text, spec.token, spec.path, spec.language, panelId, workspace, font, tab]);
 
   return (
     <div

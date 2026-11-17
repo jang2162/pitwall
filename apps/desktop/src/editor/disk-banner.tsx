@@ -16,6 +16,7 @@ import { useEffect, useRef } from "react";
 import { useProjectStrings } from "../layout/strings";
 import type { TextDocumentState } from "./documents";
 import { useEditorWorkspace } from "./editor-workspace";
+import { editorTooltips, followTab, useTooltipTab } from "./tooltip-layer";
 
 const BUTTON =
   "flex-none rounded-sm border border-ui-border px-2 py-px text-ui-foreground hover:bg-ui-hover";
@@ -91,11 +92,14 @@ export function DiskBanner({
   );
 }
 
-const readOnlySide = [
+/** 비교의 한쪽. 쪽마다 부른다 — 툴팁 층의 호스트는 뷰마다 하나다(./tooltip-layer.ts). */
+const readOnlySide = () => [
   lineNumbers(),
   EditorState.readOnly.of(true),
   EditorView.editable.of(false),
   EditorView.theme({ "&": { height: "100%" } }),
+  // 툴팁은 패널에 잘리지 않게 툴팁 층에.
+  editorTooltips(),
 ];
 
 /** 내 것(편집 중)과 디스크를 나란히. 연 순간의 두 내용을 보인다. */
@@ -103,18 +107,24 @@ export function CompareView({ mine, disk }: { mine: Text; disk: FsRead }) {
   const T = useProjectStrings().editor.disk;
   const host = useRef<HTMLDivElement>(null);
   const diskText = disk.content.kind === "text" ? disk.content.text : "";
+  const tab = useTooltipTab();
   useEffect(() => {
     const parent = host.current;
     if (!parent) return;
     const view = new MergeView({
       parent,
-      a: { doc: mine, extensions: readOnlySide },
-      b: { doc: diskText, extensions: readOnlySide },
+      a: { doc: mine, extensions: readOnlySide() },
+      b: { doc: diskText, extensions: readOnlySide() },
       gutter: true,
       highlightChanges: true,
     });
-    return () => view.destroy();
-  }, [mine, diskText]);
+    // 두 쪽의 툴팁이 탭의 보임을 따른다.
+    const unfollow = [view.a, view.b].map((v) => followTab(v, tab));
+    return () => {
+      for (const u of unfollow) u();
+      view.destroy();
+    };
+  }, [mine, diskText, tab]);
   return (
     <div data-testid="disk-compare" className="flex min-h-0 flex-1 flex-col">
       <div className="grid flex-none grid-cols-2 border-b border-ui-border text-[12px] text-ui-muted-foreground">

@@ -34,6 +34,7 @@ import { documentThemeApplier } from "../../theme/adapters";
 import { createThemeStore, type ThemeStore } from "../../theme/theme-store";
 import { ThemeStoreProvider } from "../../theme/theme-switcher";
 import { parseTheme } from "../../theme/tokens";
+import { expectOnTooltipLayer, showTestTooltip } from "../../test-support/editor-tooltips";
 import { resetWindowBranch } from "../branch-state";
 import { resetWindowGitStatus } from "../git-status";
 import fixture from "./fixtures/merge.json";
@@ -833,4 +834,33 @@ it("warns that aborting drops the edited result of open merge tabs", async () =>
   expect(abortDialog()!.querySelector("[role=alert]")!.textContent).toContain(
     "저장하지 않은 머지 탭 1개의 고친 결과도 사라진다",
   );
+});
+
+it("draws the three panes' tooltips over the merge tab in the tooltip layer and hides them while another tab covers it", async () => {
+  // 툴팁 층(editor/tooltip-layer.ts — 16-m5-plan M5-21): 패널 경계에 잘리지 않고, 탭이 가려지면 함께 숨는다.
+  await mount();
+  await openMerge();
+  const tab = document.querySelector<HTMLElement>('[data-git-merge="notes.txt"]')!;
+  const panes = (["ours", "result", "theirs"] as const).map(pane);
+  const hosts = [];
+  for (const view of panes) {
+    const tip = await act(async () => showTestTooltip(view));
+    hosts.push(expectOnTooltipLayer(view, tip, tab));
+  }
+  // 툴팁 안에 포커스가 있을 때의 키도 그 칸의 문맥이다 — 결과 칸은 에디터, 두 쪽은 git 문서.
+  expect(hosts.map((h) => h.getAttribute("data-keymap-context"))).toEqual([
+    "gitDocument",
+    "editorFocus",
+    "gitDocument",
+  ]);
+  expect(hosts.map((h) => h.hidden)).toEqual([false, false, false]);
+  await act(async () => {
+    windowRegistry()!.run("git.openMerge", { path: "image.bin" });
+  });
+  await settle();
+  expect(tab.isConnected).toBe(false);
+  expect(hosts.map((h) => h.hidden)).toEqual([true, true, true]);
+  await openMerge();
+  expect(pane("result")).toBe(panes[1]);
+  expect(hosts.map((h) => h.hidden)).toEqual([false, false, false]);
 });

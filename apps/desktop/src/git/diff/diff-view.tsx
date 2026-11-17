@@ -29,6 +29,7 @@ import { create } from "zustand";
 import type { EditorFont } from "../../editor/extensions";
 import { fontTheme } from "../../editor/extensions/operations";
 import { editorTheme } from "../../editor/extensions/theme";
+import { editorTooltips, followTab, useTooltipTab } from "../../editor/tooltip-layer";
 import {
   buildDiffModel,
   diffOverride,
@@ -113,6 +114,8 @@ function common(phrases: Record<string, string>, font: EditorFont | undefined): 
     diffTheme,
     readOnly,
     EditorState.phrases.of(phrases),
+    // 툴팁은 패널에 잘리지 않게 툴팁 층에(editor/tooltip-layer.ts). 쪽마다 부르므로 뷰마다 제 호스트다.
+    editorTooltips(),
   ];
 }
 
@@ -341,6 +344,7 @@ export function DiffView({
   const carried = useRef<{ content: DiffContent; line: number } | undefined>(undefined);
   const onControllerRef = useRef(onController);
   onControllerRef.current = onController;
+  const tab = useTooltipTab();
 
   useEffect(() => {
     const parent = host.current;
@@ -350,14 +354,17 @@ export function DiffView({
     const stop =
       keep?.content === content ? restoreTopLine(built.controller, parent, keep.line) : undefined;
     carried.current = undefined;
+    // 툴팁 층의 툴팁이 든 탭의 보임을 따른다(탭 밖 — git 거터 팝업 안 — 이면 따를 것이 없다).
+    const unfollow = built.controller.views().map((view) => followTab(view, tab));
     onControllerRef.current?.(built.controller);
     return () => {
+      for (const u of unfollow) u();
       stop?.();
       carried.current = { content, line: built.controller.topLine() };
       onControllerRef.current?.(undefined);
       built.destroy();
     };
-  }, [content, mode, syntax, slots, phrases, font]);
+  }, [content, mode, syntax, slots, phrases, font, tab]);
 
   // 키맵 컨텍스트(src/keymap/context.ts): `F7` / `⇧F7` 바인딩이 `when = "diffFocus"` 로 쓴다.
   return (

@@ -32,6 +32,7 @@ import defaultTheme from "../../../../../extensions/theme-default/themes/default
 import { App } from "../../App";
 import { openTab, tabParams } from "../../editor/editor-tabs";
 import type { KeymapNative } from "../../keymap/native";
+import { expectOnTooltipLayer, showTestTooltip } from "../../test-support/editor-tooltips";
 import { act, endTest, it } from "../../test-support/ended-test";
 import { createThemeStore } from "../../theme/theme-store";
 import { ThemeStoreProvider } from "../../theme/theme-switcher";
@@ -1109,4 +1110,22 @@ it("leaves the session to Host when the window goes away (reload), so an open tr
     projectId: "p1",
     tabId: SPEC.tabId,
   });
+});
+
+it("draws the console's tooltips over its panel in the tooltip layer and hides them while another tab covers the console", async () => {
+  // 툴팁 층(editor/tooltip-layer.ts — 16-m5-plan M5-21): 콘솔의 툴팁은 패널 경계에 잘리지 않고, 탭이 가려지면 함께 숨는다.
+  await mount();
+  await openConsole();
+  const v = view();
+  const tip = await act(async () => showTestTooltip(v));
+  const host = expectOnTooltipLayer(v, tip, q("[data-editor-tab]")!);
+  // 툴팁 안에 포커스가 있을 때의 키도 콘솔의 문맥으로 처리된다.
+  expect(host.getAttribute("data-keymap-context")).toBe("dbConsoleFocus");
+  expect(host.hidden).toBe(false);
+  await openConsole({ ...SPEC, tabId: "tab-console-2", consoleId: "c-tab-console-2" });
+  expect(view()).not.toBe(v);
+  expect(host.hidden).toBe(true);
+  await openConsole();
+  expect(view()).toBe(v);
+  expect(host.hidden).toBe(false);
 });
