@@ -34,6 +34,7 @@ import { Trash2 } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 
+import { useI18n } from "../i18n/i18n-provider";
 import { useKeymapPopup } from "../keymap/keymap-provider";
 import { useNotify } from "../notifications/notifications";
 import { useHost, useRpcQuery } from "../rpc/host";
@@ -79,16 +80,18 @@ export function displayText(text: string): string {
   return out;
 }
 
-function clockTime(at: number) {
-  return new Date(at).toLocaleTimeString(undefined, {
+// 시각은 UI 언어(`useI18n().locales[0]`)로 쓴다 — 시스템 로캘이 아니다(git 문서 패널 · 거터와 같은 규칙). `undefined` 를 넘기면
+// 영어 UI 에 「오전 07:20」 이 나온다(M5-13b).
+function clockTime(at: number, locale: string | undefined) {
+  return new Date(at).toLocaleTimeString(locale, {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
   });
 }
 
-function shortTime(at: number) {
-  return new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+function shortTime(at: number, locale: string | undefined) {
+  return new Date(at).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
 }
 
 const OUTCOME_CLASS: Record<AuditOutcome, string> = {
@@ -295,13 +298,16 @@ function ConnectedAgents({ projectId }: { projectId: string }) {
 }
 
 function SessionRow({ session, T }: { session: McpSessionInfo; T: McpStrings["sessions"] }) {
+  const locale = useI18n().locales[0];
   const name = session.client === null ? T.unknownClient : displayText(session.client);
   return (
     <li data-testid="mcp-session" className="flex items-baseline gap-2 py-0.5 text-[12px]">
       <span className="min-w-0 flex-1 truncate" title={name}>
         {name}
       </span>
-      <span className="text-ui-muted-foreground">{T.started(shortTime(session.startedAt))}</span>
+      <span className="text-ui-muted-foreground">
+        {T.started(shortTime(session.startedAt, locale))}
+      </span>
       <span className="text-ui-muted-foreground">{T.calls(session.calls)}</span>
     </li>
   );
@@ -324,6 +330,7 @@ function CallLog({
 }) {
   const strings = useMcpStrings();
   const T = strings.activity;
+  const locale = useI18n().locales[0];
   const notify = useNotify();
   const [log] = useState(() =>
     createAuditLog({ fetch: (params) => client.call("mcp.audit.list", params), projectId }),
@@ -557,6 +564,7 @@ function CallLog({
                   index={item.index}
                   start={item.start}
                   T={T}
+                  locale={locale}
                   unknownClient={strings.sessions.unknownClient}
                 />
               );
@@ -602,12 +610,14 @@ function CallRow({
   index,
   start,
   T,
+  locale,
   unknownClient,
 }: {
   row: AuditRow;
   index: number;
   start: number;
   T: ActivityStrings;
+  locale: string | undefined;
   unknownClient: string;
 }) {
   const clientName = row.client === null ? unknownClient : displayText(row.client);
@@ -624,8 +634,12 @@ function CallRow({
       className={`${COLUMNS} absolute top-0 left-0 w-full items-center px-2 hover:bg-ui-hover`}
       style={{ transform: `translateY(${start}px)`, height: ACTIVITY_ROW_HEIGHT }}
     >
-      <span role="cell" className="truncate tabular-nums" title={new Date(row.at).toLocaleString()}>
-        {clockTime(row.at)}
+      <span
+        role="cell"
+        className="truncate tabular-nums"
+        title={new Date(row.at).toLocaleString(locale)}
+      >
+        {clockTime(row.at, locale)}
       </span>
       <span role="cell" className="truncate" title={clientName}>
         {clientName}

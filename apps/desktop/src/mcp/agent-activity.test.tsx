@@ -34,6 +34,8 @@ declare global {
 }
 
 const host = vi.hoisted(() => ({
+  /** UI 언어(`i18n.get`). */
+  language: "ko",
   sessions: [] as unknown[],
   /** 감사 로그(id 오름차순으로 넣는다). */
   audit: [] as AuditRow[],
@@ -87,7 +89,7 @@ vi.mock("../tauri-transport", async () => {
         const reply = (result: unknown) => send({ id: m.id, result });
         switch (m.method) {
           case "i18n.get":
-            return reply(i18nState("ko"));
+            return reply(i18nState(host.language));
           case "config.get":
             return reply({
               snapshot: { files: [], notices: [] },
@@ -213,6 +215,7 @@ beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
+  host.language = "ko";
   host.sessions = [session("a", { calls: 4 })];
   host.audit = [];
   host.listCalls = [];
@@ -324,6 +327,34 @@ it("leaves Loading once the first page comes, with or without rows (M5-13b)", as
   expect(rowIds()).toEqual([1]);
   expect(panel()!.querySelector("[data-testid=mcp-log-empty]")).toBeNull();
 });
+
+it.each(["ko", "en"])(
+  "writes times in the UI language (%s), not the system locale (M5-13b)",
+  async (language) => {
+    // 실기에서 영어 UI 에 「오전 07:20」 이 나왔다 — 시각이 시스템 로캘을 따랐다. 두 언어로 보면 시스템 로캘이 무엇이든 하나는
+    // 시스템과 다르다.
+    host.language = language;
+    const at = Date.UTC(2026, 10, 17, 1, 0, 0) + 7 * 1000;
+    host.audit = [row(7)];
+    await openPanel();
+    const L = mcpStrings(bundledTranslator(language));
+    const started = new Date(session("a").startedAt).toLocaleTimeString(language, {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    const agent = panel()!.querySelector<HTMLElement>("[data-testid=mcp-session]")!;
+    expect(agent.textContent).toContain(L.sessions.started(started));
+    const time = logRows()[0]!.querySelector<HTMLElement>("[role=cell]")!;
+    expect(time.textContent).toBe(
+      new Date(at).toLocaleTimeString(language, {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      }),
+    );
+    expect(time.title).toBe(new Date(at).toLocaleString(language));
+  },
+);
 
 it("draws only the visible rows of a 5,000-row log, reading it page by page", async () => {
   for (let id = 1; id <= 5_000; id++) host.audit.push(row(id));
