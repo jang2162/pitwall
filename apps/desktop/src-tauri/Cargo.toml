@@ -91,6 +91,7 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
   "registry",
   "std",
 ] }
+tauri-plugin-notification = "2.8.1"
 
 [dev-dependencies]
 # 창 열기 함수를 MockRuntime 위에서 시험한다(tauri::test::mock_app).

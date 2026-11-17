@@ -15,6 +15,7 @@ use tauri::Manager as _;
 
 mod agent_open;
 mod app_commands;
+mod approval_notice;
 mod cli;
 mod clipboard;
 mod config_log;
@@ -616,6 +617,9 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // MCP 승인 요청의 OS 알림(approval_notice.rs, 16-m5-plan M5-14).
+        .plugin(tauri_plugin_notification::init())
+        .manage(approval_notice::ApprovalNotices::default())
         .manage(launch::Launch::new(host.registry().cloned()))
         .manage(windows::PendingOpens::default())
         .manage(windows::FileWindows::default())
@@ -653,6 +657,7 @@ fn main() {
                 app.handle().clone(),
             )));
             update::on_startup(app.handle(), auto_update);
+            approval_notice::install(app.handle());
             // 주 인스턴스만 MCP 소켓을 연다(떼어 띄우기 전의 프로세스 · 두 번째 실행은 여기 오지 않는다).
             #[cfg(unix)]
             mcp::serve_socket(

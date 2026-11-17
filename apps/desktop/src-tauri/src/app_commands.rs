@@ -33,6 +33,8 @@ pub const COMMANDS: &[(&str, &[WindowKind])] = &[
     ("path_kind", &[Welcome]),
     // 설정 창(src/settings/native.ts)과 프로젝트 창의 DB 결과 그리드 「다른 형식으로 복사」(src/db/grid/clipboard.ts).
     ("write_clipboard", &[Settings, Project]),
+    // MCP 승인 요청을 듣는 창의 OS 알림(src/mcp/approval-native.ts, approval_notice.rs — 16-m5-plan M5-14).
+    ("mcp_approval_notify", &[Welcome, Settings, Project]),
     // 열기 요청을 받는 창(src/project-open.ts).
     ("take_pending_project_opens", &[Project, File]),
     // 프로젝트 창의 파일 트리 드롭(src/file-tree/tree-drop.ts).
@@ -109,16 +111,25 @@ mod tests {
     fn each_window_kind_may_call_only_the_commands_it_uses() {
         assert_eq!(
             allowed_in("welcome"),
-            common_and(&["open_file_window", "take_pending_find_project", "path_kind"])
+            common_and(&[
+                "open_file_window",
+                "take_pending_find_project",
+                "path_kind",
+                "mcp_approval_notify"
+            ])
         );
-        assert_eq!(allowed_in("settings"), common_and(&["write_clipboard"]));
+        assert_eq!(
+            allowed_in("settings"),
+            common_and(&["write_clipboard", "mcp_approval_notify"])
+        );
         assert_eq!(
             allowed_in("project-ab12"),
             common_and(&[
                 "take_pending_project_opens",
                 "import_drop",
                 "perf_report",
-                "write_clipboard"
+                "write_clipboard",
+                "mcp_approval_notify"
             ])
         );
         assert_eq!(

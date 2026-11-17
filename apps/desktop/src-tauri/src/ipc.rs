@@ -196,7 +196,8 @@ pub fn install<R: Runtime>(builder: Builder<R>, router: Arc<HostRouter>) -> Buil
             crate::perf::perf_hidden,
             crate::perf::perf_visible,
             crate::perf::perf_report,
-            crate::update::window_close_cancelled
+            crate::update::window_close_cancelled,
+            crate::approval_notice::mcp_approval_notify
         ]))
         .on_window_event(on_window_event)
         .on_page_load(|webview, payload| on_page_load(webview, payload.event()))
@@ -240,12 +241,23 @@ pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
         if let Some(mcp) = window.try_state::<pw_mcp::sessions::Sessions>() {
             mcp.approvals().window_closed(window.label());
         }
+        // 그 창의 승인 알림 상태(approval_notice.rs)를 지운다.
+        if let Some(notices) = window.try_state::<crate::approval_notice::ApprovalNotices>() {
+            notices.focused(window.label());
+        }
     }
     // MCP 승인의 「가장 최근에 앞에 있던 창」(pw_mcp::approval — 프로젝트 없는 요청이 갈 창). 시험 앱에는 없다.
     if let (WindowEvent::Focused(true), Some(mcp)) =
         (event, window.try_state::<pw_mcp::sessions::Sessions>())
     {
         mcp.approvals().focused(window.label());
+    }
+    // 앞에 온 창의 승인 요청은 다시 OS 알림을 낼 수 있다(approval_notice.rs — 창마다 앞에 올 때까지 한 번).
+    if let (WindowEvent::Focused(true), Some(notices)) = (
+        event,
+        window.try_state::<crate::approval_notice::ApprovalNotices>(),
+    ) {
+        notices.focused(window.label());
     }
     // Finder 드롭 기록(drop_import.rs). 시험 앱에는 없다.
     if let Some(drops) = window.try_state::<crate::drop_import::DropImport>() {
