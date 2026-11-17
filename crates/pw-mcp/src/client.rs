@@ -10,7 +10,10 @@
 //! **취소 뒤 답 기다리기**([`HostClient::call_until_settled`] — 16-m5-plan M5-18b): 핸들러가 「되돌릴 수 없는 지점」
 //! (`pw_rpc::PointOfNoReturn` — `db_execute` 의 커밋)을 넘은 뒤에는 Host 가 취소로 버리지 않고 끝까지 돌려 답한다. 그 결과를
 //! 감사 행에 남기려고, 취소를 보낸 뒤에도 그 요청의 답을 시한까지 기다린다. Host 가 `cancelled` 로 답하면(지점 전이라 버려졌다)
-//! 취소, 결과나 다른 오류로 답하면 그 답, 시한까지 답이 없으면 「모름」 이다.
+//! 취소, 결과나 다른 오류로 답하면 그 답, 시한까지 답이 없으면 「모름」 이다. 결과로 답한 경우는 둘로 가른다: 취소를 id 를 붙인
+//! `request.cancel` 요청으로 보내면 Host 는 그 취소를 적용한 자리에서 `null` 로 답하므로(`pw_rpc::protocol`), 그 확인이 답보다
+//! **먼저** 왔으면 Host 가 취소를 받은 뒤에 끝낸 것 — 되돌릴 수 없는 지점을 넘은 호출이다. 답이 먼저 왔으면 Host 는 취소가 닿기
+//! 전에 이미 끝냈다(표지와 무관하다). 순서는 펌프가 받은 차례 번호로 본다.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -24,7 +27,9 @@ use serde_json::{Value, json};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-type Pending = Arc<Mutex<Option<HashMap<u64, oneshot::Sender<Result<Value, CallError>>>>>>;
+/// 받은 응답과 그 차례(펌프가 받은 순서 — 1부터).
+type Delivery = (u64, Result<Value, CallError>);
+type Pending = Arc<Mutex<Option<HashMap<u64, oneshot::Sender<Delivery>>>>>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CallError {
@@ -66,9 +71,11 @@ impl std::fmt::Display for CallError {
 pub enum Settled {
     /// 취소 전에 답을 받았다([`HostClient::call_until`] 의 결과와 같다).
     Answered(Result<Value, CallError>),
-    /// 취소를 보낸 뒤 Host 가 결과(또는 `cancelled` 가 아닌 오류)로 답했다 — 핸들러가 버려지지 않고 끝까지 돌았다(되돌릴 수
-    /// 없는 지점을 넘었거나, 취소가 닿기 전에 끝났다). 그 효과는 났다.
+    /// Host 가 취소를 받은 **뒤에** 결과(또는 `cancelled` 가 아닌 오류)로 답했다 — 핸들러가 되돌릴 수 없는 지점을 넘어 버려지지
+    /// 않고 끝까지 돌았다(`pw_rpc::PointOfNoReturn`).
     AnsweredAfterCancel(Result<Value, CallError>),
+    /// 취소를 보냈지만 Host 는 그 취소가 닿기 **전에** 이미 답했다 — 표지와 무관하게 끝까지 돈 호출이다.
+    FinishedBeforeCancel(Result<Value, CallError>),
     /// 취소했고 Host 가 그 핸들러를 버렸다(`cancelled` 로 답했다).
     Cancelled,
     /// 취소했고 시한까지 답이 없었다(또는 연결이 닫혔다) — 효과가 났는지 모른다.
@@ -89,6 +96,7 @@ impl HostClient {
         let mut source = conn.source;
         let table = Arc::clone(&pending);
         let pump = tokio::spawn(async move {
+            let mut seq = 0u64;
             while let Some(frame) = source.recv().await {
                 let Some(id) = frame.get("id").and_then(Value::as_u64) else {
                     continue;
@@ -96,15 +104,16 @@ impl HostClient {
                 if frame.get("method").is_some() {
                     continue;
                 }
+                seq += 1;
                 let waiter = lock(&table).as_mut().and_then(|t| t.remove(&id));
                 if let Some(waiter) = waiter {
-                    let _ = waiter.send(outcome(frame));
+                    let _ = waiter.send((seq, outcome(frame)));
                 }
             }
             // 닫혔다. 기다리던 쪽을 모두 깨우고 이후 요청은 바로 실패하게 표를 걷는다.
             if let Some(table) = lock(&table).take() {
                 for (_, waiter) in table {
-                    let _ = waiter.send(Err(CallError::Closed));
+                    let _ = waiter.send((u64::MAX, Err(CallError::Closed)));
                 }
             }
         });
@@ -154,7 +163,7 @@ impl HostClient {
             biased;
             answer = rx => {
                 outstanding.answered = true;
-                answer.unwrap_or(Err(CallError::Closed))
+                answer.map_or(Err(CallError::Closed), |(_, answer)| answer)
             }
             () = cancel.cancelled() => Err(CallError::Cancelled),
         }
@@ -194,21 +203,24 @@ impl HostClient {
             biased;
             answer = &mut rx => {
                 outstanding.answered = true;
-                return Settled::Answered(answer.unwrap_or(Err(CallError::Closed)));
+                return Settled::Answered(answer.map_or(Err(CallError::Closed), |(_, answer)| answer));
             }
             () = cancel.cancelled() => {}
         }
-        // 표에서 걷지 않고 취소만 보낸다 — 그 요청의 답을 계속 받는다. 시한이 지나 이 함수가 끝나면 지킴이가 표에서 걷는다.
-        self.send_cancel(id);
+        // 표에서 걷지 않고 취소만 보낸다 — 그 요청의 답을 계속 받는다. 시한이 지나 이 함수가 끝나면 지킴이가 표에서 걷는다. 취소는
+        // id 를 붙인 요청으로 보낸다 — Host 의 확인(`null`)이 답보다 먼저 오는가로 「취소 뒤에 끝냈다」 를 안다(머리 주석).
+        let ack = self.send_cancel_request(id);
+        let acked = |seq: u64| ack.as_ref().is_some_and(|ack| ack.received_before(seq));
         match tokio::time::timeout(grace, rx).await {
-            Ok(Ok(answer)) => {
+            Ok(Ok((seq, answer))) => {
                 outstanding.answered = true;
                 match answer {
                     Err(CallError::Rpc { code, .. }) if code == i64::from(rpc_code::CANCELLED) => {
                         Settled::Cancelled
                     }
                     Err(CallError::Closed) => Settled::Unsettled,
-                    answer => Settled::AnsweredAfterCancel(answer),
+                    answer if acked(seq) => Settled::AnsweredAfterCancel(answer),
+                    answer => Settled::FinishedBeforeCancel(answer),
                 }
             }
             // 연결이 닫혔다(펌프가 표를 걷었다).
@@ -229,6 +241,46 @@ impl HostClient {
             "method": REQUEST_CANCEL,
             "params": { "id": id },
         }));
+    }
+
+    /// `request.cancel` 을 id 를 붙인 요청으로 보낸다 — Host 는 취소를 적용한 자리에서 `null` 로 답한다. 연결이 닫혔으면 `None`.
+    fn send_cancel_request(&self, id: u64) -> Option<CancelAck<'_>> {
+        let ack_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel();
+        lock(&self.pending).as_mut()?.insert(ack_id, tx);
+        self.sink.send(json!({
+            "jsonrpc": "2.0",
+            "id": ack_id,
+            "method": REQUEST_CANCEL,
+            "params": { "id": id },
+        }));
+        Some(CancelAck {
+            client: self,
+            id: ack_id,
+            rx: Mutex::new(rx),
+        })
+    }
+}
+
+/// id 를 붙여 보낸 취소의 확인. 버려지면 표에서 걷는다.
+struct CancelAck<'a> {
+    client: &'a HostClient,
+    id: u64,
+    rx: Mutex<oneshot::Receiver<Delivery>>,
+}
+
+impl CancelAck<'_> {
+    /// 확인이 차례 `seq` 의 응답보다 먼저 왔는가. 펌프는 받은 차례대로 넘기므로, 그 응답을 받은 지금 확인이 없으면 확인이 뒤다.
+    fn received_before(&self, seq: u64) -> bool {
+        matches!(lock(&self.rx).try_recv(), Ok((ack, _)) if ack < seq)
+    }
+}
+
+impl Drop for CancelAck<'_> {
+    fn drop(&mut self) {
+        if let Some(table) = lock(&self.client.pending).as_mut() {
+            table.remove(&self.id);
+        }
     }
 }
 
@@ -292,4 +344,159 @@ fn outcome(frame: Value) -> Result<Value, CallError> {
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests {
+    //! 취소 뒤 답 기다리기([`HostClient::call_until_settled`])를 Host 프레임의 순서를 쥔 가짜 연결로 본다.
+
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use pw_core::{BoxFuture, Connection, FrameSink, FrameSource};
+    use serde_json::{Value, json};
+    use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+    use tokio_util::sync::CancellationToken;
+
+    use super::{HostClient, Settled, lock};
+
+    struct Sink(UnboundedSender<Value>);
+
+    impl FrameSink for Sink {
+        fn send(&self, frame: Value) {
+            let _ = self.0.send(frame);
+        }
+    }
+
+    struct Source(UnboundedReceiver<Value>);
+
+    impl FrameSource for Source {
+        fn recv(&mut self) -> BoxFuture<'_, Option<Value>> {
+            Box::pin(self.0.recv())
+        }
+    }
+
+    /// 가짜 Host: 클라이언트가 보낸 프레임을 받고(`sent`), Host 의 프레임을 보낸다(`host`).
+    struct Fake {
+        client: Arc<HostClient>,
+        sent: UnboundedReceiver<Value>,
+        host: Option<UnboundedSender<Value>>,
+    }
+
+    impl Fake {
+        fn new() -> Self {
+            let (to_host, sent) = unbounded_channel();
+            let (host, from_host) = unbounded_channel();
+            let client = Arc::new(HostClient::new(Connection {
+                sink: Box::new(Sink(to_host)),
+                source: Box::new(Source(from_host)),
+            }));
+            Self {
+                client,
+                sent,
+                host: Some(host),
+            }
+        }
+
+        async fn next_sent(&mut self) -> Value {
+            tokio::time::timeout(Duration::from_secs(5), self.sent.recv())
+                .await
+                .expect("the client sent nothing")
+                .unwrap()
+        }
+
+        fn answer(&self, frame: Value) {
+            self.host.as_ref().unwrap().send(frame).unwrap();
+        }
+
+        /// 호출을 띄우고 취소한다. (호출 id, 취소 확인 요청의 id).
+        async fn cancelled_call(
+            &mut self,
+            grace: Duration,
+        ) -> (tokio::task::JoinHandle<Settled>, u64, u64) {
+            let cancel = CancellationToken::new();
+            let client = Arc::clone(&self.client);
+            let token = cancel.clone();
+            let call = tokio::spawn(async move {
+                client
+                    .call_until_settled("test.call", Value::Null, &token, grace)
+                    .await
+            });
+            let request = self.next_sent().await;
+            assert_eq!(request["method"], "test.call");
+            cancel.cancel();
+            let ack = self.next_sent().await;
+            assert_eq!(ack["method"], "request.cancel", "{ack}");
+            assert_eq!(ack["params"]["id"], request["id"]);
+            (
+                call,
+                request["id"].as_u64().unwrap(),
+                ack["id"]
+                    .as_u64()
+                    .expect("the cancel is a request with an id"),
+            )
+        }
+    }
+
+    const GRACE: Duration = Duration::from_secs(5);
+
+    /// Host 가 취소를 받은 뒤(확인이 먼저) 결과로 답했다 — 되돌릴 수 없는 지점을 넘은 호출.
+    #[tokio::test]
+    async fn an_answer_after_the_cancel_ack_ran_past_the_point_of_no_return() {
+        let mut f = Fake::new();
+        let (call, id, ack) = f.cancelled_call(GRACE).await;
+        f.answer(json!({ "jsonrpc": "2.0", "id": ack, "result": null }));
+        f.answer(json!({ "jsonrpc": "2.0", "id": id, "result": 7 }));
+        assert_eq!(
+            call.await.unwrap(),
+            Settled::AnsweredAfterCancel(Ok(json!(7)))
+        );
+    }
+
+    /// Host 가 취소를 받기 전에(답이 먼저) 이미 끝냈다 — 표지와 무관하다.
+    #[tokio::test]
+    async fn an_answer_before_the_cancel_ack_finished_before_the_cancel() {
+        let mut f = Fake::new();
+        let (call, id, ack) = f.cancelled_call(GRACE).await;
+        f.answer(json!({ "jsonrpc": "2.0", "id": id, "result": 7 }));
+        f.answer(json!({ "jsonrpc": "2.0", "id": ack, "result": null }));
+        assert_eq!(
+            call.await.unwrap(),
+            Settled::FinishedBeforeCancel(Ok(json!(7)))
+        );
+    }
+
+    /// Host 가 핸들러를 버리고 `cancelled` 로 답했다.
+    #[tokio::test]
+    async fn a_cancelled_answer_is_a_cancel() {
+        let mut f = Fake::new();
+        let (call, id, ack) = f.cancelled_call(GRACE).await;
+        f.answer(json!({ "jsonrpc": "2.0", "id": ack, "result": null }));
+        f.answer(json!({ "jsonrpc": "2.0", "id": id,
+            "error": { "code": pw_rpc::code::CANCELLED, "message": "cancelled" } }));
+        assert_eq!(call.await.unwrap(), Settled::Cancelled);
+    }
+
+    /// 취소 뒤 기다리는 동안 Host 연결이 닫히면 효과가 났는지 모른다(리뷰 R3) — 취소가 아니다.
+    #[tokio::test]
+    async fn the_connection_closing_while_waiting_is_unsettled() {
+        let mut f = Fake::new();
+        let (call, _, ack) = f.cancelled_call(GRACE).await;
+        f.answer(json!({ "jsonrpc": "2.0", "id": ack, "result": null }));
+        f.host = None;
+        assert_eq!(call.await.unwrap(), Settled::Unsettled);
+    }
+
+    /// 시한까지 답이 없으면 모른다. 그 요청과 취소 확인은 대기 표에서 걷힌다(늦은 답은 주인 없이 버려진다).
+    #[tokio::test(start_paused = true)]
+    async fn no_answer_in_time_is_unsettled_and_leaves_nothing_waiting() {
+        let mut f = Fake::new();
+        let (call, id, _) = f.cancelled_call(GRACE).await;
+        assert_eq!(call.await.unwrap(), Settled::Unsettled);
+        assert!(lock(&f.client.pending).as_ref().unwrap().is_empty());
+        // 늦은 답이 와도 아무 일도 없다.
+        f.answer(json!({ "jsonrpc": "2.0", "id": id, "result": 7 }));
+        tokio::task::yield_now().await;
+        assert!(lock(&f.client.pending).as_ref().unwrap().is_empty());
+    }
 }

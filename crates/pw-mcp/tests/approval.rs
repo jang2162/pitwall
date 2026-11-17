@@ -172,6 +172,8 @@ struct PointGate {
     saw_cancel: tokio::sync::Notify,
     /// 끝낸다.
     finish: tokio::sync::Notify,
+    /// 지점 뒤에 오류로 끝낸다(커밋 실패의 자리).
+    fail: std::sync::atomic::AtomicBool,
 }
 
 /// 가짜 툴이 불린 수.
@@ -355,6 +357,9 @@ fn register_tools(router: &mut pw_rpc::Router, probe: &Probe) {
             });
             if task.await.unwrap() {
                 probe.runs.fetch_add(1, Ordering::SeqCst);
+                if probe.gate.fail.load(Ordering::SeqCst) {
+                    return Err(RpcError::new(3003, "the commit failed"));
+                }
             }
             Ok::<_, RpcError>(ToolResult {
                 audit: format!("irreversible {}", approved.hash()),
@@ -1412,6 +1417,30 @@ async fn a_cancel_after_the_point_of_no_return_finishes_the_row_with_the_result(
     );
     assert_eq!(rows[0].approval.as_deref(), Some("once"));
     assert_eq!(f.runs(), 1);
+}
+
+/// 지점 뒤에 취소했고 Host 가 **오류**로 답했다(커밋 실패의 자리 — 리뷰 R5): 행은 결과 `error` 이고 상세 끝에 같은 꼬리 글이
+/// 붙는다 — 취소가 아니라 끝까지 돈 호출의 오류다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_error_after_the_point_of_no_return_keeps_the_tail_note() {
+    let f = Fixture::new();
+    f.probe.gate.fail.store(true, Ordering::SeqCst);
+    let mut window = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let handle = irreversible_at_the_point(&f, &mut window, &agent).await;
+    f.probe.gate.go.notify_one();
+    within(f.probe.gate.decided.notified()).await;
+    handle.cancel(Some("test".into())).await.unwrap();
+    within(f.probe.gate.saw_cancel.notified()).await;
+    f.probe.gate.finish.notify_one();
+    let rows = f.rows(1);
+    let detail = rows[0].detail.clone().unwrap_or_default();
+    assert_eq!(rows[0].outcome, "error", "{rows:?}");
+    assert!(detail.starts_with("the commit failed (3003)"), "{detail}");
+    assert!(
+        detail.ends_with(&format!(" · {}", pw_mcp::server::CANCELLED_AFTER_THE_POINT)),
+        "{detail}"
+    );
 }
 
 /// 지점 전의 취소는 지금처럼 버려진다 — Host 가 `cancelled` 로 답하고 행은 결과 `error` · 상세 `cancelled`, 태스크는 지점을 세우지

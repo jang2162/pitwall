@@ -20,7 +20,8 @@
 //!    [`crate::client`]). 승인을 기다리는 동안 클라이언트가 끊으면(읽기가 끝남) 곧바로 요청을 거둔다 — rmcp 가 끊긴 뒤 5초 동안
 //!    핸들러를 돌리는 사이(05 「호출 취소」)에 사람이 [허용] 을 눌러도 돌지 않는다. 선기록한 호출은 취소 뒤에도 Host 의 답을
 //!    [`SETTLE_AFTER_CANCEL`] 까지 기다려 그 답으로 행을 끝낸다 — 되돌릴 수 없는 지점(`db_execute` 의 커밋)을 넘은 호출은 결과
-//!    `ok`(상세에 [`CANCELLED_AFTER_THE_POINT`]), 답이 없으면 취소(상세에 [`CANCELLED_UNSETTLED`]) — 16-m5-plan M5-18b.
+//!    `ok`(상세에 [`CANCELLED_AFTER_THE_POINT`]), 취소가 닿기 전에 이미 끝난 호출은 그 결과(상세에
+//!    [`CANCELLED_AFTER_IT_FINISHED`]), 답이 없으면 취소(상세에 [`CANCELLED_UNSETTLED`]) — 16-m5-plan M5-18b.
 //! 7. 응답 상한 [`MAX_RESPONSE_BYTES`] — 넘으면 「범위를 좁혀라」 오류(결정 M5-D34).
 //!
 //! 결과는 모두 `_meta` 에 결과 표지([`crate::marker`])를 단다.
@@ -75,6 +76,10 @@ pub const SETTLE_AFTER_CANCEL: Duration = Duration::from_secs(5);
 /// 취소 뒤 Host 가 결과로 답한 호출의 감사 상세 꼬리 — 되돌릴 수 없는 지점(`db_execute` 의 커밋)을 넘어 끝까지 돌았다.
 pub const CANCELLED_AFTER_THE_POINT: &str =
     "cancelled by the client after the point of no return; it ran to the end";
+
+/// 취소했지만 Host 가 그 취소를 받기 전에 이미 답한 호출의 감사 상세 꼬리 — 표지와 무관하게 끝까지 돌았다.
+pub const CANCELLED_AFTER_IT_FINISHED: &str =
+    "cancelled by the client after the host had already finished it";
 
 /// 취소 뒤 [`SETTLE_AFTER_CANCEL`] 까지 답이 없던 호출의 감사 상세 꼬리 — 「취소됨」 과 달리 효과가 났는지 모른다.
 pub const CANCELLED_UNSETTLED: &str = "no answer from the host within 5 s after the cancel; \
@@ -965,7 +970,12 @@ impl Session {
                     .await,
             )
         };
-        let after_cancel = Some(CANCELLED_AFTER_THE_POINT);
+        // 표지 뒤의 꼬리 글은 Host 가 취소를 받은 뒤에 답한 호출에만 — 취소가 닿기 전에 끝난 호출(표지와 무관)은 다른 글이다.
+        let after_cancel = match &settled {
+            Settled::AnsweredAfterCancel(_) => Some(CANCELLED_AFTER_THE_POINT),
+            Settled::FinishedBeforeCancel(_) => Some(CANCELLED_AFTER_IT_FINISHED),
+            _ => None,
+        };
         match settled {
             Settled::Answered(Ok(result)) => {
                 Ok(self.finished(row, &name, &args, project_id, tool, result, started, None))
@@ -973,11 +983,12 @@ impl Session {
             Settled::Answered(Err(e)) => {
                 Ok(self.call_failed(row, &name, &args, project_id, e, started, None))
             }
-            Settled::AnsweredAfterCancel(answer) => {
+            Settled::AnsweredAfterCancel(answer) | Settled::FinishedBeforeCancel(answer) => {
                 tracing::warn!(
                     tool = name,
                     ok = answer.is_ok(),
-                    "the client cancelled a call after it passed its point of no return; it ran to the end"
+                    note = after_cancel,
+                    "the client cancelled a call that ran to the end"
                 );
                 Ok(match answer {
                     Ok(result) => self.finished(
