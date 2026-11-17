@@ -149,7 +149,7 @@ impl Registry {
         Ok(main_repository_project(project, &projects).cloned())
     }
 
-    /// 루트 `root` 를 가진 프로젝트를 새로 더하면 신뢰 판정이 어떻게 바뀌는가([`TrustShift`]). 판정은 [`Self::trust_owner`] 와
+    /// 루트 `root` 를 가진 프로젝트를 새로 더하면 신뢰 판정 · 경로 해석이 어떻게 바뀌는가([`TrustShift`]). 판정은 [`Self::trust_owner`] 와
     /// 같은 규칙([`main_repository_project`])을 새 프로젝트를 더한 목록에 다시 돌린 것이다 — 안쪽 · 바깥쪽 · 메인 체크아웃 ·
     /// 워크트리 어느 방향이든 신뢰 주인이 바뀌는 것은 모두 여기서 나온다. 레지스트리에 쓰지 않는다. 에이전트의 등록
     /// (`project_register`, [`super::tool`])이 기존 프로젝트의 신뢰를 흔드는 등록을 거절하는 데 쓴다.
@@ -179,7 +179,28 @@ impl Registry {
             .map(|(p, _)| p)
             .collect();
         let follows = main_repository_project(&candidate, &projects).cloned();
-        Ok(TrustShift { moved, follows })
+        // 해석이 바뀌는 프로젝트: 새 루트 안쪽, 그리고 새 루트가 연결 워크트리 안이면 메인 쪽 대응 자리 안쪽의 등록 루트(그
+        // 루트들은 지금 이 폴더 안을 활성 워크트리로 연다 — `super::resolve` 의 2 단계). 리뷰 D1.
+        let link = worktree_link(root);
+        let mapped = link.as_ref().and_then(|l| Some((l, l.map_to_main(root)?)));
+        projects.pop();
+        let shadowed = projects
+            .into_iter()
+            .filter(|p| p.host == LOCAL_HOST)
+            .filter(|p| {
+                p.roots.iter().map(PathBuf::from).any(|r| {
+                    r.starts_with(root)
+                        || mapped.as_ref().is_some_and(|(l, main)| {
+                            r.starts_with(&l.main_top) && r.starts_with(main)
+                        })
+                })
+            })
+            .collect();
+        Ok(TrustShift {
+            moved,
+            follows,
+            shadowed,
+        })
     }
 
     /// 신뢰를 가진 프로젝트의 id. 워크트리 판정은 디스크(`.git` 파일)를 읽으므로 DB 잠금 밖에서 한다.
@@ -203,6 +224,10 @@ pub struct TrustShift {
     pub moved: Vec<Project>,
     /// 새 프로젝트가 신뢰를 따르게 될 기존 프로젝트(새 루트가 그 저장소의 연결 워크트리 안이다).
     pub follows: Option<Project>,
+    /// 루트가 새 루트 안쪽(새 루트가 연결 워크트리 안이면 메인 체크아웃 쪽 대응 자리 안쪽)에 있는 기존 프로젝트 — 그 안의
+    /// 경로가 지금 그 프로젝트로 풀린다. 새 루트가 그 해석을 가로챌 수 있다(워크트리 꼭대기를 등록하면 `W/app/…` 이 메인 쪽
+    /// `M/app` 대신 새 프로젝트로 풀린다).
+    pub shadowed: Vec<Project>,
 }
 
 /// `project` 의 신뢰 주인 id(`all` 기준).

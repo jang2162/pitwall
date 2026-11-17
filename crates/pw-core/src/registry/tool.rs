@@ -17,14 +17,18 @@
 //! - **이미 등록된 프로젝트에 드는 경로**: 그 루트 자체, 그 안쪽, 그리고 등록된 프로젝트의 git 워크트리(와 그 안쪽) — 경로 해석
 //!   ([`Registry::resolve`])이 이미 그 프로젝트로 여는 곳이다(`project_open` 을 쓰면 된다). 등록된 프로젝트의 워크트리를 따로
 //!   등록하면 그 프로젝트는 메인 저장소 프로젝트의 신뢰를 따른다([`super::trust`]) — 에이전트가 등록한 프로젝트가 신뢰된 채
-//!   생기지 않게 막는다. 등록된 프로젝트들을 **품는** 위 폴더는 받는다(그 프로젝트들은 계속 자기 루트로 풀리고, 새 프로젝트의
-//!   신뢰는 따로다).
+//!   생기지 않게 막는다.
+//! - **안쪽에 등록 루트가 있는 경로**(새 루트가 연결 워크트리 안이면 메인 체크아웃 쪽 대응 자리 안쪽까지 — [`Registry::trust_shift`]
+//!   의 `shadowed`): 그 루트들 안의 파일이 어느 프로젝트로 풀리는지를 바꿀 수 있다. 사람이 메인의 `M/app` 만 신뢰했을 때 워크트리
+//!   꼭대기 `W` 를 받으면 `W/app/…` 이 `M/app` 대신 새(미신뢰) 프로젝트로 풀린다(리뷰 D1). 등록된 프로젝트들을 품는 위 폴더도
+//!   이 규칙으로 거절한다 — 판정을 하나로 둔다(메인 판정).
 //! - **기존 프로젝트의 신뢰 판정을 바꾸는 경로**([`Registry::trust_shift`] — `super::trust` 의 신뢰 주인 규칙 그대로): 새 루트가
 //!   등록된 프로젝트의 신뢰를 따르게 되거나(그 저장소의 연결 워크트리 안), **등록된 워크트리 프로젝트의 신뢰 주인이 되는**
 //!   경우(사람이 워크트리만 등록 · 신뢰한 저장소의 메인 체크아웃). 뒤의 것을 받으면 사람이 신뢰한 워크트리가 이벤트 없이 미신뢰가
 //!   되고, 사람이 다시 신뢰하면 에이전트가 등록한 프로젝트의 행이 신뢰된다(리뷰 B1). `auto_approve` 와 상관없이 묻기 전에 거절한다.
-//! - **줄바꿈 · 제어 문자 · 양방향 제어 문자가 든 `root` · `name`** — 승인 창의 계획 글에 가짜 줄을 심지 못하게(리뷰 F1). 계획 글은
-//!   값을 인용해(`"…"`) 보인다.
+//! - **줄바꿈 · 제어 문자 · 양방향 제어 문자 · 보이지 않는 서식 문자(Cf · Zl · Zp)가 든 `root` · `name`** — 승인 창의 계획 글에
+//!   가짜 줄을 심거나 다른 이름과 똑같아 보이지 못하게(리뷰 F1 · R7). 계획 글은 값을 인용해(`"…"`) 보인다. `name` 은
+//!   [`MAX_NAME_CHARS`] 자까지(사람의 `project.create` 는 상한이 없다).
 //!
 //! # 신뢰
 //!
@@ -188,9 +192,30 @@ impl Registry {
                 ),
             });
         }
+        // 안쪽(워크트리면 메인 쪽 대응 자리 안쪽)에 등록 루트가 있으면 그 경로들의 해석을 바꿀 수 있다 — 묻지 않고 거절한다(리뷰 D1).
+        if let Some(inner) = shift.shadowed.first() {
+            return Err(RegistryError::InvalidPath {
+                path: root,
+                reason: format!(
+                    "contains the registered project `{}` ({}, root {}), directly or through this git worktree; registering it could change which project those files open as. Only a person may register this folder in Pitwall",
+                    inner.id,
+                    inner.name,
+                    inner.root().display()
+                ),
+            });
+        }
         // 다듬기 전의 글을 본다 — `trim` 이 지우는 제어 문자(NEL 등)도 받지 않는다.
         if let Some(name) = &params.name {
             refuse_unprintable("name", &root, name)?;
+            let chars = name.trim().chars().count();
+            if chars > MAX_NAME_CHARS {
+                return Err(RegistryError::InvalidPath {
+                    path: root,
+                    reason: format!(
+                        "`name` is {chars} characters long; the limit is {MAX_NAME_CHARS}"
+                    ),
+                });
+            }
         }
         let name = match params.name.as_deref().map(str::trim) {
             Some(name) if !name.is_empty() => name.to_owned(),
@@ -236,15 +261,41 @@ impl Registry {
     }
 }
 
-/// 줄바꿈 · 제어 문자 · 양방향 제어 문자가 든 값은 거절한다(16-m5-plan M5-16 리뷰 F1) — 승인 창의 계획 글에 가짜 줄
-/// (`trusted: yes`)을 심거나 글의 방향을 뒤집지 못하게. 문자 집합은 `pw_git::write::prompt` 의 askpass 다듬기와 같다(C0 · DEL ·
-/// C1 · ALM · LRM · RLM · LRE…RLO · LRI…PDI).
+/// 에이전트가 정하는 이름의 최대 글자 수(유니코드 스칼라 값). 프로젝트 목록 · 창 제목 · 다른 툴의 승인 요청에 그대로 나가는
+/// 글이라 짧게 둔다 — 사람의 `project.create` 는 이 상한을 두지 않는다(리뷰 R7).
+pub const MAX_NAME_CHARS: usize = 200;
+
+/// 줄바꿈 · 제어 문자 · 양방향 제어 문자 · 보이지 않는 서식 문자가 든 값은 거절한다(16-m5-plan M5-16 리뷰 F1 · R7) — 승인 창의
+/// 계획 글에 가짜 줄(`trusted: yes`)을 심거나 글의 방향을 뒤집지 못하게, 그리고 인용 없이 보이는 곳(프로젝트 목록 · 창 제목)에서
+/// 다른 이름과 똑같아 보이지 않게(`pit\u{200B}wall`). 제어 · 양방향 집합은 `pw_git::write::prompt` 의 askpass 다듬기와 같고
+/// (C0 · DEL · C1 · ALM · LRM · RLM · LRE…RLO · LRI…PDI), 거기에 일반 범주 Cf 의 나머지(0폭 문자 · 단어 결합자 · BOM · SHY ·
+/// 보이지 않는 연산자 · 태그 문자 등)와 Zl · Zp(LS · PS)를 더한다.
 fn refuse_unprintable(field: &str, path: &Path, value: &str) -> Result<(), RegistryError> {
     let bad = |c: char| {
         c.is_control()
             || matches!(
                 c,
-                '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+                '\u{00AD}'
+                    | '\u{0600}'..='\u{0605}'
+                    | '\u{061C}'
+                    | '\u{06DD}'
+                    | '\u{070F}'
+                    | '\u{0890}'..='\u{0891}'
+                    | '\u{08E2}'
+                    | '\u{180E}'
+                    | '\u{200B}'..='\u{200F}'
+                    | '\u{2028}'..='\u{202E}'
+                    | '\u{2060}'..='\u{2064}'
+                    | '\u{2066}'..='\u{206F}'
+                    | '\u{FEFF}'
+                    | '\u{FFF9}'..='\u{FFFB}'
+                    | '\u{110BD}'
+                    | '\u{110CD}'
+                    | '\u{13430}'..='\u{1343F}'
+                    | '\u{1BCA0}'..='\u{1BCA3}'
+                    | '\u{1D173}'..='\u{1D17A}'
+                    | '\u{E0001}'
+                    | '\u{E0020}'..='\u{E007F}'
             )
     };
     match value.chars().find(|c| bad(*c)) {
@@ -252,7 +303,7 @@ fn refuse_unprintable(field: &str, path: &Path, value: &str) -> Result<(), Regis
         Some(c) => Err(RegistryError::InvalidPath {
             path: path.to_path_buf(),
             reason: format!(
-                "`{field}` contains the control character {:?}; line breaks, control and bidirectional characters are not accepted",
+                "`{field}` contains the character {:?}; line breaks, control, bidirectional and invisible format characters are not accepted",
                 c
             ),
         }),
