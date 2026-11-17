@@ -844,6 +844,20 @@ export type UnaryMethods = {
 	 */
 	"lsp.workspaceSymbol": { params: LspWorkspaceSymbolParams; result: LspWorkspaceSymbols };
 	/**
+	 * 감사 로그를 최신부터 쪽 단위로 읽는다. 다른 프로세스(헤드리스 `pitwall mcp` · `pitwall tool`)가 쓴 행도 있다 —
+	 * 그 행은 `mcp.activity` 가 나가지 않으므로 화면이 열릴 때 · 창이 앞으로 올 때 다시 읽는다.
+	 */
+	"mcp.audit.list": { params: McpAuditListParams; result: McpAuditPage };
+	/**
+	 * 이 앱에 열린 MCP 세션(시작 순서): id · 클라이언트 · 세션 프로젝트 · 전송 · 시작 시각 · 호출 수. 열고 닫히면
+	 * `mcp.sessionsChanged`(Host 범위)가 나간다. 앱 없이 뜬 `pitwall mcp` 의 헤드리스 세션은 보이지 않는다.
+	 */
+	"mcp.sessions": { params: null; result: McpSessionInfo[] };
+	/**
+	 * MCP 툴 카탈로그 전부와 지금 노출 판정(켜졌는지 · 그 규칙), 최근 호출 수. 이 앱의 Host 가 처리하는 툴만이다.
+	 */
+	"mcp.tools.list": { params: McpToolsListParams; result: McpToolInfo[] };
+	/**
 	 * External tools available on this OS (id · name · contributing extension · whether it opens files too · settings
 	 * format errors) and the default tool. With `projectId`, the default tool is chosen including that project's
 	 * `[open_with] default` (when the session has a project, leaving the key out means the session's project — pass
@@ -1327,6 +1341,9 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lsp.tool.diagnostics": {"name":"lsp.tool.diagnostics","kind":"unary","tier":"read","roles":["owner"],"params":"DiagnosticsToolParams","output":"DiagnosticsToolResult","doc":" Language server diagnostics (errors, warnings, hints) for a project, one page at a time: files in path order, each\n file's diagnostics most severe first. Filter by one file (`path`, absolute or relative to the project root) and by\n `minSeverity`. Lines and columns start at 1; columns count UTF-16 code units. Only what the language servers have\n published on their own: servers run while the project is open in a Pitwall window (they start when a file of that\n language is opened there), and many servers only report files that are open in the editor, so files nobody opened\n may be missing — an empty list is not proof the project builds. `servers` tells \"no problems\" apart from \"no server\n yet / still starting / still indexing\" (a `progress` means more diagnostics may come). This tool never starts a\n server. An untrusted project runs no language servers: the result is empty with `unavailable.reason = \"untrusted\"`.\n","mcp":{"group":"code","name":"diagnostics"},"fileScope":false},
 	"lsp.typeDefinition": {"name":"lsp.typeDefinition","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspLocationsResult","doc":" 타입 정의로(`textDocument/typeDefinition`).\n","mcp":null,"fileScope":false},
 	"lsp.workspaceSymbol": {"name":"lsp.workspaceSymbol","kind":"unary","tier":"read","roles":["owner"],"params":"LspWorkspaceSymbolParams","output":"LspWorkspaceSymbols","doc":" 프로젝트의 언어 서버들에 `workspace/symbol` 을 묻는다(심볼로 이동 · 클래스로 이동 · SE 「심볼」 탭 — M4-16). 이 창이 문서를 연\n 떠 있는 서버에만 묻고 서버를 띄우지 않는다. 루트 밖 위치는 읽기 토큰과 함께(결정 M4-D13). 미신뢰면 untrusted.\n","mcp":null,"fileScope":false},
+	"mcp.audit.list": {"name":"mcp.audit.list","kind":"unary","tier":"read","roles":["owner"],"params":"McpAuditListParams","output":"McpAuditPage","doc":" 감사 로그를 최신부터 쪽 단위로 읽는다. 다른 프로세스(헤드리스 `pitwall mcp` · `pitwall tool`)가 쓴 행도 있다 —\n 그 행은 `mcp.activity` 가 나가지 않으므로 화면이 열릴 때 · 창이 앞으로 올 때 다시 읽는다.\n","mcp":null,"fileScope":false},
+	"mcp.sessions": {"name":"mcp.sessions","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"Vec<McpSessionInfo>","doc":" 이 앱에 열린 MCP 세션(시작 순서): id · 클라이언트 · 세션 프로젝트 · 전송 · 시작 시각 · 호출 수. 열고 닫히면\n `mcp.sessionsChanged`(Host 범위)가 나간다. 앱 없이 뜬 `pitwall mcp` 의 헤드리스 세션은 보이지 않는다.\n","mcp":null,"fileScope":false},
+	"mcp.tools.list": {"name":"mcp.tools.list","kind":"unary","tier":"read","roles":["owner"],"params":"McpToolsListParams","output":"Vec<McpToolInfo>","doc":" MCP 툴 카탈로그 전부와 지금 노출 판정(켜졌는지 · 그 규칙), 최근 호출 수. 이 앱의 Host 가 처리하는 툴만이다.\n","mcp":null,"fileScope":false},
 	"openWith.list": {"name":"openWith.list","kind":"unary","tier":"read","roles":["owner"],"params":"OpenWithListParams","output":"OpenWithList","doc":" External tools available on this OS (id · name · contributing extension · whether it opens files too · settings\n format errors) and the default tool. With `projectId`, the default tool is chosen including that project's\n `[open_with] default` (when the session has a project, leaving the key out means the session's project — pass\n `null` for the global default only). Launch commands are not included.\n","mcp":{"group":null,"name":null},"fileScope":false},
 	"openWith.run": {"name":"openWith.run","kind":"unary","tier":"exec","roles":["owner"],"params":"OpenWithRunParams","output":"OpenWithOutcome","doc":" 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n 그 프로젝트의 창이 아니면 permission denied 오류다 — 웰컴 창(Host 연결)만 예외로, 목록에 있는 도구(또는 기본 도구)로\n 프로젝트 루트를 여는 것(`worktree` · `file` · `line` · `column` 없이)은 된다.\n","mcp":null,"fileScope":false},
 	"project.candidates": {"name":"project.candidates","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Vec<RootCandidate>","doc":" 경로의 루트 후보: 워크트리의 메인 저장소, 가장 가까운 `.git`, 빌드 파일이 있는 상위 폴더(가까운 것부터).\n 홈 디렉터리와 그 위, 파일 시스템 루트는 넣지 않는다.\n","mcp":null,"fileScope":false},
@@ -1430,6 +1447,33 @@ export type AskpassHint =
 "confirm" | 
 /**  알림만(ssh 의 `none` — 보안 키를 만지라는 안내). ssh 가 일을 마치면 도우미를 끝내고 질문이 닫힌다. 답은 `cancel`(내리기)만. */
 "notice";
+
+export type AuditOutcome = "ok" | 
+/**  툴은 불렸고 실패했다(RPC 오류). */
+"error" | 
+/**  부르지 않았다(노출 안 된 툴, 등급 정책). */
+"denied";
+
+/**
+ *  쓰인 감사 행 하나(`mcp.audit.list` 의 원소). 열은 [`Entry`] 와 같고 `id` · `at` 이 더 있다. M5-11 이 칸(승인 방식 · 계획
+ *  해시)을 더할 자리다.
+ */
+export type AuditRow = {
+	/**  행 id. 쪽 넘기기의 커서이고 [`AuditLog::record`] 가 돌려준 값이다. */
+	id: number,
+	/**  기록 시각(Unix 밀리초). */
+	at: number,
+	session: string,
+	client: string | null,
+	projectId: string | null,
+	tool: string,
+	/**  인자 요약([`summarize`] 의 JSON 글). */
+	args: string,
+	outcome: AuditOutcome,
+	detail: string | null,
+	resultSize: number | null,
+	durationMs: number,
+};
 
 /**  `git.blame` 스트림의 항목 하나. */
 export type BlameChunk = {
@@ -3334,6 +3378,19 @@ export type ExplainPlan = {
 	/**  드라이버가 받은 계획 그대로(PG · MySQL 은 JSON 글). */
 	text: string,
 };
+
+/**  툴 하나를 켜거나 끈 규칙(판정 순서의 단계). [`Exposure::verdict`]. */
+export type ExposureRule = 
+/**  프리셋이 등급으로 골랐다(`[mcp] preset` — 설정이 없으면 `standard`). */
+"preset" | 
+/**  `[mcp.tools]` 의 그 이름 키. */
+"tool" | 
+/**  `[mcp.tools]` 의 glob 키(맞는 것 가운데 가장 긴 것). */
+"glob" | 
+/**  `[mcp.groups]` 의 그 그룹 키. */
+"group" | 
+/**  공유 레이어를 빼면 켜지는데 커밋되는 공유 설정(`.pitwall/project.toml`)이 껐다. */
+"shared";
 
 export type ExtensionDiagnostic = {
 	severity: DiagnosticSeverity,
@@ -6670,6 +6727,54 @@ export type LspWorkspaceSymbols = {
 	truncated: boolean,
 };
 
+/**  [`TOPIC_ACTIVITY`] 의 payload. */
+export type McpActivity = {
+	/**  쓰인 감사 행의 id(`mcp.audit.list` 의 `id`). */
+	id: number,
+	projectId: string | null,
+};
+
+export type McpAuditListParams = {
+	/**  그 프로젝트의 행과 프로젝트 없는 행(「에이전트 활동」 패널이 보이는 것). 없으면 전부. */
+	projectId?: string | null,
+	/**  앞 쪽의 `nextCursor`. 없으면 가장 최신부터. */
+	cursor?: string | null,
+	/**  1 ~ [`MAX_AUDIT_LIMIT`](500). 없으면 `pw_rpc::DEFAULT_LIST_LIMIT`(100). */
+	limit?: number | null,
+	outcome?: AuditOutcome | null,
+	/**  툴 이름(정확히 같은 것). */
+	tool?: string | null,
+};
+
+export type McpAuditPage = {
+	/**  최신부터. */
+	entries: AuditRow[],
+	/**  다음(더 오래된) 쪽의 커서. 마지막 쪽이면 `null`. */
+	nextCursor: string | null,
+};
+
+/**  열린 세션 하나(`mcp.sessions` 의 원소). M5-11 이후 행이 칸을 더할 자리다 — 칸은 기본값을 가진 뒤에 더한다. */
+export type McpSessionInfo = {
+	/**  감사 행의 `session` 과 같은 id. */
+	id: string,
+	/**  MCP 클라이언트(`이름 버전`). 2025-11-25 까지의 클라이언트는 initialize 로, 그 뒤 버전은 첫 툴 호출로 안다. 모르면 `null`. */
+	client: string | null,
+	/**  세션 프로젝트(`pitwall mcp --project` · cwd 로 푼 것). 없으면 `null`. */
+	projectId: string | null,
+	/**  연결 종류(`socket` · `stdio`). */
+	transport: string,
+	/**  시작 시각(Unix 밀리초). */
+	startedAt: number,
+	/**  이 세션이 받은 `tools/call` 수 — 감사 행 하나가 호출 하나다(허용 · 실패 · 거절 모두). */
+	calls: number,
+};
+
+/**  [`TOPIC_SESSIONS_CHANGED`] 의 payload. */
+export type McpSessionsChanged = {
+	/**  지금 열린 세션 수. */
+	total: number,
+};
+
 /**
  *  선언의 `mcp` 칸. `mcp: true` 는 둘 다 `None`([`Self::DERIVED`]) — 이름과 그룹을 RPC 이름에서 만든다.
  *  `mcp: { group: "code", name: "diagnostics" }` 는 둘 다 적는다(결정 M5-D26 · M5-D23).
@@ -6682,6 +6787,31 @@ export type McpTool = {
 	group: string | null,
 	/**  툴 이름. `None` 이면 RPC 이름의 `.` → `_`, camelCase → snake_case(`project.list` → `project_list`). */
 	name: string | null,
+};
+
+/**  카탈로그의 툴 하나와 지금 노출 판정. */
+export type McpToolInfo = {
+	name: string,
+	/**  툴 설명(선언의 문서 주석 — 에이전트가 읽는 영어 글이다). */
+	description: string,
+	tier: Tier,
+	/**  선언의 그룹(`pw_mcp::catalog::GROUPS`). */
+	group: string,
+	/**  입력 JSON Schema(세션 프로젝트가 없을 때의 꼴 — `projectId` 가 필수). */
+	inputSchema: JsonValue,
+	/**  지금 켜졌는가. */
+	enabled: boolean,
+	/**  켜거나 끈 규칙(`pw_mcp::exposure::Exposure::verdict` 그대로). */
+	rule: ExposureRule,
+	/**  그 규칙의 키: 툴 이름 · glob · 그룹 · 프리셋 이름. `shared` 는 `null`. */
+	key: string | null,
+	/**  최근([`RECENT`] — 30일) 감사 행 수. `projectId` 가 있으면 그 프로젝트의 행만. */
+	recentCalls: number,
+};
+
+export type McpToolsListParams = {
+	/**  그 프로젝트의 설정(전역 위에 덮은 것 — 공유 설정은 좁히기만)으로 판정한다. 없으면 전역 설정만. */
+	projectId?: string | null,
 };
 
 export type MergeLines = {

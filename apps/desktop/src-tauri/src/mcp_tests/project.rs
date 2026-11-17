@@ -36,8 +36,9 @@ impl WindowHost {
             Arc::new(pw_fs::Fs::new()),
             pw_git::write::Askpass::default(),
             requests.clone(),
+            Default::default(),
         ));
-        let services = mcp::services(&host, &paths, "test", HostKind::App);
+        let services = mcp::services(&host, &paths, "test", HostKind::App, Default::default());
         let app = tauri::test::mock_app();
         app.manage(crate::launch::Launch::new(host.registry().cloned()));
         app.manage(windows::PendingOpens::default());
@@ -105,7 +106,13 @@ async fn settings_get_reads_an_old_file_without_writing_in_the_app_and_headless(
     host.global_settings("[ui]\nlanguage = \"ko\"\n");
 
     let headless = mcp::headless_host(&host.paths);
-    let headless_services = mcp::services(&headless, &host.paths, "test", HostKind::Headless);
+    let headless_services = mcp::services(
+        &headless,
+        &host.paths,
+        "test",
+        HostKind::Headless,
+        Default::default(),
+    );
     for services in [Arc::clone(&host.services), headless_services] {
         let session = ToolSession::open(services, SessionRequest::default()).await;
         let result = session

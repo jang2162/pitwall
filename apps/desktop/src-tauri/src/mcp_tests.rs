@@ -85,7 +85,16 @@ fn mcp_tools_are_exactly_these() {
     );
     let headless = mcp::headless_host(&host.paths);
     assert_eq!(
-        names(&mcp::services(&headless, &host.paths, "test", pw_mcp::HostKind::Headless).catalog),
+        names(
+            &mcp::services(
+                &headless,
+                &host.paths,
+                "test",
+                pw_mcp::HostKind::Headless,
+                Default::default()
+            )
+            .catalog
+        ),
         HEADLESS_TOOLS,
         "헤드리스 Host 가 처리하는 툴이 목록과 다르다"
     );
@@ -640,7 +649,13 @@ impl ToolHost {
             Arc::new(pw_fs::Fs::new()),
             pw_git::write::Askpass::default(),
         ));
-        let services = mcp::services(&host, &paths, "test", pw_mcp::HostKind::App);
+        let services = mcp::services(
+            &host,
+            &paths,
+            "test",
+            pw_mcp::HostKind::App,
+            Default::default(),
+        );
         Self {
             _tmp: tmp,
             base,

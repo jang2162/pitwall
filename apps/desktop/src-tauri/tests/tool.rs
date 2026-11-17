@@ -310,6 +310,7 @@ mod app {
                 approval: Approval::Unavailable,
                 transport: "socket",
                 host_kind: HostKind::App,
+                sessions: Default::default(),
             });
             let uid = socket::current_uid();
             let path = socket::endpoint(

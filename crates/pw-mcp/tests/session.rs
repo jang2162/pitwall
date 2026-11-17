@@ -244,6 +244,7 @@ impl Fixture {
             approval: Approval::Unavailable,
             transport: "test",
             host_kind,
+            sessions: Default::default(),
         })
     }
 

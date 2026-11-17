@@ -17,6 +17,7 @@ use pw_core::config::AppPaths;
 use pw_core::{HostRouter, LocalHost};
 use pw_mcp::audit::AuditLog;
 use pw_mcp::policy::Approval;
+use pw_mcp::sessions::Sessions;
 use pw_mcp::{Catalog, HostKind, Services, SessionRequest};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{Layer, fmt};
@@ -179,7 +180,14 @@ impl Headless {
     /// `transport` 는 로그에 남는 연결 종류다(판정에는 쓰지 않는다 — `HostKind::Headless`).
     pub fn start(paths: &AppPaths, transport: &'static str) -> Self {
         let host = headless_host(paths);
-        let services = services(&host, paths, transport, HostKind::Headless);
+        // 헤드리스 세션은 보는 화면이 없다 — 등록부는 이 프로세스의 것이다.
+        let services = services(
+            &host,
+            paths,
+            transport,
+            HostKind::Headless,
+            Sessions::default(),
+        );
         Self { host, services }
     }
 
@@ -221,11 +229,13 @@ async fn headless(paths: AppPaths, request: SessionRequest) -> i32 {
 }
 
 /// 세션들이 함께 쓰는 것. 앱과 헤드리스가 같은 규칙으로 만든다. `host_kind` 는 `host` 가 앱의 Host 인지 [`headless_host`] 인지다.
+/// `sessions` 는 세션 등록부 — 앱은 `mcp.*` RPC(`pw_mcp::methods`)와 같은 것을 넘긴다.
 pub fn services(
     host: &Arc<LocalHost>,
     paths: &AppPaths,
     transport: &'static str,
     host_kind: HostKind,
+    sessions: Sessions,
 ) -> Arc<Services> {
     let router = Arc::new(HostRouter::new());
     router
@@ -248,12 +258,13 @@ pub fn services(
         approval: Approval::Unavailable,
         transport,
         host_kind,
+        sessions,
     })
 }
 
 /// 앱 쪽: 단일 인스턴스 키의 소켓을 열고 세션을 받는다. 열지 못해도 앱은 뜬다(그때 `pitwall mcp` 는 헤드리스로 돈다).
 #[cfg(unix)]
-pub fn serve_socket(host: Arc<LocalHost>, paths: AppPaths, key: String) {
+pub fn serve_socket(host: Arc<LocalHost>, paths: AppPaths, key: String, sessions: Sessions) {
     use pw_mcp::socket;
 
     tauri::async_runtime::spawn(async move {
@@ -268,7 +279,7 @@ pub fn serve_socket(host: Arc<LocalHost>, paths: AppPaths, key: String) {
             }
         };
         tracing::info!(socket = %listener.path().display(), "mcp socket listening");
-        let services = services(&host, &paths, "socket", HostKind::App);
+        let services = services(&host, &paths, "socket", HostKind::App, sessions);
         socket::accept_loop(
             listener,
             services,

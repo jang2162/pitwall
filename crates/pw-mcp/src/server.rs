@@ -43,6 +43,7 @@ use crate::client::{CallError, HostClient};
 use crate::exposure::{self, Exposure};
 use crate::marker::{Mark, Reason};
 use crate::policy::{self, Approval, Decision};
+use crate::sessions::Sessions;
 
 /// 툴 응답 한 건의 상한: 직렬화한 결과 JSON 의 바이트 수(결정 M5-D34 — 출발값이다). 툴 메서드는 이것을 넘지 않게 자르고
 /// (`truncated` 와 다음 `cursor`), 그래도 넘은 응답은 세션이 「범위를 좁혀라」 오류로 바꾼다.
@@ -91,6 +92,8 @@ pub struct Services {
     /// 로그에 남길 연결 종류(`socket` · `stdio`). 판정에는 쓰지 않는다 — 헤드리스인지는 [`Self::host_kind`].
     pub transport: &'static str,
     pub host_kind: HostKind,
+    /// 열린 세션의 등록부(`mcp.sessions`) — 앱은 `mcp.*` RPC 와 같은 것을, 헤드리스는 자기 것을 넣는다.
+    pub sessions: Sessions,
 }
 
 /// 세션을 여는 쪽이 알려 주는 것(`pitwall mcp [--project <path>]` 와 그 cwd).
@@ -155,6 +158,21 @@ where
         .serve_with_ct(io, session_cancel.clone())
         .await
         .map_err(|e| ServeError::Initialize(e.to_string()))?;
+    // 세션 등록부(M5-10): 초기화를 마친 세션을 올리고 끝나면(가드가 버려지면) 내린다. 2025-11-25 까지의 클라이언트는 여기서 이름을 안다.
+    let _registered = running.service().inner.services.sessions.register(
+        &running.service().inner.id,
+        running
+            .peer()
+            .peer_info()
+            .map(|i| format!("{} {}", i.client_info.name, i.client_info.version)),
+        running
+            .service()
+            .inner
+            .project
+            .as_ref()
+            .map(|p| p.id.clone()),
+        running.service().inner.services.transport,
+    );
     let result = running.waiting().await;
     tracing::debug!(?result, "mcp session ended");
     flush_audit(&audit).await;
@@ -205,7 +223,11 @@ async fn flush_audit(audit: &std::sync::mpsc::Sender<AuditJob>) {
 /// 세션 하나의 감사 기록을 **받은 순서대로** 쓰는 스레드를 띄우고 그 큐를 돌려준다. 호출마다 `spawn_blocking` 으로 쓰면 blocking
 /// 풀의 스레드 배정과 잠금 획득 순서에 보장이 없어 행 순서(`id`)가 호출 순서와 갈린다. 응답은 큐에 넣기만 하고 기록을 기다리지
 /// 않는다 — 세션이 끝날 때 [`serve`] 가 [`flush_audit`] 로 기다린다. 큐의 송신 쪽이 모두 버려지면 남은 기록을 쓰고 스레드가 끝난다.
-fn audit_writer(log: Arc<AuditLog>, session: &str) -> std::sync::mpsc::Sender<AuditJob> {
+fn audit_writer(
+    log: Arc<AuditLog>,
+    sessions: Sessions,
+    session: &str,
+) -> std::sync::mpsc::Sender<AuditJob> {
     let (tx, rx) = std::sync::mpsc::channel::<AuditJob>();
     let spawned = std::thread::Builder::new()
         .name("mcp-audit".to_owned())
@@ -213,8 +235,12 @@ fn audit_writer(log: Arc<AuditLog>, session: &str) -> std::sync::mpsc::Sender<Au
             for job in rx {
                 match job {
                     AuditJob::Write(entry) => {
-                        if let Err(e) = log.record(&entry) {
-                            tracing::warn!(%e, tool = entry.tool, "cannot write the mcp audit log");
+                        match log.record(&entry) {
+                            // 행이 실제로 쓰였을 때만 `mcp.activity` 를 낸다(M5-10).
+                            Ok(row) => sessions.recorded(row, entry.project_id.as_deref()),
+                            Err(e) => {
+                                tracing::warn!(%e, tool = entry.tool, "cannot write the mcp audit log");
+                            }
                         }
                     }
                     AuditJob::Flush(done) => {
@@ -263,7 +289,7 @@ impl Session {
             worktree: r.worktree.map(|w| w.top),
         });
         let id = session_id();
-        let audit = audit_writer(Arc::clone(&services.audit), &id);
+        let audit = audit_writer(Arc::clone(&services.audit), services.sessions.clone(), &id);
         tracing::info!(
             session = %id,
             transport = services.transport,
@@ -570,31 +596,7 @@ impl Session {
             data: None,
         })?;
         let services = &self.inner.services;
-        let global = services.global.snapshot();
-        let source = match project.config_source(&services.paths, project.root()) {
-            Ok(source) => Some(source.without_writes()),
-            Err(e) => {
-                tracing::warn!(%e, project = project_id, "cannot read the target project config");
-                None
-            }
-        };
-        let loaded = source.as_ref().and_then(|s| match s.load() {
-            Ok(snapshot) => Some(snapshot),
-            Err(e) => {
-                tracing::warn!(%e, project = project_id, "cannot read the target project config");
-                None
-            }
-        });
-        let without_shared = source
-            .filter(|_| project.config_mode == ConfigMode::Repository)
-            .map(ConfigSource::without_shared);
-        let exposure = layered_exposure(
-            global.get("settings", exposure::KEY),
-            loaded
-                .as_ref()
-                .and_then(|s| s.get("project", exposure::KEY)),
-            without_shared.as_ref(),
-        );
+        let exposure = exposure::of_project(&services.paths, &services.global, &project);
         Ok(exposure.enabled(tool))
     }
 
@@ -625,6 +627,11 @@ impl Session {
             result_size,
             duration: started.elapsed(),
         };
+        // 세션 등록부의 호출 수 · 클라이언트(M5-10). 호출 하나가 감사 행 하나다.
+        self.inner
+            .services
+            .sessions
+            .called(&entry.session, entry.client.as_deref());
         // 응답을 기다리게 하지 않는다 — 큐에 넣기만 한다. 기록 실패는 경고로만 남는다(audit 머리 주석).
         if self.inner.audit.send(AuditJob::Write(entry)).is_err() {
             tracing::warn!(tool, "cannot queue the mcp audit log entry");
@@ -877,7 +884,7 @@ fn exposure_feed(
     let read = move || {
         let g = global.snapshot();
         let p = project.as_ref().map(|p| p.store.snapshot());
-        Arc::new(layered_exposure(
+        Arc::new(exposure::layered(
             g.get("settings", exposure::KEY),
             p.as_ref().and_then(|p| p.get("project", exposure::KEY)),
             project.as_ref().and_then(|p| p.without_shared.as_ref()),
@@ -910,29 +917,6 @@ fn exposure_feed(
         }
     });
     rx
-}
-
-/// 전역 `[mcp]` 위에 프로젝트 `[mcp]` 를 덮어 읽는다. `without_shared`(저장소 모드의 공유 레이어를 뺀 읽기)가 있으면 그 값으로
-/// 누른다 — 커밋된 설정은 노출을 좁히기만 한다. 세션 프로젝트와 대상 프로젝트(결정 M5-D28)가 같은 규칙을 쓴다.
-fn layered_exposure(
-    global_mcp: Option<&Value>,
-    project_mcp: Option<&Value>,
-    without_shared: Option<&ConfigSource>,
-) -> Exposure {
-    let (mut exposure, warnings) = Exposure::from_layers(global_mcp, project_mcp);
-    if let Some(source) = without_shared {
-        // 공유 레이어를 뺀 값을 다시 읽는다. 읽지 못하면(로컬 파일이 깨짐) 전역만을 상한으로 둔다 — 넓어지지 않는다.
-        let local = source.load().ok();
-        let (ceiling, _) = Exposure::from_layers(
-            global_mcp,
-            local.as_ref().and_then(|s| s.get("project", exposure::KEY)),
-        );
-        exposure = exposure.narrowed_by(ceiling);
-    }
-    for w in warnings {
-        tracing::warn!("{w}");
-    }
-    exposure
 }
 
 /// 입력 스키마에 [`WORKTREE`] 가 있는가.

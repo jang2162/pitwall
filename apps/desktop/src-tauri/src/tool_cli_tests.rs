@@ -450,6 +450,7 @@ impl Fixture {
             approval: Approval::Unavailable,
             transport: "test",
             host_kind: self.kind,
+            sessions: Default::default(),
         })
     }
 

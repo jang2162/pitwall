@@ -34195,6 +34195,398 @@
       ],
       "tier": "read"
     },
+    "mcp.audit.list": {
+      "description": "감사 로그를 최신부터 쪽 단위로 읽는다. 다른 프로세스(헤드리스 `pitwall mcp` · `pitwall tool`)가 쓴 행도 있다 —\n그 행은 `mcp.activity` 가 나가지 않으므로 화면이 열릴 때 · 창이 앞으로 올 때 다시 읽는다.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "AuditOutcome": {
+            "oneOf": [
+              {
+                "enum": [
+                  "ok"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "error",
+                "description": "툴은 불렸고 실패했다(RPC 오류).",
+                "type": "string"
+              },
+              {
+                "const": "denied",
+                "description": "부르지 않았다(노출 안 된 툴, 등급 정책).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cursor": {
+            "default": null,
+            "description": "앞 쪽의 `nextCursor`. 없으면 가장 최신부터.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": null,
+            "description": "1 ~ [`MAX_AUDIT_LIMIT`](500). 없으면 `pw_rpc::DEFAULT_LIST_LIMIT`(100).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AuditOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "projectId": {
+            "default": null,
+            "description": "그 프로젝트의 행과 프로젝트 없는 행(「에이전트 활동」 패널이 보이는 것). 없으면 전부.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tool": {
+            "default": null,
+            "description": "툴 이름(정확히 같은 것).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "AuditOutcome": {
+            "oneOf": [
+              {
+                "enum": [
+                  "ok"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "error",
+                "description": "툴은 불렸고 실패했다(RPC 오류).",
+                "type": "string"
+              },
+              {
+                "const": "denied",
+                "description": "부르지 않았다(노출 안 된 툴, 등급 정책).",
+                "type": "string"
+              }
+            ]
+          },
+          "AuditRow": {
+            "description": "쓰인 감사 행 하나(`mcp.audit.list` 의 원소). 열은 [`Entry`] 와 같고 `id` · `at` 이 더 있다. M5-11 이 칸(승인 방식 · 계획\n해시)을 더할 자리다.",
+            "properties": {
+              "args": {
+                "description": "인자 요약([`summarize`] 의 JSON 글).",
+                "type": "string"
+              },
+              "at": {
+                "description": "기록 시각(Unix 밀리초).",
+                "format": "int64",
+                "type": "integer"
+              },
+              "client": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "detail": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "durationMs": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "id": {
+                "description": "행 id. 쪽 넘기기의 커서이고 [`AuditLog::record`] 가 돌려준 값이다.",
+                "format": "int64",
+                "type": "integer"
+              },
+              "outcome": {
+                "$ref": "#/$defs/AuditOutcome"
+              },
+              "projectId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "resultSize": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "session": {
+                "type": "string"
+              },
+              "tool": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "at",
+              "session",
+              "client",
+              "projectId",
+              "tool",
+              "args",
+              "outcome",
+              "detail",
+              "resultSize",
+              "durationMs"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "entries": {
+            "description": "최신부터.",
+            "items": {
+              "$ref": "#/$defs/AuditRow"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "description": "다음(더 오래된) 쪽의 커서. 마지막 쪽이면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "entries",
+          "nextCursor"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "mcp.sessions": {
+      "description": "이 앱에 열린 MCP 세션(시작 순서): id · 클라이언트 · 세션 프로젝트 · 전송 · 시작 시각 · 호출 수. 열고 닫히면\n`mcp.sessionsChanged`(Host 범위)가 나간다. 앱 없이 뜬 `pitwall mcp` 의 헤드리스 세션은 보이지 않는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "result": {
+        "$defs": {
+          "McpSessionInfo": {
+            "description": "열린 세션 하나(`mcp.sessions` 의 원소). M5-11 이후 행이 칸을 더할 자리다 — 칸은 기본값을 가진 뒤에 더한다.",
+            "properties": {
+              "calls": {
+                "description": "이 세션이 받은 `tools/call` 수 — 감사 행 하나가 호출 하나다(허용 · 실패 · 거절 모두).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "client": {
+                "description": "MCP 클라이언트(`이름 버전`). 2025-11-25 까지의 클라이언트는 initialize 로, 그 뒤 버전은 첫 툴 호출로 안다. 모르면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "description": "감사 행의 `session` 과 같은 id.",
+                "type": "string"
+              },
+              "projectId": {
+                "description": "세션 프로젝트(`pitwall mcp --project` · cwd 로 푼 것). 없으면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "startedAt": {
+                "description": "시작 시각(Unix 밀리초).",
+                "format": "int64",
+                "type": "integer"
+              },
+              "transport": {
+                "description": "연결 종류(`socket` · `stdio`).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "client",
+              "projectId",
+              "transport",
+              "startedAt",
+              "calls"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "items": {
+          "$ref": "#/$defs/McpSessionInfo"
+        },
+        "type": "array"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "mcp.tools.list": {
+      "description": "MCP 툴 카탈로그 전부와 지금 노출 판정(켜졌는지 · 그 규칙), 최근 호출 수. 이 앱의 Host 가 처리하는 툴만이다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "default": null,
+            "description": "그 프로젝트의 설정(전역 위에 덮은 것 — 공유 설정은 좁히기만)으로 판정한다. 없으면 전역 설정만.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ExposureRule": {
+            "description": "툴 하나를 켜거나 끈 규칙(판정 순서의 단계). [`Exposure::verdict`].",
+            "oneOf": [
+              {
+                "const": "preset",
+                "description": "프리셋이 등급으로 골랐다(`[mcp] preset` — 설정이 없으면 `standard`).",
+                "type": "string"
+              },
+              {
+                "const": "tool",
+                "description": "`[mcp.tools]` 의 그 이름 키.",
+                "type": "string"
+              },
+              {
+                "const": "glob",
+                "description": "`[mcp.tools]` 의 glob 키(맞는 것 가운데 가장 긴 것).",
+                "type": "string"
+              },
+              {
+                "const": "group",
+                "description": "`[mcp.groups]` 의 그 그룹 키.",
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "공유 레이어를 빼면 켜지는데 커밋되는 공유 설정(`.pitwall/project.toml`)이 껐다.",
+                "type": "string"
+              }
+            ]
+          },
+          "McpToolInfo": {
+            "description": "카탈로그의 툴 하나와 지금 노출 판정.",
+            "properties": {
+              "description": {
+                "description": "툴 설명(선언의 문서 주석 — 에이전트가 읽는 영어 글이다).",
+                "type": "string"
+              },
+              "enabled": {
+                "description": "지금 켜졌는가.",
+                "type": "boolean"
+              },
+              "group": {
+                "description": "선언의 그룹(`pw_mcp::catalog::GROUPS`).",
+                "type": "string"
+              },
+              "inputSchema": {
+                "description": "입력 JSON Schema(세션 프로젝트가 없을 때의 꼴 — `projectId` 가 필수)."
+              },
+              "key": {
+                "description": "그 규칙의 키: 툴 이름 · glob · 그룹 · 프리셋 이름. `shared` 는 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "recentCalls": {
+                "description": "최근([`RECENT`] — 30일) 감사 행 수. `projectId` 가 있으면 그 프로젝트의 행만.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "rule": {
+                "$ref": "#/$defs/ExposureRule",
+                "description": "켜거나 끈 규칙(`pw_mcp::exposure::Exposure::verdict` 그대로)."
+              },
+              "tier": {
+                "$ref": "#/$defs/Tier"
+              }
+            },
+            "required": [
+              "name",
+              "description",
+              "tier",
+              "group",
+              "inputSchema",
+              "enabled",
+              "rule",
+              "key",
+              "recentCalls"
+            ],
+            "type": "object"
+          },
+          "Tier": {
+            "description": "권한 등급. 값과 순서는 `docs/design/05-mcp.md` §3 「권한 모델」 표를 따른다.\n\n디스패처는 이 값을 강제하지 않는다 — 승인 정책(자동 허용 · UI 승인)은 이 값을 읽는 MCP 계층이 정한다.\n호출 가능 여부는 [`RoleSet`] 이 정한다.\n\n메서드가 도달할 수 있는 **가장 높은** 등급으로 선언한다. `roles` 를 생략하면 등급에서 role 이 정해지므로\n(`read` 는 readonly 까지 연다), 낮게 선언하면 그 위의 조작이 조용히 열린다.\n입력에 따라 등급이 오르는 메서드는 조회용과 쓰기용으로 나눈다 — `db_query`(read) · `db_execute`(dangerous),\n결정 M5-D4(`docs/design/16-m5-plan.md`). 그래서 MCP 툴의 등급도 이 규칙에 예외가 없다 — 툴의 등급은 그 선언의 `tier` 다.",
+            "enum": [
+              "read",
+              "write",
+              "exec",
+              "dangerous"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "items": {
+          "$ref": "#/$defs/McpToolInfo"
+        },
+        "type": "array"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "openWith.list": {
       "description": "External tools available on this OS (id · name · contributing extension · whether it opens files too · settings\nformat errors) and the default tool. With `projectId`, the default tool is chosen including that project's\n`[open_with] default` (when the session has a project, leaving the key out means the session's project — pass\n`null` for the global default only). Launch commands are not included.",
       "kind": "unary",

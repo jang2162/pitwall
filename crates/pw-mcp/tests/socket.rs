@@ -171,6 +171,7 @@ async fn app() -> App {
         approval: Approval::Unavailable,
         transport: "socket",
         host_kind: pw_mcp::HostKind::App,
+        sessions: Default::default(),
     });
     let uid = socket::current_uid();
     let path = socket::endpoint("test-key", &paths.state, &base, uid).unwrap();

@@ -25,6 +25,8 @@
 
 use std::collections::BTreeSet;
 
+use pw_core::config::{AppPaths, ConfigSource, ConfigStore};
+use pw_core::registry::{ConfigMode, Project};
 use pw_rpc::Tier;
 use serde_json::{Map, Value};
 
@@ -50,6 +52,15 @@ impl Preset {
         }
     }
 
+    /// 설정 파일에 쓰는 이름.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Preset::ReadOnly => "read-only",
+            Preset::Standard => "standard",
+            Preset::Full => "full",
+        }
+    }
+
     pub fn allows(self, tier: Tier) -> bool {
         match self {
             Preset::ReadOnly => tier == Tier::Read,
@@ -57,6 +68,41 @@ impl Preset {
             Preset::Full => true,
         }
     }
+}
+
+/// 툴 하나를 켜거나 끈 규칙(판정 순서의 단계). [`Exposure::verdict`].
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    specta::Type,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum ExposureRule {
+    /// 프리셋이 등급으로 골랐다(`[mcp] preset` — 설정이 없으면 `standard`).
+    Preset,
+    /// `[mcp.tools]` 의 그 이름 키.
+    Tool,
+    /// `[mcp.tools]` 의 glob 키(맞는 것 가운데 가장 긴 것).
+    Glob,
+    /// `[mcp.groups]` 의 그 그룹 키.
+    Group,
+    /// 공유 레이어를 빼면 켜지는데 커밋되는 공유 설정(`.pitwall/project.toml`)이 껐다.
+    Shared,
+}
+
+/// [`Exposure::verdict`] 의 결과.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Verdict {
+    pub enabled: bool,
+    pub rule: ExposureRule,
+    /// 그 규칙의 키: 툴 이름 · glob · 그룹 · 프리셋 이름. [`ExposureRule::Shared`] 는 없다.
+    pub key: Option<String>,
 }
 
 /// 병합된 `[mcp]` 를 읽은 결과.
@@ -166,24 +212,57 @@ impl Exposure {
     }
 
     pub fn enabled(&self, tool: &Tool) -> bool {
-        self.own(tool) && self.ceiling.as_ref().is_none_or(|c| c.enabled(tool))
+        self.verdict(tool).enabled
     }
 
-    fn own(&self, tool: &Tool) -> bool {
-        if let Some((_, on)) = self.tools.iter().find(|(p, _)| *p == tool.name) {
-            return *on;
+    /// 그 툴이 켜졌는지와 그것을 정한 규칙. [`Self::enabled`] 는 이것의 `enabled` 다 — 판정은 이 한 벌이다(`mcp.tools.list` 의
+    /// 「꺼진 까닭」 도 이것을 그대로 싣는다).
+    ///
+    /// 상한([`Self::narrowed_by`])이 있으면: 상한이 끈 툴은 상한의 판정(공유 설정이 없어도 꺼진다), 상한은 켰는데 공유
+    /// 설정까지 읽은 판정이 끈 툴은 [`ExposureRule::Shared`], 둘 다 켰으면 공유 설정까지 읽은 판정이다.
+    pub fn verdict(&self, tool: &Tool) -> Verdict {
+        let own = self.own(tool);
+        let Some(ceiling) = &self.ceiling else {
+            return own;
+        };
+        let upper = ceiling.verdict(tool);
+        if !upper.enabled {
+            upper
+        } else if !own.enabled {
+            Verdict {
+                enabled: false,
+                rule: ExposureRule::Shared,
+                key: None,
+            }
+        } else {
+            own
+        }
+    }
+
+    fn own(&self, tool: &Tool) -> Verdict {
+        let by = |rule, key: &str, enabled| Verdict {
+            enabled,
+            rule,
+            key: Some(key.to_owned()),
+        };
+        if let Some((p, on)) = self.tools.iter().find(|(p, _)| *p == tool.name) {
+            return by(ExposureRule::Tool, p, *on);
         }
         let glob = self
             .tools
             .iter()
             .filter(|(p, _)| p.contains('*') && glob_match(p, &tool.name))
             .max_by_key(|(p, _)| p.len());
-        if let Some((_, on)) = glob {
-            return *on;
+        if let Some((p, on)) = glob {
+            return by(ExposureRule::Glob, p, *on);
         }
         match self.groups.iter().find(|(g, _)| g == tool.group) {
-            Some((_, on)) => *on,
-            None => self.preset.allows(tool.tier),
+            Some((g, on)) => by(ExposureRule::Group, g, *on),
+            None => by(
+                ExposureRule::Preset,
+                self.preset.as_str(),
+                self.preset.allows(tool.tier),
+            ),
         }
     }
 
@@ -196,6 +275,58 @@ impl Exposure {
             .map(|t| t.name.clone())
             .collect()
     }
+}
+
+/// 전역 `[mcp]` 위에 프로젝트 `[mcp]` 를 덮어 읽는다. `without_shared`(저장소 모드의 공유 레이어를 뺀 읽기)가 있으면 그 값으로
+/// 누른다 — 커밋된 설정은 노출을 좁히기만 한다. 세션 프로젝트 · 대상 프로젝트(결정 M5-D28) · `mcp.tools.list` 가 같은 규칙을 쓴다.
+pub fn layered(
+    global_mcp: Option<&Value>,
+    project_mcp: Option<&Value>,
+    without_shared: Option<&ConfigSource>,
+) -> Exposure {
+    let (mut exposure, warnings) = Exposure::from_layers(global_mcp, project_mcp);
+    if let Some(source) = without_shared {
+        // 공유 레이어를 뺀 값을 다시 읽는다. 읽지 못하면(로컬 파일이 깨짐) 전역만을 상한으로 둔다 — 넓어지지 않는다.
+        let local = source.load().ok();
+        let (ceiling, _) = Exposure::from_layers(
+            global_mcp,
+            local.as_ref().and_then(|s| s.get("project", KEY)),
+        );
+        exposure = exposure.narrowed_by(ceiling);
+    }
+    for w in warnings {
+        tracing::warn!("{w}");
+    }
+    exposure
+}
+
+/// 등록된 프로젝트 하나의 노출: 전역 설정 위에 그 프로젝트 설정(체크아웃은 프로젝트 루트)을 [`layered`] 로 덮는다. 프로젝트
+/// 설정은 **디스크에 쓰지 않고** 읽는다(구버전 파일은 메모리에서만 올린다). 읽지 못하면 경고를 남기고 전역만 쓴다.
+/// 세션이 대상 프로젝트를 판정할 때(결정 M5-D28)와 `mcp.tools.list { projectId }` 가 쓴다.
+pub fn of_project(paths: &AppPaths, global: &ConfigStore, project: &Project) -> Exposure {
+    let global = global.snapshot();
+    let source = match project.config_source(paths, project.root()) {
+        Ok(source) => Some(source.without_writes()),
+        Err(e) => {
+            tracing::warn!(%e, project = project.id, "cannot read the target project config");
+            None
+        }
+    };
+    let loaded = source.as_ref().and_then(|s| match s.load() {
+        Ok(snapshot) => Some(snapshot),
+        Err(e) => {
+            tracing::warn!(%e, project = project.id, "cannot read the target project config");
+            None
+        }
+    });
+    let without_shared = source
+        .filter(|_| project.config_mode == ConfigMode::Repository)
+        .map(ConfigSource::without_shared);
+    layered(
+        global.get("settings", KEY),
+        loaded.as_ref().and_then(|s| s.get("project", KEY)),
+        without_shared.as_ref(),
+    )
 }
 
 /// `*` 만 특별한 glob. `*` 는 빈 글자열을 포함한 아무 글자열이다.
@@ -331,6 +462,60 @@ mod tests {
             "db_schema",
             Tier::Read
         )));
+    }
+
+    /// 판정의 규칙: 상한이 켰는데 공유 설정이 끈 툴만 `shared` 다. 공유 설정이 켜려다 상한에 막힌 툴은 상한의 규칙이다.
+    #[test]
+    fn the_verdict_names_the_rule_and_tells_shared_narrowing_apart() {
+        let global = json!({"preset": "read-only", "tools": {"project_info": false}});
+        let shared =
+            json!({"preset": "full", "tools": {"project_info": true, "project_list": false}});
+        let (with_shared, _) = Exposure::from_layers(Some(&global), Some(&shared));
+        let (ceiling, _) = Exposure::from_layers(Some(&global), None);
+        let exposure = with_shared.narrowed_by(ceiling);
+        let verdict = |name: &str, tier| exposure.verdict(&Tool::fake(name, tier));
+        let v = |enabled, rule, key: Option<&str>| Verdict {
+            enabled,
+            rule,
+            key: key.map(str::to_owned),
+        };
+        assert_eq!(
+            verdict("project_list", Tier::Read),
+            v(false, ExposureRule::Shared, None),
+            "공유가 끈 툴"
+        );
+        assert_eq!(
+            verdict("project_info", Tier::Read),
+            v(false, ExposureRule::Tool, Some("project_info")),
+            "공유가 켜려 했지만 전역의 키가 끈다"
+        );
+        assert_eq!(
+            verdict("settings_set", Tier::Write),
+            v(false, ExposureRule::Preset, Some("read-only")),
+            "공유의 full 은 넘지 못한다 — 전역 프리셋"
+        );
+        assert_eq!(
+            verdict("project_open", Tier::Read),
+            v(true, ExposureRule::Preset, Some("full")),
+            "켜진 툴은 공유까지 읽은 판정"
+        );
+        // 상한이 없으면 shared 는 나오지 않는다. enabled() 는 verdict 의 enabled 다.
+        let (plain, _) = Exposure::from_layers(
+            Some(&json!({"tools": {"a*": false}, "groups": {"db": false}})),
+            None,
+        );
+        assert_eq!(
+            plain.verdict(&Tool::fake("ab", Tier::Read)),
+            v(false, ExposureRule::Glob, Some("a*"))
+        );
+        assert_eq!(
+            plain.verdict(&Tool::fake_in("db", "x", Tier::Read)),
+            v(false, ExposureRule::Group, Some("db"))
+        );
+        for name in ["ab", "x", "project_list"] {
+            let t = Tool::fake(name, Tier::Read);
+            assert_eq!(exposure.enabled(&t), exposure.verdict(&t).enabled);
+        }
     }
 
     #[test]

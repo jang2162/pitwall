@@ -107,6 +107,7 @@ impl Fixture {
             approval: Approval::Unavailable,
             transport: "test",
             host_kind: pw_mcp::HostKind::App,
+            sessions: Default::default(),
         });
         let (server_io, client_io) = tokio::io::duplex(64 * 1024);
         let cancel = CancellationToken::new();

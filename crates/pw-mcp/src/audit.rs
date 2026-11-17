@@ -54,8 +54,19 @@ const MIGRATIONS: &[&str] = &["CREATE TABLE calls (
      );
      CREATE INDEX calls_project_at ON calls(project_id, at);"];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Outcome {
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    specta::Type,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum AuditOutcome {
     Ok,
     /// 툴은 불렸고 실패했다(RPC 오류).
     Error,
@@ -63,7 +74,19 @@ pub enum Outcome {
     Denied,
 }
 
-impl Outcome {
+/// 짧은 이름 — 이 크레이트와 앱이 쓴다. TS 생성물의 이름은 [`AuditOutcome`] 이다.
+pub type Outcome = AuditOutcome;
+
+impl AuditOutcome {
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "ok" => Some(Outcome::Ok),
+            "error" => Some(Outcome::Error),
+            "denied" => Some(Outcome::Denied),
+            _ => None,
+        }
+    }
+
     fn as_str(self) -> &'static str {
         match self {
             Outcome::Ok => "ok",
@@ -114,8 +137,9 @@ impl AuditLog {
         &self.file
     }
 
-    /// 한 행을 쓴다. 디스크 IO 를 하므로 비동기 문맥에서 부르지 않는다 — 세션은 기록 스레드(`server.rs` `audit_writer`)에서 부른다.
-    pub fn record(&self, entry: &Entry) -> Result<(), String> {
+    /// 한 행을 쓰고 그 행의 id(`calls.id` — `mcp.audit.list` 의 `id`)를 돌려준다. 디스크 IO 를 하므로 비동기 문맥에서 부르지
+    /// 않는다 — 세션은 기록 스레드(`server.rs` `audit_writer`)에서 부른다.
+    pub fn record(&self, entry: &Entry) -> Result<i64, String> {
         let mut guard = self.conn.lock().unwrap_or_else(PoisonError::into_inner);
         if guard.is_none() {
             *guard = Some(open(&self.file).map_err(|e| format!("{}: {e}", self.file.display()))?);
@@ -127,6 +151,152 @@ impl AuditLog {
             *guard = None;
         }
         result.map_err(|e| format!("{}: {e}", self.file.display()))
+    }
+}
+
+/// 쓰인 감사 행 하나(`mcp.audit.list` 의 원소). 열은 [`Entry`] 와 같고 `id` · `at` 이 더 있다. M5-11 이 칸(승인 방식 · 계획
+/// 해시)을 더할 자리다.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    specta::Type,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditRow {
+    /// 행 id. 쪽 넘기기의 커서이고 [`AuditLog::record`] 가 돌려준 값이다.
+    #[specta(type = pw_rpc::JsNumber)]
+    pub id: i64,
+    /// 기록 시각(Unix 밀리초).
+    #[specta(type = pw_rpc::JsNumber)]
+    pub at: i64,
+    pub session: String,
+    pub client: Option<String>,
+    pub project_id: Option<String>,
+    pub tool: String,
+    /// 인자 요약([`summarize`] 의 JSON 글).
+    pub args: String,
+    pub outcome: Outcome,
+    pub detail: Option<String>,
+    #[specta(type = Option<pw_rpc::JsNumber>)]
+    pub result_size: Option<i64>,
+    #[specta(type = pw_rpc::JsNumber)]
+    pub duration_ms: i64,
+}
+
+/// [`AuditLog::list`] 의 조건.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Query {
+    /// 그 프로젝트의 행과 프로젝트 없는 행. `None` 이면 전부.
+    pub project_id: Option<String>,
+    /// 이 id 보다 앞의(오래된) 행만 — 쪽 넘기기.
+    pub before: Option<i64>,
+    pub limit: usize,
+    pub outcome: Option<Outcome>,
+    /// 툴 이름(정확히 같은 것).
+    pub tool: Option<String>,
+}
+
+impl AuditLog {
+    /// 최신부터 `query.limit` 행과 그 뒤에 행이 더 있는지. 파일이 없으면 만들지 않고 빈 목록이다. 디스크 IO 를 한다.
+    pub fn list(&self, query: &Query) -> Result<(Vec<AuditRow>, bool), String> {
+        self.read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, at, session, client, project_id, tool, args, outcome, detail, result_size, duration_ms
+                 FROM calls
+                 WHERE (?1 IS NULL OR project_id = ?1 OR project_id IS NULL)
+                   AND (?2 IS NULL OR id < ?2)
+                   AND (?3 IS NULL OR outcome = ?3)
+                   AND (?4 IS NULL OR tool = ?4)
+                 ORDER BY id DESC
+                 LIMIT ?5",
+            )?;
+            let limit = i64::try_from(query.limit.saturating_add(1)).unwrap_or(i64::MAX);
+            let rows = stmt
+                .query_map(
+                    params![
+                        query.project_id,
+                        query.before,
+                        query.outcome.map(Outcome::as_str),
+                        query.tool,
+                        limit,
+                    ],
+                    |row| {
+                        let outcome: String = row.get(7)?;
+                        Ok(AuditRow {
+                            id: row.get(0)?,
+                            at: row.get(1)?,
+                            session: row.get(2)?,
+                            client: row.get(3)?,
+                            project_id: row.get(4)?,
+                            tool: row.get(5)?,
+                            args: row.get(6)?,
+                            // 스키마의 CHECK 가 값을 셋으로 묶는다. 다른 값(뒤 판이 더한 값을 앞 판이 읽음)은 오류로 본다.
+                            outcome: Outcome::parse(&outcome).unwrap_or(Outcome::Error),
+                            detail: row.get(8)?,
+                            result_size: row.get(9)?,
+                            duration_ms: row.get(10)?,
+                        })
+                    },
+                )?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .map(|rows| {
+            let mut rows = rows.unwrap_or_default();
+            let more = rows.len() > query.limit;
+            rows.truncate(query.limit);
+            (rows, more)
+        })
+    }
+
+    /// `since`(Unix 밀리초) 뒤의 툴별 호출 수. `project_id` 가 있으면 그 프로젝트의 행만. 파일이 없으면 빈 표다.
+    pub fn tool_counts(
+        &self,
+        since: i64,
+        project_id: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, u64>, String> {
+        self.read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT tool, COUNT(*) FROM calls
+                 WHERE at >= ?1 AND (?2 IS NULL OR project_id = ?2)
+                 GROUP BY tool",
+            )?;
+            let counts = stmt
+                .query_map(params![since, project_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })?
+                .map(|r| r.map(|(tool, n)| (tool, u64::try_from(n).unwrap_or(0))))
+                .collect::<rusqlite::Result<_>>()?;
+            Ok(counts)
+        })
+        .map(Option::unwrap_or_default)
+    }
+
+    /// 읽기. 파일이 아직 없으면 만들지 않고 `None`.
+    fn read<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> rusqlite::Result<T>,
+    ) -> Result<Option<T>, String> {
+        let mut guard = self.conn.lock().unwrap_or_else(PoisonError::into_inner);
+        if guard.is_none() {
+            if !self.file.exists() {
+                return Ok(None);
+            }
+            *guard = Some(open(&self.file).map_err(|e| format!("{}: {e}", self.file.display()))?);
+        }
+        let conn = guard.as_ref().expect("방금 채웠다");
+        let result = f(conn);
+        if result.is_err() {
+            *guard = None;
+        }
+        result
+            .map(Some)
+            .map_err(|e| format!("{}: {e}", self.file.display()))
     }
 }
 
@@ -192,7 +362,7 @@ fn private_file(_file: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn insert(conn: &mut Connection, e: &Entry) -> rusqlite::Result<()> {
+fn insert(conn: &mut Connection, e: &Entry) -> rusqlite::Result<i64> {
     let at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -214,7 +384,9 @@ fn insert(conn: &mut Connection, e: &Entry) -> rusqlite::Result<()> {
             e.duration.as_millis() as i64,
         ],
     )?;
-    tx.commit()
+    let id = tx.last_insert_rowid();
+    tx.commit()?;
+    Ok(id)
 }
 
 /// 인자 요약. 감사 로그는 오래 남고 UI 에 보이므로 인자를 그대로 쓰지 않는다:

@@ -16,6 +16,8 @@ rmcp = { version = "3.9.0", default-features = false, features = ["server", "tra
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+# `mcp.*` RPC(methods.rs)의 입출력 타입이 TS 로 나간다(`rpc_method!` 가 specta 타입을 요구한다).
+specta = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = [
   "rt",
@@ -33,8 +35,6 @@ tracing = "0.1.44"
 libc = "0.2.190"
 
 [dev-dependencies]
-# 세션 시험이 선언하는 가짜 툴 메서드의 입력 struct(`rpc_method!` 가 specta 타입을 요구한다).
-specta = { workspace = true, features = ["derive"] }
 rmcp = { version = "3.9.0", default-features = false, features = [
   "client",
   "server",

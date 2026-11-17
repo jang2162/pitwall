@@ -6,6 +6,8 @@
 //! - [`policy`]: 권한 등급별 정책(지금은 `read` 만 허용).
 //! - [`audit`]: 감사 로그(`$STATE/mcp/audit.db`)와 인자 요약 규칙.
 //! - [`server`]: MCP 세션 하나(rmcp). 툴 호출을 Host 의 RPC 로 옮긴다.
+//! - [`sessions`]: 열린 세션의 등록부와 상태 이벤트(`mcp.sessionsChanged` · `mcp.activity`).
+//! - [`methods`]: 사람의 화면이 부르는 `mcp.*` RPC(세션 목록 · 툴 목록 · 감사 로그). 에이전트에게는 열지 않는다.
 //! - [`marker`]: `tools/call` 결과의 `_meta` 에 싣는 결과 표지와 까닭 코드.
 //! - [`socket`]: 실행 중인 앱의 로컬 소켓(unix). 위치 · 권한 · 워크트리 격리 · 핸드셰이크.
 //! - [`proxy`]: `pitwall mcp` 의 stdio ↔ 소켓 프록시.
@@ -48,9 +50,11 @@ mod client;
 pub mod code;
 pub mod exposure;
 pub mod marker;
+pub mod methods;
 pub mod policy;
 pub mod proxy;
 pub mod server;
+pub mod sessions;
 #[cfg(unix)]
 pub mod socket;
 

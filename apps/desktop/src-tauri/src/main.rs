@@ -61,6 +61,7 @@ fn local_host(
         fs,
         askpass,
         pw_core::open::OpenRequests::default(),
+        pw_mcp::sessions::Sessions::default(),
     )
 }
 
@@ -69,6 +70,8 @@ fn local_host(
 /// 파일 서비스(`fs`)는 Finder 드롭 들여오기(drop_import.rs)도 쓰므로 부르는 쪽이 만든다.
 /// git askpass(`askpass`)도 부르는 쪽이 만든다 — 주 인스턴스가 된 뒤(setup)에 그 소켓을 연다.
 /// 열기 요청 자리(`open_requests`, 에이전트의 `project_open`)도 부르는 쪽이 만든다 — 창을 여는 쪽(agent_open.rs)은 setup 에서 붙인다.
+/// MCP 세션 등록부(`mcp_sessions`)도 부르는 쪽이 만든다 — `mcp.*` RPC 와 MCP 소켓(setup 에서 연다)이 같은 것을 쓴다.
+#[allow(clippy::too_many_arguments)] // 부르는 쪽이 만들어 다른 자리(창 · 소켓)와 나눠 쓰는 부품들이다.
 fn local_host_with(
     paths: AppPaths,
     diagnostics: Arc<Diagnostics>,
@@ -77,6 +80,7 @@ fn local_host_with(
     fs: Arc<Fs>,
     askpass: pw_git::write::Askpass,
     open_requests: pw_core::open::OpenRequests,
+    mcp_sessions: pw_mcp::sessions::Sessions,
 ) -> LocalHost {
     let methods = Arc::clone(&i18n);
     // 앱이 띄우는 프로세스의 환경. 로그인 셸은 처음 쓸 때 돈다 — 시작을 늦추지 않는다.
@@ -179,6 +183,9 @@ fn local_host_with(
         paths.state.join("db-ssh-tunnels"),
     );
     let db_session_methods = Arc::clone(&db_sessions);
+    // MCP 상태(`mcp.sessions` · `mcp.tools.list` · `mcp.audit.list`, M5-10). 카탈로그 · 감사 로그는 Host 를 만든 뒤 붙인다.
+    let mcp_status = Arc::new(pw_mcp::methods::Mcp::new(mcp_sessions));
+    let mcp_status_methods = Arc::clone(&mcp_status);
     let host = LocalHost::builder(LOCAL_HOST_ID)
         .config(paths)
         .open_requests(open_requests)
@@ -218,6 +225,7 @@ fn local_host_with(
         .methods(move |router| {
             pw_tools::install::methods::register(router, tools_installer_methods)
         })
+        .methods(move |router| pw_mcp::methods::register(router, mcp_status_methods))
         .build();
     // 파일 감시(`fs.watch`)는 바뀐 경로를 버스로 낸다.
     fs_watch.attach(host.bus().clone());
@@ -236,6 +244,15 @@ fn local_host_with(
         tools_registry.attach(config.paths.cache.clone(), config.global.clone());
         // 외부 도구 실행(⌥F1 · ⌘⌥E)이 전역 설정 · 프로젝트 레지스트리를 쓴다.
         if let Some(projects) = host.registry() {
+            // MCP 상태: 세션 이벤트는 Host 버스로, 툴 목록은 세션과 같은 카탈로그(이 Host 가 처리하는 툴)로.
+            mcp_status.sessions().attach(host.bus().clone());
+            mcp_status.attach(pw_mcp::methods::HostParts {
+                paths: config.paths.clone(),
+                global: config.global.clone(),
+                projects: projects.clone(),
+                catalog: Arc::new(pw_mcp::Catalog::linked().routed_by(host.router())),
+                audit: Arc::new(pw_mcp::audit::AuditLog::under_state(&config.paths.state)),
+            });
             // 파일 RPC(`fs.*`)는 요청의 프로젝트 루트를 레지스트리에서 찾는다.
             fs.attach(projects.clone());
             // 터미널은 전역 설정(`[terminal] shell`)과 레지스트리(프로젝트 · cwd)를 쓴다.
@@ -538,6 +555,7 @@ fn main() {
     let fs = Arc::new(Fs::new());
     let askpass = pw_git::write::Askpass::default();
     let open_requests = pw_core::open::OpenRequests::default();
+    let mcp_sessions = pw_mcp::sessions::Sessions::new();
     let host = Arc::new(local_host_with(
         paths.clone(),
         Arc::clone(&diagnostics),
@@ -546,6 +564,7 @@ fn main() {
         Arc::clone(&fs),
         askpass.clone(),
         open_requests.clone(),
+        mcp_sessions.clone(),
     ));
     // 「활성 기능」은 지금 Host 가 처리하는 메서드의 모듈 이름이다. 확장 · 설정 기능이 들어오면 그것으로 바꾼다.
     diagnostics.set_features(
@@ -627,7 +646,12 @@ fn main() {
             update::on_startup(app.handle(), auto_update);
             // 주 인스턴스만 MCP 소켓을 연다(떼어 띄우기 전의 프로세스 · 두 번째 실행은 여기 오지 않는다).
             #[cfg(unix)]
-            mcp::serve_socket(host.clone(), paths.clone(), identifier.clone());
+            mcp::serve_socket(
+                host.clone(),
+                paths.clone(),
+                identifier.clone(),
+                mcp_sessions.clone(),
+            );
             // askpass 소켓도 주 인스턴스만 연다.
             #[cfg(unix)]
             serve_askpass(&askpass, &paths, &identifier);

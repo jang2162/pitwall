@@ -5792,6 +5792,7 @@ dependencies = [
  "pw-lang",
  "pw-lsp",
  "pw-lsp-servers",
+ "pw-mcp",
  "pw-open-with",
  "pw-rpc",
  "pw-run",
