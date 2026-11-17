@@ -74,11 +74,13 @@ impl DbTarget {
 
     /// 표지의 열쇠(결정 M5-D37 — 메인 판정 2026-11-14). 한 연결로 다른 DB 를 읽을 수 있는 드라이버(MySQL · MariaDB — 드라이버 id
     /// `mysql`)는 DB 이름을 뺀다: 그 서버의 어느 DB 가 프로덕션이면 그 서버 · 사용자로 가는 에이전트 호출은 모두 프로덕션이다
-    /// (`db_query` 가 SQL 글 안의 `other_db.t` 를 지킬 수 없다). PG 는 DB 이름을 둔다(한 연결이 다른 DB 를 읽지 못한다). SQLite 는
-    /// 파일이 열쇠다(`ATTACH` 는 실행 분류의 몫 — M5-07).
+    /// (`db_query` 가 SQL 글 안의 `other_db.t` 를 지킬 수 없다). Redis 도 DB 번호를 뺀다(메인 판정 2026-11-17 — M5-19): 한 연결이
+    /// `SELECT` 로 다른 번호로 옮겨 가고 번호 사이에 권한 경계가 없다. 번호를 열쇠에 두면 같은 번호의 다른 표기(`database` 입력
+    /// `"00"` · `"+0"`, 설정에서 뺀 번호와 `"0"`)로 표지를 비껴간다 — 드라이버는 그 모두를 같은 번호로 읽는다. PG 는 DB 이름을
+    /// 둔다(한 연결이 다른 DB 를 읽지 못한다). SQLite 는 파일이 열쇠다(`ATTACH` 는 실행 분류의 몫 — M5-07).
     pub fn mark_key(&self) -> Self {
         match self.driver {
-            DriverKind::Mysql => Self {
+            DriverKind::Mysql | DriverKind::Redis => Self {
                 database: None,
                 ..self.clone()
             },

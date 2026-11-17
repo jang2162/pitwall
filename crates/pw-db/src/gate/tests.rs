@@ -411,3 +411,39 @@ fn mysql_mark_keys_drop_only_the_database() {
     };
     assert_ne!(pg("app").mark_key(), pg("other").mark_key());
 }
+
+/// Redis 의 표지 열쇠도 DB 번호를 뺀다(메인 판정 2026-11-17 — M5-19): 같은 번호의 다른 표기(`"00"` · `"+0"` · 번호를 뺀 설정)도,
+/// 다른 번호도 같은 열쇠다. 사용자 · 포트가 다르면 다른 열쇠이고, 「사람이 연 연결」 의 열쇠(대상 전체)는 번호도 본다.
+#[test]
+fn redis_mark_keys_drop_the_database_number() {
+    let redis = |db: Option<&str>, user: Option<&str>, port: u16| {
+        let mut value =
+            json!({ "name": "r", "driver": "redis", "host": "cache.example", "port": port });
+        if let Some(db) = db {
+            value["database"] = json!(db);
+        }
+        if let Some(user) = user {
+            value["user"] = json!(user);
+        }
+        agent::DbTarget::of(
+            &crate::config::from_file_value(&value).unwrap(),
+            std::path::Path::new("/r"),
+        )
+    };
+    let base = redis(Some("0"), None, 6379);
+    for same in [
+        redis(None, None, 6379),
+        redis(Some("00"), None, 6379),
+        redis(Some("+0"), None, 6379),
+        redis(Some("7"), None, 6379),
+    ] {
+        assert_eq!(base.mark_key(), same.mark_key());
+        assert_eq!(base.mark_key(), base.with_database(Some("00")).mark_key());
+    }
+    assert_ne!(
+        base.mark_key(),
+        redis(Some("0"), Some("reader"), 6379).mark_key()
+    );
+    assert_ne!(base.mark_key(), redis(Some("0"), None, 6380).mark_key());
+    assert_ne!(base, redis(Some("7"), None, 6379));
+}
