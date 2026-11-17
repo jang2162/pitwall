@@ -6,7 +6,9 @@
 //!   `[mcp.audit] retention_days`. `[mcp.policy]`(승인 시한 · 프로덕션)는 이 화면의 것이 아니다(계획 행에 없다).
 //! - **값 판정은 Host 가 한다** — 화면이 막지 않는다. 판정은 Host 가 설정을 읽는 함수와 같은 규칙이다: 프리셋은
 //!   [`Preset::parse`], 그룹은 [`GROUPS`], 툴은 이 Host 의 카탈로그에 있는 이름(glob 키는 쓰지 않는다), 자동 승인은 등급 이름이고
-//!   `dangerous` 는 거절, 보관 일수는 [`audit::retention_days`] 가 경고 없이 받는 값(0 이상 정수 — 0 은 지우지 않음)이다. 거절은
+//!   `dangerous` 는 거절, 보관 일수는 [`audit::retention_days`] 가 경고 없이 받는 값(0 이상 정수 — 0 은 지우지 않음) 가운데
+//!   [`MAX_RETENTION_DAYS`](3650 — 10년) 이하다. 상한은 이 쓰기의 것이다 — 사람이 파일에 손으로 쓴 더 큰 값은 Host 가 그대로
+//!   읽고(M5-11 의 읽기) 화면도 그 값을 보인다. 거절은
 //!   `INVALID_PARAMS` 이고 `data` 는 [`McpSettingRefused`](창이 `reason` 을 번역한다).
 //! - 쓰기는 그 키 하나만 고친다(`pw_core::config::write::write_key` — 주석 · 다른 키 보존, 값이 같으면 쓰지 않음). 바꿨으면
 //!   전역 설정을 바로 다시 읽어 `config.changed` 가 나가고, 열린 MCP 세션이 노출을 다시 읽어 보이는 툴이 바뀌면
@@ -29,6 +31,9 @@ use crate::catalog::GROUPS;
 use crate::exposure::{Exposure, KEY, Preset};
 use crate::methods::{HostParts, Mcp};
 use crate::policy::{self, AUTO_APPROVE};
+
+/// 설정 창이 쓸 수 있는 감사 보관 일수의 상한(10년, 메인 판정 2026-11-17 — M5-15 리뷰). 0(지우지 않음)은 따로 받는다.
+pub const MAX_RETENTION_DAYS: u32 = 3650;
 
 /// 설정 파일 종류(`settings.toml` 이 부르는 이름 — `pw_core::config::write`).
 const SETTINGS_KIND: &str = "settings";
@@ -58,6 +63,8 @@ pub struct McpSettingsView {
     /// 감사 로그 보관 일수(0 은 지우지 않음).
     pub retention_days: u32,
     pub default_retention_days: u32,
+    /// 이 화면이 쓸 수 있는 보관 일수의 상한([`MAX_RETENTION_DAYS`]).
+    pub max_retention_days: u32,
     /// 전역 `[mcp]` 를 읽다 버린 값의 경고(Host 의 영어 문장 그대로).
     pub warnings: Vec<String>,
     /// `projectId` 를 줬을 때만.
@@ -136,7 +143,7 @@ pub enum McpSettingKey {
     Group,
     /// `[mcp.tools] <name>` — 값은 bool. `name` 은 이 Host 의 툴 이름(glob 은 받지 않는다).
     Tool,
-    /// `[mcp.audit] retention_days` — 값은 0 이상 정수(0 은 지우지 않음).
+    /// `[mcp.audit] retention_days` — 값은 0 ~ [`MAX_RETENTION_DAYS`] 정수(0 은 지우지 않음).
     RetentionDays,
 }
 
@@ -169,7 +176,7 @@ pub enum McpSettingRefusal {
     UnknownGroup,
     /// 이 Host 에 없는 툴.
     UnknownTool,
-    /// 보관 일수가 0 이상 정수가 아니다.
+    /// 보관 일수가 0 ~ [`MAX_RETENTION_DAYS`](3650) 정수가 아니다.
     BadRetentionDays,
     /// 그 키의 꼴이 아니다(bool 자리에 글 · `name` 이 없음 등).
     BadValue,
@@ -197,7 +204,7 @@ rpc_method! {
     }
 
     /// 전역 `settings.toml` 의 `[mcp]` 키 하나를 쓴다(`value: null` 이면 지운다). 프로젝트 설정은 쓰지 않는다. 값은 Host 가
-    /// 판정한다 — 모르는 프리셋 · 그룹 · 툴, `auto_approve` 의 `dangerous`, 0 이상 정수가 아닌 보관 일수는 쓰지 않고
+    /// 판정한다 — 모르는 프리셋 · 그룹 · 툴, `auto_approve` 의 `dangerous`, 0 ~ 3650 정수가 아닌 보관 일수는 쓰지 않고
     /// `INVALID_PARAMS`(`data` 는 `McpSettingRefused`). 쓴 뒤 설정을 다시 읽어 열린 MCP 세션의 툴 목록이 바뀌고
     /// (`tools/list_changed`), 새 전역 값을 돌려준다.
     pub McpSettingsSet: "mcp.settings.set" {
@@ -348,6 +355,16 @@ fn validate(parts: &HostParts, params: &McpSettingsSetParams) -> Result<Write, R
                     if let Some(warning) = warning {
                         return Err(refused(key, R::BadRetentionDays, warning));
                     }
+                    if days > MAX_RETENTION_DAYS {
+                        return Err(refused(
+                            key,
+                            R::BadRetentionDays,
+                            format!(
+                                "mcp.audit.retention_days must be at most {MAX_RETENTION_DAYS} days \
+                                 (0 keeps everything), found {days}"
+                            ),
+                        ));
+                    }
                     Some(toml_edit::Value::from(i64::from(days)))
                 }
             };
@@ -422,6 +439,7 @@ fn global_view(parts: &HostParts) -> McpSettingsView {
             .collect(),
         retention_days,
         default_retention_days: DEFAULT_RETENTION_DAYS,
+        max_retention_days: MAX_RETENTION_DAYS,
         warnings,
         project: None,
     }

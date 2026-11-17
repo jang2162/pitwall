@@ -925,7 +925,7 @@ export type UnaryMethods = {
 	"mcp.settings.get": { params: McpSettingsGetParams; result: McpSettingsView };
 	/**
 	 * 전역 `settings.toml` 의 `[mcp]` 키 하나를 쓴다(`value: null` 이면 지운다). 프로젝트 설정은 쓰지 않는다. 값은 Host 가
-	 * 판정한다 — 모르는 프리셋 · 그룹 · 툴, `auto_approve` 의 `dangerous`, 0 이상 정수가 아닌 보관 일수는 쓰지 않고
+	 * 판정한다 — 모르는 프리셋 · 그룹 · 툴, `auto_approve` 의 `dangerous`, 0 ~ 3650 정수가 아닌 보관 일수는 쓰지 않고
 	 * `INVALID_PARAMS`(`data` 는 `McpSettingRefused`). 쓴 뒤 설정을 다시 읽어 열린 MCP 세션의 툴 목록이 바뀌고
 	 * (`tools/list_changed`), 새 전역 값을 돌려준다.
 	 */
@@ -1451,7 +1451,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"mcp.audit.list": {"name":"mcp.audit.list","kind":"unary","tier":"read","roles":["owner"],"params":"McpAuditListParams","output":"McpAuditPage","doc":" 감사 로그를 최신부터 쪽 단위로 읽는다. 다른 프로세스(헤드리스 `pitwall mcp` · `pitwall tool`)가 쓴 행도 있다 —\n 그 행은 `mcp.activity` 가 나가지 않으므로 화면이 열릴 때 · 창이 앞으로 올 때 다시 읽는다.\n","mcp":null,"fileScope":false},
 	"mcp.sessions": {"name":"mcp.sessions","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"Vec<McpSessionInfo>","doc":" 이 앱에 열린 MCP 세션(시작 순서): id · 클라이언트 · 세션 프로젝트 · 전송 · 시작 시각 · 호출 수. 열고 닫히면\n `mcp.sessionsChanged`(Host 범위)가 나간다. 앱 없이 뜬 `pitwall mcp` 의 헤드리스 세션은 보이지 않는다.\n","mcp":null,"fileScope":false},
 	"mcp.settings.get": {"name":"mcp.settings.get","kind":"unary","tier":"read","roles":["owner"],"params":"McpSettingsGetParams","output":"McpSettingsView","doc":" 설정 창 「MCP」 쪽의 값: 전역 `[mcp]` 의 프리셋 · 자동 승인 · 그룹 키 · 감사 보관 일수(Host 가 판정에 쓰는 값)와 전역\n 설정 파일 경로. `projectId` 를 주면 그 프로젝트의 설정 파일들 · 그 파일들이 덮은 `[mcp]` 키 · 그 프로젝트의 자동 승인도\n 싣는다(읽기만). 툴 하나하나의 판정은 `mcp.tools.list` 다.\n","mcp":null,"fileScope":false},
-	"mcp.settings.set": {"name":"mcp.settings.set","kind":"unary","tier":"write","roles":["owner"],"params":"McpSettingsSetParams","output":"McpSettingsView","doc":" 전역 `settings.toml` 의 `[mcp]` 키 하나를 쓴다(`value: null` 이면 지운다). 프로젝트 설정은 쓰지 않는다. 값은 Host 가\n 판정한다 — 모르는 프리셋 · 그룹 · 툴, `auto_approve` 의 `dangerous`, 0 이상 정수가 아닌 보관 일수는 쓰지 않고\n `INVALID_PARAMS`(`data` 는 `McpSettingRefused`). 쓴 뒤 설정을 다시 읽어 열린 MCP 세션의 툴 목록이 바뀌고\n (`tools/list_changed`), 새 전역 값을 돌려준다.\n","mcp":null,"fileScope":false},
+	"mcp.settings.set": {"name":"mcp.settings.set","kind":"unary","tier":"write","roles":["owner"],"params":"McpSettingsSetParams","output":"McpSettingsView","doc":" 전역 `settings.toml` 의 `[mcp]` 키 하나를 쓴다(`value: null` 이면 지운다). 프로젝트 설정은 쓰지 않는다. 값은 Host 가\n 판정한다 — 모르는 프리셋 · 그룹 · 툴, `auto_approve` 의 `dangerous`, 0 ~ 3650 정수가 아닌 보관 일수는 쓰지 않고\n `INVALID_PARAMS`(`data` 는 `McpSettingRefused`). 쓴 뒤 설정을 다시 읽어 열린 MCP 세션의 툴 목록이 바뀌고\n (`tools/list_changed`), 새 전역 값을 돌려준다.\n","mcp":null,"fileScope":false},
 	"mcp.tools.list": {"name":"mcp.tools.list","kind":"unary","tier":"read","roles":["owner"],"params":"McpToolsListParams","output":"Vec<McpToolInfo>","doc":" MCP 툴 카탈로그 전부와 지금 노출 판정(켜졌는지 · 그 규칙), 최근 호출 수. 이 앱의 Host 가 처리하는 툴만이다.\n","mcp":null,"fileScope":false},
 	"openWith.list": {"name":"openWith.list","kind":"unary","tier":"read","roles":["owner"],"params":"OpenWithListParams","output":"OpenWithList","doc":" External tools available on this OS (id · name · contributing extension · whether it opens files too · settings\n format errors) and the default tool. With `projectId`, the default tool is chosen including that project's\n `[open_with] default` (when the session has a project, leaving the key out means the session's project — pass\n `null` for the global default only). Launch commands are not included.\n","mcp":{"group":null,"name":null},"fileScope":false},
 	"openWith.run": {"name":"openWith.run","kind":"unary","tier":"exec","roles":["owner"],"params":"OpenWithRunParams","output":"OpenWithOutcome","doc":" 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n 그 프로젝트의 창이 아니면 permission denied 오류다 — 웰컴 창(Host 연결)만 예외로, 목록에 있는 도구(또는 기본 도구)로\n 프로젝트 루트를 여는 것(`worktree` · `file` · `line` · `column` 없이)은 된다.\n","mcp":null,"fileScope":false},
@@ -7198,7 +7198,7 @@ export type McpSettingKey =
 "group" | 
 /**  `[mcp.tools] <name>` — 값은 bool. `name` 은 이 Host 의 툴 이름(glob 은 받지 않는다). */
 "tool" | 
-/**  `[mcp.audit] retention_days` — 값은 0 이상 정수(0 은 지우지 않음). */
+/**  `[mcp.audit] retention_days` — 값은 0 ~ [`MAX_RETENTION_DAYS`] 정수(0 은 지우지 않음). */
 "retentionDays";
 
 export type McpSettingOverride = {
@@ -7220,7 +7220,7 @@ export type McpSettingRefusal =
 "unknownGroup" | 
 /**  이 Host 에 없는 툴. */
 "unknownTool" | 
-/**  보관 일수가 0 이상 정수가 아니다. */
+/**  보관 일수가 0 ~ [`MAX_RETENTION_DAYS`](3650) 정수가 아니다. */
 "badRetentionDays" | 
 /**  그 키의 꼴이 아니다(bool 자리에 글 · `name` 이 없음 등). */
 "badValue";
@@ -7271,6 +7271,8 @@ export type McpSettingsView = {
 	/**  감사 로그 보관 일수(0 은 지우지 않음). */
 	retentionDays: number,
 	defaultRetentionDays: number,
+	/**  이 화면이 쓸 수 있는 보관 일수의 상한([`MAX_RETENTION_DAYS`]). */
+	maxRetentionDays: number,
 	/**  전역 `[mcp]` 를 읽다 버린 값의 경고(Host 의 영어 문장 그대로). */
 	warnings: string[],
 	/**  `projectId` 를 줬을 때만. */

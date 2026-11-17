@@ -362,6 +362,14 @@ async fn settings_set_refuses_values_the_host_would_not_use() {
         ("retentionDays", None, json!(-1), "badRetentionDays"),
         ("retentionDays", None, json!(1.5), "badRetentionDays"),
         ("retentionDays", None, json!("90"), "badRetentionDays"),
+        // 상한(`MAX_RETENTION_DAYS` = 3650)을 넘는 값.
+        ("retentionDays", None, json!(3651), "badRetentionDays"),
+        (
+            "retentionDays",
+            None,
+            json!(4_294_967_295_u64),
+            "badRetentionDays",
+        ),
     ] {
         assert_eq!(
             refusal(&window, key, name, value.clone()).await,
@@ -374,9 +382,15 @@ async fn settings_set_refuses_values_the_host_would_not_use() {
             "{key} {value}: 거절했는데 파일이 바뀌었다"
         );
     }
-    // 0 은 「지우지 않음」 이라 받는다.
+    // 0 은 「지우지 않음」 이라 받는다. 상한 그 값도 받는다.
     let view = set(&window, "retentionDays", None, json!(0)).await;
     assert_eq!(view["retentionDays"], 0);
+    let view = set(&window, "retentionDays", None, json!(3650)).await;
+    assert_eq!(view["retentionDays"], 3650);
+    assert_eq!(
+        view["maxRetentionDays"],
+        pw_mcp::settings::MAX_RETENTION_DAYS
+    );
 }
 
 /// 읽기는 Host 가 판정에 쓰는 값이다 — 잘못된 프리셋은 `read-only`, `auto_approve` 의 `dangerous` 는 빠지고 경고가 실린다.
@@ -530,4 +544,66 @@ async fn turning_a_group_off_notifies_open_sessions_and_hides_its_tools() {
 
     client.cancel().await.unwrap();
     cancel.cancel();
+}
+
+fn verdict_of(list: &Value, name: &str) -> (bool, String, Value) {
+    let tool = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == name)
+        .unwrap_or_else(|| panic!("{name} 이 목록에 없다"));
+    (
+        tool["enabled"].as_bool().unwrap(),
+        tool["rule"].as_str().unwrap().to_owned(),
+        tool["key"].clone(),
+    )
+}
+
+/// 전역의 툴 키는 프로젝트가 그룹 · 프리셋 · glob 으로 바꾼 판정에도 닿는다(정확한 툴 키가 그보다 앞선다 — 리뷰어 탐침,
+/// 16-m5-plan M5-15 리뷰). 그래서 화면은 프로젝트가 판정을 바꾼 툴의 전역 토글을 잠그지 않고 그 프로젝트에서의 판정을 나란히
+/// 보인다. 반대로 공유 설정이 끈 툴은 전역 키로 켜지지 않는다(까닭 `shared`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_global_tool_key_reaches_a_tool_the_project_turned_off_by_group() {
+    let f = Fixture::new();
+    let window = f.window().await;
+    let project = json!({ "projectId": f.alpha });
+
+    // 프로젝트 local 의 `groups.db = false` 가 probe_db 를 끈다.
+    let list = window
+        .call("mcp.tools.list", project.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        verdict_of(&list, "probe_db"),
+        (false, "group".into(), json!("db"))
+    );
+
+    // 전역에 그 툴의 키를 쓰면 그 프로젝트에서도 켜진다.
+    set(&window, "tool", Some("probe_db"), json!(true)).await;
+    let list = window
+        .call("mcp.tools.list", project.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        verdict_of(&list, "probe_db"),
+        (true, "tool".into(), json!("probe_db"))
+    );
+
+    // 커밋되는 공유 설정이 끈 툴(`probe_project = false`)은 전역 키로 켜지지 않는다 — 공유 설정은 좁히기만 하고 그 까닭이
+    // `shared` 다. 전역은 이미 `probe_project = true` 이고 다시 써도 그대로다.
+    let list = window
+        .call("mcp.tools.list", project.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        verdict_of(&list, "probe_project"),
+        (false, "shared".into(), Value::Null)
+    );
+    set(&window, "tool", Some("probe_project"), json!(true)).await;
+    let list = window.call("mcp.tools.list", project).await.unwrap();
+    assert_eq!(
+        verdict_of(&list, "probe_project"),
+        (false, "shared".into(), Value::Null)
+    );
 }

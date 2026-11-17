@@ -36833,6 +36833,12 @@
             },
             "type": "array"
           },
+          "maxRetentionDays": {
+            "description": "이 화면이 쓸 수 있는 보관 일수의 상한([`MAX_RETENTION_DAYS`]).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "preset": {
             "description": "지금 프리셋(`read-only` · `standard` · `full`). 파일 값이 잘못됐으면 Host 가 쓰는 `read-only` 다.",
             "type": "string"
@@ -36869,6 +36875,7 @@
           "groups",
           "retentionDays",
           "defaultRetentionDays",
+          "maxRetentionDays",
           "warnings",
           "project"
         ],
@@ -36880,7 +36887,7 @@
       "tier": "read"
     },
     "mcp.settings.set": {
-      "description": "전역 `settings.toml` 의 `[mcp]` 키 하나를 쓴다(`value: null` 이면 지운다). 프로젝트 설정은 쓰지 않는다. 값은 Host 가\n판정한다 — 모르는 프리셋 · 그룹 · 툴, `auto_approve` 의 `dangerous`, 0 이상 정수가 아닌 보관 일수는 쓰지 않고\n`INVALID_PARAMS`(`data` 는 `McpSettingRefused`). 쓴 뒤 설정을 다시 읽어 열린 MCP 세션의 툴 목록이 바뀌고\n(`tools/list_changed`), 새 전역 값을 돌려준다.",
+      "description": "전역 `settings.toml` 의 `[mcp]` 키 하나를 쓴다(`value: null` 이면 지운다). 프로젝트 설정은 쓰지 않는다. 값은 Host 가\n판정한다 — 모르는 프리셋 · 그룹 · 툴, `auto_approve` 의 `dangerous`, 0 ~ 3650 정수가 아닌 보관 일수는 쓰지 않고\n`INVALID_PARAMS`(`data` 는 `McpSettingRefused`). 쓴 뒤 설정을 다시 읽어 열린 MCP 세션의 툴 목록이 바뀌고\n(`tools/list_changed`), 새 전역 값을 돌려준다.",
       "kind": "unary",
       "params": {
         "$defs": {
@@ -36909,7 +36916,7 @@
               },
               {
                 "const": "retentionDays",
-                "description": "`[mcp.audit] retention_days` — 값은 0 이상 정수(0 은 지우지 않음).",
+                "description": "`[mcp.audit] retention_days` — 값은 0 ~ [`MAX_RETENTION_DAYS`] 정수(0 은 지우지 않음).",
                 "type": "string"
               }
             ]
@@ -37095,6 +37102,12 @@
             },
             "type": "array"
           },
+          "maxRetentionDays": {
+            "description": "이 화면이 쓸 수 있는 보관 일수의 상한([`MAX_RETENTION_DAYS`]).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "preset": {
             "description": "지금 프리셋(`read-only` · `standard` · `full`). 파일 값이 잘못됐으면 Host 가 쓰는 `read-only` 다.",
             "type": "string"
@@ -37131,6 +37144,7 @@
           "groups",
           "retentionDays",
           "defaultRetentionDays",
+          "maxRetentionDays",
           "warnings",
           "project"
         ],
