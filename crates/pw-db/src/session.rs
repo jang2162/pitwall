@@ -899,6 +899,15 @@ pub struct DbSessions {
 pub type TestHook =
     Box<dyn FnOnce() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
 
+/// 호출의 취소 토큰(`pw_rpc::Ctx::cancellation`)을 받는 끼워 넣기 — 시험이 「Host 가 그 호출의 취소를 받았다」 를 본 뒤에 길을
+/// 잇는다(16-m5-plan M5-18b).
+pub type CancelWatchHook = Box<
+    dyn FnOnce(
+            tokio_util::sync::CancellationToken,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+        + Send,
+>;
+
 /// 시험이 경쟁의 틈을 결정적으로 만들려고 실행 길의 정해진 자리에 끼워 넣는 동작(16-m5-plan M5-18 — 승인 뒤 · 연결 전의 설정
 /// 바꿔 끼우기, 커밋 앞뒤의 취소). 자리마다 한 번만 쓰이고 비워진다. 앱은 설정하지 않는다 — 비어 있으면 그 자리는 잠금 하나를
 /// 지날 뿐이다.
@@ -908,6 +917,7 @@ pub struct TestHooks {
     before_resolve: Mutex<Option<TestHook>>,
     before_commit: Mutex<Option<TestHook>>,
     after_commit_point: Mutex<Option<TestHook>>,
+    after_commit_point_watching: Mutex<Option<CancelWatchHook>>,
 }
 
 impl TestHooks {
@@ -926,6 +936,12 @@ impl TestHooks {
         *lock(&self.after_commit_point) = Some(hook);
     }
 
+    /// [`Self::set_after_commit_point`] 와 같은 자리(그 뒤)에서, 그 호출의 취소 토큰을 받아 기다린다 — MCP 세션을 거치는 시험이
+    /// 취소가 Host 에 닿은 것을 보고 커밋을 보내게 한다.
+    pub fn set_after_commit_point_watching(&self, hook: CancelWatchHook) {
+        *lock(&self.after_commit_point_watching) = Some(hook);
+    }
+
     pub(crate) async fn before_resolve(&self) {
         let hook = lock(&self.before_resolve).take();
         if let Some(hook) = hook {
@@ -933,12 +949,20 @@ impl TestHooks {
         }
     }
 
-    pub(crate) fn take_commit_hooks(&self) -> (Option<TestHook>, Option<TestHook>) {
-        (
-            lock(&self.before_commit).take(),
-            lock(&self.after_commit_point).take(),
-        )
+    pub(crate) fn take_commit_hooks(&self) -> CommitHooks {
+        CommitHooks {
+            before_commit: lock(&self.before_commit).take(),
+            after_commit_point: lock(&self.after_commit_point).take(),
+            after_commit_point_watching: lock(&self.after_commit_point_watching).take(),
+        }
     }
+}
+
+/// `db_execute` 한 번이 가져간 커밋 앞뒤의 끼워 넣기([`TestHooks`]).
+pub(crate) struct CommitHooks {
+    pub before_commit: Option<TestHook>,
+    pub after_commit_point: Option<TestHook>,
+    pub after_commit_point_watching: Option<CancelWatchHook>,
 }
 
 impl DbSessions {

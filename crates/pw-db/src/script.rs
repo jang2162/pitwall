@@ -455,7 +455,8 @@ fn result_overhead(columns: &[ColumnMeta], index: u32, grade: RiskGrade) -> usiz
 ///
 /// **커밋의 경계**(`db_execute` — 16-m5-plan M5-18, 메인 판정 2026-11-17): 실행 태스크는 커밋하기 전에 [`CommitPoint::begin_commit`]
 /// 을 지난다. 그 전에 버려졌으면(취소가 관측됐으면) 커밋하지 않고 롤백한다. 지난 뒤에 버려지면 인터럽트를 보내지 않는다 — 커밋을
-/// 취소로 끊지 않는다. 그때 에이전트는 「취소」 를 받지만 DB 에는 커밋된다(태스크가 경고 로그를 남긴다 — 05-mcp.md 의 한계).
+/// 취소로 끊지 않는다. RPC 의 취소는 그 앞에서 세운 `pw_rpc::PointOfNoReturn` 이 막아 호출이 버려지지 않으므로, 지난 뒤에 버려지는
+/// 것은 런타임이 끝나며 버려진 호출뿐이다(태스크가 경고 로그를 남긴다).
 pub(crate) struct CancelOnDrop {
     cancel: Option<QueryCancel>,
     phase: Arc<Mutex<CallPhase>>,

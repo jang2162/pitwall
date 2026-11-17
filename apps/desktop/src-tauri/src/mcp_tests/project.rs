@@ -28,7 +28,7 @@ impl WindowHost {
         let base = pw_core::registry::path::simplify(std::fs::canonicalize(tmp.path()).unwrap());
         let paths = pw_core::config::AppPaths::under(&base.join("app"));
         let requests = OpenRequests::default();
-        let host = Arc::new(crate::local_host_with(
+        let (host, db) = crate::local_host_parts(
             paths.clone(),
             Arc::new(pw_diag::Diagnostics::new(base.join("logs"), "0.0.0")),
             Arc::new(pw_ext::Registry::default()),
@@ -37,7 +37,8 @@ impl WindowHost {
             pw_git::write::Askpass::default(),
             requests.clone(),
             Default::default(),
-        ));
+        );
+        let host = Arc::new(host);
         let services = mcp::services(&host, &paths, "test", HostKind::App, Default::default());
         let app = tauri::test::mock_app();
         app.manage(crate::launch::Launch::new(host.registry().cloned()));
@@ -52,6 +53,7 @@ impl WindowHost {
                 paths,
                 host,
                 services,
+                db,
             },
             app,
         }

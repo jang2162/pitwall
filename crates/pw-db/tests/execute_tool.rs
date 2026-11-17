@@ -429,6 +429,7 @@ async fn after_approval_the_statements_run_in_one_committed_transaction() {
         audit.starts_with("statements=3 grade=write sql=sha256:"),
         "{audit}"
     );
+    assert!(audit.ends_with(" transaction=committed"), "{audit}");
     assert!(!audit.contains("users"), "{audit}");
 }
 
@@ -621,6 +622,13 @@ async fn a_failing_second_statement_rolls_everything_back() {
         .await;
     let out = ran.unwrap();
     assert_eq!(out["transaction"], "rolledBack");
+    assert!(
+        out["audit"]
+            .as_str()
+            .unwrap()
+            .ends_with(" transaction=rolledBack"),
+        "{out}"
+    );
     assert_eq!(out["results"].as_array().unwrap().len(), 1);
     assert_eq!(out["error"]["index"], 1);
     assert_eq!(out["error"]["line"], 2);
@@ -1335,7 +1343,9 @@ async fn a_failed_commit_is_an_error_not_a_commit() {
     assert_eq!(e.pg.committed(), Vec::<String>::new());
 }
 
-/// 끼워 넣는 자리에서 호출을 취소하고 그 응답(취소)을 받은 뒤 실행 태스크를 보낸다. 태스크가 연결을 닫을 때까지 기다린다.
+/// 끼워 넣는 자리에서 호출을 취소한 뒤 실행 태스크를 보내고, 그 호출의 응답을 돌려준다. 태스크가 연결을 닫을 때까지 기다린다.
+/// 커밋 전 자리면 취소 응답(Host 가 핸들러를 버렸다는 증거)을 받은 뒤 보낸다. 커밋하기로 정한 뒤의 자리면 태스크가 그 자리에 묶인
+/// 동안 응답이 나가지 않는 것을 본 뒤 보낸다 — 표지 뒤라 핸들러가 버려지지 않는다.
 async fn cancel_at(
     e: &Env,
     agent: &mut Conn,
@@ -1343,7 +1353,7 @@ async fn cancel_at(
     hash: &str,
     at_commit_point: bool,
     tool: u32,
-) {
+) -> Result<Value, pw_rpc::RpcError> {
     let (hook, reached, go) = gate_hook();
     if at_commit_point {
         e.sessions.test_hooks.set_after_commit_point(hook);
@@ -1366,15 +1376,27 @@ async fn cancel_at(
     agent.session.handle_value(json!({
         "jsonrpc": "2.0", "method": "request.cancel", "params": { "id": 900 },
     }));
-    // 취소 응답은 Host 가 핸들러를 버린 뒤에 온다.
-    let answer = agent.response(900).await;
-    assert_eq!(answer.expect_err("cancelled").code, pw_rpc::code::CANCELLED);
-    go.send(()).unwrap();
+    let answer = if at_commit_point {
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), agent.response(900))
+                .await
+                .is_err(),
+            "the host answered while the commit was still pending"
+        );
+        go.send(()).unwrap();
+        agent.response(900).await
+    } else {
+        // 취소 응답은 Host 가 핸들러를 버린 뒤에 온다.
+        let answer = agent.response(900).await;
+        go.send(()).unwrap();
+        answer
+    };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while !e.pg.calls_of(tool).contains(&FakeCall::Close) {
         assert!(tokio::time::Instant::now() < deadline, "{:?}", e.pg.calls());
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+    answer
 }
 
 /// 마지막 문장 뒤 · 커밋 전에 관측된 취소는 롤백한다 — 에이전트가 「취소」 를 받은 호출의 쓰기는 남지 않는다.
@@ -1387,15 +1409,16 @@ async fn a_cancel_seen_before_the_commit_rolls_back() {
     let input = json!({ "sql": "UPDATE users SET a = 1 WHERE id = 1" });
     let required = asked(&e.execute(&mut agent, "dev", input.clone()).await);
     let tool = e.connects() as u32;
-    cancel_at(&e, &mut agent, input, &required.plan.hash, false, tool).await;
+    let answer = cancel_at(&e, &mut agent, input, &required.plan.hash, false, tool).await;
+    assert_eq!(answer.expect_err("cancelled").code, pw_rpc::code::CANCELLED);
     let calls = e.pg.calls_of(tool);
     assert!(calls.contains(&FakeCall::Rollback), "{calls:?}");
     assert!(!calls.contains(&FakeCall::Commit), "{calls:?}");
     assert_eq!(e.pg.committed(), Vec::<String>::new());
 }
 
-/// 커밋하기로 정한 뒤의 취소는 커밋을 끊지 않는다 — 인터럽트도 보내지 않는다. 에이전트는 「취소」 를 받지만 DB 에는 커밋된다
-/// (05-mcp.md 의 한계 — 다시 부르기 전에 `db_query` 로 확인한다. Host 는 경고 로그를 남긴다).
+/// 커밋하기로 정한 뒤의 취소는 커밋을 끊지 않는다 — 인터럽트도 보내지 않는다. 그 자리에서 RPC 의 「되돌릴 수 없는 지점」 을
+/// 세우므로 Host 는 핸들러를 버리지 않고 커밋 결과(`committed`)로 답한다(16-m5-plan M5-18b — 감사 행은 MCP 세션이 그 답으로 끝낸다).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_cancel_after_the_commit_point_does_not_stop_the_commit() {
     let e = env();
@@ -1405,7 +1428,18 @@ async fn a_cancel_after_the_commit_point_does_not_stop_the_commit() {
     let input = json!({ "sql": "UPDATE users SET a = 1 WHERE id = 1" });
     let required = asked(&e.execute(&mut agent, "dev", input.clone()).await);
     let tool = e.connects() as u32;
-    cancel_at(&e, &mut agent, input, &required.plan.hash, true, tool).await;
+    let answer = cancel_at(&e, &mut agent, input, &required.plan.hash, true, tool)
+        .await
+        .expect("the commit is the answer, not a cancel");
+    assert_eq!(answer["transaction"], "committed", "{answer}");
+    assert_eq!(answer["results"][0]["rowsAffected"], 1, "{answer}");
+    assert!(
+        answer["audit"]
+            .as_str()
+            .unwrap()
+            .ends_with(" transaction=committed"),
+        "{answer}"
+    );
     let calls = e.pg.calls_of(tool);
     assert!(calls.contains(&FakeCall::Commit), "{calls:?}");
     assert!(!calls.contains(&FakeCall::Interrupt), "{calls:?}");

@@ -23,11 +23,13 @@
 //!    응답 예산을 읽는 그때 센다).
 //! 6. **스키마 캐시** — DDL 등급 이상의 문장이 돌았으면(실패 포함 — MySQL 은 실패한 DDL 도 암묵 커밋한다) 그 연결의 캐시를 버리고
 //!    `db.schemaChanged` 를 낸다(창의 탐색기가 새로 읽는다).
-//! 7. **감사** — 상세 칸에 문장 수 · 가장 높은 등급 · 문장 해시(`file` 이면 경로와 내용 해시). SQL 원문 · 값은 남지 않는다.
+//! 7. **감사** — 상세 칸에 문장 수 · 가장 높은 등급 · 문장 해시(`file` 이면 경로와 내용 해시), 끝까지 돈 호출이면 트랜잭션의 끝
+//!    (`transaction=committed` · `rolledBack` · `readOnly`). SQL 원문 · 값은 남지 않는다.
 //! 8. **취소**(메인 판정 2026-11-17) — 문장이 도는 중이면 인터럽트 · 롤백 · 닫기. 마지막 문장 뒤 **커밋하기로 정하기 전에** 관측된
-//!    취소는 롤백한다. 정한 뒤의 취소는 커밋을 끊지 않는다(인터럽트도 보내지 않는다) — 에이전트는 「취소」 를 받지만 DB 에는
-//!    커밋될 수 있고, Host 가 경고 로그를 남긴다(`crate::script::CancelOnDrop` 의 커밋 경계). 감사 · 결과에 `committed` 를 싣는 것은
-//!    이월(16-m5-plan M5-18 행 끝).
+//!    취소는 롤백한다. 커밋하기로 정하는 자리에서 RPC 의 「되돌릴 수 없는 지점」 표지(`pw_rpc::PointOfNoReturn`)를 세우므로, 그
+//!    뒤의 취소는 커밋을 끊지 않고(인터럽트도 보내지 않는다) 핸들러도 버려지지 않는다 — Host 는 커밋 결과(`transaction:
+//!    "committed"` 또는 커밋 오류)로 답하고, MCP 세션이 그 답으로 감사 행을 끝낸다(`pw_mcp::server` — 16-m5-plan M5-18b). 런타임이
+//!    끝나며 버려진 호출만 `crate::script::CancelOnDrop` 의 경고 로그로 남는다.
 //! 9. **연결 직전의 재확인** — 관문 · 승인 뒤 연결을 열 때 설정을 다시 풀어 대상과 표지를 판정한 것과 견준다(`DbGrant`
 //!    `check_agent_use`). 그사이 대상이 바뀌었으면 `notOpenedByUser`, 표지가 더해졌으면 `productionBlocked` · `readOnlyConnection` —
 //!    승인 해시는 판정 때의 값이라 이 틈(큰 SQL 의 분류 시간 등)을 덮지 못한다.
@@ -391,7 +393,10 @@ impl DbSessions {
         // 실행은 연결을 쥔 태스크에서 돈다 — 호출이 버려져도(취소 · 세션 끊김) 태스크가 드라이버 호출을 버리고 롤백한 뒤 닫는다.
         let guard = CancelOnDrop::new(cancel.clone());
         let point = guard.commit_point();
-        let (before_commit, after_commit_point) = self.test_hooks.take_commit_hooks();
+        // 커밋을 정하는 그 자리에서 세우는 RPC 의 표지 — 선 뒤의 취소는 핸들러를 버리지 않아 커밋 결과가 답이 된다.
+        let no_return = ctx.point_of_no_return();
+        let hooks = self.test_hooks.take_commit_hooks();
+        let call_cancel = ctx.cancellation().clone();
         let run = {
             let (source, planned) = (source.clone(), planned.clone());
             let (sessions, project, connection) = (
@@ -414,24 +419,29 @@ impl DbSessions {
                 .await;
                 let ended = match &ran {
                     Ok(ran) if mode == ScriptMode::Write && ran.error.is_none() => {
-                        if let Some(hook) = before_commit {
+                        if let Some(hook) = hooks.before_commit {
                             hook().await;
                         }
-                        // 커밋 전에 호출이 버려졌으면(취소) 커밋하지 않는다. 정한 뒤의 취소는 커밋을 끊지 않는다.
-                        if point.begin_commit() {
-                            if let Some(hook) = after_commit_point {
+                        // 커밋 전에 호출이 취소됐으면 커밋하지 않는다. RPC 의 표지를 먼저 세운다 — 세웠으면 그 뒤의 취소(`request.cancel` ·
+                        // 세션 닫힘)는 핸들러를 버리지 않고 커밋 결과로 답하게 한다. 못 세웠으면 취소가 먼저 왔다.
+                        if no_return.pass() && point.begin_commit() {
+                            if let Some(hook) = hooks.after_commit_point {
                                 hook().await;
+                            }
+                            if let Some(hook) = hooks.after_commit_point_watching {
+                                hook(call_cancel).await;
                             }
                             let committed =
                                 within(Budget::PAGE.connect, "commit", conn.commit()).await;
+                            // 표지 뒤에는 취소로 버려지지 않는다 — 여기 오는 것은 런타임이 끝나며 버려진 호출뿐이다(답할 곳이 없다).
                             if point.cancelled_after_commit() {
                                 tracing::warn!(
                                     target: "pw_db",
                                     project = %project,
                                     connection = %connection,
                                     committed = committed.is_ok(),
-                                    "db_execute was cancelled after its commit was sent; the agent was told it was \
-                                     cancelled, but the transaction {}",
+                                    "db_execute was dropped after its commit was sent; no answer was sent, but the \
+                                     transaction {}",
                                     if committed.is_ok() { "committed" } else { "did not commit" }
                                 );
                             }
@@ -482,6 +492,15 @@ impl DbSessions {
             (ScriptMode::Write, None) => DbToolTransaction::Committed,
             (ScriptMode::Write, Some(_)) => DbToolTransaction::RolledBack,
         };
+        // 감사 상세에 트랜잭션의 끝을 싣는다 — 클라이언트가 커밋 뒤에 취소한 호출도 그 행이 커밋을 보인다(16-m5-plan M5-18b).
+        let audit = format!(
+            "{audit} transaction={}",
+            match transaction {
+                DbToolTransaction::Committed => "committed",
+                DbToolTransaction::RolledBack => "rolledBack",
+                DbToolTransaction::ReadOnly => "readOnly",
+            }
+        );
         let mut result = DbToolExecute {
             statements: u32::try_from(planned.len()).unwrap_or(u32::MAX),
             results: ran.results,

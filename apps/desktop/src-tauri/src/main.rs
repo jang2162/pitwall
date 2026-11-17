@@ -66,6 +66,28 @@ fn local_host(
     )
 }
 
+/// [`local_host`] 와 같고 그 Host 의 DB 세션도 돌려준다 — 시험이 실행 길에 끼워 넣는 자리(`DbSessions::test_hooks`)를 쓴다.
+#[cfg(test)]
+fn local_host_and_db(
+    paths: AppPaths,
+    diagnostics: Arc<Diagnostics>,
+    extensions: Arc<Registry>,
+    i18n: Arc<I18n>,
+    fs: Arc<Fs>,
+    askpass: pw_git::write::Askpass,
+) -> (LocalHost, Arc<pw_db::DbSessions>) {
+    local_host_parts(
+        paths,
+        diagnostics,
+        extensions,
+        i18n,
+        fs,
+        askpass,
+        pw_core::open::OpenRequests::default(),
+        pw_mcp::sessions::Sessions::default(),
+    )
+}
+
 /// 앱이 쓰는 LocalHost.
 /// UI 언어(`i18n`)는 Host 를 만든 뒤 그 전역 설정을 붙인다.
 /// 파일 서비스(`fs`)는 Finder 드롭 들여오기(drop_import.rs)도 쓰므로 부르는 쪽이 만든다.
@@ -83,6 +105,31 @@ fn local_host_with(
     open_requests: pw_core::open::OpenRequests,
     mcp_sessions: pw_mcp::sessions::Sessions,
 ) -> LocalHost {
+    local_host_parts(
+        paths,
+        diagnostics,
+        extensions,
+        i18n,
+        fs,
+        askpass,
+        open_requests,
+        mcp_sessions,
+    )
+    .0
+}
+
+/// [`local_host_with`] 의 몸통. DB 세션은 시험([`local_host_and_db`])이 받는다.
+#[allow(clippy::too_many_arguments)] // local_host_with 와 같다.
+fn local_host_parts(
+    paths: AppPaths,
+    diagnostics: Arc<Diagnostics>,
+    extensions: Arc<Registry>,
+    i18n: Arc<I18n>,
+    fs: Arc<Fs>,
+    askpass: pw_git::write::Askpass,
+    open_requests: pw_core::open::OpenRequests,
+    mcp_sessions: pw_mcp::sessions::Sessions,
+) -> (LocalHost, Arc<pw_db::DbSessions>) {
     let methods = Arc::clone(&i18n);
     // 앱이 띄우는 프로세스의 환경. 로그인 셸은 처음 쓸 때 돈다 — 시작을 늦추지 않는다.
     // 미신뢰 프로젝트에서는 프로젝트 코드를 돌리는 제공자를 고르지 않는다(M1-05). 레지스트리는 Host 를 만든 뒤 붙인다.
@@ -184,6 +231,7 @@ fn local_host_with(
         paths.state.join("db-ssh-tunnels"),
     );
     let db_session_methods = Arc::clone(&db_sessions);
+    let db_sessions_out = Arc::clone(&db_sessions);
     // MCP 상태(`mcp.sessions` · `mcp.tools.list` · `mcp.audit.list`, M5-10). 카탈로그 · 감사 로그는 Host 를 만든 뒤 붙인다.
     let mcp_status = Arc::new(pw_mcp::methods::Mcp::new(mcp_sessions));
     let mcp_status_methods = Arc::clone(&mcp_status);
@@ -364,7 +412,7 @@ fn local_host_with(
             ));
         }
     }
-    host
+    (host, db_sessions_out)
 }
 
 /// 도구 제거(`tools.uninstall`) 전에 그 패키지의 설치본으로 뜬 언어 서버를 끝낸다(`pw_tools::install::ToolUsers` — M4-05).

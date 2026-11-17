@@ -686,6 +686,8 @@ pub(crate) struct ToolHost {
     pub host: Arc<LocalHost>,
     /// 앱이 소켓 세션에 주는 것과 같은 규칙으로 만든 것(`mcp::services`).
     pub services: Arc<Services>,
+    /// 그 Host 의 DB 세션 — 시험이 실행 길에 끼워 넣는 자리(`test_hooks`)를 쓴다.
+    pub db: Arc<pw_db::DbSessions>,
 }
 
 impl ToolHost {
@@ -694,14 +696,15 @@ impl ToolHost {
         // macOS 의 /var → /private/var 처럼 레지스트리가 저장하는 꼴로 맞춘다.
         let base = pw_core::registry::path::simplify(std::fs::canonicalize(tmp.path()).unwrap());
         let paths = AppPaths::under(&base.join("app"));
-        let host = Arc::new(crate::local_host(
+        let (host, db) = crate::local_host_and_db(
             paths.clone(),
             Arc::new(pw_diag::Diagnostics::new(base.join("logs"), "0.0.0")),
             Arc::new(pw_ext::Registry::default()),
             Arc::new(pw_i18n::I18n::new(pw_i18n::Catalog::default(), Vec::new())),
             Arc::new(pw_fs::Fs::new()),
             pw_git::write::Askpass::default(),
-        ));
+        );
+        let host = Arc::new(host);
         let services = mcp::services(
             &host,
             &paths,
@@ -715,6 +718,7 @@ impl ToolHost {
             paths,
             host,
             services,
+            db,
         }
     }
 

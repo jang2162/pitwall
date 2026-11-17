@@ -538,8 +538,8 @@ async fn a_db_execute_whose_commit_fails_is_an_error_in_the_result_and_the_audit
         .query_row("SELECT count(*) FROM t", [], |r| r.get(0))
         .unwrap();
     assert_eq!(count, 1, "the write did not stay");
-    let rows = host.audit_rows(1);
-    let row = rows.iter().find(|r| r.tool == "db_execute").unwrap();
+    // 선기록한 행의 끝 기록은 결과가 나간 뒤 큐로 닿는다 — `started` 가 아닐 때까지 기다린다.
+    let row = finished_row(&host, 0);
     assert_eq!(row.outcome, "error", "{row:?}");
     assert!(
         row.detail
@@ -549,4 +549,158 @@ async fn a_db_execute_whose_commit_fails_is_an_error_in_the_result_and_the_audit
         "{row:?}"
     );
     session.close().await;
+}
+
+/// `db_execute` 가 커밋하기로 정한 뒤 클라이언트가 MCP 로 취소하면(16-m5-plan M5-18b) DB 에는 커밋되고, 감사 행도 결과 `ok` ·
+/// `transaction=committed` 로 그것을 보인다(상세 끝에 「취소됐지만 끝까지 돌았다」). 실 SQLite · 진짜 MCP 세션. 커밋 지점의 끼워
+/// 넣기(`DbSessions::test_hooks`)가 Host 에 그 호출의 취소가 닿은 것을 본 뒤에 커밋을 보낸다 — 경쟁이 없다. 커밋 전의 취소는
+/// 여전히 롤백 · `cancelled` 다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_db_execute_cancelled_after_its_commit_point_is_committed_in_the_audit_log() {
+    use pw_mcp::approval::{Connection, McpApprovalAnswer};
+    use rmcp::model::{CallToolRequest, CallToolRequestParams, ClientRequest};
+    use rmcp::service::PeerRequestOptions;
+    let host = ToolHost::app();
+    let alpha = host.project("alpha");
+    host.host
+        .registry()
+        .unwrap()
+        .set_trust(&alpha, true)
+        .unwrap();
+    let root = host.base.join("work").join("alpha");
+    let file = root.join("app.db");
+    {
+        let setup = rusqlite::Connection::open(&file).unwrap();
+        setup.execute_batch("CREATE TABLE t (v text);").unwrap();
+    }
+    std::fs::create_dir_all(root.join(".pitwall/db")).unwrap();
+    std::fs::write(
+        root.join(".pitwall/db/lite.toml"),
+        "schema = 1\nname = \"lite\"\ndriver = \"sqlite\"\npath = \"app.db\"\n",
+    )
+    .unwrap();
+    host.global_settings("[mcp.tools]\ndb_execute = true\n");
+    host.window_call(
+        &alpha,
+        "db.schema.objects",
+        serde_json::json!({ "projectId": alpha, "connectionId": "lite", "kind": "table", "limit": 10 }),
+    )
+    .await
+    .unwrap();
+    let session = host.session(SessionRequest::default()).await;
+    let mut window =
+        host.services
+            .sessions
+            .approvals()
+            .listen(Some(&alpha), None, Connection::named("window"));
+    let count = || -> i64 {
+        rusqlite::Connection::open(&file)
+            .unwrap()
+            .query_row("SELECT count(*) FROM t", [], |r| r.get(0))
+            .unwrap()
+    };
+    let send = |sql: &str| {
+        let params = CallToolRequestParams::new("db_execute").with_arguments(
+            serde_json::json!({ "projectId": alpha, "connectionId": "lite", "sql": sql })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        let peer = session.client.peer().clone();
+        async move {
+            peer.send_cancellable_request(
+                ClientRequest::CallToolRequest(CallToolRequest::new(params)),
+                PeerRequestOptions::no_options(),
+            )
+            .await
+            .unwrap()
+        }
+    };
+    let wait = |rx: tokio::sync::oneshot::Receiver<()>| async move {
+        tokio::time::timeout(std::time::Duration::from_secs(10), rx)
+            .await
+            .expect("the run never reached the hook")
+            .unwrap();
+    };
+
+    // 커밋 전의 취소: 롤백, 감사 행은 취소.
+    let (reached, at_hook) = tokio::sync::oneshot::channel();
+    let (go, released) = tokio::sync::oneshot::channel::<()>();
+    host.db.test_hooks.set_before_commit(Box::new(move || {
+        Box::pin(async move {
+            let _ = reached.send(());
+            let _ = released.await;
+        })
+    }));
+    let handle = send("INSERT INTO t VALUES ('before')").await;
+    window_answers(&host, &mut window, &alpha, McpApprovalAnswer::Once).await;
+    wait(at_hook).await;
+    handle.cancel(Some("test".into())).await.unwrap();
+    // 행이 끝난 뒤(취소 응답 — 핸들러가 버려졌다) 태스크를 보낸다.
+    let row = finished_row(&host, 0);
+    assert_eq!(
+        (row.outcome.as_str(), row.detail.as_deref()),
+        ("error", Some("cancelled")),
+        "{row:?}"
+    );
+    go.send(()).unwrap();
+
+    // 커밋하기로 정한 뒤의 취소: 커밋, 감사 행은 `ok` · 커밋 표시.
+    let (reached, at_hook) = tokio::sync::oneshot::channel();
+    host.db
+        .test_hooks
+        .set_after_commit_point_watching(Box::new(move |cancelled| {
+            Box::pin(async move {
+                let _ = reached.send(());
+                tokio::time::timeout(std::time::Duration::from_secs(10), cancelled.cancelled())
+                    .await
+                    .expect("the cancel never reached the host");
+            })
+        }));
+    let handle = send("INSERT INTO t VALUES ('after')").await;
+    window_answers(&host, &mut window, &alpha, McpApprovalAnswer::Once).await;
+    wait(at_hook).await;
+    handle.cancel(Some("test".into())).await.unwrap();
+    let row = finished_row(&host, 1);
+    assert_eq!(
+        count(),
+        1,
+        "the write after the commit point stayed; the one before did not"
+    );
+    let detail = row.detail.clone().unwrap_or_default();
+    assert_eq!(row.outcome, "ok", "{row:?}");
+    assert!(
+        detail.starts_with("statements=1 grade=write sql=sha256:"),
+        "{detail}"
+    );
+    assert!(detail.contains(" transaction=committed"), "{detail}");
+    assert!(
+        detail.ends_with(&format!(" · {}", pw_mcp::server::CANCELLED_AFTER_THE_POINT)),
+        "{detail}"
+    );
+    let kept: String = rusqlite::Connection::open(&file)
+        .unwrap()
+        .query_row("SELECT v FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(kept, "after");
+    session.close().await;
+}
+
+/// `db_execute` 의 `nth` 번째 감사 행 — 선기록한 행이 끝 기록(`started` 가 아닌 결과)을 받을 때까지 기다린다.
+fn finished_row(host: &ToolHost, nth: usize) -> super::AuditRow {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let row = host
+            .audit_rows(nth + 1)
+            .into_iter()
+            .filter(|r| r.tool == "db_execute")
+            .nth(nth);
+        if let Some(row) = &row
+            && row.outcome != "started"
+        {
+            return row.clone();
+        }
+        assert!(std::time::Instant::now() < deadline, "{row:?}");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }
