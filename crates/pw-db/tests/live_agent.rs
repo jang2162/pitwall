@@ -237,3 +237,80 @@ async fn live_pg_db_connection_test_opens_an_approved_connection() {
         Some("notOpenedByUser")
     );
 }
+
+/// 실 PG 로 표지 기억의 영속(사용자 결정 2026-11-18 — M5-17 재리뷰 G2, M5-17b): 사람의 키체인에 비밀번호가 있는 연결이 한 번
+/// 프로덕션으로 읽힌 뒤 에이전트가 자기 파일 툴로 `production` 을 지우고 앱이 다시 켜져도, `db_connection_test` 는 「이 연결 열기」
+/// 승인을 청하지 않고 프로덕션으로 거절한다. 사람이 그 프로젝트 창에서 기억을 풀어야 평범한 대상이 되고, 그때는 승인 뒤 실 서버에
+/// 붙는다.
+#[cfg(pw_live_pg)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_pg_a_remembered_production_mark_holds_across_a_restart_until_the_person_forgets_it() {
+    use pw_core::registry::plan::{APPROVAL_KEY, APPROVAL_REQUIRED};
+    let (mut f, _w, _database) = host(LiveDb::Pg, Arc::new(pw_db_driver_pg::PgDriver::new())).await;
+    let dev = f.db_file("dev.toml");
+    let unmarked = std::fs::read_to_string(&dev).unwrap();
+    std::fs::write(&dev, format!("{unmarked}production = true\n")).unwrap();
+    let params = json!({ "projectId": f.id, "connectionId": "dev" });
+    let reason = |e: &RpcError| {
+        e.data
+            .as_ref()
+            .and_then(|d| d["reason"].as_str())
+            .map(str::to_owned)
+    };
+    let mut agent = f.connect(ConnectionScope::Agent);
+    let blocked = agent
+        .call("db.tool.connectionTest", params.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        reason(&blocked).as_deref(),
+        Some("productionBlocked"),
+        "{blocked:?}"
+    );
+
+    // 에이전트가 자기 파일 툴로 표지를 지우고, 앱이 다시 켜진다.
+    std::fs::write(&dev, &unmarked).unwrap();
+    f.restart(|router, connections| {
+        let mut drivers = pw_db::DriverRegistry::new();
+        drivers
+            .register(Arc::new(pw_db_driver_pg::PgDriver::new()))
+            .unwrap();
+        pw_db::register(
+            router,
+            Arc::new(DbSessions::new(Arc::clone(connections), drivers)),
+        );
+    });
+    let mut agent = f.connect(ConnectionScope::Agent);
+    let blocked = agent
+        .call("db.tool.connectionTest", params.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        reason(&blocked).as_deref(),
+        Some("productionBlocked"),
+        "{blocked:?}"
+    );
+
+    // 사람이 그 프로젝트 창에서 푼다 — 그 뒤에는 평범한 대상이라 승인 뒤 실 서버에 붙는다.
+    let mut w = f.window();
+    let forgot = w
+        .call("db.connection.forgetMarks", params.clone())
+        .await
+        .unwrap();
+    assert_eq!(forgot["remembered"]["production"], true, "{forgot}");
+    let asked = agent
+        .call("db.tool.connectionTest", params.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(asked.code, APPROVAL_REQUIRED, "{asked:?}");
+    let mut approved = params.clone();
+    approved[APPROVAL_KEY] = json!({ "hash": asked.data.unwrap()["plan"]["hash"] });
+    let tested = agent
+        .call("db.tool.connectionTest", approved)
+        .await
+        .unwrap();
+    assert!(
+        tested["version"].as_str().is_some_and(|v| !v.is_empty()),
+        "{tested}"
+    );
+}
