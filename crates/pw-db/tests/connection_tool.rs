@@ -875,6 +875,19 @@ async fn marks_in_any_layer_or_checkout_hold() {
         "name": "prod", "driver": "postgres", "host": "db.prod.example", "database": "app", "user": "app",
         "readOnly": true } });
     refused(&e.upsert(&mut agent, in_wt, None).await, "lowersMarks");
+    // 워크트리의 같은 id 가 다른 대상(표지 없음)이어도 메인 체크아웃의 그 연결이 프로덕션이면 표지 없는 쓰기는 거절한다.
+    let elsewhere = unmarked.replace("db.prod.example", "staging.example");
+    std::fs::write(
+        std::path::Path::new(&wt).join(".pitwall/db/prod.toml"),
+        &elsewhere,
+    )
+    .unwrap();
+    let in_wt_elsewhere = json!({ "connectionId": "prod", "worktree": wt, "config": {
+        "name": "prod", "driver": "postgres", "host": "staging.example", "database": "app", "user": "app" } });
+    refused(
+        &e.upsert(&mut agent, in_wt_elsewhere, None).await,
+        "lowersMarks",
+    );
 }
 
 /// 표지가 붙은 연결의 대상(호스트 · DB · 사용자 · 포트 등)을 바꾸는 쓰기는 표지를 그대로 달아도 거절한다. 표지 없는 연결은 대상을
