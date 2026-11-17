@@ -597,6 +597,69 @@ it("a file change is drawn with the diff view", async () => {
   expect(file.textContent).toContain("t⟨U+200B⟩wo");
 });
 
+// 16-m5-plan M5-16 의 두 툴이 내는 계획 꼴 그대로(`pw_core::registry::tool` 의 `PlannedRegistration::plan`,
+// `pw_open_with::upsert` 의 `PlannedUpsert::plan`): 인용된 값이 든 넉 줄 글과, 옛 명령을 덮는 `settings.toml` 의 앞뒤.
+it("the project_register and open_with_upsert plans are shown as the tools write them", async () => {
+  const f = await mount();
+  const registerText = [
+    'root: "/w/say \\"hi\\""',
+    'name: "beta\\ntrusted: yes"',
+    'settings: repository ("/w/say \\"hi\\"/.pitwall", committed with the code)',
+    "trusted: no",
+  ].join("\n");
+  const before =
+    'schema = 1\n\n[open_with.tools.zed]\ncommand = ["/opt/old-zed", "{project_root}"]\n';
+  const after = 'schema = 1\n\n[open_with.tools.zed]\ncommand = ["/opt/zed", "{project_root}"]\n';
+  await f.push(
+    open(
+      request({
+        id: 1,
+        projectId: null,
+        notThisProject: true,
+        tool: "project_register",
+        plan: {
+          ...request().plan,
+          method: "project.tool.register",
+          summary: 'Register "/w/say \\"hi\\"" as the project "beta\\ntrusted: yes"',
+          changes: [{ kind: "text", label: "project", text: registerText }],
+        },
+      }),
+    ),
+    open(
+      request({
+        id: 2,
+        projectId: null,
+        notThisProject: true,
+        tool: "open_with_upsert",
+        answers: ["deny", "once"],
+        plan: {
+          ...request().plan,
+          method: "openWith.tool.upsert",
+          summary: "Change the external tool `zed` in the global settings",
+          changes: [{ kind: "file", path: "/c/settings.toml", before, after }],
+          rules: { autoApprove: false, remember: { kind: "never" } },
+        },
+      }),
+    ),
+  );
+  // 인용이 그대로 보이고(이스케이프한 `\n` 은 글자 둘이다) 줄은 넷이다 — 이름이 가짜 `trusted: yes` 줄을 만들지 못한다.
+  expect(text("mcp-approval-text-label")).toBe("project");
+  const body = text("mcp-approval-text-body") ?? "";
+  expect(body).toContain('name: "beta\\ntrusted: yes"');
+  expect(body.split("\n").filter((line) => line.startsWith("trusted:"))).toEqual(["trusted: no"]);
+  expect(text("mcp-approval-not-this-project")).toBe(T.notThisProject);
+  await act(async () => button("deny")!.click());
+
+  expect(text("mcp-approval-tool")).toBe("open_with_upsert");
+  const file = dialog()!.querySelector<HTMLElement>("[data-testid=mcp-approval-file]")!;
+  expect(file.dataset.status).toBe("modified");
+  expect(text("mcp-approval-path")).toBe("/c/settings.toml");
+  // 덮이는 옛 명령과 새 명령이 함께 보인다.
+  expect(file.textContent).toContain("/opt/old-zed");
+  expect(file.textContent).toContain("/opt/zed");
+  expect(answerButtons().map((b) => b.answer)).toEqual(["deny", "once"]);
+});
+
 it("planDiff turns the before and after text into hunks", async () => {
   const changed = planDiff("/w/a.txt", "a\nb\nc\n", "a\nB\nc\nd");
   expect(changed.file.status).toBe("modified");
