@@ -50,7 +50,9 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-use crate::approval::{Allowance, ApprovalAsk, AskError, McpApprovalAnswer};
+use crate::approval::{
+    Allowance, ApprovalAsk, AskError, MAX_PENDING_PER_SESSION, McpApprovalAnswer,
+};
 use crate::audit::{AuditApproval, AuditLog, Entry, Outcome, summarize};
 use crate::catalog::{Catalog, PROJECT_ID, Tool};
 use crate::client::{CallError, HostClient};
@@ -802,6 +804,12 @@ impl Session {
                 format!(
                     "no one answered the approval request for `{name}` in Pitwall within {} seconds",
                     policy.approval_timeout.as_secs()
+                ),
+            )),
+            Err(AskError::Backlog) => Err(Refusal::denied(
+                Reason::ApprovalBacklog,
+                format!(
+                    "`{name}` was not shown for approval: this session already has {MAX_PENDING_PER_SESSION} approval requests waiting in Pitwall; wait for them to be answered and call again"
                 ),
             )),
             Err(AskError::Shutdown) => Err(Refusal::cancelled()),

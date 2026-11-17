@@ -34,6 +34,9 @@ pub enum Reason {
     ApprovalDenied,
     /// (거절) 승인 창이 시간(`[mcp.policy] approval_timeout_secs`, 기본 300초) 안에 답을 받지 못했다(M5-12).
     ApprovalTimeout,
+    /// (거절) 그 세션의 승인 대기가 이미 상한(`pw_mcp::approval::MAX_PENDING_PER_SESSION`, 8)이다 — 창에 묻지 않았다(16-m5-plan
+    /// M5-14). 앞의 요청이 끝난 뒤 다시 부른다.
+    ApprovalBacklog,
     /// (거절) 승인 뒤 툴이 다시 만든 계획의 해시가 승인한 것과 다르다(파일 내용 · 서버가 채운 `worktree` · 대상이 바뀜) — 돌리지
     /// 않았고 다시 묻지 않았다(결정 M5-D30). 다시 부르면 새 계획으로 묻는다.
     PlanChanged,
@@ -67,6 +70,7 @@ impl Reason {
         Reason::NeedsApproval,
         Reason::ApprovalDenied,
         Reason::ApprovalTimeout,
+        Reason::ApprovalBacklog,
         Reason::PlanChanged,
         Reason::NeedsApp,
         Reason::HeadlessWrite,
@@ -103,6 +107,7 @@ impl Reason {
             Reason::NeedsApproval => "needs_approval",
             Reason::ApprovalDenied => "approval_denied",
             Reason::ApprovalTimeout => "approval_timeout",
+            Reason::ApprovalBacklog => "approval_backlog",
             Reason::PlanChanged => "plan_changed",
             Reason::NeedsApp => "needs_app",
             Reason::HeadlessWrite => "headless_write",

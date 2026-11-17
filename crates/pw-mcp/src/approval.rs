@@ -17,6 +17,9 @@
 //! - **프로젝트 없는 요청의 후보는 창의 연결뿐이다** — 창 식별자([`Approvals::listen`] 의 `window`)가 없는 연결(창 없는 Host
 //!   범위 연결 등)에는 보내지 않는다. 창이 사라지면 앱이 [`Approvals::window_closed`] 로 포커스 순서에서 뺀다.
 //! - 한 창의 대기는 id 순서로 보인다(화면이 차례로 띄운다).
+//! - **세션당 대기 상한**([`MAX_PENDING_PER_SESSION`] — 16-m5-plan M5-14): 한 MCP 세션의 대기가 상한에 닿아 있으면 새 요청은
+//!   창에 보이지 않고 곧바로 거절된다([`AskError::Backlog`]). 에이전트가 승인 요청을 쌓아 화면과 시한 대기를 채우지 못하게 —
+//!   앞의 요청 하나가 끝나면 다시 받는다. 다른 세션에는 닿지 않는다.
 //! - 앱이 끝날 때 [`Approvals::shutdown`] 이 대기를 모두 거둔다.
 //!
 //! 에이전트 범위 연결(MCP 세션)은 듣지도 답하지도 못한다 — `mcp.*` 의 문(`methods::WindowsOnly`)이 거절한다. 에이전트가 자기
@@ -126,9 +129,14 @@ pub struct ApprovalAsk {
     pub timeout: Duration,
 }
 
+/// 한 MCP 세션(감사 행의 `session`)이 한꺼번에 기다리게 할 수 있는 승인 요청 수. 넘는 요청은 [`AskError::Backlog`].
+pub const MAX_PENDING_PER_SESSION: usize = 8;
+
 /// 답 없이 끝난 까닭.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AskError {
+    /// 그 세션의 대기가 이미 [`MAX_PENDING_PER_SESSION`] 개다 — 창에 보이지 않았다.
+    Backlog,
     /// 요청을 보일 창이 없다(그 프로젝트 창 · 프로젝트 없는 요청이면 아무 창).
     NoWindow,
     /// 묻는 도중 답할 창이 모두 떠났다.
@@ -353,6 +361,14 @@ impl Approvals {
                 Some(_) => return Err(AskError::NoWindow),
                 None => Route::Listener(state.front().ok_or(AskError::NoWindow)?),
             };
+            let waiting = state
+                .pending
+                .values()
+                .filter(|p| p.reply.is_some() && p.request.session == ask.session)
+                .count();
+            if waiting >= MAX_PENDING_PER_SESSION {
+                return Err(AskError::Backlog);
+            }
             state.next_request += 1;
             let id = state.next_request;
             let request = McpApprovalRequest {
@@ -703,6 +719,80 @@ mod tests {
             "이미 답했다"
         );
         assert_eq!(approvals.pending(), 0);
+    }
+
+    /// 세션당 대기 상한(16-m5-plan M5-14): 그 세션의 아홉째 요청은 창에 보이지 않고 곧바로 거절되고 앞 여덟은 그대로 기다린다. 하나가
+    /// 끝나면 다시 받는다. 다른 세션의 요청은 상한에 닿지 않는다.
+    #[tokio::test]
+    async fn a_session_cannot_pile_up_more_than_the_pending_limit() {
+        let approvals = Approvals::default();
+        let mut window = approvals.listen(Some("p"), Some("w-p"), conn(1));
+        let mut asking = Vec::new();
+        for _ in 0..MAX_PENDING_PER_SESSION {
+            let approvals = approvals.clone();
+            asking.push(tokio::spawn(async move {
+                approvals.ask(ask(Some("p"), false)).await
+            }));
+        }
+        let mut shown = Vec::new();
+        for _ in 0..MAX_PENDING_PER_SESSION {
+            shown.push(opened(&mut window).await);
+        }
+        assert_eq!(approvals.pending(), MAX_PENDING_PER_SESSION);
+        assert_eq!(
+            within(approvals.ask(ask(Some("p"), false))).await,
+            Err(AskError::Backlog)
+        );
+        assert!(
+            window.try_recv().is_none(),
+            "넘친 요청은 창에 보이지 않는다"
+        );
+        assert_eq!(
+            approvals.pending(),
+            MAX_PENDING_PER_SESSION,
+            "앞 여덟은 그대로다"
+        );
+        assert!(asking.iter().all(|t| !t.is_finished()));
+        // 다른 세션은 상한과 무관하다.
+        let other = {
+            let approvals = approvals.clone();
+            tokio::spawn(async move {
+                approvals
+                    .ask(ApprovalAsk {
+                        session: "s2".into(),
+                        ..ask(Some("p"), false)
+                    })
+                    .await
+            })
+        };
+        let other_request = opened(&mut window).await;
+        assert_eq!(other_request.session, "s2");
+        // 하나에 답하면 그 세션이 다시 묻는다.
+        let mine = ConnectionScope::Project("p".into());
+        let by = Answerer {
+            scope: &mine,
+            connection: conn(1),
+        };
+        approvals
+            .answer(&by, shown[0].id, McpApprovalAnswer::Deny)
+            .unwrap();
+        assert_eq!(
+            within(asking.remove(0)).await.unwrap(),
+            Ok(McpApprovalAnswer::Deny)
+        );
+        assert_eq!(
+            within(window.recv()).await,
+            Some(McpApprovalEvent::Closed { id: shown[0].id })
+        );
+        let again = {
+            let approvals = approvals.clone();
+            tokio::spawn(async move { approvals.ask(ask(Some("p"), false)).await })
+        };
+        let request = opened(&mut window).await;
+        assert_eq!(request.session, "s1");
+        approvals.shutdown();
+        assert_eq!(within(again).await.unwrap(), Err(AskError::Shutdown));
+        assert_eq!(within(other).await.unwrap(), Err(AskError::Shutdown));
     }
 
     /// 시한은 가짜 시계(tokio 의 멈춘 시간)로 본다.

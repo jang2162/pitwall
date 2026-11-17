@@ -1162,6 +1162,59 @@ async fn the_shared_policy_table_has_no_effect_and_warns() {
     within(call).await.unwrap();
 }
 
+/// 세션당 대기 상한(16-m5-plan M5-14): 한 세션이 상한만큼 기다리게 하면 다음 호출은 창에 보이지 않고 곧바로
+/// `approval_backlog` 로 거절되고 감사 행이 남는다. 앞의 요청은 그대로 기다리고, 하나가 끝나면 다시 묻는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_over_the_pending_limit_is_refused_without_asking() {
+    let f = Fixture::new();
+    let mut window = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let limit = pw_mcp::approval::MAX_PENDING_PER_SESSION;
+    let mut calls = Vec::new();
+    let mut shown = Vec::new();
+    for i in 0..limit {
+        calls.push(agent.spawn("fake_write", json!({"tag": format!("t{i}")})));
+        shown.push(window.opened().await);
+    }
+    let started = std::time::Instant::now();
+    let refused = agent
+        .call("fake_write", json!({"tag": "one too many"}))
+        .await;
+    assert!(started.elapsed() < Duration::from_secs(5), "기다렸다");
+    assert_eq!(mark(&refused), Mark::denied(Reason::ApprovalBacklog));
+    assert!(
+        text(&refused).contains("already has 8 approval requests waiting"),
+        "{}",
+        text(&refused)
+    );
+    assert!(window.quiet(), "넘친 요청은 창에 보이지 않는다");
+    assert!(
+        calls.iter().all(|c| !c.is_finished()),
+        "앞의 요청은 그대로 기다린다"
+    );
+    // 하나가 끝나면 다시 묻는다.
+    window.answer(shown[0].id, McpApprovalAnswer::Deny).unwrap();
+    within(calls.remove(0)).await.unwrap();
+    window.closed(shown[0].id).await;
+    let again = agent.spawn("fake_write", json!({"tag": "again"}));
+    let request = window.opened().await;
+    for r in shown.iter().skip(1).chain([&request]) {
+        window.answer(r.id, McpApprovalAnswer::Deny).unwrap();
+    }
+    for c in calls.into_iter().chain([again]) {
+        within(c).await.unwrap();
+    }
+    assert_eq!(f.runs(), 0);
+    let rows = f.rows(limit + 2);
+    assert!(
+        rows.iter().any(|r| r.outcome == "denied"
+            && r.detail
+                .as_deref()
+                .is_some_and(|d| d.contains("already has 8"))),
+        "넘친 호출의 감사 행"
+    );
+}
+
 /// 대상 프로젝트 창이 없으면 기다리지 않고 거절한다(`needs_approval`). 다른 프로젝트 창 · 웰컴 창은 대신 답하지 않는다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn without_the_target_project_window_the_call_is_refused_at_once() {
