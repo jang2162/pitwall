@@ -23,7 +23,13 @@ export const RPC_INVALIDATIONS: readonly InvalidationRule[] = [];
  * 목록을 다시 부른다 — 다른 창 · CLI 가 바꾼 것도 웰컴 창에 보인다.
  */
 export function hostInvalidations(host: string): readonly InvalidationRule[] {
-  const config = [rpcQueryKey(host, "config.get"), rpcQueryKey(host, "i18n.get")];
+  // 설정 창 「MCP」(M5-15)의 값과 툴 판정도 전역 설정에서 온다 — 다른 창 · 편집기가 settings.toml 을 고쳐도 보인다.
+  const config = [
+    rpcQueryKey(host, "config.get"),
+    rpcQueryKey(host, "i18n.get"),
+    rpcQueryKey(host, "mcp.settings.get"),
+    rpcQueryKey(host, "mcp.tools.list"),
+  ];
   const projects = [
     rpcQueryKey(host, "project.list"),
     rpcQueryKey(host, "project.recent"),

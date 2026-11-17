@@ -145,3 +145,87 @@ mcp-approval-notify-title = Pitwall approval request
 # $agent: requesting agent ("An agent" if it gave no name), $tool: tool name
 mcp-approval-notify-body = { $agent } is waiting for approval of { $tool }
 mcp-approval-notify-agent = An agent
+
+## Settings > MCP (16-m5-plan M5-15)
+
+mcp-settings-title = MCP
+mcp-settings-intro = Changes the [mcp] table of the global settings (settings.toml). Project settings are not edited here — open their file.
+mcp-settings-loading = Loading…
+# $error: the host's error text
+mcp-settings-failed = Could not load the MCP settings: { $error }
+mcp-settings-open-file = Open as file
+# $path: the settings file
+mcp-settings-open-failed = Could not open { $path }
+# $warning: the host's own text about a value it did not use
+mcp-settings-warning = Not used from the settings file: { $warning }
+mcp-settings-preset = Preset
+mcp-settings-preset-read-only = read-only — read tools only
+mcp-settings-preset-standard = standard — read and write tools
+mcp-settings-preset-full = full — every tool, including run and DB writes
+mcp-settings-auto-approve = Approve without asking
+mcp-settings-auto-approve-note = Dangerous tools always ask. Calls from another machine are never auto-approved.
+mcp-settings-retention = Keep the agent activity log
+mcp-settings-retention-unit = days
+# $days: default number of days
+mcp-settings-retention-hint = 0 keeps everything · default { $days } days
+mcp-settings-apply = Apply
+mcp-settings-reset = Default
+mcp-settings-groups = Tool groups
+mcp-settings-group-default = Follow the preset
+mcp-settings-group-on = On
+mcp-settings-group-off = Off
+mcp-settings-tools = Tools
+mcp-settings-search = Search tools
+# $count: tools shown
+mcp-settings-tools-count = { $count } tools
+mcp-settings-no-tools = No tool matches.
+mcp-settings-column-on = On
+mcp-settings-column-name = Name
+mcp-settings-column-tier = Tier
+mcp-settings-column-group = Group
+mcp-settings-column-calls = Calls (30 days)
+mcp-settings-column-why = Why
+mcp-settings-schema-show = Input schema
+mcp-settings-schema-hide = Hide schema
+# $key: preset name
+mcp-settings-rule-preset = Preset { $key }
+mcp-settings-rule-tool = Set for this tool
+# $key: the glob
+mcp-settings-rule-glob = Pattern { $key }
+# $key: group name
+mcp-settings-rule-group = Group { $key }
+mcp-settings-rule-shared = Turned off by the shared project settings
+mcp-settings-project = Show a project's overrides
+mcp-settings-project-none = None
+mcp-settings-project-files = Project settings files
+mcp-settings-file-shared = .pitwall/project.toml (shared — can only narrow)
+mcp-settings-file-local = .pitwall/project.local.toml (personal)
+mcp-settings-file-personal = project.toml (personal project)
+mcp-settings-file-missing = not created
+mcp-settings-project-overrides = Values this project sets under [mcp]
+mcp-settings-project-no-overrides = This project sets nothing under [mcp].
+# $file: which project file
+mcp-settings-override-from = ({ $file })
+mcp-settings-project-auto-approve = Approved without asking in this project
+mcp-settings-project-auto-approve-none = none
+# $state: on or off, $why: the rule
+mcp-settings-overridden = This project: { $state } — { $why }
+mcp-settings-overridden-badge = Project overrides
+mcp-settings-state-on = on
+mcp-settings-state-off = off
+mcp-settings-register = Register with an agent
+mcp-settings-register-intro = Run or add one of these in the agent's settings. Pitwall does not change the agent's settings. The pitwall command must be on the PATH (Install Shell Command).
+mcp-settings-register-claude-code = Claude Code (all projects)
+mcp-settings-register-codex = Codex
+mcp-settings-register-cursor = Cursor (~/.cursor/mcp.json)
+mcp-settings-copy = Copy
+mcp-settings-copied = Copied
+# $error: why copying failed
+mcp-settings-copy-failed = Could not copy: { $error }
+mcp-settings-refused-unknown-preset = Not a preset.
+mcp-settings-refused-dangerous = Dangerous tools always ask; they cannot be approved without asking.
+mcp-settings-refused-unknown-tier = Not a tier.
+mcp-settings-refused-unknown-group = Not a tool group.
+mcp-settings-refused-unknown-tool = Not a tool of this app.
+mcp-settings-refused-retention = Enter a whole number of days, 0 or more.
+mcp-settings-refused-bad-value = The host did not take this value.

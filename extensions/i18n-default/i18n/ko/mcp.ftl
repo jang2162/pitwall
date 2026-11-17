@@ -122,3 +122,87 @@ mcp-approval-notify-title = Pitwall 승인 요청
 # $agent: 요청 에이전트(이름을 알리지 않았으면 「에이전트」), $tool: 툴 이름
 mcp-approval-notify-body = { $agent }가 { $tool } 승인을 기다린다
 mcp-approval-notify-agent = 에이전트
+
+## 설정 > MCP (16-m5-plan M5-15)
+
+mcp-settings-title = MCP
+mcp-settings-intro = 전역 설정(settings.toml)의 [mcp] 를 고친다. 프로젝트 설정은 여기서 고치지 않는다 — 그 파일을 연다.
+mcp-settings-loading = 읽는 중…
+# $error: Host 의 오류 글
+mcp-settings-failed = MCP 설정을 읽지 못했다: { $error }
+mcp-settings-open-file = 파일로 열기
+# $path: 설정 파일
+mcp-settings-open-failed = { $path } 를 열지 못했다
+# $warning: Host 가 쓰지 않은 값에 대해 남긴 글(영어 그대로)
+mcp-settings-warning = 설정 파일에서 쓰지 않은 값: { $warning }
+mcp-settings-preset = 프리셋
+mcp-settings-preset-read-only = read-only — 조회 툴만
+mcp-settings-preset-standard = standard — 조회 · 쓰기 툴
+mcp-settings-preset-full = full — 실행 · DB 쓰기까지 모든 툴
+mcp-settings-auto-approve = 묻지 않고 허용
+mcp-settings-auto-approve-note = 위험 등급은 늘 묻는다. 다른 머신을 겨누는 호출은 자동 허용하지 않는다.
+mcp-settings-retention = 에이전트 활동 기록 보관
+mcp-settings-retention-unit = 일
+# $days: 기본 일수
+mcp-settings-retention-hint = 0 은 지우지 않음 · 기본 { $days }일
+mcp-settings-apply = 적용
+mcp-settings-reset = 기본값으로
+mcp-settings-groups = 툴 그룹
+mcp-settings-group-default = 프리셋을 따름
+mcp-settings-group-on = 켬
+mcp-settings-group-off = 끔
+mcp-settings-tools = 툴
+mcp-settings-search = 툴 검색
+# $count: 보이는 툴 수
+mcp-settings-tools-count = 툴 { $count }개
+mcp-settings-no-tools = 맞는 툴이 없다.
+mcp-settings-column-on = 켬
+mcp-settings-column-name = 이름
+mcp-settings-column-tier = 등급
+mcp-settings-column-group = 그룹
+mcp-settings-column-calls = 호출(30일)
+mcp-settings-column-why = 까닭
+mcp-settings-schema-show = 입력 스키마
+mcp-settings-schema-hide = 스키마 접기
+# $key: 프리셋 이름
+mcp-settings-rule-preset = 프리셋 { $key }
+mcp-settings-rule-tool = 이 툴에 정한 값
+# $key: glob
+mcp-settings-rule-glob = 패턴 { $key }
+# $key: 그룹 이름
+mcp-settings-rule-group = 그룹 { $key }
+mcp-settings-rule-shared = 공유 프로젝트 설정이 껐다
+mcp-settings-project = 프로젝트 덮어쓰기 보기
+mcp-settings-project-none = 없음
+mcp-settings-project-files = 프로젝트 설정 파일
+mcp-settings-file-shared = .pitwall/project.toml (공유 — 좁히기만 한다)
+mcp-settings-file-local = .pitwall/project.local.toml (개인)
+mcp-settings-file-personal = project.toml (개인 전용 프로젝트)
+mcp-settings-file-missing = 없음
+mcp-settings-project-overrides = 이 프로젝트가 [mcp] 아래에 적은 값
+mcp-settings-project-no-overrides = 이 프로젝트는 [mcp] 아래에 적은 것이 없다.
+# $file: 어느 프로젝트 파일
+mcp-settings-override-from = ({ $file })
+mcp-settings-project-auto-approve = 이 프로젝트에서 묻지 않고 허용
+mcp-settings-project-auto-approve-none = 없음
+# $state: 켬 · 끔, $why: 정한 규칙
+mcp-settings-overridden = 이 프로젝트: { $state } — { $why }
+mcp-settings-overridden-badge = 프로젝트가 덮음
+mcp-settings-state-on = 켬
+mcp-settings-state-off = 끔
+mcp-settings-register = 에이전트에 등록
+mcp-settings-register-intro = 아래 명령을 실행하거나 에이전트 설정에 넣는다. Pitwall 은 에이전트의 설정을 고치지 않는다. pitwall 명령이 PATH 에 있어야 한다(Shell 명령 설치).
+mcp-settings-register-claude-code = Claude Code (모든 프로젝트)
+mcp-settings-register-codex = Codex
+mcp-settings-register-cursor = Cursor (~/.cursor/mcp.json)
+mcp-settings-copy = 복사
+mcp-settings-copied = 복사했다
+# $error: 복사하지 못한 까닭
+mcp-settings-copy-failed = 복사하지 못했다: { $error }
+mcp-settings-refused-unknown-preset = 프리셋이 아니다.
+mcp-settings-refused-dangerous = 위험 등급은 늘 묻는다 — 묻지 않고 허용할 수 없다.
+mcp-settings-refused-unknown-tier = 등급이 아니다.
+mcp-settings-refused-unknown-group = 툴 그룹이 아니다.
+mcp-settings-refused-unknown-tool = 이 앱의 툴이 아니다.
+mcp-settings-refused-retention = 0 이상의 정수 일수를 넣는다.
+mcp-settings-refused-bad-value = Host 가 이 값을 받지 않았다.

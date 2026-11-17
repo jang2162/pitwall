@@ -208,6 +208,9 @@ rpc_method! {
     }
 }
 
+// 거절의 `data` — 메서드가 참조하지 않아 따로 등록한다(창이 `reason` 을 번역한다).
+pw_rpc::rpc_type!(McpSettingRefused);
+
 fn refused(key: McpSettingKey, reason: McpSettingRefusal, message: String) -> RpcError {
     RpcError::invalid_params(message).with_data(
         serde_json::to_value(McpSettingRefused { key, reason })

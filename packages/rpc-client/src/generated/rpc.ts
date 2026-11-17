@@ -7208,6 +7208,29 @@ export type McpSettingOverride = {
 	file: McpSettingsFileKind,
 };
 
+/**  거절의 까닭(창이 번역한다). */
+export type McpSettingRefusal = 
+/**  모르는 프리셋. */
+"unknownPreset" | 
+/**  `auto_approve` 에 `dangerous` — 위험 등급은 늘 묻는다. */
+"dangerousAutoApprove" | 
+/**  `auto_approve` 에 등급이 아닌 것. */
+"unknownTier" | 
+/**  모르는 그룹. */
+"unknownGroup" | 
+/**  이 Host 에 없는 툴. */
+"unknownTool" | 
+/**  보관 일수가 0 이상 정수가 아니다. */
+"badRetentionDays" | 
+/**  그 키의 꼴이 아니다(bool 자리에 글 · `name` 이 없음 등). */
+"badValue";
+
+/**  `mcp.settings.set` 거절의 `data`. */
+export type McpSettingRefused = {
+	key: McpSettingKey,
+	reason: McpSettingRefusal,
+};
+
 export type McpSettingsFile = {
 	kind: McpSettingsFileKind,
 	path: string,

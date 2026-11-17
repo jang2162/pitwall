@@ -5,7 +5,13 @@
 import { useLocalization } from "@fluent/react";
 import { useMemo } from "react";
 
-import type { AuditApproval, AuditOutcome, Tier } from "@pitwall/rpc-client";
+import type {
+  AuditApproval,
+  AuditOutcome,
+  McpSettingRefusal,
+  McpSettingsFileKind,
+  Tier,
+} from "@pitwall/rpc-client";
 
 import { type Translate, translator } from "../i18n/localization";
 
@@ -120,6 +126,93 @@ export function mcpStrings(t: Translate) {
       notifyTitle: t("mcp-approval-notify-title"),
       notifyBody: (agent: string, tool: string) => t("mcp-approval-notify-body", { agent, tool }),
       notifyAgent: t("mcp-approval-notify-agent"),
+    },
+    /** 설정 > MCP(M5-15, settings/mcp-section.tsx). */
+    settings: {
+      title: t("mcp-settings-title"),
+      intro: t("mcp-settings-intro"),
+      loading: t("mcp-settings-loading"),
+      failed: (error: string) => t("mcp-settings-failed", { error }),
+      openFile: t("mcp-settings-open-file"),
+      openFailed: (path: string) => t("mcp-settings-open-failed", { path }),
+      warning: (warning: string) => t("mcp-settings-warning", { warning }),
+      preset: t("mcp-settings-preset"),
+      presets: {
+        "read-only": t("mcp-settings-preset-read-only"),
+        standard: t("mcp-settings-preset-standard"),
+        full: t("mcp-settings-preset-full"),
+      },
+      autoApprove: t("mcp-settings-auto-approve"),
+      autoApproveNote: t("mcp-settings-auto-approve-note"),
+      retention: t("mcp-settings-retention"),
+      retentionUnit: t("mcp-settings-retention-unit"),
+      retentionHint: (days: number) => t("mcp-settings-retention-hint", { days }),
+      apply: t("mcp-settings-apply"),
+      reset: t("mcp-settings-reset"),
+      groups: t("mcp-settings-groups"),
+      group: {
+        default: t("mcp-settings-group-default"),
+        on: t("mcp-settings-group-on"),
+        off: t("mcp-settings-group-off"),
+      },
+      tools: t("mcp-settings-tools"),
+      search: t("mcp-settings-search"),
+      toolsCount: (count: number) => t("mcp-settings-tools-count", { count }),
+      noTools: t("mcp-settings-no-tools"),
+      column: {
+        on: t("mcp-settings-column-on"),
+        name: t("mcp-settings-column-name"),
+        tier: t("mcp-settings-column-tier"),
+        group: t("mcp-settings-column-group"),
+        calls: t("mcp-settings-column-calls"),
+        why: t("mcp-settings-column-why"),
+      },
+      schemaShow: t("mcp-settings-schema-show"),
+      schemaHide: t("mcp-settings-schema-hide"),
+      rule: {
+        preset: (key: string) => t("mcp-settings-rule-preset", { key }),
+        tool: t("mcp-settings-rule-tool"),
+        glob: (key: string) => t("mcp-settings-rule-glob", { key }),
+        group: (key: string) => t("mcp-settings-rule-group", { key }),
+        shared: t("mcp-settings-rule-shared"),
+      },
+      project: t("mcp-settings-project"),
+      projectNone: t("mcp-settings-project-none"),
+      projectFiles: t("mcp-settings-project-files"),
+      file: {
+        shared: t("mcp-settings-file-shared"),
+        local: t("mcp-settings-file-local"),
+        personal: t("mcp-settings-file-personal"),
+      } satisfies Record<McpSettingsFileKind, string>,
+      fileMissing: t("mcp-settings-file-missing"),
+      projectOverrides: t("mcp-settings-project-overrides"),
+      projectNoOverrides: t("mcp-settings-project-no-overrides"),
+      overrideFrom: (file: string) => t("mcp-settings-override-from", { file }),
+      projectAutoApprove: t("mcp-settings-project-auto-approve"),
+      projectAutoApproveNone: t("mcp-settings-project-auto-approve-none"),
+      overridden: (state: string, why: string) => t("mcp-settings-overridden", { state, why }),
+      overriddenBadge: t("mcp-settings-overridden-badge"),
+      stateOn: t("mcp-settings-state-on"),
+      stateOff: t("mcp-settings-state-off"),
+      register: t("mcp-settings-register"),
+      registerIntro: t("mcp-settings-register-intro"),
+      registerClient: {
+        claudeCode: t("mcp-settings-register-claude-code"),
+        codex: t("mcp-settings-register-codex"),
+        cursor: t("mcp-settings-register-cursor"),
+      },
+      copy: t("mcp-settings-copy"),
+      copied: t("mcp-settings-copied"),
+      copyFailed: (error: string) => t("mcp-settings-copy-failed", { error }),
+      refused: {
+        unknownPreset: t("mcp-settings-refused-unknown-preset"),
+        dangerousAutoApprove: t("mcp-settings-refused-dangerous"),
+        unknownTier: t("mcp-settings-refused-unknown-tier"),
+        unknownGroup: t("mcp-settings-refused-unknown-group"),
+        unknownTool: t("mcp-settings-refused-unknown-tool"),
+        badRetentionDays: t("mcp-settings-refused-retention"),
+        badValue: t("mcp-settings-refused-bad-value"),
+      } satisfies Record<McpSettingRefusal, string>,
     },
   };
 }

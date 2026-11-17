@@ -27,8 +27,9 @@ pub const COMMANDS: &[(&str, &[WindowKind])] = &[
     ("open_project_window", ALL),
     ("window_close_cancelled", ALL),
     ("install_shell_command", ALL),
-    // 웰컴 창의 S1 · S2(src/welcome/native.ts).
-    ("open_file_window", &[Welcome]),
+    // 웰컴 창의 S1 · S2(src/welcome/native.ts)와 설정 창 「MCP」 의 「파일로 열기」(src/settings/native.ts — 전역 settings.toml ·
+    // 고른 프로젝트의 설정 파일, 경로는 Host 가 준 것만 — 16-m5-plan M5-15).
+    ("open_file_window", &[Welcome, Settings]),
     ("take_pending_find_project", &[Welcome]),
     ("path_kind", &[Welcome]),
     // 설정 창(src/settings/native.ts)과 프로젝트 창의 DB 결과 그리드 「다른 형식으로 복사」(src/db/grid/clipboard.ts).
@@ -120,7 +121,7 @@ mod tests {
         );
         assert_eq!(
             allowed_in("settings"),
-            common_and(&["write_clipboard", "mcp_approval_notify"])
+            common_and(&["write_clipboard", "mcp_approval_notify", "open_file_window"])
         );
         assert_eq!(
             allowed_in("project-ab12"),
