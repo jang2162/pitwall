@@ -802,3 +802,45 @@ async fn the_default_user_spellings_share_the_production_mark() {
         e.scan(&mut agent, "reader", json!({})).await.unwrap();
     }
 }
+
+/// 키 이름 하나가 응답 예산보다 크면(예산 계산이 불가능한 꼴) 그 쪽은 거절되지만 `data.nextCursor` 로 그 뒤 키를 이어 읽는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_key_name_larger_than_the_response_is_skipped_by_the_cursor() {
+    let e = env(true);
+    e.seed(
+        3,
+        &format!("a{}", "k".repeat(200 * 1024)),
+        FakeKvValue::String(b"x".to_vec()),
+    );
+    for i in 0..5 {
+        e.seed(3, &format!("b{i}"), FakeKvValue::String(b"x".to_vec()));
+    }
+    e.human_opens("cache", None).await;
+    let mut agent = e.agent();
+    let error = e.scan(&mut agent, "cache", json!({})).await.unwrap_err();
+    assert_eq!(error.code, rpc_code::INVALID_PARAMS);
+    let data = error.data.unwrap();
+    assert_eq!(data["reason"], "tooLarge");
+    let cursor = data["nextCursor"]
+        .as_str()
+        .expect("a next cursor")
+        .to_owned();
+    let (rest, _) = {
+        let mut keys = Vec::new();
+        let mut cursor = Some(cursor);
+        let mut pages = 0;
+        while let Some(c) = cursor.take() {
+            let page = e
+                .scan(&mut agent, "cache", json!({ "cursor": c }))
+                .await
+                .unwrap();
+            pages += 1;
+            for k in page["keys"].as_array().unwrap() {
+                keys.push(k["key"].as_str().unwrap().to_owned());
+            }
+            cursor = page["nextCursor"].as_str().map(str::to_owned);
+        }
+        (keys, pages)
+    };
+    assert_eq!(rest, ["b0", "b1", "b2", "b3", "b4"]);
+}

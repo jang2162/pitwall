@@ -408,6 +408,50 @@ async fn live_redis_kv_tool_a_stream_entry_with_20000_fields_fits_the_response()
     }
 }
 
+/// 리뷰 D-F1 의 재현: 항목 `1-1` 이 큰 첫 필드(300 KiB) + 작은 필드 99 이고 그 뒤에 항목 `2-1` · `3-1` 이 있다. 기본 설정에서 거절되던
+/// 꼴이다 — 이제 `1-1` 은 첫 필드만 잘려 실리고(작은 필드는 그대로), 커서로 그 뒤 항목까지 끝까지 읽힌다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_redis_kv_tool_a_large_first_field_does_not_stop_the_stream() {
+    let mut admin = admin().await;
+    run(&mut admin, &["DEL", "m519:df1:stream"]).await;
+    let payload = "p".repeat(300 * 1024);
+    let mut xadd = vec![
+        "XADD".to_owned(),
+        "m519:df1:stream".to_owned(),
+        "1-1".to_owned(),
+        "payload".to_owned(),
+        payload,
+    ];
+    for i in 0..99 {
+        xadd.push(format!("meta{i:02}"));
+        xadd.push("x".to_owned());
+    }
+    admin.command(xadd).await.unwrap();
+    run(&mut admin, &["XADD", "m519:df1:stream", "2-1", "f", "two"]).await;
+    run(
+        &mut admin,
+        &["XADD", "m519:df1:stream", "3-1", "f", "three"],
+    )
+    .await;
+    let mut e = env().await;
+    let pages = e.read_all(json!("m519:df1:stream"), None).await;
+    let entries: Vec<Value> = pages
+        .iter()
+        .flat_map(|p| p["value"]["stream"].as_array().unwrap().clone())
+        .collect();
+    let ids: Vec<&str> = entries.iter().map(|x| x["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["1-1", "2-1", "3-1"]);
+    let first = &entries[0]["fields"];
+    assert_eq!(first.as_array().unwrap().len(), 100);
+    assert_eq!(first[0]["value"]["truncated"]["size"], 300 * 1024);
+    assert!(
+        first.as_array().unwrap()[1..]
+            .iter()
+            .all(|f| f["value"]["text"] == "x")
+    );
+    assert_eq!(entries[2]["fields"][0]["value"]["text"], "three");
+}
+
 /// 원소 하나가 응답 예산보다 큰 꼴은 다른 타입에도 없다 — hash 의 값 · list 의 원소 · set · zset 의 멤버 하나가 600 KiB 면 그 값만
 /// 앞부분으로 잘리고(`truncated`, 덜지 않는다) 응답이 192 KiB 안이다. 600 KiB string 은 자르지 않고 창으로 쪽을 나눈다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

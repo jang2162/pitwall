@@ -24,9 +24,11 @@
 //!   묶음은 늘 싣는다(그래서 커서가 나아간다 — `limit` 을 넘는 것은 `SCAN` 한 걸음이 혼자 더 준 때뿐이다). 첫 묶음이 응답 예산을
 //!   넘치면 묶음 크기를 반씩 줄여 다시 묻는다.
 //!   값 읽기는 쪽의 원소 수(string 은 바이트 창)를 반씩 줄여 다시 묻고, 더 줄일 수 없으면 [`cut_to_fit`]: 긴 값을 앞부분으로
-//!   자르고(`truncated` — 감싸서 커지는 짧은 값은 두지 않는다), 그래도 넘치면 뒤쪽 필드(스트림 항목 하나) · 원소(한 걸음에 온 hash ·
-//!   set 쪽)를 덜어 `omitted` 에 남긴다(리뷰 F1). 그래도 넘치면 거절한다 — 응답은 늘 예산 안이다. string 은 자르지 않고 창만
-//!   줄인다 — 자르면 다음 쪽 커서와 사이가 빈다.
+//!   자르고(`truncated` — 1 KiB 보다 긴 값은 몫이 작아져도 자르고, 감싸서 커지는 짧은 값은 두지 않는다), 그래도 넘치면 뒤쪽
+//!   필드(스트림 항목 하나) · 원소(한 걸음에 온 hash · set 쪽)를 덜어 `omitted` 에 남긴다(리뷰 F1 · D-F1). 하나도 들지 않으면
+//!   `shown: 0` 표지만 싣는다. 어느 경우든 커서는 이 쪽 뒤로 나아간다(메인 판정 — 어떤 항목도 「읽을 수 없음」 으로 끝나지 않는다).
+//!   빈 쪽의 틀도 들지 않는 꼴 · 키 이름 하나가 예산보다 큰 스캔만 거절하고(`data.reason = "tooLarge"`), 그 거절에도
+//!   `data.nextCursor` 를 싣는다. string 은 자르지 않고 창만 줄인다 — 자르면 다음 쪽 커서와 사이가 빈다.
 //! - **`SCAN` 의 중복**(이 행이 정한 것): Redis `SCAN` 은 같은 키를 두 번 줄 수 있다(재해시 중 · 다음 쪽이 넘긴 묶음을 다시 읽을
 //!   때). **한 쪽 안에서는 거르고, 쪽 사이의 중복은 그대로 준다** — 툴 설명에 적는다. 끝까지 있던 키는 빠지지 않는다(`SCAN` 의
 //!   보장 — 커서는 실은 묶음 뒤로만 나아간다).
@@ -187,7 +189,9 @@ rpc_method! {
     /// never missed. There is no command input — this tool only reads. Uses only connections the person opened in
     /// Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` — try again after the person has opened
     /// it once) and never uses a Redis server marked production — any database number on the same server · user
-    /// (`productionBlocked`). Redis connections only — for SQL databases use `db_schema` · `db_query`.
+    /// (`productionBlocked`). Redis connections only — for SQL databases use `db_schema` · `db_query`. The only page that
+    /// cannot be returned is one whose key name alone is larger than the response (about 192 KiB): that call is refused
+    /// (`data.reason: "tooLarge"`) and `data.nextCursor` continues after it.
     pub DbToolKvScanMethod: "db.tool.kvScan" {
         params: DbToolKvScanParams,
         result: DbToolKvScan,
@@ -200,7 +204,11 @@ rpc_method! {
     /// zset by index, a stream by entry id, a RedisJSON document whole. `nextCursor` reads the next page; a missing key
     /// is `"missing"`. Values that are not UTF-8 come as hex bytes. The response is limited to about 192 KiB — a page
     /// holds fewer elements to fit, and an element too large on its own is cut (`truncated`); a stream entry with too
-    /// many fields shows only its first fields (`omitted` says how many — the rest cannot be read here). There is no command
+    /// many fields shows only its first fields, and a hash · set that Redis returns in one step may show only its first
+    /// elements (`omitted` says how many — the rest cannot be read through this tool). An element that cannot fit even
+    /// cut is left out with `omitted.shown: 0`. In every case `nextCursor` continues after what this page covered, so
+    /// reading never stops at one large element. A call is refused only when even an empty page cannot fit
+    /// (`data.reason: "tooLarge"`, with `data.nextCursor`). There is no command
     /// input — this tool only reads. Uses only connections the person opened in Pitwall's DB explorer during this app
     /// run (`notOpenedByUser`) and never uses a Redis server marked production (`productionBlocked`). Redis connections
     /// only.
@@ -358,7 +366,14 @@ impl DbSessions {
                 ),
             )
             .await?;
-        let read = read_page(conn.as_mut(), p.key, p.cursor, limit).await;
+        let read = read_page(
+            conn.as_mut(),
+            p.key,
+            p.cursor,
+            limit,
+            RESPONSE_BUDGET - FRAME_ROOM,
+        )
+        .await;
         let _ = within(Budget::PAGE.connect, "close", conn.close()).await;
         drop(tunnel);
         read
@@ -408,8 +423,11 @@ async fn scan_page(
                 count /= 2;
                 continue;
             }
-            return Err(RpcError::invalid_params(
-                "a key name at this cursor is too large to list in one tool response; narrow `match`",
+            // 키 이름 하나가 예산보다 크다(예산 계산이 불가능한 꼴). 거절하되 그 묶음 뒤의 커서를 실어 다음으로 건너뛰게 한다.
+            return Err(too_large(
+                "a key name at this cursor is too large to list in one tool response; \
+                 continue with data.nextCursor (the keys of this SCAN step are skipped) or narrow `match`",
+                page.next_cursor.as_deref(),
             ));
         }
         used += size;
@@ -436,6 +454,7 @@ async fn read_page(
     key: KvKey,
     cursor: Option<String>,
     limit: u32,
+    room: usize,
 ) -> Result<DbToolKvGet, RpcError> {
     let Some(info) = conn.key_info(key.clone()).await.map_err(db_error)? else {
         return Ok(DbToolKvGet {
@@ -450,7 +469,6 @@ async fn read_page(
     };
     let windowed = matches!(info.kind, KvType::String | KvType::Json);
     let mut count = if windowed { TOOL_STRING_WINDOW } else { limit };
-    let room = RESPONSE_BUDGET - FRAME_ROOM;
     loop {
         let page = conn
             .read(
@@ -479,8 +497,11 @@ async fn read_page(
         } else {
             let cut = cut_to_fit(&mut value, room);
             if json_len(&value) > room {
-                return Err(RpcError::invalid_params(
-                    "the value at this cursor is too large for one tool response even after cutting it",
+                // 빈 쪽도 들지 않는다(예산 계산이 불가능한 꼴) — 거절하되 다음 커서를 싣는다.
+                return Err(too_large(
+                    "this page does not fit in one tool response even with every element left out; \
+                     continue with data.nextCursor",
+                    next_cursor.as_deref(),
                 ));
             }
             (cut.values || cut.omitted.is_some(), cut.omitted)
@@ -529,7 +550,8 @@ fn values_mut(value: &mut KvValue) -> Vec<&mut DbValue> {
     }
 }
 
-/// 값을 자를 때 남기는 몫의 하한(바이트). 이보다 짧은 값은 자르지 않는다 — 감싼 표지(`truncated` 의 틀)가 값보다 커진다.
+/// 자르지 않는 짧은 값의 상한(바이트). 이보다 짧은 값은 자르지 않는다 — 앞부분 몇 바이트를 감싼 표지(`truncated` 의 틀)로 바꿔 봐야
+/// 줄어드는 것이 없고 값만 망가진다. 긴 값은 몫이 이보다 작아져도 자른다(메인 판정 — 리뷰 D-F1).
 const MIN_CUT: usize = 1024;
 
 /// [`cut_to_fit`] 이 한 것.
@@ -537,30 +559,56 @@ const MIN_CUT: usize = 1024;
 struct Cut {
     /// 값 하나 이상을 앞부분으로 잘랐다.
     values: bool,
-    /// 뒤쪽 원소 · 필드를 덜었다.
+    /// 뒤쪽 원소 · 필드를 덜었다(`shown` 이 0 이면 아무것도 싣지 못했다 — 「너무 커서 싣지 못함」 표지).
     omitted: Option<DbToolKvOmitted>,
 }
 
-/// 쪽이 `room` 안에 들게 한다. ① 긴 값을 같은 몫(하한 [`MIN_CUT`])으로 앞부분만 남긴다 — 감싸서 커지는 값은 건드리지 않는다
-/// ② 그래도 넘치면 뒤에서부터 덜어 낸다: 스트림 항목 하나면 그 항목의 필드를, 원소가 여럿이면 원소를(덜어 낸 수를 남긴다). 다 해도
-/// 넘치면 부른 쪽이 거절한다(필드 이름 하나가 예산보다 큰 꼴 등은 ①이 막는다).
+/// 쪽이 `room` 안에 들게 한다(메인 판정 — 어떤 키 · 항목도 「읽을 수 없음」 으로 끝나지 않고, 쪽은 늘 앞으로 간다).
+/// ① [`MIN_CUT`] 보다 긴 값을 같은 몫으로 앞부분만 남긴다 — 몫을 반씩 줄여 0 까지 간다. 감싸서 커지는 값은 건드리지 않는다
+/// ② 그래도 넘치면 뒤에서부터 덜어 낸다: 스트림 항목 하나면 그 항목의 필드를, 원소가 여럿이면 원소를. 들어가는 만큼만 싣고(0 개일 수
+/// 있다 — 그때는 표지만 남는다) 덜어 낸 수를 남긴다. 쪽의 커서는 부른 쪽이 그대로 내므로 다음 쪽은 이 쪽 뒤부터다. 다 해도 넘치면
+/// (빈 쪽의 틀도 들지 않는 꼴) 부른 쪽이 거절한다.
 fn cut_to_fit(value: &mut KvValue, room: usize) -> Cut {
-    let mut cut = Cut::default();
-    let n = values_mut(value).len().max(1);
-    let mut share = room / n;
-    while json_len(value) > room && share >= MIN_CUT {
-        for v in values_mut(value) {
-            cut.values |= cut_value(v, share);
-        }
-        share /= 2;
-    }
+    let mut cut = Cut {
+        values: cut_values(value, room),
+        omitted: None,
+    };
     if json_len(value) > room {
         cut.omitted = omit_tail(value, room);
     }
     cut
 }
 
-/// 뒤쪽 부분을 덜어 `room` 안에 들게 한다. 첫 부분은 남긴다(쪽이 비면 읽을 것이 없다 — 그 부분 하나가 넘치면 부른 쪽이 거절한다).
+/// ① — 긴 값을 같은 몫으로. 잘랐으면 `true`.
+fn cut_values(value: &mut KvValue, room: usize) -> bool {
+    let n = values_mut(value).len().max(1);
+    let mut share = room / n;
+    let mut cut = false;
+    while json_len(value) > room {
+        for v in values_mut(value) {
+            if long(v) {
+                cut |= cut_value(v, share);
+            }
+        }
+        if share == 0 {
+            break;
+        }
+        share /= 2;
+    }
+    cut
+}
+
+/// [`MIN_CUT`] 보다 긴 값인가(이미 자른 값은 긴 값이었다).
+fn long(value: &DbValue) -> bool {
+    match value {
+        DbValue::Text(t) | DbValue::Json(t) => t.len() > MIN_CUT,
+        DbValue::Truncated(_) => true,
+        DbValue::Bytes(b) => b.truncated || b.hex.len() > MIN_CUT,
+        _ => false,
+    }
+}
+
+/// ② — 뒤쪽 부분을 덜어 `room` 안에 들게 한다. 앞에서부터 들어가는 만큼 남긴다(첫 부분도 들지 않으면 0 개).
 fn omit_tail(value: &mut KvValue, room: usize) -> Option<DbToolKvOmitted> {
     fn keep<T: Serialize>(parts: &mut Vec<T>, base: usize, room: usize) -> (u32, u32) {
         let total = parts.len();
@@ -568,7 +616,7 @@ fn omit_tail(value: &mut KvValue, room: usize) -> Option<DbToolKvOmitted> {
         let mut kept = 0;
         for part in parts.iter() {
             let size = json_len(part) + 1;
-            if kept > 0 && used + size > room {
+            if used + size > room {
                 break;
             }
             used += size;
@@ -651,6 +699,13 @@ fn cut_value(value: &mut DbValue, max: usize) -> bool {
         }
         _ => false,
     }
+}
+
+/// 예산 계산이 불가능한 쪽의 거절(invalid params, `data.reason = "tooLarge"`). 다음 커서가 있으면 `data.nextCursor` 로 싣는다 —
+/// 쪽은 늘 앞으로 간다.
+fn too_large(message: &str, next_cursor: Option<&str>) -> RpcError {
+    RpcError::new(pw_rpc::code::INVALID_PARAMS, message)
+        .with_data(serde_json::json!({ "reason": "tooLarge", "nextCursor": next_cursor }))
 }
 
 /// 툴 메서드를 붙인다(`crate::session::register` 가 부른다).
@@ -824,5 +879,101 @@ mod tests {
             assert!(json_len(&value) <= room);
             assert_eq!((cut.values, cut.omitted), (true, None));
         }
+    }
+
+    /// 리뷰 D-F1 의 꼴: 큰 첫 필드(300 KiB) + 작은 필드 99 의 스트림 항목. 몫이 1 KiB 아래여도 긴 값(첫 필드)은 잘리고, 작은 필드는
+    /// 그대로이며, 덜어 내지 않는다.
+    #[test]
+    fn a_large_first_field_among_many_small_ones_is_cut_not_refused() {
+        let room = RESPONSE_BUDGET - FRAME_ROOM;
+        let mut fields = vec![KvField {
+            field: text("payload"),
+            value: DbValue::text("p".repeat(300 * 1024), CellLimit(usize::MAX)),
+        }];
+        fields.extend((0..99).map(|i| KvField {
+            field: text(&format!("meta{i:02}")),
+            value: text("x"),
+        }));
+        let mut value = KvValue::Stream(vec![pw_db_types::KvStreamEntry {
+            id: "1-1".into(),
+            fields,
+        }]);
+        let cut = cut_to_fit(&mut value, room);
+        assert!(json_len(&value) <= room);
+        assert_eq!((cut.values, cut.omitted), (true, None));
+        let KvValue::Stream(entries) = &value else {
+            unreachable!()
+        };
+        assert_eq!(entries[0].fields.len(), 100);
+        assert!(
+            matches!(&entries[0].fields[0].value, DbValue::Truncated(t) if t.size == 300 * 1024)
+        );
+        assert!(entries[0].fields[1..].iter().all(|f| f.value == text("x")));
+    }
+
+    async fn fake_list(items: usize, item_bytes: usize) -> Box<dyn KvConnection> {
+        use pw_db_driver::DbDriver as _;
+        use pw_db_driver::fake::kv::{FakeKvDriver, FakeKvValue};
+        let driver = FakeKvDriver::new();
+        driver.insert(
+            0,
+            b"k",
+            FakeKvValue::List(
+                (0..items)
+                    .map(|i| vec![b'a' + i as u8; item_bytes])
+                    .collect(),
+            ),
+        );
+        match driver
+            .connect(FakeKvDriver::spec(0))
+            .await
+            .unwrap()
+            .connection
+        {
+            DbConnection::Kv(conn) => conn,
+            DbConnection::Sql(_) => unreachable!(),
+        }
+    }
+
+    /// 잘라도 들지 않는 원소는 「싣지 못함」 표지(`shown: 0`)로 나가고, 쪽은 그 원소 뒤로 나아간다 — 다음 커서로 다음 원소를 읽는다.
+    /// (작은 예산으로 그 꼴을 만든다.)
+    #[tokio::test]
+    async fn an_element_that_cannot_fit_even_cut_is_marked_and_the_page_moves_on() {
+        let mut conn = fake_list(3, 2_000).await;
+        let key = KvKey::Text("k".into());
+        let page = read_page(conn.as_mut(), key.clone(), None, 1, 60)
+            .await
+            .unwrap();
+        assert_eq!(page.value, KvValue::List(Vec::new()));
+        assert_eq!(
+            page.omitted,
+            Some(DbToolKvOmitted {
+                of: DbToolKvOmittedKind::Elements,
+                shown: 0,
+                total: 1
+            })
+        );
+        assert!(page.truncated);
+        assert_eq!(page.next_cursor.as_deref(), Some("1"));
+        let next = read_page(conn.as_mut(), key, page.next_cursor, 1, 60)
+            .await
+            .unwrap();
+        assert_eq!(next.next_cursor.as_deref(), Some("2"));
+    }
+
+    /// 빈 쪽의 틀도 들지 않으면(예산 계산이 불가능한 꼴) 거절하되 `data.nextCursor` 로 다음 쪽을 알린다.
+    #[tokio::test]
+    async fn a_page_whose_frame_cannot_fit_is_refused_with_the_next_cursor() {
+        let mut conn = fake_list(3, 2_000).await;
+        let error = read_page(conn.as_mut(), KvKey::Text("k".into()), None, 1, 5)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, pw_rpc::code::INVALID_PARAMS);
+        let data = error.data.unwrap();
+        assert_eq!(
+            (&data["reason"], &data["nextCursor"]),
+            (&serde_json::json!("tooLarge"), &serde_json::json!("1"))
+        );
+        assert!(error.message.contains("nextCursor"), "{}", error.message);
     }
 }
