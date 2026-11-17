@@ -309,6 +309,12 @@ mod fake {
         pub tags: Option<Vec<String>>,
     }
 
+    /// 입력 없는 쓰기 툴의 입력. `write` 이상 툴은 계획을 만드는 `Planned` struct 입력이어야 한다(카탈로그 규칙 — 16-m5-plan M5-12).
+    #[derive(Debug, Deserialize, specta::Type, schemars::JsonSchema)]
+    pub struct NoInput {}
+
+    pub type WriteParams = pw_core::registry::plan::Planned<NoInput>;
+
     macro_rules! fake {
         ($ty:ident, $method:literal, $name:literal, $tier:ident, $params:ty, $result:ty) => {
             #[derive(Debug, Clone, Copy)]
@@ -338,7 +344,7 @@ mod fake {
 
     fake!(Echo, "cli.echo", "cli_echo", Read, EchoParams, EchoParams);
     fake!(Fail, "cli.fail", "cli_fail", Read, (), ());
-    fake!(Write, "cli.write", "cli_write", Write, (), ());
+    fake!(Write, "cli.write", "cli_write", Write, WriteParams, ());
     fake!(Slow, "cli.slow", "cli_slow", Read, (), ());
     fake!(AppOnly, "cli.appOnly", "cli_app_only", Read, (), ());
 }
@@ -400,7 +406,9 @@ impl Fixture {
                     router.unary(fake::Fail, |_ctx, ()| async {
                         Err::<(), _>(RpcError::internal("the fake tool failed"))
                     });
-                    router.unary(fake::Write, |_ctx, ()| async { Ok::<(), RpcError>(()) });
+                    router.unary(fake::Write, |_ctx, _p: fake::WriteParams| async {
+                        Ok::<(), RpcError>(())
+                    });
                     router.unary(fake::Slow, move |_ctx, ()| {
                         let probe = slow.clone();
                         async move {

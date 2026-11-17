@@ -8,15 +8,20 @@
 //!   화면이 열릴 때 · 창이 앞으로 올 때 다시 읽는다.
 //! - **이벤트 payload 는 수 · id 만 싣는다.** 이벤트는 role 을 가리지 않고 구독자에게 가는데(`pw_rpc::events` 머리 주석)
 //!   세션 목록 · 감사 행은 owner 만 읽는다(`mcp.sessions` · `mcp.audit.list`). 화면은 이벤트를 받으면 RPC 로 다시 읽는다.
+//! - 등록부는 승인 허브([`crate::approval::Approvals`] — `mcp.approvals` 를 듣는 창들)도 함께 든다. 앱의 `mcp.*` RPC 와 소켓
+//!   세션이 같은 등록부를 쓰므로 창과 세션이 같은 허브를 본다(16-m5-plan M5-12).
+//! - 앱이 끝날 때 [`Sessions::shutdown`] 이 대기 중인 승인을 거두고 살아 있는 세션의 감사 큐를 비운다(시한까지).
 //! - 등록부는 프로세스 하나의 것이다. 앱은 소켓 세션들과 `mcp.*` RPC 가 같은 [`Sessions`] 를 쓰고, 헤드리스는 자기 것을 둔다
 //!   (보는 쪽이 없다).
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use pw_core::{EventBus, Scope};
 use serde::{Deserialize, Serialize};
+
+use crate::approval::Approvals;
 
 /// 세션이 열리거나 닫혔다. payload [`McpSessionsChanged`], Host 범위.
 pub const TOPIC_SESSIONS_CHANGED: &str = "mcp.sessionsChanged";
@@ -85,7 +90,14 @@ struct Shared {
     early: Mutex<BTreeMap<String, (u64, Option<String>)>>,
     /// 이벤트를 낼 버스. 붙기 전에는 이벤트를 내지 않는다(헤드리스 · 시험).
     bus: OnceLock<EventBus>,
+    /// 승인 허브(창의 `mcp.approvals` 와 세션의 승인 요청).
+    approvals: Approvals,
+    /// 세션 id → 그 세션의 감사 큐를 `deadline` 까지 비우는 함수([`Sessions::shutdown`]).
+    flushers: Mutex<BTreeMap<String, Flusher>>,
 }
+
+/// 감사 큐를 비우는 함수. 시한 안에 비웠으면 `true`.
+pub type Flusher = Arc<dyn Fn(Instant) -> bool + Send + Sync>;
 
 impl Sessions {
     pub fn new() -> Self {
@@ -95,6 +107,39 @@ impl Sessions {
     /// 이벤트를 낼 버스를 붙인다(앱의 Host 버스). 두 번째부터는 무시한다.
     pub fn attach(&self, bus: EventBus) {
         let _ = self.0.bus.set(bus);
+    }
+
+    /// 승인 허브.
+    pub fn approvals(&self) -> &Approvals {
+        &self.0.approvals
+    }
+
+    /// 세션의 감사 큐를 비우는 함수를 둔다. 돌려준 가드가 버려지면 뺀다(세션이 끝남).
+    pub fn add_flusher(&self, id: &str, flush: Flusher) -> FlusherGuard {
+        self.flushers().insert(id.to_owned(), flush);
+        FlusherGuard {
+            sessions: self.clone(),
+            id: id.to_owned(),
+        }
+    }
+
+    /// 앱이 끝난다(블로킹): 대기 중인 승인을 모두 거두고, 승인을 지나던 호출이 감사 기록을 큐에 넣기를 기다린 뒤, 살아 있는 세션의
+    /// 감사 큐를 비운다 — 모두 `timeout` 안에서. 그 시간만큼 앱 종료가 늦어질 수 있다. 시한 안에 다 했으면 `true`.
+    pub fn shutdown(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut done = self.0.approvals.shutdown_and_wait(deadline);
+        let flushers: Vec<Flusher> = self.flushers().values().cloned().collect();
+        for flush in flushers {
+            done &= flush(deadline);
+        }
+        done
+    }
+
+    fn flushers(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Flusher>> {
+        self.0
+            .flushers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// 열린 세션(시작 순서).
@@ -210,6 +255,18 @@ impl Sessions {
 
     fn early(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, (u64, Option<String>)>> {
         self.0.early.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// [`Sessions::add_flusher`] 의 가드.
+pub struct FlusherGuard {
+    sessions: Sessions,
+    id: String,
+}
+
+impl Drop for FlusherGuard {
+    fn drop(&mut self) {
+        self.sessions.flushers().remove(&self.id);
     }
 }
 

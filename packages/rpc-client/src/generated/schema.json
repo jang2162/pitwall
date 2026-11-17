@@ -35048,6 +35048,409 @@
       ],
       "tier": "read"
     },
+    "mcp.approval.answer": {
+      "description": "승인 요청의 답. 프로젝트 요청은 그 프로젝트 창의 연결만, 프로젝트 없는 요청은 그 요청을 받은 창의 연결만 답한다.\n이미 끝난 요청이면 not found, 그 요청이 받지 않는 답이면 invalid params.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "McpApprovalAnswer": {
+            "description": "사람의 답.",
+            "oneOf": [
+              {
+                "const": "deny",
+                "description": "[거절].",
+                "type": "string"
+              },
+              {
+                "const": "once",
+                "description": "[이번만 허용].",
+                "type": "string"
+              },
+              {
+                "const": "session",
+                "description": "[이 세션 동안 허용] — 그 세션 · 그 프로젝트 · 그 툴(계획이 열쇠를 정하면 그 열쇠).",
+                "type": "string"
+              },
+              {
+                "const": "window",
+                "description": "CLI 요청의 [이 프로젝트 창이 열려 있는 동안 CLI 허용](결정 M5-D5).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "answer": {
+            "$ref": "#/$defs/McpApprovalAnswer",
+            "description": "그 요청의 `answers` 가운데 하나."
+          },
+          "id": {
+            "description": "`mcp.approvals` 가 보낸 요청의 `id`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "answer"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "mcp.approvals": {
+      "description": "창이 떠 있는 동안 열어 두는 승인 요청 스트림(16-m5-plan M5-12). 열 때 아직 대기 중인 그 창의 요청이 먼저 온다. 프로젝트\n요청은 그 프로젝트 창에만, 프로젝트 없는 요청은 가장 최근에 앞에 있던 창 하나에 온다. `projectId` 는 그 프로젝트 창의\n연결만 줄 수 있다.",
+      "item": {
+        "$defs": {
+          "McpApprovalAnswer": {
+            "description": "사람의 답.",
+            "oneOf": [
+              {
+                "const": "deny",
+                "description": "[거절].",
+                "type": "string"
+              },
+              {
+                "const": "once",
+                "description": "[이번만 허용].",
+                "type": "string"
+              },
+              {
+                "const": "session",
+                "description": "[이 세션 동안 허용] — 그 세션 · 그 프로젝트 · 그 툴(계획이 열쇠를 정하면 그 열쇠).",
+                "type": "string"
+              },
+              {
+                "const": "window",
+                "description": "CLI 요청의 [이 프로젝트 창이 열려 있는 동안 CLI 허용](결정 M5-D5).",
+                "type": "string"
+              }
+            ]
+          },
+          "McpApprovalRequest": {
+            "description": "창에 보이는 승인 요청.",
+            "properties": {
+              "answers": {
+                "description": "이 요청이 받는 답. `dangerous` · 기억하지 않는 계획(`open_with_upsert`)은 [거절] · [이번만 허용] 둘이다.",
+                "items": {
+                  "$ref": "#/$defs/McpApprovalAnswer"
+                },
+                "type": "array"
+              },
+              "cli": {
+                "description": "CLI(`pitwall-cli`)로 온 호출이다 — 셋째 답이 [`McpApprovalAnswer::Window`] 다.",
+                "type": "boolean"
+              },
+              "client": {
+                "description": "요청 에이전트(`이름 버전`). 에이전트가 적은 글이다 — 화면이 거른다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "expiresAt": {
+                "description": "시한이 끝나는 시각(Unix 밀리초).",
+                "format": "int64",
+                "type": "integer"
+              },
+              "id": {
+                "description": "이 앱 안에서 요청마다 다르다. 답할 때 쓴다.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "notThisProject": {
+                "description": "이 요청은 받은 창의 프로젝트 것이 아니다(프로젝트 없는 요청 — 가장 최근에 앞에 있던 창에 뜬다. 결정 M5-D29).",
+                "type": "boolean"
+              },
+              "plan": {
+                "$ref": "#/$defs/ToolPlan",
+                "description": "툴이 만든 계획(요약 · 바뀔 것 · 해시)."
+              },
+              "projectId": {
+                "description": "대상 프로젝트. 프로젝트 없는 쓰기면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "session": {
+                "description": "요청한 MCP 세션(감사 행의 `session`).",
+                "type": "string"
+              },
+              "tier": {
+                "$ref": "#/$defs/Tier",
+                "description": "툴의 선언 등급."
+              },
+              "timeoutSecs": {
+                "description": "시한(초).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "tool": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "projectId",
+              "notThisProject",
+              "session",
+              "client",
+              "cli",
+              "tool",
+              "tier",
+              "plan",
+              "answers",
+              "timeoutSecs",
+              "expiresAt"
+            ],
+            "type": "object"
+          },
+          "PlanChange": {
+            "description": "바뀔 것 하나. 다른 꼴이 필요한 툴 행이 갈래를 더한다.",
+            "oneOf": [
+              {
+                "description": "파일 하나의 앞뒤 내용. 없던 파일이면 `before` 가, 지우는 파일이면 `after` 가 `null`.",
+                "properties": {
+                  "after": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "before": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "kind": {
+                    "const": "file",
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "path",
+                  "before",
+                  "after"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "이름 붙은 글(SQL 문장 · 명령 정의 등).",
+                "properties": {
+                  "kind": {
+                    "const": "text",
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "label",
+                  "text"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "PlanRules": {
+            "description": "그 계획에 어떤 답이 열리는가.",
+            "properties": {
+              "autoApprove": {
+                "description": "`[mcp] auto_approve` 를 적용하는가. `open_with_upsert` 와 「이 연결 열기」 는 `false`(결정 M5-D31). `dangerous` 는 이것과\n상관없이 적용하지 않는다.",
+                "type": "boolean"
+              },
+              "remember": {
+                "$ref": "#/$defs/Remember",
+                "description": "「이 세션 동안 허용」(CLI 면 「창이 열려 있는 동안 CLI 허용」)이 무엇을 기억하는가. `dangerous` 는 이것과 상관없이 없다."
+              }
+            },
+            "required": [
+              "autoApprove",
+              "remember"
+            ],
+            "type": "object"
+          },
+          "Remember": {
+            "description": "세션 허용이 기억하는 단위.",
+            "oneOf": [
+              {
+                "description": "그 세션 · 그 프로젝트 · 그 툴(05 「권한 모델」).",
+                "properties": {
+                  "kind": {
+                    "const": "tool",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "그 세션 · 그 프로젝트 · 이 열쇠(「이 연결 열기」 — 그 연결 id 와 푼 대상).",
+                "properties": {
+                  "key": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "key",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "key"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "기억하지 않는다 — 셋째 버튼이 없다(`open_with_upsert`).",
+                "properties": {
+                  "kind": {
+                    "const": "never",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "Tier": {
+            "description": "권한 등급. 값과 순서는 `docs/design/05-mcp.md` §3 「권한 모델」 표를 따른다.\n\n디스패처는 이 값을 강제하지 않는다 — 승인 정책(자동 허용 · UI 승인)은 이 값을 읽는 MCP 계층이 정한다.\n호출 가능 여부는 [`RoleSet`] 이 정한다.\n\n메서드가 도달할 수 있는 **가장 높은** 등급으로 선언한다. `roles` 를 생략하면 등급에서 role 이 정해지므로\n(`read` 는 readonly 까지 연다), 낮게 선언하면 그 위의 조작이 조용히 열린다.\n입력에 따라 등급이 오르는 메서드는 조회용과 쓰기용으로 나눈다 — `db_query`(read) · `db_execute`(dangerous),\n결정 M5-D4(`docs/design/16-m5-plan.md`). 그래서 MCP 툴의 등급도 이 규칙에 예외가 없다 — 툴의 등급은 그 선언의 `tier` 다.",
+            "enum": [
+              "read",
+              "write",
+              "exec",
+              "dangerous"
+            ],
+            "type": "string"
+          },
+          "ToolPlan": {
+            "description": "툴이 만든 계획. 승인 요청이 그대로 보인다.",
+            "properties": {
+              "changes": {
+                "description": "바뀔 것(파일 diff · 문장 목록 등). 빈 목록이면 요약만 보인다.",
+                "items": {
+                  "$ref": "#/$defs/PlanChange"
+                },
+                "type": "array"
+              },
+              "hash": {
+                "description": "`sha256:<hex>`. 승인은 이것에 묶인다.",
+                "type": "string"
+              },
+              "method": {
+                "description": "툴의 RPC 이름.",
+                "type": "string"
+              },
+              "rules": {
+                "$ref": "#/$defs/PlanRules"
+              },
+              "summary": {
+                "description": "한 줄 요약(영어가 아니어도 된다 — 사람의 화면이 보인다. 에이전트가 보낸 글이 섞이면 화면이 거른다).",
+                "type": "string"
+              },
+              "tier": {
+                "$ref": "#/$defs/Tier"
+              }
+            },
+            "required": [
+              "method",
+              "tier",
+              "summary",
+              "changes",
+              "rules",
+              "hash"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`mcp.approvals` 스트림의 항목.",
+        "oneOf": [
+          {
+            "description": "새 요청(또는 듣기 시작할 때 아직 대기 중인 요청).",
+            "properties": {
+              "kind": {
+                "const": "open",
+                "type": "string"
+              },
+              "request": {
+                "$ref": "#/$defs/McpApprovalRequest"
+              }
+            },
+            "required": [
+              "kind",
+              "request"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "그 요청을 거뒀다(답 · 시한 초과 · 세션 끊김 · 호출 취소 · 앱 종료). 떠 있는 다이얼로그를 내린다.",
+            "properties": {
+              "id": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "closed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "kind": "stream",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "default": null,
+            "description": "이 창의 프로젝트. 그 프로젝트 창의 연결만 줄 수 있다. 없으면(웰컴 · 설정 창) 프로젝트 없는 요청만 받는다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "mcp.audit.clear": {
       "description": "그 프로젝트의 감사 행을 모두 지운다(「에이전트 활동」 패널의 「기록 지우기」 — 화면이 확인을 받은 뒤 부른다). 그 프로젝트\n창의 연결만 부른다(`project.state.set` 과 같은 판정). 지운 id 는 다시 쓰이지 않는다 — 앞서 받은 커서는 그 뒤의 행을 가리키지\n않는다.",
       "kind": "unary",

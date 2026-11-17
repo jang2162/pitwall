@@ -20,6 +20,10 @@ use rmcp::{RoleClient, ServiceExt};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
+/// 입력 없는 쓰기 툴의 입력(쓰기 툴은 `Planned` struct 입력이어야 한다 — 카탈로그 규칙).
+#[derive(Debug, Clone, serde::Deserialize, specta::Type, schemars::JsonSchema)]
+pub struct NoInput {}
+
 rpc_method! {
     /// 시험용: `[mcp.tools]` 의 정확한 이름 키가 끈다.
     pub ProbeExact: "mcptest.probeExact" {
@@ -47,7 +51,7 @@ rpc_method! {
 
     /// 시험용: 프리셋 read-only 가 끈다(write 등급).
     pub ProbeWrite: "mcptest.probeWrite" {
-        params: (),
+        params: pw_core::registry::plan::Planned<NoInput>,
         result: (),
         tier: Write,
         mcp: { group: "project", name: "probe_write" },
@@ -111,7 +115,12 @@ impl Fixture {
                     router.unary(ProbeExact, ok);
                     router.unary(ProbeGlob, ok);
                     router.unary(ProbeDb, ok);
-                    router.unary(ProbeWrite, ok);
+                    router.unary(
+                        ProbeWrite,
+                        |_ctx, _p: pw_core::registry::plan::Planned<NoInput>| async {
+                            Ok::<(), RpcError>(())
+                        },
+                    );
                     router.unary(ProbeShared, ok);
                     router.unary(ProbeOn, ok);
                 })

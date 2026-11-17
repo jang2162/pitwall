@@ -3,7 +3,9 @@
 //! - [`catalog`]: `rpc_method!` 선언 중 `mcp` 를 단 것에서 만든 툴 목록(이름 · 그룹 · 설명 · 등급 · 입출력 스키마).
 //! - [`exposure`]: 툴 노출 설정(`[mcp]` 프리셋 · `[mcp.tools]` · `[mcp.groups]` on/off, 전역 → 프로젝트).
 //! - [`code`]: 이 크레이트의 애플리케이션 오류 코드(6001~).
-//! - [`policy`]: 권한 등급별 정책(지금은 `read` 만 허용).
+//! - [`policy`]: 권한 등급별 정책 · `auto_approve` · `[mcp.policy]` 읽기.
+//! - [`approval`]: 승인 요청의 라우팅(창의 `mcp.approvals` · `mcp.approval.answer`). 계획 · 해시의 꼴은
+//!   `pw_core::registry::plan`(툴 크레이트가 이 크레이트에 의존하지 않는다).
 //! - [`audit`]: 감사 로그(`$STATE/mcp/audit.db`)와 인자 요약 규칙.
 //! - [`server`]: MCP 세션 하나(rmcp). 툴 호출을 Host 의 RPC 로 옮긴다.
 //! - [`sessions`]: 열린 세션의 등록부와 상태 이벤트(`mcp.sessionsChanged` · `mcp.activity`).
@@ -32,6 +34,12 @@
 //!   마지막 쪽)를 싣는다. `limit` 이 비면 `pw_rpc::DEFAULT_LIST_LIMIT`(100 — 툴마다 다르면 그 툴의 값, 결정 M5-D34). 어느 툴이 쪽 단위인지는 그 툴 행이 정한다 — 넘치는 응답은 세션의 응답 상한이 막는다.
 //! - **등급은 그 툴이 도달할 수 있는 가장 높은 등급**이다(`pw_rpc::Tier` 의 규칙 그대로). 입력에 따라 등급이 오르면 툴을 둘로
 //!   나눈다(`db_query` read · `db_execute` dangerous — 결정 M5-D4).
+//! - **계획**(결정 M5-D30 — 16-m5-plan M5-12): `write` 이상 툴(과 호출마다 승인을 청하는 `read` 툴)은 입력을
+//!   `pw_core::registry::plan::Planned<P>` 로 감싸고, 부작용 전에 [`ToolPlan`](pw_core::registry::plan::ToolPlan) 을 만들어
+//!   `Planned::approve` 를 지난다. 승인 표 없이 불리면 **아무것도 바꾸지 않고** 계획을 실은 「승인 필요」 로 돌아온다 — 입력이 틀려
+//!   계획을 만들 수 없으면 그 오류를 그대로 낸다(승인을 묻기 전에 거절). 계획에는 서버가 채운 입력 전체와 툴이 더하는 대상 값
+//!   (`PlanBuilder::target` — 고치기 전 파일 내용, DB 의 푼 대상 · 표지)을 넣는다. 해시 판정을 따로 두지 않는다. `write` 이상인데
+//!   입력이 `Planned` 가 아니면 [`Catalog::linked`] 가 시작 때 실패한다.
 //! - **감사 상세**: 감사 행의 인자 요약은 글자열을 80자에서 자르므로 툴이 남길 것이 따로 있으면 결과(object)의 최상위
 //!   [`server::AUDIT`](`audit`) 칸에 글로 싣는다 — 세션이 그 글을 감사 행의 상세 칸으로 옮긴다(오류 · 거절이면 오류 `data`
 //!   (object)의 최상위 `audit` 을 「오류 글 · 상세」 로, 그때는 `data` 를 통째로 싣지 않는다). 길이는 감사의 상세 상한
@@ -44,6 +52,7 @@
 //! - 툴을 더하면 데스크톱 크레이트의 툴 목록(`apps/desktop/src-tauri/src/mcp_tests.rs` 의 `APP_TOOLS` · 코어 툴이면
 //!   `HEADLESS_TOOLS`)에 이름을 더하고, 그 파일의 툴 왕복 도우미(`ToolHost`)로 진짜 세션에서 본다.
 
+pub mod approval;
 pub mod audit;
 pub mod catalog;
 mod client;

@@ -237,6 +237,12 @@ pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
             files.forget(window.label());
         }
     }
+    // MCP 승인의 「가장 최근에 앞에 있던 창」(pw_mcp::approval — 프로젝트 없는 요청이 갈 창). 시험 앱에는 없다.
+    if let (WindowEvent::Focused(true), Some(mcp)) =
+        (event, window.try_state::<pw_mcp::sessions::Sessions>())
+    {
+        mcp.approvals().focused(window.label());
+    }
     // Finder 드롭 기록(drop_import.rs). 시험 앱에는 없다.
     if let Some(drops) = window.try_state::<crate::drop_import::DropImport>() {
         crate::drop_import::on_window_event(window, event, &drops);

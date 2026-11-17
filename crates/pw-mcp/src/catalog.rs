@@ -11,6 +11,9 @@
 //! - 입력: MCP 의 `inputSchema` 는 루트가 object 여야 한다. struct 입력은 그 스키마를 루트로 펼치고, `()` 입력은 빈 object 로
 //!   내보내고 RPC 에는 `null` 을 보낸다. enum 등 그 밖의 루트는 툴로 만들 수 없다([`CatalogError`]).
 //! - 출력: 결과 스키마의 루트가 object 일 때만 `outputSchema` 와 `structuredContent` 를 쓴다(MCP 규칙). 배열 등은 JSON 텍스트로만 준다.
+//! - 계획(16-m5-plan M5-12, 결정 M5-D30): 입력 타입이 `pw_core::registry::plan::Planned` 면 그 스키마 루트의 표지
+//!   (`PLANNED_MARK`)를 읽어 [`Tool::planned`] 로 두고 보이는 스키마에서는 지운다. **`write` 이상 툴은 계획을 만들어야 한다** —
+//!   표지가 없으면 시작 때 실패한다([`CatalogError::Unplanned`]). 세션은 계획 없이 쓰기 툴을 부를 길이 없다(fail-closed).
 //! - 프로젝트 지정: 입력에 `projectId` 가 있으면 프로젝트 툴이다. 세션에 프로젝트가 있으면(`pitwall mcp --project`, cwd) 그 키를
 //!   필수에서 빼고 빠졌을 때 서버가 채운다([`Tool::input_schema_for`]).
 
@@ -18,6 +21,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
+use pw_core::registry::plan::PLANNED_MARK;
 use pw_rpc::{McpTool, MethodInfo, MethodKind, Tier};
 use schemars::generate::SchemaSettings;
 use serde_json::{Map, Value, json};
@@ -44,6 +48,9 @@ pub struct Tool {
     pub description: String,
     /// 입력이 `()` 라 RPC 에 `null` 을 보낸다.
     pub unit_params: bool,
+    /// 입력이 `Planned` 다 — 승인 표 없이 부르면 계획만 만들어 「승인 필요」 로 답한다(`pw_core::registry::plan`). `write`
+    /// 이상은 언제나 `true` 다(아니면 카탈로그가 실패한다). `read` 툴도 호출마다 승인을 청하면 `true` 다.
+    pub planned: bool,
     input_schema: Map<String, Value>,
     pub output_schema: Option<Arc<Map<String, Value>>>,
 }
@@ -90,6 +97,7 @@ impl Tool {
             tier,
             description: String::new(),
             unit_params: true,
+            planned: tier != Tier::Read,
             input_schema: Map::new(),
             output_schema: None,
         }
@@ -112,6 +120,8 @@ pub enum CatalogError {
     BadName { method: &'static str, name: String },
     /// 그룹이 [`GROUPS`] 에 없다.
     UnknownGroup { method: &'static str, group: String },
+    /// `write` 이상 툴의 입력이 `Planned` 가 아니다 — 계획 없이는 승인을 받을 수 없다.
+    Unplanned(&'static str),
     /// 두 메서드가 같은 툴 이름이 된다.
     Duplicate {
         name: String,
@@ -134,6 +144,10 @@ impl fmt::Display for CatalogError {
                 f,
                 "`{method}`: tool group `{group}` is not one of {}",
                 GROUPS.join(", ")
+            ),
+            CatalogError::Unplanned(m) => write!(
+                f,
+                "`{m}`: tools above `read` must take `Planned` params and build a plan (pw_core::registry::plan)"
             ),
             CatalogError::Duplicate {
                 name,
@@ -250,7 +264,11 @@ fn tool(info: &MethodInfo, decl: McpTool) -> Result<Tool, CatalogError> {
             group,
         });
     };
-    let input = root_schema(|g| info.params_schema(g));
+    let mut input = root_schema(|g| info.params_schema(g));
+    let planned = input.remove(PLANNED_MARK) == Some(Value::Bool(true));
+    if meta.tier != Tier::Read && !planned {
+        return Err(CatalogError::Unplanned(meta.name));
+    }
     let (unit_params, input_schema) = match input.get("type").and_then(Value::as_str) {
         Some("object") => (false, input),
         Some("null") => (
@@ -272,6 +290,7 @@ fn tool(info: &MethodInfo, decl: McpTool) -> Result<Tool, CatalogError> {
         tier: meta.tier,
         description: description(meta.doc),
         unit_params,
+        planned,
         input_schema,
         output_schema,
     })
@@ -463,5 +482,95 @@ mod tests {
         assert!(!valid_name(""));
         assert!(!valid_name("dev.pitwall.x"));
         assert!(!valid_name(&"a".repeat(MAX_NAME + 1)));
+    }
+
+    #[derive(Debug, Clone, serde::Deserialize, specta::Type, schemars::JsonSchema)]
+    #[serde(rename_all = "camelCase")]
+    pub struct WriteParams {
+        #[allow(dead_code)] // 스키마만 본다.
+        pub project_id: String,
+    }
+
+    pw_rpc::rpc_method! {
+        /// 계획을 만드는 쓰기 툴.
+        PlannedWrite: "catalogtest.plannedWrite" {
+            params: pw_core::registry::plan::Planned<WriteParams>,
+            result: (),
+            tier: Write,
+            mcp: { group: "project", name: "planned_write" },
+        }
+        /// 호출마다 승인을 청할 수 있는 조회 툴.
+        PlannedRead: "catalogtest.plannedRead" {
+            params: pw_core::registry::plan::Planned<WriteParams>,
+            result: (),
+            tier: Read,
+            mcp: { group: "project", name: "planned_read" },
+        }
+    }
+
+    /// 계획 없는 쓰기 툴. `rpc_method!` 로 만들면 이 바이너리의 `Catalog::linked` 가 실패하므로 손으로 만든다.
+    #[derive(Debug, Clone, Copy)]
+    struct UnplannedWrite;
+    impl Method for UnplannedWrite {
+        type Params = WriteParams;
+        const META: MethodMeta = MethodMeta {
+            name: "catalogtest.unplannedWrite",
+            kind: MethodKind::Unary,
+            tier: Tier::Write,
+            roles: RoleSet::default_for(Tier::Write),
+            params: "WriteParams",
+            output: "()",
+            doc: "",
+            mcp: Some(McpTool {
+                group: Some("project"),
+                name: Some("unplanned_write"),
+            }),
+            file_scope: false,
+        };
+    }
+    impl UnaryMethod for UnplannedWrite {
+        type Result = ();
+    }
+
+    /// `write` 이상 툴은 `Planned` 입력이어야 한다(fail-closed) — 아니면 카탈로그가 실패한다. 표지는 보이는 스키마에서 지운다.
+    #[test]
+    fn tools_above_read_must_build_a_plan_and_the_mark_is_not_shown() {
+        assert_eq!(
+            catalog(&[MethodInfo::unary::<UnplannedWrite>()]).unwrap_err(),
+            CatalogError::Unplanned("catalogtest.unplannedWrite")
+        );
+        let catalog = catalog(&[
+            MethodInfo::unary::<PlannedWrite>(),
+            MethodInfo::unary::<PlannedRead>(),
+            MethodInfo::unary::<Named>(),
+        ])
+        .unwrap();
+        let planned: Vec<_> = catalog
+            .tools()
+            .iter()
+            .map(|t| (t.name.as_str(), t.planned))
+            .collect();
+        assert_eq!(
+            planned,
+            [
+                ("diagnostics", false),
+                ("planned_read", true),
+                ("planned_write", true)
+            ]
+        );
+        let schema = catalog
+            .get("planned_write")
+            .unwrap()
+            .input_schema_for(false);
+        assert!(!schema.contains_key(PLANNED_MARK), "{schema:?}");
+        assert!(
+            !schema["properties"]
+                .as_object()
+                .unwrap()
+                .contains_key(pw_core::registry::plan::APPROVAL_KEY)
+        );
+        assert_eq!(schema["properties"]["projectId"]["type"], "string");
+        // 실행 파일에 링크된 선언 전부도 같은 규칙을 지난다(패닉하지 않는다).
+        let _ = Catalog::linked();
     }
 }

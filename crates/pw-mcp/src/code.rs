@@ -9,8 +9,13 @@ use std::ops::RangeInclusive;
 /// 이 크레이트가 쓰는 범위.
 pub const RANGE: RangeInclusive<i32> = 6001..=6999;
 
-/// 위 코드 전부(상수 이름, 값). 아직 없다 — 첫 코드를 더하는 행이 채운다.
-pub const ALL: [(&str, i32); 0] = [];
+/// 「승인이 있어야 한다」(16-m5-plan M5-12) — 계획을 만드는 툴 메서드가 승인 표 없이(또는 해시가 다른 표로) 불리면 낸다. `data`
+/// 는 `pw_core::registry::plan::ApprovalRequired`(계획 · `mismatch`). 툴 크레이트가 이 크레이트에 의존하지 않아 정본은
+/// `pw_core::registry::plan` 에 있다. MCP 세션 안에서만 쓰이고 에이전트에게 그대로 나가지 않는다.
+pub const APPROVAL_REQUIRED: i32 = pw_core::registry::plan::APPROVAL_REQUIRED;
+
+/// 위 코드 전부(상수 이름, 값).
+pub const ALL: [(&str, i32); 1] = [("APPROVAL_REQUIRED", APPROVAL_REQUIRED)];
 
 #[cfg(test)]
 mod tests {

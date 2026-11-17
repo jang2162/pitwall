@@ -1,0 +1,1490 @@
+//! 승인 경로(16-m5-plan.md M5-12): 진짜 rmcp 클라이언트 · 세션 · Host · 감사 파일, 가짜 쓰기 툴 메서드(계획을 만들고 승인 표를
+//! 본다), 가짜 창(승인 허브를 직접 듣고 답한다 — `mcp.approvals` 를 연 창과 같은 자리), 시한은 설정의 짧은 값과 허브 단위 시험의
+//! 멈춘 시계(`approval.rs`). RPC 길(`mcp.approvals` · `mcp.approval.answer` 와 에이전트 범위 거절)은 끝의 시험들이 본다.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
+use pw_core::config::AppPaths;
+use pw_core::registry::NewProject;
+use pw_core::registry::plan::{APPROVAL_KEY, PlanChange, PlanRules, Planned, Remember, ToolPlan};
+use pw_core::{HostRouter, LocalHost};
+use pw_mcp::approval::{
+    AnswerError, Answerer, Connection, Listener, McpApprovalAnswer, McpApprovalEvent,
+    McpApprovalRequest,
+};
+use pw_mcp::audit::AuditLog;
+use pw_mcp::marker::{Mark, Reason};
+use pw_mcp::methods::{self, HostParts, Mcp};
+use pw_mcp::policy::Approval;
+use pw_mcp::sessions::Sessions;
+use pw_mcp::{Catalog, HostKind, Services, SessionRequest};
+use pw_rpc::{Caller, ConnectionScope, Role, RpcError, Tier, rpc_method};
+use rmcp::model::{
+    CallToolRequest, CallToolRequestParams, CallToolResult, ClientCapabilities, ClientConfig,
+    ClientRequest, Implementation,
+};
+use rmcp::service::{PeerRequestOptions, RunningService};
+use rmcp::{RoleClient, ServiceExt};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolParams {
+    pub project_id: String,
+    #[serde(default)]
+    pub worktree: Option<String>,
+    /// 계획이 내용을 덮고 실행이 `tag` 를 쓰는 파일. `worktree` 가 있으면 그 아래 상대 경로, 없으면 절대 경로.
+    #[serde(default)]
+    pub file: Option<String>,
+    #[serde(default)]
+    pub tag: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
+pub struct NoProjectParams {
+    #[serde(default)]
+    pub tag: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
+pub struct ToolResult {
+    pub audit: String,
+}
+
+rpc_method! {
+    /// 가짜 쓰기 툴: 계획(파일 내용 · 입력)을 만들고 승인 표가 맞을 때만 그 파일에 `tag` 를 쓴다.
+    pub FakeWrite: "approvaltest.write" {
+        params: Planned<ToolParams>,
+        result: ToolResult,
+        tier: Write,
+        mcp: { group: "project", name: "fake_write" },
+    }
+
+    /// 다른 쓰기 툴(세션 허용이 툴마다인지 본다).
+    pub OtherWrite: "approvaltest.other" {
+        params: Planned<ToolParams>,
+        result: ToolResult,
+        tier: Write,
+        mcp: { group: "project", name: "other_write" },
+    }
+
+    /// `dangerous` 툴.
+    pub FakeDangerous: "approvaltest.dangerous" {
+        params: Planned<ToolParams>,
+        result: ToolResult,
+        tier: Dangerous,
+        mcp: { group: "project", name: "fake_dangerous" },
+    }
+
+    /// 명령을 정의하는 쓰기(`open_with_upsert` 의 자리): `auto_approve` 도 세션 허용도 없다.
+    pub FakeDefine: "approvaltest.define" {
+        params: Planned<ToolParams>,
+        result: ToolResult,
+        tier: Write,
+        mcp: { group: "project", name: "fake_define" },
+    }
+
+    /// 프로젝트 없는 쓰기(`project_register` 의 자리).
+    pub FakeRegister: "approvaltest.register" {
+        params: Planned<NoProjectParams>,
+        result: ToolResult,
+        tier: Write,
+        mcp: { group: "project", name: "fake_register" },
+    }
+
+    /// 호출마다 승인을 청할 수 있는 조회 툴(「이 연결 열기」 의 자리): `tag` 가 `ask` 로 시작하면 승인을 청한다.
+    pub FakeOpen: "approvaltest.open" {
+        params: Planned<ToolParams>,
+        result: ToolResult,
+        tier: Read,
+        mcp: { group: "project", name: "fake_open" },
+    }
+}
+
+/// 가짜 툴이 불린 수.
+#[derive(Clone, Default)]
+struct Probe {
+    /// 계획을 만든 수(첫 호출 · 승인 뒤 호출 모두).
+    plans: Arc<AtomicUsize>,
+    /// 승인을 지나 실제로 돈 수.
+    runs: Arc<AtomicUsize>,
+}
+
+fn target_file(p: &ToolParams) -> Option<PathBuf> {
+    p.file.as_ref().map(|f| match &p.worktree {
+        Some(w) => Path::new(w).join(f),
+        None => PathBuf::from(f),
+    })
+}
+
+fn plan_of(method: &str, tier: Tier, rules: PlanRules, p: &ToolParams) -> ToolPlan {
+    let file = target_file(p);
+    let content = file.as_ref().map(|f| std::fs::read_to_string(f).ok());
+    let mut plan = ToolPlan::builder(method, tier, p)
+        .summary(format!("{method} {}", p.tag))
+        .target("content", &content)
+        .rules(rules);
+    if let Some(file) = &file {
+        plan = plan.change(PlanChange::File {
+            path: file.display().to_string(),
+            before: content.flatten(),
+            after: Some(p.tag.clone()),
+        });
+    }
+    plan.build()
+}
+
+async fn execute(
+    probe: Probe,
+    plan: ToolPlan,
+    p: Planned<ToolParams>,
+) -> Result<ToolResult, RpcError> {
+    probe.plans.fetch_add(1, Ordering::SeqCst);
+    let approved = p.approve(plan)?;
+    probe.runs.fetch_add(1, Ordering::SeqCst);
+    if let Some(file) = target_file(&p.params) {
+        std::fs::write(file, &p.params.tag).unwrap();
+    }
+    Ok(ToolResult {
+        audit: format!("tag={} {}", p.params.tag, approved.hash()),
+    })
+}
+
+fn register_tools(router: &mut pw_rpc::Router, probe: &Probe) {
+    let plain = PlanRules::default();
+    let never = PlanRules {
+        auto_approve: false,
+        remember: Remember::Never,
+    };
+    for (method, tier, rules) in [
+        ("approvaltest.write", Tier::Write, plain.clone()),
+        ("approvaltest.other", Tier::Write, plain.clone()),
+        ("approvaltest.dangerous", Tier::Dangerous, plain.clone()),
+        ("approvaltest.define", Tier::Write, never.clone()),
+    ] {
+        let probe = probe.clone();
+        let handler = move |_ctx, p: Planned<ToolParams>| {
+            let plan = plan_of(method, tier, rules.clone(), &p.params);
+            execute(probe.clone(), plan, p)
+        };
+        match method {
+            "approvaltest.write" => router.unary(FakeWrite, handler),
+            "approvaltest.other" => router.unary(OtherWrite, handler),
+            "approvaltest.dangerous" => router.unary(FakeDangerous, handler),
+            _ => router.unary(FakeDefine, handler),
+        };
+    }
+    let register = probe.clone();
+    router.unary(FakeRegister, move |_ctx, p: Planned<NoProjectParams>| {
+        let probe = register.clone();
+        async move {
+            probe.plans.fetch_add(1, Ordering::SeqCst);
+            let plan = ToolPlan::builder("approvaltest.register", Tier::Write, &p.params)
+                .summary("register")
+                .build();
+            p.approve(plan)?;
+            probe.runs.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, RpcError>(ToolResult {
+                audit: format!("tag={}", p.params.tag),
+            })
+        }
+    });
+    let open = probe.clone();
+    router.unary(FakeOpen, move |_ctx, p: Planned<ToolParams>| {
+        let probe = open.clone();
+        async move {
+            if !p.params.tag.starts_with("ask") {
+                probe.runs.fetch_add(1, Ordering::SeqCst);
+                return Ok(ToolResult {
+                    audit: "no approval".into(),
+                });
+            }
+            let rules = PlanRules {
+                auto_approve: false,
+                remember: Remember::Key {
+                    key: format!("connection:{}", p.params.tag),
+                },
+            };
+            let plan = plan_of("approvaltest.open", Tier::Read, rules, &p.params);
+            execute(probe, plan, p).await
+        }
+    });
+}
+
+/// `[mcp.tools]` 의 공통 줄 — `dangerous` 툴은 프리셋 `standard` 에 없다.
+const TOOLS: &str = "[mcp.tools]\nfake_dangerous = true\n";
+
+struct Fixture {
+    _tmp: tempfile::TempDir,
+    base: PathBuf,
+    paths: AppPaths,
+    host: Arc<LocalHost>,
+    sessions: Sessions,
+    probe: Probe,
+    alpha: String,
+    beta: String,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        Self::with_global("")
+    }
+
+    /// 전역 `settings.toml` 에 `global` 을 넣은 Fixture(`[mcp]` 의 키를 쓰면 `[mcp.tools]` 앞에 온다).
+    fn with_global(global: &str) -> Self {
+        Self::build(global, |_| {})
+    }
+
+    /// 프로젝트를 등록하기 전에 그 루트에 파일을 둔다(`.pitwall/*.toml`).
+    fn build(global: &str, before: impl FnOnce(&Path)) -> Self {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = pw_core::registry::path::simplify(std::fs::canonicalize(tmp.path()).unwrap());
+        let paths = AppPaths::under(&base.join("app"));
+        std::fs::create_dir_all(&paths.config).unwrap();
+        std::fs::write(
+            paths.config.join("settings.toml"),
+            format!("schema = 1\n{global}{TOOLS}"),
+        )
+        .unwrap();
+        for name in ["alpha", "beta"] {
+            std::fs::create_dir_all(base.join("work").join(name)).unwrap();
+        }
+        before(&base.join("work"));
+        let sessions = Sessions::new();
+        let mcp = Arc::new(Mcp::new(sessions.clone()));
+        let mcp_methods = Arc::clone(&mcp);
+        let probe = Probe::default();
+        let tools = probe.clone();
+        let host = Arc::new(
+            LocalHost::builder("local")
+                .config(paths.clone())
+                .methods(move |router| register_tools(router, &tools))
+                .methods(move |router| methods::register(router, mcp_methods))
+                .build(),
+        );
+        let registry = host.registry().unwrap();
+        let mut ids = ["alpha", "beta"].iter().map(|name| {
+            registry
+                .create(NewProject {
+                    root: base.join("work").join(name),
+                    ..NewProject::default()
+                })
+                .unwrap()
+                .id
+        });
+        let (alpha, beta) = (ids.next().unwrap(), ids.next().unwrap());
+        let config = host.config().unwrap();
+        mcp.attach(HostParts {
+            paths: paths.clone(),
+            global: config.global.clone(),
+            projects: registry.clone(),
+            catalog: Arc::new(Catalog::linked().routed_by(host.router())),
+            audit: Arc::new(AuditLog::under_state(&paths.state)),
+        });
+        Self {
+            _tmp: tmp,
+            base,
+            paths,
+            host,
+            sessions,
+            probe,
+            alpha,
+            beta,
+        }
+    }
+
+    fn services(&self, host_kind: HostKind) -> Arc<Services> {
+        let router = Arc::new(HostRouter::new());
+        router.add_host(self.host.clone()).unwrap();
+        Arc::new(Services {
+            router,
+            host_id: "local".into(),
+            paths: self.paths.clone(),
+            global: self.host.config().unwrap().global.clone(),
+            bus: self.host.bus().clone(),
+            audit: Arc::new(AuditLog::under_state(&self.paths.state)),
+            catalog: Arc::new(Catalog::linked().routed_by(self.host.router())),
+            approval: Approval::for_host(host_kind, &self.sessions),
+            transport: "test",
+            host_kind,
+            sessions: self.sessions.clone(),
+        })
+    }
+
+    fn work(&self, name: &str) -> PathBuf {
+        self.base.join("work").join(name)
+    }
+
+    /// 세션 하나: 클라이언트 이름 `client`, 세션 프로젝트는 `cwd` 를 담은 프로젝트.
+    async fn agent(&self, client: &str, cwd: &Path) -> Agent {
+        self.agent_on(client, cwd, HostKind::App).await
+    }
+
+    async fn agent_on(&self, client: &str, cwd: &Path, host_kind: HostKind) -> Agent {
+        let (server_io, client_io) = tokio::io::duplex(64 * 1024);
+        let (r, w) = tokio::io::split(server_io);
+        let cancel = CancellationToken::new();
+        tokio::spawn(pw_mcp::serve(
+            self.services(host_kind),
+            SessionRequest {
+                project: None,
+                cwd: Some(cwd.to_path_buf()),
+            },
+            (r, w),
+            cancel.clone(),
+        ));
+        let config = ClientConfig::new(
+            ClientCapabilities::default(),
+            Implementation::new(client, "1"),
+        );
+        let running = config.serve(client_io).await.unwrap();
+        Agent {
+            running,
+            _cancel: cancel,
+        }
+    }
+
+    /// 그 프로젝트 창(가짜): 승인 허브를 그 창의 연결로 듣는다.
+    fn window(&self, project: &str) -> Window {
+        let connection = Connection::named(&format!("window-{project}"));
+        Window {
+            listener: self.sessions.approvals().listen(
+                Some(project),
+                Some(&format!("w-{project}")),
+                connection.clone(),
+            ),
+            project: Some(project.to_owned()),
+            connection,
+            sessions: self.sessions.clone(),
+        }
+    }
+
+    /// 프로젝트 없는 창(웰컴 창의 자리).
+    fn welcome(&self) -> Window {
+        let connection = Connection::named("welcome");
+        Window {
+            listener: self
+                .sessions
+                .approvals()
+                .listen(None, Some("welcome"), connection.clone()),
+            project: None,
+            connection,
+            sessions: self.sessions.clone(),
+        }
+    }
+
+    fn runs(&self) -> usize {
+        self.probe.runs.load(Ordering::SeqCst)
+    }
+
+    fn plans(&self) -> usize {
+        self.probe.plans.load(Ordering::SeqCst)
+    }
+
+    /// 감사 행(쓰기는 큐로 끝난다 — `n` 개가 될 때까지 기다린다).
+    fn rows(&self, n: usize) -> Vec<Row> {
+        let file = self.paths.state.join("mcp/audit.db");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let rows = rusqlite::Connection::open(&file)
+                .ok()
+                .and_then(|conn| {
+                    let mut stmt = conn
+                        .prepare(
+                            "SELECT session, tool, outcome, detail, approval, plan_hash FROM calls ORDER BY id",
+                        )
+                        .ok()?;
+                    let rows = stmt
+                        .query_map([], |r| {
+                            Ok(Row {
+                                session: r.get(0)?,
+                                tool: r.get(1)?,
+                                outcome: r.get(2)?,
+                                detail: r.get(3)?,
+                                approval: r.get(4)?,
+                                plan_hash: r.get(5)?,
+                            })
+                        })
+                        .ok()?
+                        .map(Result::unwrap)
+                        .collect::<Vec<_>>();
+                    Some(rows)
+                })
+                .unwrap_or_default();
+            // 선기록한 행은 끝 기록이 따로 온다 — `started` 가 없을 때까지.
+            if rows.len() >= n && rows.iter().all(|r| r.outcome != "started") {
+                return rows;
+            }
+            assert!(std::time::Instant::now() < deadline, "audit rows: {rows:?}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Row {
+    session: String,
+    tool: String,
+    outcome: String,
+    detail: Option<String>,
+    approval: Option<String>,
+    plan_hash: Option<String>,
+}
+
+struct Agent {
+    running: RunningService<RoleClient, ClientConfig>,
+    _cancel: CancellationToken,
+}
+
+impl Agent {
+    /// 호출을 띄운다(답을 기다리지 않는다).
+    fn spawn(&self, tool: &str, args: Value) -> tokio::task::JoinHandle<CallToolResult> {
+        let peer = self.running.peer().clone();
+        let mut params = CallToolRequestParams::new(tool.to_owned());
+        if let Value::Object(map) = args {
+            params = params.with_arguments(map);
+        }
+        tokio::spawn(async move { peer.call_tool(params).await.unwrap() })
+    }
+
+    async fn call(&self, tool: &str, args: Value) -> CallToolResult {
+        within(self.spawn(tool, args)).await.unwrap()
+    }
+}
+
+struct Window {
+    listener: Listener,
+    project: Option<String>,
+    connection: Connection,
+    sessions: Sessions,
+}
+
+impl Window {
+    async fn next(&mut self) -> McpApprovalEvent {
+        within(self.listener.recv()).await.expect("listener ended")
+    }
+
+    async fn opened(&mut self) -> McpApprovalRequest {
+        match self.next().await {
+            McpApprovalEvent::Open { request } => *request,
+            other => panic!("expected a request, got {other:?}"),
+        }
+    }
+
+    async fn closed(&mut self, id: u64) {
+        assert_eq!(self.next().await, McpApprovalEvent::Closed { id });
+    }
+
+    fn answer(&self, id: u64, answer: McpApprovalAnswer) -> Result<(), AnswerError> {
+        let scope = match &self.project {
+            Some(p) => ConnectionScope::Project(p.clone()),
+            None => ConnectionScope::Host,
+        };
+        self.sessions.approvals().answer(
+            &Answerer {
+                scope: &scope,
+                connection: self.connection.clone(),
+            },
+            id,
+            answer,
+        )
+    }
+
+    fn quiet(&mut self) -> bool {
+        self.listener.try_recv().is_none()
+    }
+}
+
+async fn within<F: Future>(f: F) -> F::Output {
+    tokio::time::timeout(Duration::from_secs(10), f)
+        .await
+        .expect("timed out")
+}
+
+fn mark(result: &CallToolResult) -> Mark {
+    Mark::read(&result.meta.as_ref().expect("no _meta").0).expect("no outcome mark")
+}
+
+fn text(result: &CallToolResult) -> String {
+    result
+        .content
+        .iter()
+        .filter_map(|c| c.as_text().map(|t| t.text.clone()))
+        .collect()
+}
+
+/// 허용 → 실행, 승인을 지난 호출의 감사 행에 승인 방식과 해시가 있다. 계획 단계(첫 호출)는 부작용이 없다 — 사람이 답하기 전에는
+/// 파일이 그대로다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_allowed_call_runs_once_and_its_row_keeps_the_approval_and_the_hash() {
+    let f = Fixture::new();
+    let file = f.work("alpha").join("a.txt");
+    std::fs::write(&file, "before").unwrap();
+    let mut window = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let call = agent.spawn(
+        "fake_write",
+        json!({"file": file.display().to_string(), "tag": "after"}),
+    );
+    let request = window.opened().await;
+    assert_eq!(request.tool, "fake_write");
+    assert_eq!(request.tier, Tier::Write);
+    assert_eq!(request.project_id.as_deref(), Some(f.alpha.as_str()));
+    assert_eq!(request.client.as_deref(), Some("agent 1"));
+    assert!(!request.cli);
+    assert_eq!(
+        request.answers,
+        [
+            McpApprovalAnswer::Deny,
+            McpApprovalAnswer::Once,
+            McpApprovalAnswer::Session
+        ]
+    );
+    assert_eq!(
+        request.plan.changes,
+        [PlanChange::File {
+            path: file.display().to_string(),
+            before: Some("before".into()),
+            after: Some("after".into()),
+        }]
+    );
+    // 계획 단계: 툴은 계획만 만들었다.
+    assert_eq!((f.plans(), f.runs()), (1, 0));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "before");
+    assert_eq!(
+        f.rows(0).len(),
+        0,
+        "답하기 전에는 감사 행도 없다(선기록은 승인 뒤)"
+    );
+
+    window.answer(request.id, McpApprovalAnswer::Once).unwrap();
+    let result = within(call).await.unwrap();
+    assert_eq!(mark(&result), Mark::ok(), "{result:?}");
+    window.closed(request.id).await;
+    assert_eq!((f.plans(), f.runs()), (2, 1));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "after");
+    let rows = f.rows(1);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (
+            rows[0].tool.as_str(),
+            rows[0].outcome.as_str(),
+            rows[0].approval.as_deref(),
+            rows[0].plan_hash.as_deref()
+        ),
+        (
+            "fake_write",
+            "ok",
+            Some("once"),
+            Some(request.plan.hash.as_str())
+        )
+    );
+    // [이번만 허용] 은 다음 호출에 닿지 않는다.
+    let again = agent.spawn("fake_write", json!({"tag": "x"}));
+    let second = window.opened().await;
+    window.answer(second.id, McpApprovalAnswer::Deny).unwrap();
+    within(again).await.unwrap();
+}
+
+/// 거절 · 시한 초과 → 실행하지 않고 감사 `denied` 와 까닭.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn denied_and_timed_out_calls_do_not_run() {
+    let f = Fixture::with_global("[mcp.policy]\napproval_timeout_secs = 1\n");
+    let mut window = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+
+    let call = agent.spawn("fake_write", json!({"tag": "no"}));
+    let request = window.opened().await;
+    assert_eq!(request.timeout_secs, 1, "전역 [mcp.policy] 의 시한");
+    window.answer(request.id, McpApprovalAnswer::Deny).unwrap();
+    let denied = within(call).await.unwrap();
+    assert_eq!(mark(&denied), Mark::denied(Reason::ApprovalDenied));
+    assert_eq!(denied.is_error, Some(true));
+    window.closed(request.id).await;
+
+    let call = agent.spawn("fake_write", json!({"tag": "late"}));
+    let request = window.opened().await;
+    let started = std::time::Instant::now();
+    let timed_out = within(call).await.unwrap();
+    assert!(started.elapsed() >= Duration::from_millis(900));
+    assert_eq!(mark(&timed_out), Mark::denied(Reason::ApprovalTimeout));
+    assert!(
+        text(&timed_out).contains("within 1 seconds"),
+        "{}",
+        text(&timed_out)
+    );
+    window.closed(request.id).await;
+    // 시한이 지난 요청에는 답할 수 없다.
+    assert_eq!(
+        window.answer(request.id, McpApprovalAnswer::Once),
+        Err(AnswerError::NotFound)
+    );
+
+    assert_eq!(f.runs(), 0);
+    let rows = f.rows(2);
+    let summary: Vec<_> = rows
+        .iter()
+        .map(|r| (r.outcome.as_str(), r.approval.as_deref()))
+        .collect();
+    assert_eq!(summary, [("denied", None), ("denied", None)]);
+    assert!(
+        rows[0]
+            .detail
+            .as_deref()
+            .unwrap()
+            .contains("denied in Pitwall")
+    );
+    assert!(
+        rows[1]
+            .detail
+            .as_deref()
+            .unwrap()
+            .contains("within 1 seconds")
+    );
+}
+
+/// 승인 뒤 계획이 바뀌면(파일 내용) 돌지 않고, 다시 묻지 않고 `plan_changed` 로 거절한다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_plan_that_changes_after_approval_does_not_run_and_is_not_asked_again() {
+    let f = Fixture::new();
+    let file = f.work("alpha").join("a.txt");
+    std::fs::write(&file, "seen by the person").unwrap();
+    let mut window = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let call = agent.spawn(
+        "fake_write",
+        json!({"file": file.display().to_string(), "tag": "x"}),
+    );
+    let request = window.opened().await;
+    std::fs::write(&file, "changed behind the dialog").unwrap();
+    window.answer(request.id, McpApprovalAnswer::Once).unwrap();
+    let result = within(call).await.unwrap();
+    assert_eq!(mark(&result), Mark::denied(Reason::PlanChanged));
+    assert!(
+        text(&result).contains("changed after it was approved"),
+        "{}",
+        text(&result)
+    );
+    assert!(
+        !text(&result).contains("sha256:"),
+        "계획 · 해시가 에이전트에게 나갔다"
+    );
+    window.closed(request.id).await;
+    assert!(window.quiet(), "다시 물었다");
+    assert_eq!(f.runs(), 0);
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "changed behind the dialog"
+    );
+    let rows = f.rows(1);
+    assert_eq!(
+        (rows[0].outcome.as_str(), rows[0].approval.as_deref()),
+        ("denied", Some("once")),
+        "선기록한 행이 거절로 끝난다"
+    );
+}
+
+/// `git worktree add` 가 만드는 모양: `main` 의 연결 워크트리. 돌려주는 것은 워크트리 꼭대기.
+fn fake_worktree(main: &Path, wt: &Path) -> PathBuf {
+    let admin = main.join(".git/worktrees/wt");
+    std::fs::create_dir_all(&admin).unwrap();
+    std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+    std::fs::create_dir_all(wt).unwrap();
+    std::fs::write(wt.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+    std::fs::write(
+        admin.join("gitdir"),
+        format!("{}\n", wt.join(".git").display()),
+    )
+    .unwrap();
+    pw_core::registry::path::simplify(std::fs::canonicalize(wt).unwrap())
+}
+
+/// 서버가 채운 `worktree` 도 계획에 든다: 세션이 연결 워크트리 안에서 열려 서버가 `worktree` 를 채우고, 툴은 그 워크트리의
+/// 파일을 계획에 넣는다. 승인 뒤 그 워크트리의 파일이 바뀌면 돌지 않는다. 승인 표의 해시는 채운 입력을 덮는다 — 같은 입력을
+/// 채우지 않은 계획(메인 체크아웃)과 해시가 다르다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_server_filled_worktree_is_part_of_the_plan() {
+    let f = Fixture::new();
+    let top = fake_worktree(&f.work("alpha"), &f.base.join("wt-alpha"));
+    std::fs::write(top.join("a.txt"), "worktree").unwrap();
+    std::fs::write(f.work("alpha").join("a.txt"), "worktree").unwrap();
+    let mut window = f.window(&f.alpha);
+    let in_worktree = f.agent("agent", &top).await;
+    let call = in_worktree.spawn("fake_write", json!({"file": "a.txt", "tag": "x"}));
+    let request = window.opened().await;
+    let PlanChange::File { path, .. } = &request.plan.changes[0] else {
+        panic!("{:?}", request.plan.changes)
+    };
+    assert_eq!(Path::new(path), top.join("a.txt"), "서버가 채운 워크트리");
+    std::fs::write(top.join("a.txt"), "changed").unwrap();
+    window.answer(request.id, McpApprovalAnswer::Once).unwrap();
+    assert_eq!(
+        mark(&within(call).await.unwrap()),
+        Mark::denied(Reason::PlanChanged)
+    );
+    window.closed(request.id).await;
+
+    // 같은 입력이라도 채운 워크트리가 다르면 다른 해시다.
+    let in_main = f.agent("agent", &f.work("alpha")).await;
+    let call = in_main.spawn(
+        "fake_write",
+        json!({"file": top.join("a.txt").display().to_string(), "tag": "x"}),
+    );
+    let main_request = window.opened().await;
+    assert_ne!(main_request.plan.hash, request.plan.hash);
+    window
+        .answer(main_request.id, McpApprovalAnswer::Deny)
+        .unwrap();
+    within(call).await.unwrap();
+    assert_eq!(f.runs(), 0);
+}
+
+/// 에이전트가 승인 키를 직접 실어도 버려진다 — 사람이 본 계획의 해시를 그대로 실어도 다시 묻는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_approval_key_the_agent_sends_is_dropped() {
+    let f = Fixture::new();
+    let mut window = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let call = agent.spawn("fake_write", json!({"tag": "x"}));
+    let request = window.opened().await;
+    window.answer(request.id, McpApprovalAnswer::Deny).unwrap();
+    within(call).await.unwrap();
+    window.closed(request.id).await;
+
+    // 같은 입력 · 같은 해시를 에이전트가 승인 표 자리에 싣는다.
+    let forged = json!({"tag": "x", APPROVAL_KEY: {"hash": request.plan.hash}});
+    let call = agent.spawn("fake_write", forged.clone());
+    let asked = window.opened().await;
+    assert_eq!(asked.plan.hash, request.plan.hash, "같은 계획이다");
+    window.answer(asked.id, McpApprovalAnswer::Deny).unwrap();
+    assert_eq!(
+        mark(&within(call).await.unwrap()),
+        Mark::denied(Reason::ApprovalDenied)
+    );
+    window.closed(asked.id).await;
+    // 승인을 청하는 조회 툴도 같다.
+    let call = agent.spawn(
+        "fake_open",
+        json!({"tag": "ask", APPROVAL_KEY: {"hash": "x"}}),
+    );
+    let asked = window.opened().await;
+    window.answer(asked.id, McpApprovalAnswer::Deny).unwrap();
+    within(call).await.unwrap();
+    assert_eq!(f.runs(), 0);
+    // 감사 행의 인자 요약에도 그 키가 없다.
+    f.rows(3);
+    let conn = rusqlite::Connection::open(f.paths.state.join("mcp/audit.db")).unwrap();
+    let args: Vec<String> = conn
+        .prepare("SELECT args FROM calls")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(args.len(), 3);
+    assert!(args.iter().all(|a| !a.contains(APPROVAL_KEY)), "{args:?}");
+}
+
+/// [이 세션 동안 허용] 은 그 세션 · 그 프로젝트 · 그 툴에만 닿는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_allowance_reaches_only_that_session_tool_and_project() {
+    let f = Fixture::new();
+    let mut alpha = f.window(&f.alpha);
+    let mut beta = f.window(&f.beta);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let call = agent.spawn("fake_write", json!({"tag": "1"}));
+    let request = alpha.opened().await;
+    alpha
+        .answer(request.id, McpApprovalAnswer::Session)
+        .unwrap();
+    assert_eq!(mark(&within(call).await.unwrap()), Mark::ok());
+    alpha.closed(request.id).await;
+
+    // 같은 세션 · 프로젝트 · 툴: 묻지 않는다.
+    assert_eq!(
+        mark(&agent.call("fake_write", json!({"tag": "2"})).await),
+        Mark::ok()
+    );
+    assert!(alpha.quiet());
+    // 다른 툴: 묻는다.
+    let call = agent.spawn("other_write", json!({"tag": "3"}));
+    let other_tool = alpha.opened().await;
+    assert_eq!(other_tool.tool, "other_write");
+    alpha
+        .answer(other_tool.id, McpApprovalAnswer::Deny)
+        .unwrap();
+    within(call).await.unwrap();
+    alpha.closed(other_tool.id).await;
+    // 다른 프로젝트: 그 프로젝트 창에 묻는다.
+    let call = agent.spawn("fake_write", json!({"projectId": f.beta, "tag": "4"}));
+    let other_project = beta.opened().await;
+    assert_eq!(other_project.project_id.as_deref(), Some(f.beta.as_str()));
+    beta.answer(other_project.id, McpApprovalAnswer::Deny)
+        .unwrap();
+    within(call).await.unwrap();
+    // 다른 세션: 묻는다.
+    let second = f.agent("agent", &f.work("alpha")).await;
+    let call = second.spawn("fake_write", json!({"tag": "5"}));
+    let other_session = alpha.opened().await;
+    assert_ne!(other_session.session, request.session);
+    alpha
+        .answer(other_session.id, McpApprovalAnswer::Deny)
+        .unwrap();
+    within(call).await.unwrap();
+
+    assert_eq!(f.runs(), 2);
+    let rows = f.rows(5);
+    let approvals: Vec<_> = rows
+        .iter()
+        .map(|r| (r.tool.as_str(), r.outcome.as_str(), r.approval.as_deref()))
+        .collect();
+    assert_eq!(
+        approvals,
+        [
+            ("fake_write", "ok", Some("session")),
+            ("fake_write", "ok", Some("session")),
+            ("other_write", "denied", None),
+            ("fake_write", "denied", None),
+            ("fake_write", "denied", None),
+        ]
+    );
+    assert_ne!(
+        rows[0].plan_hash, rows[1].plan_hash,
+        "호출마다 그 계획의 해시"
+    );
+}
+
+/// CLI 허용: 다른 CLI 세션의 같은 툴도 묻지 않고(창이 열려 있는 동안), 그 창을 닫으면 사라진다. CLI 가 아닌 세션에는 닿지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_cli_allowance_lasts_while_the_window_is_open() {
+    let f = Fixture::new();
+    let mut window = f.window(&f.alpha);
+    let first = f.agent(pw_mcp::server::CLI_CLIENT, &f.work("alpha")).await;
+    let call = first.spawn("fake_write", json!({"tag": "1"}));
+    let request = window.opened().await;
+    assert!(request.cli);
+    assert_eq!(
+        request.answers,
+        [
+            McpApprovalAnswer::Deny,
+            McpApprovalAnswer::Once,
+            McpApprovalAnswer::Window
+        ]
+    );
+    assert_eq!(
+        window.answer(request.id, McpApprovalAnswer::Session),
+        Err(AnswerError::NotOffered)
+    );
+    window
+        .answer(request.id, McpApprovalAnswer::Window)
+        .unwrap();
+    assert_eq!(mark(&within(call).await.unwrap()), Mark::ok());
+    window.closed(request.id).await;
+
+    // 다른 CLI 세션(호출마다 새 세션이다)의 같은 툴: 묻지 않는다.
+    let second = f.agent(pw_mcp::server::CLI_CLIENT, &f.work("alpha")).await;
+    assert_eq!(
+        mark(&second.call("fake_write", json!({"tag": "2"})).await),
+        Mark::ok()
+    );
+    assert!(window.quiet());
+    // CLI 가 아닌 세션 · 다른 툴은 묻는다.
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let call = agent.spawn("fake_write", json!({"tag": "3"}));
+    let asked = window.opened().await;
+    window.answer(asked.id, McpApprovalAnswer::Deny).unwrap();
+    within(call).await.unwrap();
+    window.closed(asked.id).await;
+    let call = second.spawn("other_write", json!({"tag": "4"}));
+    let asked = window.opened().await;
+    window.answer(asked.id, McpApprovalAnswer::Deny).unwrap();
+    within(call).await.unwrap();
+
+    // 창을 닫으면(듣기를 그만두면) 사라진다 — 다시 연 창은 다시 묻는다.
+    drop(window);
+    let mut reopened = f.window(&f.alpha);
+    let third = f.agent(pw_mcp::server::CLI_CLIENT, &f.work("alpha")).await;
+    let call = third.spawn("fake_write", json!({"tag": "5"}));
+    let asked = reopened.opened().await;
+    reopened.answer(asked.id, McpApprovalAnswer::Deny).unwrap();
+    within(call).await.unwrap();
+
+    let rows = f.rows(5);
+    let approvals: Vec<_> = rows.iter().map(|r| r.approval.as_deref()).collect();
+    assert_eq!(
+        approvals,
+        [Some("window"), Some("window"), None, None, None]
+    );
+    assert_ne!(
+        rows[0].session, rows[1].session,
+        "CLI 는 호출마다 새 세션이다"
+    );
+}
+
+/// `auto_approve = ["write"]` 면 묻지 않는다(감사 행의 승인 방식 `auto`). `dangerous` 는 `auto_approve` 에 있어도 매번 묻고
+/// 셋째 답이 없다. 명령을 정의하는 쓰기(`Remember::Never` · `auto_approve: false`)도 묻고 셋째 답이 없다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_approve_skips_the_question_except_for_dangerous_and_defining_tools() {
+    let f = Fixture::with_global("[mcp]\nauto_approve = [\"write\", \"dangerous\"]\n");
+    let mut window = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    assert_eq!(
+        mark(&agent.call("fake_write", json!({"tag": "1"})).await),
+        Mark::ok()
+    );
+    assert!(window.quiet(), "auto_approve 인데 물었다");
+
+    for tool in ["fake_dangerous", "fake_dangerous", "fake_define"] {
+        let call = agent.spawn(tool, json!({"tag": "x"}));
+        let request = window.opened().await;
+        assert_eq!(request.tool, tool);
+        assert_eq!(
+            request.answers,
+            [McpApprovalAnswer::Deny, McpApprovalAnswer::Once],
+            "{tool}"
+        );
+        assert_eq!(
+            window.answer(request.id, McpApprovalAnswer::Session),
+            Err(AnswerError::NotOffered)
+        );
+        window.answer(request.id, McpApprovalAnswer::Once).unwrap();
+        assert_eq!(mark(&within(call).await.unwrap()), Mark::ok(), "{tool}");
+        window.closed(request.id).await;
+    }
+    let rows = f.rows(4);
+    let approvals: Vec<_> = rows
+        .iter()
+        .map(|r| (r.tool.as_str(), r.approval.as_deref()))
+        .collect();
+    assert_eq!(
+        approvals,
+        [
+            ("fake_write", Some("auto")),
+            ("fake_dangerous", Some("once")),
+            ("fake_dangerous", Some("once")),
+            ("fake_define", Some("once")),
+        ]
+    );
+    assert!(rows.iter().all(|r| r.plan_hash.is_some()));
+}
+
+/// 커밋되는 공유 `project.toml` 의 `auto_approve` 는 효과가 없고 `.local.toml` 의 것은 먹는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_shared_project_auto_approve_has_no_effect() {
+    let f = Fixture::build("", |work| {
+        let shared = work.join("alpha/.pitwall");
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::write(
+            shared.join("project.toml"),
+            "schema = 1\n[mcp]\nauto_approve = [\"write\"]\n",
+        )
+        .unwrap();
+        let local = work.join("beta/.pitwall");
+        std::fs::create_dir_all(&local).unwrap();
+        std::fs::write(
+            local.join("project.local.toml"),
+            "schema = 1\n[mcp]\nauto_approve = [\"write\"]\n",
+        )
+        .unwrap();
+    });
+    let mut alpha = f.window(&f.alpha);
+    let beta = f.window(&f.beta);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let call = agent.spawn("fake_write", json!({"tag": "shared"}));
+    let request = alpha.opened().await;
+    alpha.answer(request.id, McpApprovalAnswer::Deny).unwrap();
+    assert_eq!(
+        mark(&within(call).await.unwrap()),
+        Mark::denied(Reason::ApprovalDenied)
+    );
+    // 대상 프로젝트(`beta`)의 `.local.toml` 이 정한다 — 세션 프로젝트의 것이 아니다.
+    assert_eq!(
+        mark(
+            &agent
+                .call("fake_write", json!({"projectId": f.beta, "tag": "local"}))
+                .await
+        ),
+        Mark::ok()
+    );
+    drop(beta);
+    assert_eq!(f.runs(), 1);
+    let rows = f.rows(2);
+    assert_eq!(rows[1].approval.as_deref(), Some("auto"));
+}
+
+/// 공유 `project.toml` 의 `[mcp.policy] approval_timeout_secs` 는 효과가 없고 경고가 남는다. 전역 · `.local.toml` 의 값은 먹는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_shared_policy_table_has_no_effect_and_warns() {
+    let f = Fixture::build("", |work| {
+        let shared = work.join("alpha/.pitwall");
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::write(
+            shared.join("project.toml"),
+            "schema = 1\n[mcp.policy]\napproval_timeout_secs = 1\n",
+        )
+        .unwrap();
+        let local = work.join("beta/.pitwall");
+        std::fs::create_dir_all(&local).unwrap();
+        std::fs::write(
+            local.join("project.local.toml"),
+            "schema = 1\n[mcp.policy]\napproval_timeout_secs = 7\n",
+        )
+        .unwrap();
+    });
+    let registry = f.host.registry().unwrap();
+    let global = &f.host.config().unwrap().global;
+    let (policy, warnings) =
+        pw_mcp::policy::read_project(&f.paths, global, &registry.get(&f.alpha).unwrap());
+    assert_eq!(policy.approval_timeout, Duration::from_secs(300));
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("mcp.policy in the shared .pitwall/project.toml has no effect")),
+        "{warnings:?}"
+    );
+    let (policy, warnings) =
+        pw_mcp::policy::read_project(&f.paths, global, &registry.get(&f.beta).unwrap());
+    assert_eq!(policy.approval_timeout, Duration::from_secs(7));
+    assert!(warnings.is_empty(), "{warnings:?}");
+
+    // 세션도 같은 판정이다: 창에 실린 시한.
+    let mut alpha = f.window(&f.alpha);
+    let mut beta = f.window(&f.beta);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let call = agent.spawn("fake_write", json!({"tag": "a"}));
+    let request = alpha.opened().await;
+    assert_eq!(request.timeout_secs, 300);
+    alpha.answer(request.id, McpApprovalAnswer::Deny).unwrap();
+    within(call).await.unwrap();
+    let call = agent.spawn("fake_write", json!({"projectId": f.beta, "tag": "b"}));
+    let request = beta.opened().await;
+    assert_eq!(request.timeout_secs, 7);
+    beta.answer(request.id, McpApprovalAnswer::Deny).unwrap();
+    within(call).await.unwrap();
+}
+
+/// 대상 프로젝트 창이 없으면 기다리지 않고 거절한다(`needs_approval`). 다른 프로젝트 창 · 웰컴 창은 대신 답하지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn without_the_target_project_window_the_call_is_refused_at_once() {
+    let f = Fixture::new();
+    let mut beta = f.window(&f.beta);
+    let mut welcome = f.welcome();
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let started = std::time::Instant::now();
+    let result = agent.call("fake_write", json!({"tag": "x"})).await;
+    assert!(started.elapsed() < Duration::from_secs(5), "기다렸다");
+    assert_eq!(mark(&result), Mark::denied(Reason::NeedsApproval));
+    assert!(
+        text(&result).contains(&format!(
+            "no Pitwall window of project `{}` is open",
+            f.alpha
+        )),
+        "{}",
+        text(&result)
+    );
+    assert!(beta.quiet() && welcome.quiet());
+    assert_eq!(f.runs(), 0);
+    assert_eq!(f.rows(1)[0].outcome, "denied");
+}
+
+/// 프로젝트 없는 쓰기는 가장 최근에 앞에 있던 창에 「이 프로젝트의 것이 아니다」 로 묻고 그 창만 답한다. 창이 없으면 거절.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_projectless_write_asks_the_front_window() {
+    let f = Fixture::new();
+    let agent = f.agent("agent", &f.base).await;
+    assert_eq!(
+        mark(&agent.call("fake_register", json!({"tag": "none"})).await),
+        Mark::denied(Reason::NeedsApproval),
+        "창이 하나도 없다"
+    );
+    let mut alpha = f.window(&f.alpha);
+    let mut welcome = f.welcome();
+    f.sessions.approvals().focused("welcome");
+    f.sessions.approvals().focused(&format!("w-{}", f.alpha));
+    let call = agent.spawn("fake_register", json!({"tag": "x"}));
+    let request = alpha.opened().await;
+    assert!(request.not_this_project);
+    assert_eq!(request.project_id, None);
+    assert!(welcome.quiet(), "다른 창에도 떴다");
+    assert_eq!(
+        welcome.answer(request.id, McpApprovalAnswer::Once),
+        Err(AnswerError::NotYours)
+    );
+    alpha.answer(request.id, McpApprovalAnswer::Once).unwrap();
+    assert_eq!(mark(&within(call).await.unwrap()), Mark::ok());
+    assert_eq!(f.runs(), 1);
+}
+
+/// 호출 취소가 대기를 거둔다: 창의 다이얼로그에 닫힘이 가고, 감사 행은 `error` · `cancelled`, 툴은 돌지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelling_the_call_withdraws_the_request() {
+    let f = Fixture::new();
+    let mut window = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let handle = agent
+        .running
+        .peer()
+        .send_cancellable_request(
+            ClientRequest::CallToolRequest(CallToolRequest::new(
+                CallToolRequestParams::new("fake_write")
+                    .with_arguments(json!({"tag": "x"}).as_object().unwrap().clone()),
+            )),
+            PeerRequestOptions::no_options(),
+        )
+        .await
+        .unwrap();
+    let request = window.opened().await;
+    handle.cancel(Some("test".into())).await.unwrap();
+    window.closed(request.id).await;
+    assert_eq!(
+        window.answer(request.id, McpApprovalAnswer::Once),
+        Err(AnswerError::NotFound)
+    );
+    let rows = f.rows(1);
+    assert_eq!(
+        (rows[0].outcome.as_str(), rows[0].detail.as_deref()),
+        ("error", Some("cancelled"))
+    );
+    assert_eq!(f.runs(), 0);
+}
+
+/// 끊긴 세션의 요청에 사람이 [허용] 을 눌러도 돌지 않는다. rmcp 는 끊긴 뒤 5초까지 핸들러를 돌리지만, 세션은 읽기가 끝나는 것을
+/// 보고 곧바로 요청을 거둔다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_disconnected_sessions_request_is_withdrawn_before_anyone_can_allow_it() {
+    let f = Fixture::new();
+    let mut window = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let _call = agent.spawn("fake_write", json!({"tag": "x"}));
+    let request = window.opened().await;
+    let disconnected = std::time::Instant::now();
+    agent.running.cancel().await.unwrap();
+    window.closed(request.id).await;
+    assert!(
+        disconnected.elapsed() < Duration::from_secs(3),
+        "5초 drain 을 기다렸다: {:?}",
+        disconnected.elapsed()
+    );
+    assert_eq!(
+        window.answer(request.id, McpApprovalAnswer::Once),
+        Err(AnswerError::NotFound)
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(f.runs(), 0);
+    assert_eq!(f.rows(1)[0].detail.as_deref(), Some("cancelled"));
+}
+
+/// 승인을 청하는 조회 툴: 승인이 필요 없는 호출은 첫 호출의 결과가 곧 결과(선기록 없음 · 승인 칸 없음), 청한 호출은 승인을 지나
+/// 선기록되고 승인 방식 · 해시가 남는다. `auto_approve` 를 적용하지 않는 계획이면 `auto_approve = ["read", "write"]` 여도 묻고,
+/// 세션 허용은 계획의 열쇠(그 연결)에 묶인다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_read_tool_can_ask_per_call() {
+    let f = Fixture::with_global("[mcp]\nauto_approve = [\"read\", \"write\"]\n");
+    let mut window = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    assert_eq!(
+        mark(&agent.call("fake_open", json!({"tag": "plain"})).await),
+        Mark::ok()
+    );
+    assert!(window.quiet());
+    let call = agent.spawn("fake_open", json!({"tag": "ask-1"}));
+    let request = window.opened().await;
+    assert_eq!(request.tier, Tier::Read);
+    window
+        .answer(request.id, McpApprovalAnswer::Session)
+        .unwrap();
+    assert_eq!(mark(&within(call).await.unwrap()), Mark::ok());
+    window.closed(request.id).await;
+    // 같은 열쇠: 묻지 않는다. 다른 열쇠(다른 연결): 묻는다.
+    assert_eq!(
+        mark(&agent.call("fake_open", json!({"tag": "ask-1"})).await),
+        Mark::ok()
+    );
+    let call = agent.spawn("fake_open", json!({"tag": "ask-2"}));
+    let other = window.opened().await;
+    window.answer(other.id, McpApprovalAnswer::Deny).unwrap();
+    within(call).await.unwrap();
+    let rows = f.rows(4);
+    let summary: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            (
+                r.outcome.as_str(),
+                r.approval.as_deref(),
+                r.plan_hash.is_some(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            ("ok", None, false),
+            ("ok", Some("session"), true),
+            ("ok", Some("session"), true),
+            ("denied", None, false),
+        ]
+    );
+}
+
+/// 헤드리스: 승인 경로가 없어 `write` 이상은 거절한다(`headless_write`) — 툴을 부르지도 않는다(계획도 없다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_headless_session_refuses_writes_without_calling_the_tool() {
+    let f = Fixture::with_global("[mcp]\nauto_approve = [\"write\"]\n");
+    let _window = f.window(&f.alpha);
+    let agent = f
+        .agent_on("agent", &f.work("alpha"), HostKind::Headless)
+        .await;
+    let result = agent.call("fake_write", json!({"tag": "x"})).await;
+    assert_eq!(mark(&result), Mark::denied(Reason::HeadlessWrite));
+    assert_eq!((f.plans(), f.runs()), (0, 0));
+    // 승인을 청하는 조회 툴도 헤드리스에서는 승인을 받을 길이 없다.
+    let result = agent.call("fake_open", json!({"tag": "ask"})).await;
+    assert_eq!(mark(&result), Mark::denied(Reason::NeedsApproval));
+    assert_eq!(f.runs(), 0);
+}
+
+/// 앱이 끝날 때(`Sessions::shutdown`): 대기를 거두고, 그 호출의 감사 행이 큐에서 쓰인 뒤 돌아온다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutting_down_withdraws_requests_and_flushes_the_audit_queue() {
+    let f = Fixture::new();
+    let mut window = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    // 끝난 read 호출의 기록(큐)도 함께 비운다.
+    agent.call("project_list", json!({})).await;
+    let call = agent.spawn("fake_write", json!({"tag": "x"}));
+    let request = window.opened().await;
+    f.rows(1);
+    // 다른 프로세스가 감사 파일의 쓰기 잠금을 잠시 쥔다 — 쓰기 스레드가 그동안 기다리므로, 종료가 큐를 비우기를 기다리지 않으면
+    // 돌아온 때 거절 행이 아직 없다.
+    let audit_file = f.paths.state.join("mcp/audit.db");
+    let locker = rusqlite::Connection::open(&audit_file).unwrap();
+    locker.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(500));
+        locker.execute_batch("COMMIT").unwrap();
+    });
+    let sessions = f.sessions.clone();
+    let done = tokio::task::spawn_blocking(move || sessions.shutdown(Duration::from_secs(2)))
+        .await
+        .unwrap();
+    release.join().unwrap();
+    assert!(done, "시한 안에 끝나지 않았다");
+    // 돌아온 때 행이 이미 있다(기다리지 않고 읽는다).
+    let conn = rusqlite::Connection::open(f.paths.state.join("mcp/audit.db")).unwrap();
+    let rows: Vec<(String, String, Option<String>)> = conn
+        .prepare("SELECT tool, outcome, detail FROM calls ORDER BY id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("project_list".to_owned(), "ok".to_owned(), None),
+            (
+                "fake_write".to_owned(),
+                "error".to_owned(),
+                Some("cancelled".to_owned())
+            ),
+        ]
+    );
+    window.closed(request.id).await;
+    assert_eq!(
+        mark(&within(call).await.unwrap()),
+        Mark::error(Some(Reason::Cancelled))
+    );
+    assert_eq!(f.runs(), 0);
+}
+
+// ---- RPC 길: 창이 하는 그대로 Host 연결로 `mcp.approvals` 를 열고 `mcp.approval.answer` 로 답한다 ----
+
+struct Rpc(pw_core::Connection, i64);
+
+impl Rpc {
+    async fn connect(f: &Fixture, scope: ConnectionScope) -> Self {
+        let caller = Caller {
+            role: Role::Owner,
+            scope,
+            window: Some("rpc-window".into()),
+        };
+        Self(pw_core::Host::connect(&*f.host, caller).await.unwrap(), 0)
+    }
+
+    fn send(&mut self, method: &str, params: Value) -> i64 {
+        self.1 += 1;
+        self.0
+            .sink
+            .send(json!({"jsonrpc": "2.0", "id": self.1, "method": method, "params": params}));
+        self.1
+    }
+
+    async fn next(&mut self) -> Value {
+        within(self.0.source.recv())
+            .await
+            .expect("connection closed")
+    }
+
+    async fn reply(&mut self, id: i64) -> Value {
+        loop {
+            let frame = self.next().await;
+            if frame["id"] == json!(id) {
+                return frame;
+            }
+        }
+    }
+
+    async fn call(&mut self, method: &str, params: Value) -> Value {
+        let id = self.send(method, params);
+        self.reply(id).await
+    }
+
+    /// 스트림을 연다. 열리면 `Ok(streamId)`, 거절되면(열기 응답 · 곧바로 끝) `Err(error)`.
+    async fn open(&mut self, params: Value) -> Result<Value, Value> {
+        let opened = self.call("mcp.approvals", params).await;
+        if !opened["error"].is_null() {
+            return Err(opened["error"].clone());
+        }
+        let stream = opened["result"]["streamId"].clone();
+        self.0.sink.send(json!({
+            "jsonrpc": "2.0", "method": "stream.credit",
+            "params": {"streamId": stream, "credit": 16}
+        }));
+        Ok(stream)
+    }
+
+    async fn chunk(&mut self) -> Value {
+        loop {
+            let frame = self.next().await;
+            if frame["method"] == "stream.chunk" {
+                return frame["params"]["data"].clone();
+            }
+            if frame["method"] == "stream.end" {
+                return json!({"ended": frame["params"]["error"]});
+            }
+        }
+    }
+}
+
+/// 에이전트 범위 연결(MCP 세션이 Host 에 붙는 연결)은 `mcp.approvals` 를 열 수 없다 — `mcp.*` 문의 스트림 갈래(첫 시험).
+/// 자기 요청에 `mcp.approval.answer` 로 스스로 답할 수도 없다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agent_connection_can_neither_hear_nor_answer_approvals() {
+    let f = Fixture::new();
+    let mut window = f.window(&f.alpha);
+    let mut agent_rpc = Rpc::connect(&f, ConnectionScope::Agent).await;
+    let refused = match agent_rpc.open(json!({"projectId": f.alpha})).await {
+        Err(error) => error,
+        Ok(_) => agent_rpc.chunk().await["ended"].clone(),
+    };
+    assert_eq!(
+        refused["code"],
+        json!(pw_rpc::code::PERMISSION_DENIED),
+        "{refused}"
+    );
+    assert_eq!(refused["data"]["reason"], "agentSession", "{refused}");
+
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let call = agent.spawn("fake_write", json!({"tag": "x"}));
+    let request = window.opened().await;
+    let answered = agent_rpc
+        .call(
+            "mcp.approval.answer",
+            json!({"id": request.id, "answer": "once"}),
+        )
+        .await;
+    assert_eq!(
+        answered["error"]["code"],
+        json!(pw_rpc::code::PERMISSION_DENIED)
+    );
+    assert_eq!(answered["error"]["data"]["reason"], "agentSession");
+    // 에이전트에게 열린 툴에도 답하는 길이 없다.
+    let tools = agent.running.peer().list_all_tools().await.unwrap();
+    assert!(
+        tools.iter().all(|t| !t.name.contains("approval")),
+        "{:?}",
+        tools.iter().map(|t| t.name.to_string()).collect::<Vec<_>>()
+    );
+    assert_eq!(f.runs(), 0);
+    window.answer(request.id, McpApprovalAnswer::Deny).unwrap();
+    within(call).await.unwrap();
+}
+
+/// 프로젝트 창의 연결이 `mcp.approvals` 로 요청을 받고 `mcp.approval.answer` 로 답한다. 다른 프로젝트 창은 그 프로젝트를 듣거나
+/// 그 요청에 답하지 못한다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_project_window_hears_and_answers_over_rpc() {
+    let f = Fixture::new();
+    let mut other = Rpc::connect(&f, ConnectionScope::Project(f.beta.clone())).await;
+    let refused = match other.open(json!({"projectId": f.alpha})).await {
+        Err(error) => error,
+        Ok(_) => other.chunk().await["ended"].clone(),
+    };
+    assert_eq!(refused["data"]["reason"], "notProjectWindow", "{refused}");
+
+    let mut rpc = Rpc::connect(&f, ConnectionScope::Project(f.alpha.clone())).await;
+    rpc.open(json!({"projectId": f.alpha})).await.unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while f.sessions.approvals().listeners() == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the stream did not listen"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let call = agent.spawn("fake_write", json!({"tag": "x"}));
+    let event = rpc.chunk().await;
+    assert_eq!(event["kind"], "open", "{event}");
+    let id = event["request"]["id"].clone();
+    assert_eq!(event["request"]["tool"], "fake_write");
+    assert_eq!(event["request"]["plan"]["tier"], "write");
+
+    let not_mine = other
+        .call("mcp.approval.answer", json!({"id": id, "answer": "once"}))
+        .await;
+    assert_eq!(not_mine["error"]["data"]["reason"], "notProjectWindow");
+    let not_offered = rpc
+        .call("mcp.approval.answer", json!({"id": id, "answer": "window"}))
+        .await;
+    assert_eq!(
+        not_offered["error"]["code"],
+        json!(pw_rpc::code::INVALID_PARAMS)
+    );
+    let ok = rpc
+        .call("mcp.approval.answer", json!({"id": id, "answer": "once"}))
+        .await;
+    assert!(ok["error"].is_null(), "{ok}");
+    assert_eq!(mark(&within(call).await.unwrap()), Mark::ok());
+    let closed = rpc.chunk().await;
+    assert_eq!(closed, json!({"kind": "closed", "id": id}));
+    let again = rpc
+        .call("mcp.approval.answer", json!({"id": id, "answer": "once"}))
+        .await;
+    assert_eq!(again["error"]["code"], json!(pw_rpc::code::NOT_FOUND));
+    assert_eq!(f.runs(), 1);
+}
+
+/// 「승인 필요」 오류는 에이전트에게 그대로 나가지 않는다 — `rmcp` 결과가 정해진 거절 까닭이고 글에 계획이 없다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_approval_required_error_never_reaches_the_agent() {
+    let f = Fixture::new();
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let result = agent.call("fake_write", json!({"tag": "x"})).await;
+    assert_eq!(mark(&result), Mark::denied(Reason::NeedsApproval));
+    let body = serde_json::to_string(&result).unwrap();
+    assert!(!body.contains("sha256:"), "{body}");
+    assert!(!body.contains("6001"), "{body}");
+    let read = agent.call("fake_open", json!({"tag": "ask"})).await;
+    assert_eq!(mark(&read), Mark::denied(Reason::NeedsApproval));
+    let body = serde_json::to_string(&read).unwrap();
+    assert!(
+        !body.contains("sha256:") && !body.contains("\"plan\""),
+        "{body}"
+    );
+}

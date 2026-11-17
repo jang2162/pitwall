@@ -27,12 +27,16 @@ pub const REASON: &str = "pitwall/reason";
 pub enum Reason {
     /// (거절) 세션 또는 대상 프로젝트의 노출 설정이 그 툴을 껐다. 모르는 툴 이름도 이것이다.
     NotExposed,
-    /// (거절) 사람의 승인이 있어야 하는데 지금 받을 길이 없다.
+    /// (거절) 사람의 승인이 있어야 하는데 지금 받을 길이 없다 — 승인 경로가 없는 세션, 묻을 창이 없음(결정 M5-D29), 묻는 도중
+    /// 창이 닫힘.
     NeedsApproval,
-    /// (거절) 사람이 승인 창에서 거절했다. 승인 경로(16-m5-plan M5-12)가 쓴다.
+    /// (거절) 사람이 승인 창에서 거절했다(16-m5-plan M5-12).
     ApprovalDenied,
-    /// (거절) 승인 창이 시간 안에 답을 받지 못했다. 승인 경로(M5-12)가 쓴다.
+    /// (거절) 승인 창이 시간(`[mcp.policy] approval_timeout_secs`, 기본 300초) 안에 답을 받지 못했다(M5-12).
     ApprovalTimeout,
+    /// (거절) 승인 뒤 툴이 다시 만든 계획의 해시가 승인한 것과 다르다(파일 내용 · 서버가 채운 `worktree` · 대상이 바뀜) — 돌리지
+    /// 않았고 다시 묻지 않았다(결정 M5-D30). 다시 부르면 새 계획으로 묻는다.
+    PlanChanged,
     /// (거절) 앱이 떠 있어야 하는 툴을 헤드리스 세션에서 불렀다(결정 M5-D3).
     NeedsApp,
     /// (거절) 헤드리스 세션에서 `write` 이상 등급의 툴을 불렀다 — 헤드리스에는 승인 경로가 없다(결정 M5-D32).
@@ -63,6 +67,7 @@ impl Reason {
         Reason::NeedsApproval,
         Reason::ApprovalDenied,
         Reason::ApprovalTimeout,
+        Reason::PlanChanged,
         Reason::NeedsApp,
         Reason::HeadlessWrite,
         Reason::Cancelled,
@@ -98,6 +103,7 @@ impl Reason {
             Reason::NeedsApproval => "needs_approval",
             Reason::ApprovalDenied => "approval_denied",
             Reason::ApprovalTimeout => "approval_timeout",
+            Reason::PlanChanged => "plan_changed",
             Reason::NeedsApp => "needs_app",
             Reason::HeadlessWrite => "headless_write",
             Reason::Cancelled => "cancelled",

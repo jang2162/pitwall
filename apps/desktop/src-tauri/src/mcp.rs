@@ -310,7 +310,7 @@ pub fn services(
         audit: Arc::new(AuditLog::under_state(&paths.state)),
         // 실행 파일에 링크된 선언 중 이 Host 가 실제로 처리하는 것만. 헤드리스는 코어 메서드만 등록한다.
         catalog: Arc::new(Catalog::linked().routed_by(host.router())),
-        approval: Approval::Unavailable,
+        approval: Approval::for_host(host_kind, &sessions),
         transport,
         host_kind,
         sessions,

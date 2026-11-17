@@ -102,6 +102,39 @@ fn mcp_tools_are_exactly_these() {
     );
 }
 
+/// 앱 세션은 승인 경로를 받는다 — 앱의 `mcp.approvals` 를 듣는 창과 같은 허브(넘긴 세션 등록부의 것)다. 헤드리스는 받지 않는다
+/// (16-m5-plan M5-12 ① · ⑦, `mcp::services`).
+#[test]
+fn app_sessions_get_the_windows_approval_route_and_headless_ones_none() {
+    use pw_mcp::policy::Approval;
+    let host = ToolHost::app();
+    let sessions = pw_mcp::sessions::Sessions::new();
+    let app = mcp::services(
+        &host.host,
+        &host.paths,
+        "test",
+        pw_mcp::HostKind::App,
+        sessions.clone(),
+    );
+    let Approval::Route(route) = &app.approval else {
+        panic!("the app session has no approval route: {:?}", app.approval)
+    };
+    let _window =
+        sessions
+            .approvals()
+            .listen(Some("p"), None, pw_mcp::approval::Connection::named("w"));
+    assert_eq!(route.listeners(), 1, "창이 듣는 허브와 다르다");
+    let headless = mcp::headless_host(&host.paths);
+    let services = mcp::services(
+        &headless,
+        &host.paths,
+        "test",
+        pw_mcp::HostKind::Headless,
+        sessions,
+    );
+    assert!(matches!(services.approval, Approval::Unavailable));
+}
+
 /// 툴 메서드 규약(`crates/pw-mcp` 머리 주석)을 어긴 곳. 비면 규약대로다.
 ///
 /// - 프로젝트 툴(입력에 `projectId`)의 입력이 struct 인 것(뒤에 선택 입력 `checkout` 을 깨지 않고 더한다, 결정 M5-D15)은 여기서

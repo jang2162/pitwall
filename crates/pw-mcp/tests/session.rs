@@ -24,10 +24,14 @@ use serde_json::{Map, Value, json};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
+/// 입력 없는 쓰기 툴의 입력(쓰기 툴은 `Planned` struct 입력이어야 한다 — 카탈로그 규칙).
+#[derive(Debug, Clone, serde::Deserialize, specta::Type, schemars::JsonSchema)]
+pub struct NoInput {}
+
 rpc_method! {
     /// 시험용 쓰기 툴. 정책이 거절해야 한다.
     pub TestWrite: "mcptest.write" {
-        params: (),
+        params: pw_core::registry::plan::Planned<NoInput>,
         result: (),
         tier: Write,
         mcp: { group: "project", name: "mcptest_write" },
@@ -195,7 +199,12 @@ impl Fixture {
             LocalHost::builder("local")
                 .config(paths.clone())
                 .methods(move |router| {
-                    router.unary(TestWrite, |_ctx, ()| async { Ok::<(), RpcError>(()) });
+                    router.unary(
+                        TestWrite,
+                        |_ctx, _p: pw_core::registry::plan::Planned<NoInput>| async {
+                            Ok::<(), RpcError>(())
+                        },
+                    );
                     extra(router);
                 })
                 .build(),

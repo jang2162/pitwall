@@ -9,19 +9,32 @@
 //! 1. 세션의 노출 — 보이지 않는 툴은 JSON-RPC invalid params(오류 `data` 에 결과 표지).
 //! 2. 빈 `projectId` 는 세션 프로젝트로, 빈 `worktree` 는 세션의 활성 워크트리 꼭대기로 채운다(세션 프로젝트를 겨눌 때만).
 //! 3. 대상 프로젝트의 노출 — `projectId` 가 세션 프로젝트가 아니면 그 프로젝트의 `[mcp]` 로도 판정한다(결정 M5-D28).
-//! 4. 등급 정책([`crate::policy`]).
-//! 5. Host RPC. MCP 의 취소 알림이 오거나 세션이 끝나면 그 RPC 를 거둔다(`request.cancel` — [`crate::client`]).
-//! 6. 응답 상한 [`MAX_RESPONSE_BYTES`] — 넘으면 「범위를 좁혀라」 오류(결정 M5-D34).
+//! 4. 등급 정책([`crate::policy`]). 승인 경로가 없는 세션(헤드리스)의 `write` 이상은 여기서 거절한다.
+//! 5. **승인**(16-m5-plan M5-12, 결정 M5-D30): 계획을 만드는 툴([`Tool::planned`] — `write` 이상은 모두)은 먼저 승인 표 없이
+//!    부른다. 툴은 부작용 없이 계획을 실은 「승인 필요」(`pw_core::registry::plan::APPROVAL_REQUIRED`)로 답하고, 세션은
+//!    `auto_approve` · 세션 허용 · CLI 허용을 보거나 그 프로젝트 창에 묻는다([`crate::approval`]). 허용이면 승인 표(해시)를 예약 키에
+//!    실어 다시 부르고, 툴이 계획을 다시 만들어 해시가 다르면 다시 묻지 않고 거절한다(`plan_changed`). 「승인 필요」 오류는
+//!    에이전트에게 그대로 나가지 않는다 — 묻지 못하면 정해진 거절 까닭이다. 에이전트가 보낸 예약 키는 맨 앞에서 버린다.
+//!    계획이 승인을 청하지 않은 `read` 호출은 그 첫 호출의 결과가 곧 결과다.
+//! 6. Host RPC(선기록 — 결정 M5-D11). MCP 의 취소 알림이 오거나 세션이 끝나면 그 RPC 를 거둔다(`request.cancel` —
+//!    [`crate::client`]). 승인을 기다리는 동안 클라이언트가 끊으면(읽기가 끝남) 곧바로 요청을 거둔다 — rmcp 가 끊긴 뒤 5초 동안
+//!    핸들러를 돌리는 사이(05 「호출 취소」)에 사람이 [허용] 을 눌러도 돌지 않는다.
+//! 7. 응답 상한 [`MAX_RESPONSE_BYTES`] — 넘으면 「범위를 좁혀라」 오류(결정 M5-D34).
 //!
 //! 결과는 모두 `_meta` 에 결과 표지([`crate::marker`])를 단다.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::task::{Context, Poll};
 use std::time::Instant;
 
 use pw_core::config::{AppPaths, ConfigSource, ConfigStore, TOPIC_CHANGED};
 use pw_core::registry::methods::{PathParams, ProjectIdParams};
+use pw_core::registry::plan::{
+    APPROVAL_KEY, APPROVAL_REQUIRED, ApprovalRequired, ApprovalTicket, Remember, ToolPlan,
+};
 use pw_core::registry::{ConfigMode, Project, Resolution};
 use pw_core::{EventBus, Filter, HostRouter, Scope, Target};
 use pw_rpc::{Caller, Role, Tier};
@@ -33,16 +46,17 @@ use rmcp::model::{
 use rmcp::service::{MaybeSendFuture, NotificationContext, RequestContext, SubscriptionContext};
 use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
 use serde_json::{Map, Value};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
+use crate::approval::{ApprovalAsk, AskError, McpApprovalAnswer};
 use crate::audit::{AuditApproval, AuditLog, Entry, Outcome, summarize};
 use crate::catalog::{Catalog, PROJECT_ID, Tool};
 use crate::client::{CallError, HostClient};
 use crate::exposure::{self, Exposure};
 use crate::marker::{Mark, Reason};
-use crate::policy::{self, Approval, Decision};
+use crate::policy::{self, Approval, Decision, Policy};
 use crate::sessions::Sessions;
 
 /// 툴 응답 한 건의 상한: 직렬화한 결과 JSON 의 바이트 수(결정 M5-D34 — 출발값이다). 툴 메서드는 이것을 넘지 않게 자르고
@@ -71,6 +85,10 @@ pub enum HostKind {
     /// `write` 이상의 거절 까닭은 `headless_write` 다.
     Headless,
 }
+
+/// CLI(`pitwall tool`)가 `initialize` 에 적는 클라이언트 이름. 이 이름의 호출은 승인의 셋째 답이 「창이 열려 있는 동안 CLI
+/// 허용」 이다(결정 M5-D5 — 서버는 CLI 를 이 이름으로만 안다).
+pub const CLI_CLIENT: &str = "pitwall-cli";
 
 /// 헤드리스 세션의 서버 안내문(결정 M5-D3). 앱 세션에는 싣지 않는다. 앱이 뜨면 `pitwall mcp` 가 앱으로 넘겨 붙는다(16-m5-plan M5-20).
 pub const HEADLESS_NOTICE: &str = "The Pitwall app is not running, so only the core tools are available. \
@@ -154,6 +172,15 @@ where
     let _stop = session_cancel.clone().drop_guard();
     let session = Session::open(services, &request, session_cancel.clone()).await?;
     let audit = session.inner.audit.clone();
+    // 클라이언트가 끊으면(읽기가 끝남) 곧바로 안다 — 승인 대기를 거둔다(rmcp 의 5초 drain 을 기다리지 않는다).
+    let (reader, writer) = io;
+    let io = (
+        WatchEof {
+            inner: reader,
+            closed: session.inner.closed.clone(),
+        },
+        writer,
+    );
     let running = session
         .serve_with_ct(io, session_cancel.clone())
         .await
@@ -173,10 +200,41 @@ where
             .map(|p| p.id.clone()),
         running.service().inner.services.transport,
     );
+    // 앱이 끝날 때 이 세션의 감사 큐를 비운다(`Sessions::shutdown`).
+    let flush_queue = audit.clone();
+    let _flusher = running.service().inner.services.sessions.add_flusher(
+        &running.service().inner.id,
+        Arc::new(move |deadline| flush_audit_blocking(&flush_queue, deadline)),
+    );
     let result = running.waiting().await;
     tracing::debug!(?result, "mcp session ended");
     flush_audit(&audit).await;
     Ok(())
+}
+
+/// 읽기 쪽이 끝나면(EOF · 오류) `closed` 를 취소한다.
+struct WatchEof<R> {
+    inner: R,
+    closed: CancellationToken,
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for WatchEof<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        let polled = Pin::new(&mut self.inner).poll_read(cx, buf);
+        match &polled {
+            Poll::Ready(Ok(())) if buf.filled().len() == before && buf.remaining() > 0 => {
+                self.closed.cancel();
+            }
+            Poll::Ready(Err(_)) => self.closed.cancel(),
+            _ => {}
+        }
+        polled
+    }
 }
 
 /// 세션의 프로젝트.
@@ -203,6 +261,39 @@ struct Inner {
     client_info: Mutex<Option<String>>,
     /// 감사 기록 큐([`audit_writer`]). 세션의 호출 순서대로 쓰인다.
     audit: std::sync::mpsc::Sender<AuditJob>,
+    /// 클라이언트가 끊었거나 세션이 끝났다([`WatchEof`] · `cancel` 의 자식). 승인 대기는 이것이 취소되면 거둔다.
+    closed: CancellationToken,
+    /// 「이 세션 동안 허용」: (프로젝트, 툴 이름 또는 계획의 열쇠).
+    allowed: Mutex<BTreeSet<(Option<String>, String)>>,
+}
+
+/// 승인을 지난 호출의 승인 방식과 계획 해시.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Approved {
+    mode: AuditApproval,
+    hash: String,
+}
+
+/// 승인을 받지 못한 까닭(에이전트에게 가는 글 · 표지).
+struct Refusal {
+    message: String,
+    mark: Mark,
+}
+
+impl Refusal {
+    fn denied(reason: Reason, message: String) -> Self {
+        Self {
+            message,
+            mark: Mark::denied(reason),
+        }
+    }
+
+    fn cancelled() -> Self {
+        Self {
+            message: Reason::Cancelled.as_str().to_owned(),
+            mark: Mark::error(Some(Reason::Cancelled)),
+        }
+    }
 }
 
 /// 감사 쓰기 스레드가 받는 일.
@@ -213,6 +304,8 @@ enum AuditJob {
     Finish(i64, Entry),
     /// 앞서 받은 기록을 다 썼으면 알린다([`flush_audit`]).
     Flush(tokio::sync::oneshot::Sender<()>),
+    /// [`Self::Flush`] 의 블로킹 꼴([`flush_audit_blocking`] — 앱 종료 길).
+    FlushSync(std::sync::mpsc::Sender<()>),
 }
 
 /// 지금까지 `audit` 에 넣은 기록이 다 쓰일 때까지 기다린다(큐는 차례대로 처리된다). 쓰기 스레드가 없으면 곧바로 돌아온다.
@@ -221,6 +314,19 @@ async fn flush_audit(audit: &std::sync::mpsc::Sender<AuditJob>) {
     if audit.send(AuditJob::Flush(tx)).is_ok() {
         let _ = rx.await;
     }
+}
+
+/// [`flush_audit`] 의 블로킹 꼴: `deadline` 까지 기다린다. 다 썼으면(쓰기 스레드가 없어도) `true`.
+fn flush_audit_blocking(audit: &std::sync::mpsc::Sender<AuditJob>, deadline: Instant) -> bool {
+    let (tx, rx) = std::sync::mpsc::channel();
+    if audit.send(AuditJob::FlushSync(tx)).is_err() {
+        return true;
+    }
+    let left = deadline.saturating_duration_since(Instant::now());
+    !matches!(
+        rx.recv_timeout(left),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+    )
 }
 
 /// 세션 하나의 감사 기록을 **받은 순서대로** 쓰는 스레드를 띄우고 그 큐를 돌려준다. 호출마다 `spawn_blocking` 으로 쓰면 blocking
@@ -263,6 +369,9 @@ fn audit_writer(
                         ),
                     },
                     AuditJob::Flush(done) => {
+                        let _ = done.send(());
+                    }
+                    AuditJob::FlushSync(done) => {
                         let _ = done.send(());
                     }
                 }
@@ -322,9 +431,11 @@ impl Session {
                 project,
                 exposure,
                 id,
-                cancel,
                 client_info: Mutex::new(None),
                 audit,
+                closed: cancel.child_token(),
+                allowed: Mutex::new(BTreeSet::new()),
+                cancel,
             }),
         })
     }
@@ -371,6 +482,10 @@ impl Session {
         let started = Instant::now();
         let name = request.name.to_string();
         let mut args = request.arguments.unwrap_or_default();
+        // 승인 표의 자리는 세션만 싣는다 — 에이전트가 보낸 같은 키는 버린다(결정 M5-D30).
+        if args.remove(APPROVAL_KEY).is_some() {
+            tracing::warn!(tool = name, "dropped an approval key the agent sent");
+        }
         let tool = self.visible().into_iter().find(|t| t.name == name).cloned();
         let Some(tool) = tool else {
             self.audit(
@@ -424,23 +539,12 @@ impl Session {
                 Err(e) => return Ok(self.call_failed(None, &name, &args, project_id, e, started)),
             }
         }
-        let denied = match policy::decide(tool.tier, self.inner.services.approval) {
-            Decision::Allow => None,
-            // 승인 화면이 아직 없다. `Approval::Available` 을 넣는 쪽이 생기면 여기서 승인을 기다린다.
-            Decision::Ask => Some((
-                "approval is required and is not available yet".to_owned(),
-                Reason::NeedsApproval,
-            )),
-            Decision::Deny(reason) => Some((
-                reason,
-                if self.headless() {
-                    Reason::HeadlessWrite
-                } else {
-                    Reason::NeedsApproval
-                },
-            )),
-        };
-        if let Some((reason, code)) = denied {
+        if let Decision::Deny(reason) = policy::decide(tool.tier, &self.inner.services.approval) {
+            let code = if self.headless() {
+                Reason::HeadlessWrite
+            } else {
+                Reason::NeedsApproval
+            };
             self.audit(
                 None,
                 &name,
@@ -453,16 +557,277 @@ impl Session {
             );
             return Ok(failed(reason, Mark::denied(code)));
         }
-        // 승인 경로(M5-12)는 위의 `Ask` 자리에서 답을 받은 뒤 승인 방식 · 계획 해시와 함께 이 단계로 온다.
-        self.run(&tool, args, project_id, started, &cancel, None, None)
+        if tool.planned {
+            return self
+                .planned(&tool, args, project_id, started, &cancel)
+                .await;
+        }
+        // 카탈로그가 `write` 이상을 모두 `planned` 로 만든다 — 여기 오는 것은 계획 없는 `read` 툴뿐이다.
+        self.run(&tool, args, project_id, started, &cancel, None)
             .await
     }
 
-    /// 정책을 지난 호출을 돌린다: `write` 이상이거나 승인을 지난 호출(`approval` · `plan_hash` 를 받음 — 등급과 무관)이면
-    /// **선기록** — 실행 전에 감사 행을 `started` 로 쓰고([`Self::begin`] — 큐를 지나지 않고 기다린다) 못 쓰면 돌리지 않고
-    /// 거절한다(결정 M5-D11). 그 뒤 Host RPC, 끝나면 같은 행을 결과 · 상세 · 크기 · 소요로 고친다(큐로). 승인 칸은 그 행에 남는다.
-    /// 승인을 지나지 않은 `read` 는 끝난 뒤 새 행 하나다(큐로 — 실패는 경고만).
-    #[allow(clippy::too_many_arguments)] // 감사 행의 열과 호출 하나의 입력이다.
+    /// 계획을 만드는 툴의 호출(머리 주석의 5단계). 첫 호출은 승인 표 없이 — 툴은 부작용 없이 계획만 만든다.
+    async fn planned(
+        &self,
+        tool: &Tool,
+        args: Map<String, Value>,
+        project_id: Option<String>,
+        started: Instant,
+        cancel: &CancellationToken,
+    ) -> Result<CallToolResult, ErrorData> {
+        let name = tool.name.clone();
+        let first = self
+            .inner
+            .client
+            .call_until(tool.method, Value::Object(args.clone()), cancel)
+            .await;
+        let plan = match first {
+            // 이 호출에는 승인을 청하지 않았다(`read` 툴).
+            Ok(result) if tool.tier == Tier::Read => {
+                return Ok(self.finished(None, &name, &args, project_id, tool, result, started));
+            }
+            Ok(_) => {
+                // 툴이 승인 표 없이 돌았다 — 규약 위반(프로그래밍 오류). 결과를 에이전트에게 주지 않는다.
+                tracing::error!(tool = name, "a planned tool ran without an approval ticket");
+                let message = format!(
+                    "`{name}` ran without asking for approval in Pitwall; this is a Pitwall bug, please report it"
+                );
+                self.audit(
+                    None,
+                    &name,
+                    &args,
+                    project_id,
+                    Outcome::Error,
+                    Some(message.clone()),
+                    None,
+                    started,
+                );
+                return Ok(failed(message, Mark::error(None)));
+            }
+            Err(CallError::Rpc { code, data, .. }) if code == i64::from(APPROVAL_REQUIRED) => {
+                match data.and_then(|d| serde_json::from_value::<ApprovalRequired>(d).ok()) {
+                    Some(required) => required.plan,
+                    None => {
+                        let message = format!("`{name}` sent a plan Pitwall cannot read");
+                        self.audit(
+                            None,
+                            &name,
+                            &args,
+                            project_id,
+                            Outcome::Error,
+                            Some(message.clone()),
+                            None,
+                            started,
+                        );
+                        return Ok(failed(message, Mark::error(None)));
+                    }
+                }
+            }
+            Err(e) => return Ok(self.call_failed(None, &name, &args, project_id, e, started)),
+        };
+        // 앱이 끝날 때(`Sessions::shutdown`) 이 호출이 거절 기록을 큐에 넣을 때까지 기다리게 한다.
+        let hold = match &self.inner.services.approval {
+            Approval::Route(route) => Some(route.hold()),
+            Approval::Unavailable => None,
+        };
+        let approved = match self
+            .approve(tool, &plan, project_id.as_deref(), cancel)
+            .await
+        {
+            Ok(mode) => Approved {
+                mode,
+                hash: plan.hash,
+            },
+            Err(refusal) => {
+                self.audit(
+                    None,
+                    &name,
+                    &args,
+                    project_id,
+                    refusal.mark.outcome,
+                    Some(refusal.message.clone()),
+                    None,
+                    started,
+                );
+                drop(hold);
+                return Ok(failed(refusal.message, refusal.mark));
+            }
+        };
+        drop(hold);
+        self.run(tool, args, project_id, started, cancel, Some(approved))
+            .await
+    }
+
+    /// 계획 하나의 승인 방식을 정한다: `auto_approve` → 세션 허용 · CLI 허용 → 창에 묻기. `dangerous` 는 매번 묻고 기억하지
+    /// 않는다. 묻는 동안 호출이 취소되거나 클라이언트가 끊으면 요청을 거둔다.
+    async fn approve(
+        &self,
+        tool: &Tool,
+        plan: &ToolPlan,
+        project_id: Option<&str>,
+        cancel: &CancellationToken,
+    ) -> Result<AuditApproval, Refusal> {
+        let name = &tool.name;
+        let Approval::Route(route) = &self.inner.services.approval else {
+            return Err(Refusal::denied(
+                Reason::NeedsApproval,
+                format!(
+                    "`{name}` needs approval in the Pitwall app for this call, and this session has no approval route"
+                ),
+            ));
+        };
+        let policy = self.policy_for(project_id, cancel).await?;
+        let dangerous = tool.tier == Tier::Dangerous || plan.tier == Tier::Dangerous;
+        if !dangerous && plan.rules.auto_approve && policy.auto_approves(tool.tier) {
+            return Ok(AuditApproval::Auto);
+        }
+        let key = if dangerous {
+            None
+        } else {
+            match &plan.rules.remember {
+                Remember::Tool => Some(name.clone()),
+                Remember::Key { key } => Some(key.clone()),
+                Remember::Never => None,
+            }
+        };
+        let cli = self.is_cli();
+        if let Some(key) = &key {
+            if self.session_allows(project_id, key) {
+                return Ok(AuditApproval::Session);
+            }
+            if cli && project_id.is_some_and(|p| route.cli_allowed(p, key)) {
+                return Ok(AuditApproval::Window);
+            }
+        }
+        let third = key.as_ref().and_then(|_| {
+            if cli {
+                // CLI 허용은 그 프로젝트 창에 묶인다 — 프로젝트 없는 요청에는 없다.
+                project_id.map(|_| McpApprovalAnswer::Window)
+            } else {
+                Some(McpApprovalAnswer::Session)
+            }
+        });
+        let mut answers = vec![McpApprovalAnswer::Deny, McpApprovalAnswer::Once];
+        answers.extend(third);
+        let ask = ApprovalAsk {
+            project_id: project_id.map(str::to_owned),
+            session: self.inner.id.clone(),
+            client: self.client(),
+            cli,
+            tool: name.clone(),
+            tier: tool.tier,
+            plan: plan.clone(),
+            answers,
+            remember: if cli { key.clone() } else { None },
+            timeout: policy.approval_timeout,
+        };
+        let answered = tokio::select! {
+            answered = route.ask(ask) => answered,
+            () = cancel.cancelled() => return Err(Refusal::cancelled()),
+            () = self.inner.closed.cancelled() => return Err(Refusal::cancelled()),
+        };
+        // 답과 끊김이 겹쳤으면 돌리지 않는다 — 끊긴 세션의 요청은 [허용] 을 받아도 돌지 않는다.
+        if cancel.is_cancelled() || self.inner.closed.is_cancelled() {
+            return Err(Refusal::cancelled());
+        }
+        let window = match project_id {
+            Some(p) => format!("no Pitwall window of project `{p}` is open"),
+            None => "no Pitwall window is open".to_owned(),
+        };
+        match answered {
+            Ok(McpApprovalAnswer::Deny) => Err(Refusal::denied(
+                Reason::ApprovalDenied,
+                format!("the call to `{name}` was denied in Pitwall"),
+            )),
+            Ok(McpApprovalAnswer::Once) => Ok(AuditApproval::Once),
+            Ok(McpApprovalAnswer::Session) => {
+                if let Some(key) = key {
+                    self.inner
+                        .allowed
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .insert((project_id.map(str::to_owned), key));
+                }
+                Ok(AuditApproval::Session)
+            }
+            Ok(McpApprovalAnswer::Window) => Ok(AuditApproval::Window),
+            Err(AskError::NoWindow) => Err(Refusal::denied(
+                Reason::NeedsApproval,
+                format!(
+                    "`{name}` needs approval, and {window} to ask; open it in Pitwall and call again"
+                ),
+            )),
+            Err(AskError::WindowLeft) => Err(Refusal::denied(
+                Reason::NeedsApproval,
+                format!(
+                    "the Pitwall window closed before anyone answered the approval request for `{name}`"
+                ),
+            )),
+            Err(AskError::TimedOut) => Err(Refusal::denied(
+                Reason::ApprovalTimeout,
+                format!(
+                    "no one answered the approval request for `{name}` in Pitwall within {} seconds",
+                    policy.approval_timeout.as_secs()
+                ),
+            )),
+            Err(AskError::Shutdown) => Err(Refusal::cancelled()),
+        }
+    }
+
+    /// 대상 프로젝트의 승인 정책(프로젝트 없는 호출은 전역). 프로젝트를 읽지 못하면 그 오류로 거절한다.
+    async fn policy_for(
+        &self,
+        project_id: Option<&str>,
+        cancel: &CancellationToken,
+    ) -> Result<Policy, Refusal> {
+        let services = &self.inner.services;
+        let Some(project_id) = project_id else {
+            return Ok(policy::of_global(&services.global));
+        };
+        let project = self
+            .project(project_id, cancel)
+            .await
+            .map_err(|e| match e {
+                CallError::Cancelled => Refusal::cancelled(),
+                e => Refusal {
+                    message: e.to_string(),
+                    mark: Mark::error(None),
+                },
+            })?;
+        Ok(policy::of_project(
+            &services.paths,
+            &services.global,
+            &project,
+        ))
+    }
+
+    fn session_allows(&self, project_id: Option<&str>, key: &str) -> bool {
+        self.inner
+            .allowed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(&(project_id.map(str::to_owned), key.to_owned()))
+    }
+
+    fn client(&self) -> Option<String> {
+        self.inner
+            .client_info
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// CLI(`pitwall-cli`)로 온 세션인가 — 클라이언트가 적은 이름으로만 안다(결정 M5-D5).
+    fn is_cli(&self) -> bool {
+        self.client()
+            .is_some_and(|c| c.split(' ').next() == Some(CLI_CLIENT))
+    }
+
+    /// 정책 · 승인을 지난 호출을 돌린다: `write` 이상이거나 승인을 지난 호출(`approved` — 등급과 무관)이면 **선기록** — 실행
+    /// 전에 감사 행을 `started` 로 쓰고([`Self::begin`] — 큐를 지나지 않고 기다린다) 못 쓰면 돌리지 않고 거절한다(결정 M5-D11).
+    /// 그 뒤 Host RPC(승인을 지났으면 입력의 예약 키에 승인 표를 싣는다), 끝나면 같은 행을 결과 · 상세 · 크기 · 소요로 고친다
+    /// (큐로). 승인 방식 · 계획 해시는 그 행에 남는다. 승인을 지나지 않은 `read` 는 끝난 뒤 새 행 하나다(큐로 — 실패는 경고만).
     async fn run(
         &self,
         tool: &Tool,
@@ -470,19 +835,17 @@ impl Session {
         project_id: Option<String>,
         started: Instant,
         cancel: &CancellationToken,
-        approval: Option<AuditApproval>,
-        plan_hash: Option<String>,
+        approved: Option<Approved>,
     ) -> Result<CallToolResult, ErrorData> {
         let name = tool.name.clone();
-        // 선기록의 기준: `write` 이상이거나 승인을 지난 호출(승인 방식 · 계획 해시를 받음). 승인을 청하는 `read` 호출(「이 연결
-        // 열기」, 프로덕션 `ask` 의 조회)도 승인을 지났으면 행을 먼저 쓰고 승인 칸을 그 행에 남긴다(메인 판정 2026-11-17 —
-        // 16-m5-plan M5-12 ⑧). 승인 없는 `read` 는 끝난 뒤 한 번이다.
-        let approved = approval.is_some() || plan_hash.is_some();
-        let row = if tool.tier == Tier::Read && !approved {
+        // 선기록의 기준: `write` 이상이거나 승인을 지난 호출. 승인을 청하는 `read` 호출(「이 연결 열기」, 프로덕션 `ask` 의
+        // 조회)도 승인을 지났으면 행을 먼저 쓰고 승인 칸을 그 행에 남긴다(메인 판정 2026-11-17 — 16-m5-plan M5-12 ⑧).
+        let row = if tool.tier == Tier::Read && approved.is_none() {
             None
         } else {
+            let (mode, hash) = approved.as_ref().map(|a| (a.mode, a.hash.clone())).unzip();
             match self
-                .begin(&name, &args, project_id.clone(), approval, plan_hash)
+                .begin(&name, &args, project_id.clone(), mode, hash)
                 .await
             {
                 Ok(row) => Some(row),
@@ -509,7 +872,17 @@ impl Session {
         let params = if tool.unit_params {
             Value::Null
         } else {
-            Value::Object(args.clone())
+            let mut params = args.clone();
+            if let Some(approved) = &approved {
+                params.insert(
+                    APPROVAL_KEY.to_owned(),
+                    serde_json::to_value(ApprovalTicket {
+                        hash: approved.hash.clone(),
+                    })
+                    .expect("승인 표는 직렬화된다"),
+                );
+            }
+            Value::Object(params)
         };
         // 클라이언트가 취소하거나 세션이 끝나면 Host RPC 를 거둔다 — `HostClient` 가 그 요청 id 로 `request.cancel` 을 보낸다.
         // 세션의 끝을 따로 보지 않는다: rmcp 의 요청 토큰(`cancel`)은 [`serve`] 가 `serve_with_ct` 에 넘긴 세션 토큰의 자손이라,
@@ -520,46 +893,59 @@ impl Session {
             .call_until(tool.method, params, cancel)
             .await
         {
-            Ok(result) => {
-                let size = result.to_string().len();
-                let detail = audit_detail(&result);
-                if size > MAX_RESPONSE_BYTES {
-                    let message = format!(
-                        "the response is {size} bytes, over the {} KiB limit for one tool response; \
-                         narrow the request (a smaller `limit`, a path, a filter) and call again",
-                        MAX_RESPONSE_BYTES / 1024
-                    );
-                    self.audit(
-                        row,
-                        &name,
-                        &args,
-                        project_id,
-                        Outcome::Error,
-                        Some(with_detail(message.clone(), detail)),
-                        Some(size),
-                        started,
-                    );
-                    return Ok(failed(message, Mark::error(Some(Reason::TooLarge))));
-                }
-                self.audit(
-                    row,
-                    &name,
-                    &args,
-                    project_id,
-                    Outcome::Ok,
-                    detail.map(str::to_owned),
-                    Some(size),
-                    started,
-                );
-                let result = if tool.output_schema.is_some() && result.is_object() {
-                    CallToolResult::structured(result)
-                } else {
-                    CallToolResult::success(vec![ContentBlock::text(result.to_string())])
-                };
-                Ok(marked(result, Mark::ok()))
-            }
+            Ok(result) => Ok(self.finished(row, &name, &args, project_id, tool, result, started)),
             Err(e) => Ok(self.call_failed(row, &name, &args, project_id, e, started)),
         }
+    }
+
+    /// Host RPC 가 성공한 호출의 감사 행과 결과(응답 상한을 본다).
+    #[allow(clippy::too_many_arguments)] // 감사 행의 열과 호출 하나의 결과다.
+    fn finished(
+        &self,
+        row: Option<i64>,
+        name: &str,
+        args: &Map<String, Value>,
+        project_id: Option<String>,
+        tool: &Tool,
+        result: Value,
+        started: Instant,
+    ) -> CallToolResult {
+        let size = result.to_string().len();
+        let detail = audit_detail(&result);
+        if size > MAX_RESPONSE_BYTES {
+            let message = format!(
+                "the response is {size} bytes, over the {} KiB limit for one tool response; \
+                 narrow the request (a smaller `limit`, a path, a filter) and call again",
+                MAX_RESPONSE_BYTES / 1024
+            );
+            self.audit(
+                row,
+                name,
+                args,
+                project_id,
+                Outcome::Error,
+                Some(with_detail(message.clone(), detail)),
+                Some(size),
+                started,
+            );
+            return failed(message, Mark::error(Some(Reason::TooLarge)));
+        }
+        self.audit(
+            row,
+            name,
+            args,
+            project_id,
+            Outcome::Ok,
+            detail.map(str::to_owned),
+            Some(size),
+            started,
+        );
+        let result = if tool.output_schema.is_some() && result.is_object() {
+            CallToolResult::structured(result)
+        } else {
+            CallToolResult::success(vec![ContentBlock::text(result.to_string())])
+        };
+        marked(result, Mark::ok())
     }
 
     /// Host RPC 가 실패한 호출(취소 포함)의 감사 행과 결과.
@@ -591,6 +977,43 @@ impl Session {
             }
             _ => None,
         };
+        // 승인 뒤 다시 만든 계획의 해시가 다르다(파일 · 워크트리 · 대상이 바뀜) — 다시 묻지 않고 거절한다. 「승인 필요」 오류와
+        // 그 계획은 에이전트에게 그대로 보내지 않는다.
+        let approval = match &error {
+            CallError::Rpc { code, data, .. } if *code == i64::from(APPROVAL_REQUIRED) => Some(
+                data.as_ref()
+                    .and_then(|d| serde_json::from_value::<ApprovalRequired>(d.clone()).ok())
+                    .is_some_and(|r| r.mismatch),
+            ),
+            _ => None,
+        };
+        if let Some(mismatch) = approval {
+            let (message, mark) = if mismatch {
+                (
+                    format!(
+                        "the plan of `{name}` changed after it was approved (a file, the worktree or the target \
+                         changed), so it did not run; call again to ask for a new approval"
+                    ),
+                    Mark::denied(Reason::PlanChanged),
+                )
+            } else {
+                (
+                    format!("`{name}` needs approval in Pitwall for this call"),
+                    Mark::denied(Reason::NeedsApproval),
+                )
+            };
+            self.audit(
+                row,
+                name,
+                args,
+                project_id,
+                mark.outcome,
+                Some(message.clone()),
+                None,
+                started,
+            );
+            return failed(message, mark);
+        }
         // 취소된 호출의 감사 행은 결과 `error` · 까닭 `cancelled` 다(결과 값을 늘리지 않는다).
         let (message, mark) = if cancelled {
             (
@@ -660,6 +1083,18 @@ impl Session {
         project_id: &str,
         cancel: &CancellationToken,
     ) -> Result<bool, CallError> {
+        let project = self.project(project_id, cancel).await?;
+        let services = &self.inner.services;
+        let exposure = exposure::of_project(&services.paths, &services.global, &project);
+        Ok(exposure.enabled(tool))
+    }
+
+    /// 레지스트리의 그 프로젝트(`project.get`). 없는 id 면 툴이 돌려줄 오류와 같은 오류다.
+    async fn project(
+        &self,
+        project_id: &str,
+        cancel: &CancellationToken,
+    ) -> Result<Project, CallError> {
         let params = serde_json::to_value(ProjectIdParams {
             id: project_id.to_owned(),
         })
@@ -669,14 +1104,11 @@ impl Session {
             .client
             .call_until("project.get", params, cancel)
             .await?;
-        let project: Project = serde_json::from_value(value).map_err(|e| CallError::Rpc {
+        serde_json::from_value(value).map_err(|e| CallError::Rpc {
             code: i64::from(pw_rpc::code::INTERNAL_ERROR),
             message: format!("unexpected project.get result: {e}"),
             data: None,
-        })?;
-        let services = &self.inner.services;
-        let exposure = exposure::of_project(&services.paths, &services.global, &project);
-        Ok(exposure.enabled(tool))
+        })
     }
 
     /// 끝난 호출의 감사 기록을 큐에 넣는다. `row` 가 있으면(선기록한 호출) 그 행을 고치고, 없으면 새 행이다.
@@ -1086,8 +1518,9 @@ fn session_id() -> String {
     )
 }
 
-/// 선기록(16-m5-plan M5-11 ② — 결정 M5-D11). 지금 `write` 이상은 정책이 모두 거절하므로(승인 경로는 M5-12) 정책 뒤의 실행
-/// 단계([`Session::run`])를 가짜 쓰기 툴로 직접 부른다 — M5-12 가 승인을 받은 뒤 부르는 자리다. 세션 · Host · 감사 파일은 진짜다.
+/// 선기록(16-m5-plan M5-11 ② — 결정 M5-D11). 정책 · 승인 뒤의 실행 단계([`Session::run`])를 가짜 쓰기 툴로 직접 부른다 —
+/// 승인 경로(M5-12)가 답을 받은 뒤 부르는 자리다. 가짜 툴은 승인 표를 보지 않고 돈다(승인 경로의 시험은 `tests/approval.rs`).
+/// 세션 · Host · 감사 파일은 진짜다.
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1132,7 +1565,7 @@ mod tests {
     rpc_method! {
         /// 시험용 쓰기 툴: 불린 수를 세고 `tag` 를 감사 상세로 싣는다.
         pub FakeWrite: "mcptest.fakeWrite" {
-            params: FakeWriteParams,
+            params: pw_core::registry::plan::Planned<FakeWriteParams>,
             result: FakeWriteResult,
             tier: Write,
             mcp: { group: "project", name: "fake_write" },
@@ -1149,7 +1582,7 @@ mod tests {
 
         /// 시험용 쓰기 툴: 불리면 알리고 끝나지 않는다.
         pub HangingWrite: "mcptest.hangingWrite" {
-            params: FakeWriteParams,
+            params: pw_core::registry::plan::Planned<FakeWriteParams>,
             result: FakeWriteResult,
             tier: Write,
             mcp: { group: "project", name: "hanging_write" },
@@ -1184,21 +1617,28 @@ mod tests {
                                 })
                             }
                         });
-                        router.unary(FakeWrite, move |_ctx, p: FakeWriteParams| {
-                            r.fetch_add(1, Ordering::SeqCst);
-                            async move {
-                                Ok::<_, RpcError>(FakeWriteResult {
-                                    audit: format!("tag={}", p.tag),
-                                })
-                            }
-                        });
-                        router.unary(HangingWrite, move |_ctx, _p: FakeWriteParams| {
-                            let e = Arc::clone(&e);
-                            async move {
-                                e.notify_one();
-                                std::future::pending::<Result<FakeWriteResult, RpcError>>().await
-                            }
-                        });
+                        router.unary(
+                            FakeWrite,
+                            move |_ctx, p: pw_core::registry::plan::Planned<FakeWriteParams>| {
+                                r.fetch_add(1, Ordering::SeqCst);
+                                async move {
+                                    Ok::<_, RpcError>(FakeWriteResult {
+                                        audit: format!("tag={}", p.params.tag),
+                                    })
+                                }
+                            },
+                        );
+                        router.unary(
+                            HangingWrite,
+                            move |_ctx, _p: pw_core::registry::plan::Planned<FakeWriteParams>| {
+                                let e = Arc::clone(&e);
+                                async move {
+                                    e.notify_one();
+                                    std::future::pending::<Result<FakeWriteResult, RpcError>>()
+                                        .await
+                                }
+                            },
+                        );
                     })
                     .build(),
             );
@@ -1259,7 +1699,7 @@ mod tests {
 
     /// 정책을 지난 쓰기 호출 하나 — 승인 경로(M5-12)가 답을 받은 뒤 부르는 자리.
     async fn write(session: &Session, name: &str, tag: &str) -> CallToolResult {
-        approved(session, name, tag, None, None).await
+        approved(session, name, tag, None).await
     }
 
     /// 정책 · 승인을 지난 호출 하나 — 승인 방식 · 계획 해시를 함께 넘긴다(M5-12 가 승인 뒤 넘기는 값).
@@ -1267,8 +1707,7 @@ mod tests {
         session: &Session,
         name: &str,
         tag: &str,
-        approval: Option<AuditApproval>,
-        plan_hash: Option<&str>,
+        approval: Option<(AuditApproval, &str)>,
     ) -> CallToolResult {
         let tool = session
             .inner
@@ -1288,8 +1727,10 @@ mod tests {
                 None,
                 Instant::now(),
                 &CancellationToken::new(),
-                approval,
-                plan_hash.map(str::to_owned),
+                approval.map(|(mode, hash)| Approved {
+                    mode,
+                    hash: hash.to_owned(),
+                }),
             )
             .await
             .unwrap()
@@ -1451,8 +1892,7 @@ mod tests {
             &session,
             "fake_read",
             "r",
-            Some(AuditApproval::Once),
-            Some("sha256:plan"),
+            Some((AuditApproval::Once, "sha256:plan")),
         )
         .await;
         assert_eq!(mark(&result), Mark::ok(), "{result:?}");
@@ -1485,8 +1925,7 @@ mod tests {
             &session,
             "fake_read",
             "r",
-            Some(AuditApproval::Session),
-            None,
+            Some((AuditApproval::Session, "sha256:plan")),
         )
         .await;
         assert_eq!(mark(&refused), Mark::denied(Reason::AuditUnavailable));

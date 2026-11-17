@@ -872,6 +872,11 @@ export type UnaryMethods = {
 	 */
 	"lsp.workspaceSymbol": { params: LspWorkspaceSymbolParams; result: LspWorkspaceSymbols };
 	/**
+	 * 승인 요청의 답. 프로젝트 요청은 그 프로젝트 창의 연결만, 프로젝트 없는 요청은 그 요청을 받은 창의 연결만 답한다.
+	 * 이미 끝난 요청이면 not found, 그 요청이 받지 않는 답이면 invalid params.
+	 */
+	"mcp.approval.answer": { params: McpApprovalAnswerParams; result: null };
+	/**
 	 * 그 프로젝트의 감사 행을 모두 지운다(「에이전트 활동」 패널의 「기록 지우기」 — 화면이 확인을 받은 뒤 부른다). 그 프로젝트
 	 * 창의 연결만 부른다(`project.state.set` 과 같은 판정). 지운 id 는 다시 쓰이지 않는다 — 앞서 받은 커서는 그 뒤의 행을 가리키지
 	 * 않는다.
@@ -1180,6 +1185,12 @@ export type StreamMethods = {
 	 */
 	"host.demoTask": { params: DemoTaskParams; item: DemoTaskUpdate };
 	/**
+	 * 창이 떠 있는 동안 열어 두는 승인 요청 스트림(16-m5-plan M5-12). 열 때 아직 대기 중인 그 창의 요청이 먼저 온다. 프로젝트
+	 * 요청은 그 프로젝트 창에만, 프로젝트 없는 요청은 가장 최근에 앞에 있던 창 하나에 온다. `projectId` 는 그 프로젝트 창의
+	 * 연결만 줄 수 있다.
+	 */
+	"mcp.approvals": { params: McpApprovalsParams; item: McpApprovalEvent };
+	/**
 	 * 프로젝트 안의 텍스트 검색. 결과를 파일별 묶음 청크로 보내고 마지막에 `done` 청크 하나를 보낸다. 규칙(ignore · 심링크 ·
 	 * 바이너리 · 50 MiB · 벤더/생성 제외 · 결과 상한)은 `pw_fs::search` 머리 주석. 루트 밖 경로 · 빈 질의 · 잘못된 정규식 ·
 	 * 글롭은 invalid params 로, 없는 경로는 `NOT_FOUND` 로 스트림이 `failed` 로 끝난다(청크 없이).
@@ -1377,6 +1388,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lsp.tool.diagnostics": {"name":"lsp.tool.diagnostics","kind":"unary","tier":"read","roles":["owner"],"params":"DiagnosticsToolParams","output":"DiagnosticsToolResult","doc":" Language server diagnostics (errors, warnings, hints) for a project, one page at a time: files in path order, each\n file's diagnostics most severe first. Filter by one file (`path`, absolute or relative to the project root) and by\n `minSeverity`. Lines and columns start at 1; columns count UTF-16 code units. Only what the language servers have\n published on their own: servers run while the project is open in a Pitwall window (they start when a file of that\n language is opened there), and many servers only report files that are open in the editor, so files nobody opened\n may be missing — an empty list is not proof the project builds. `servers` tells \"no problems\" apart from \"no server\n yet / still starting / still indexing\" (a `progress` means more diagnostics may come). This tool never starts a\n server. An untrusted project runs no language servers: the result is empty with `unavailable.reason = \"untrusted\"`.\n","mcp":{"group":"code","name":"diagnostics"},"fileScope":false},
 	"lsp.typeDefinition": {"name":"lsp.typeDefinition","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspLocationsResult","doc":" 타입 정의로(`textDocument/typeDefinition`).\n","mcp":null,"fileScope":false},
 	"lsp.workspaceSymbol": {"name":"lsp.workspaceSymbol","kind":"unary","tier":"read","roles":["owner"],"params":"LspWorkspaceSymbolParams","output":"LspWorkspaceSymbols","doc":" 프로젝트의 언어 서버들에 `workspace/symbol` 을 묻는다(심볼로 이동 · 클래스로 이동 · SE 「심볼」 탭 — M4-16). 이 창이 문서를 연\n 떠 있는 서버에만 묻고 서버를 띄우지 않는다. 루트 밖 위치는 읽기 토큰과 함께(결정 M4-D13). 미신뢰면 untrusted.\n","mcp":null,"fileScope":false},
+	"mcp.approval.answer": {"name":"mcp.approval.answer","kind":"unary","tier":"write","roles":["owner"],"params":"McpApprovalAnswerParams","output":"()","doc":" 승인 요청의 답. 프로젝트 요청은 그 프로젝트 창의 연결만, 프로젝트 없는 요청은 그 요청을 받은 창의 연결만 답한다.\n 이미 끝난 요청이면 not found, 그 요청이 받지 않는 답이면 invalid params.\n","mcp":null,"fileScope":false},
+	"mcp.approvals": {"name":"mcp.approvals","kind":"stream","tier":"read","roles":["owner"],"params":"McpApprovalsParams","output":"McpApprovalEvent","doc":" 창이 떠 있는 동안 열어 두는 승인 요청 스트림(16-m5-plan M5-12). 열 때 아직 대기 중인 그 창의 요청이 먼저 온다. 프로젝트\n 요청은 그 프로젝트 창에만, 프로젝트 없는 요청은 가장 최근에 앞에 있던 창 하나에 온다. `projectId` 는 그 프로젝트 창의\n 연결만 줄 수 있다.\n","mcp":null,"fileScope":false},
 	"mcp.audit.clear": {"name":"mcp.audit.clear","kind":"unary","tier":"write","roles":["owner"],"params":"McpAuditClearParams","output":"McpAuditCleared","doc":" 그 프로젝트의 감사 행을 모두 지운다(「에이전트 활동」 패널의 「기록 지우기」 — 화면이 확인을 받은 뒤 부른다). 그 프로젝트\n 창의 연결만 부른다(`project.state.set` 과 같은 판정). 지운 id 는 다시 쓰이지 않는다 — 앞서 받은 커서는 그 뒤의 행을 가리키지\n 않는다.\n","mcp":null,"fileScope":false},
 	"mcp.audit.list": {"name":"mcp.audit.list","kind":"unary","tier":"read","roles":["owner"],"params":"McpAuditListParams","output":"McpAuditPage","doc":" 감사 로그를 최신부터 쪽 단위로 읽는다. 다른 프로세스(헤드리스 `pitwall mcp` · `pitwall tool`)가 쓴 행도 있다 —\n 그 행은 `mcp.activity` 가 나가지 않으므로 화면이 열릴 때 · 창이 앞으로 올 때 다시 읽는다.\n","mcp":null,"fileScope":false},
 	"mcp.sessions": {"name":"mcp.sessions","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"Vec<McpSessionInfo>","doc":" 이 앱에 열린 MCP 세션(시작 순서): id · 클라이언트 · 세션 프로젝트 · 전송 · 시작 시각 · 호출 수. 열고 닫히면\n `mcp.sessionsChanged`(Host 범위)가 나간다. 앱 없이 뜬 `pitwall mcp` 의 헤드리스 세션은 보이지 않는다.\n","mcp":null,"fileScope":false},
@@ -6894,6 +6907,63 @@ export type McpActivity = {
 	projectId: string | null,
 };
 
+/**  사람의 답. */
+export type McpApprovalAnswer = 
+/**  [거절]. */
+"deny" | 
+/**  [이번만 허용]. */
+"once" | 
+/**  [이 세션 동안 허용] — 그 세션 · 그 프로젝트 · 그 툴(계획이 열쇠를 정하면 그 열쇠). */
+"session" | 
+/**  CLI 요청의 [이 프로젝트 창이 열려 있는 동안 CLI 허용](결정 M5-D5). */
+"window";
+
+export type McpApprovalAnswerParams = {
+	/**  `mcp.approvals` 가 보낸 요청의 `id`. */
+	id: number,
+	/**  그 요청의 `answers` 가운데 하나. */
+	answer: McpApprovalAnswer,
+};
+
+/**  `mcp.approvals` 스트림의 항목. */
+export type McpApprovalEvent = 
+/**  새 요청(또는 듣기 시작할 때 아직 대기 중인 요청). */
+{ kind: "open"; request: McpApprovalRequest } | 
+/**  그 요청을 거뒀다(답 · 시한 초과 · 세션 끊김 · 호출 취소 · 앱 종료). 떠 있는 다이얼로그를 내린다. */
+{ kind: "closed"; id: number };
+
+/**  창에 보이는 승인 요청. */
+export type McpApprovalRequest = {
+	/**  이 앱 안에서 요청마다 다르다. 답할 때 쓴다. */
+	id: number,
+	/**  대상 프로젝트. 프로젝트 없는 쓰기면 `null`. */
+	projectId: string | null,
+	/**  이 요청은 받은 창의 프로젝트 것이 아니다(프로젝트 없는 요청 — 가장 최근에 앞에 있던 창에 뜬다. 결정 M5-D29). */
+	notThisProject: boolean,
+	/**  요청한 MCP 세션(감사 행의 `session`). */
+	session: string,
+	/**  요청 에이전트(`이름 버전`). 에이전트가 적은 글이다 — 화면이 거른다. */
+	client: string | null,
+	/**  CLI(`pitwall-cli`)로 온 호출이다 — 셋째 답이 [`McpApprovalAnswer::Window`] 다. */
+	cli: boolean,
+	tool: string,
+	/**  툴의 선언 등급. */
+	tier: Tier,
+	/**  툴이 만든 계획(요약 · 바뀔 것 · 해시). */
+	plan: ToolPlan,
+	/**  이 요청이 받는 답. `dangerous` · 기억하지 않는 계획(`open_with_upsert`)은 [거절] · [이번만 허용] 둘이다. */
+	answers: McpApprovalAnswer[],
+	/**  시한(초). */
+	timeoutSecs: number,
+	/**  시한이 끝나는 시각(Unix 밀리초). */
+	expiresAt: number,
+};
+
+export type McpApprovalsParams = {
+	/**  이 창의 프로젝트. 그 프로젝트 창의 연결만 줄 수 있다. 없으면(웰컴 · 설정 창) 프로젝트 없는 요청만 받는다. */
+	projectId?: string | null,
+};
+
 export type McpAuditClearParams = {
 	/**  이 프로젝트의 행을 지운다. 프로젝트 없는 행 · 다른 프로젝트의 행은 남는다. */
 	projectId: string,
@@ -7176,7 +7246,25 @@ export type PinnedFile = {
 	target: string,
 };
 
+/**  바뀔 것 하나. 다른 꼴이 필요한 툴 행이 갈래를 더한다. */
+export type PlanChange = 
+/**  파일 하나의 앞뒤 내용. 없던 파일이면 `before` 가, 지우는 파일이면 `after` 가 `null`. */
+{ kind: "file"; path: string; before: string | null; after: string | null } | 
+/**  이름 붙은 글(SQL 문장 · 명령 정의 등). */
+{ kind: "text"; label: string; text: string };
+
 export type PlanFormat = "json" | "text";
+
+/**  그 계획에 어떤 답이 열리는가. */
+export type PlanRules = {
+	/**
+	 *  `[mcp] auto_approve` 를 적용하는가. `open_with_upsert` 와 「이 연결 열기」 는 `false`(결정 M5-D31). `dangerous` 는 이것과
+	 *  상관없이 적용하지 않는다.
+	 */
+	autoApprove: boolean,
+	/**  「이 세션 동안 허용」(CLI 면 「창이 열려 있는 동안 CLI 허용」)이 무엇을 기억하는가. `dangerous` 는 이것과 상관없이 없다. */
+	remember: Remember,
+};
 
 export type Pong = {
 	nonce: string,
@@ -7304,6 +7392,15 @@ export type RegistryOrigin =
 "snapshot" | 
 /**  `$CACHE/registry/<판>/` 에 받아 둔 판 전체. */
 "cache";
+
+/**  세션 허용이 기억하는 단위. */
+export type Remember = 
+/**  그 세션 · 그 프로젝트 · 그 툴(05 「권한 모델」). */
+{ kind: "tool" } | 
+/**  그 세션 · 그 프로젝트 · 이 열쇠(「이 연결 열기」 — 그 연결 id 와 푼 대상). */
+{ kind: "key"; key: string } | 
+/**  기억하지 않는다 — 셋째 버튼이 없다(`open_with_upsert`). */
+{ kind: "never" };
 
 export type RepoHead = 
 /**  On a branch. `name` is the short name (`main`, `feat/x`), `commit` the hash of its tip commit. */
@@ -8397,6 +8494,20 @@ export type ToolPackageSummary = {
 	deprecated: boolean,
 	/**  이 기기에서 설치할 수 없는 까닭. 설치할 수 있으면 `null`. */
 	unsupported: ToolUnsupported | null,
+};
+
+/**  툴이 만든 계획. 승인 요청이 그대로 보인다. */
+export type ToolPlan = {
+	/**  툴의 RPC 이름. */
+	method: string,
+	tier: Tier,
+	/**  한 줄 요약(영어가 아니어도 된다 — 사람의 화면이 보인다. 에이전트가 보낸 글이 섞이면 화면이 거른다). */
+	summary: string,
+	/**  바뀔 것(파일 diff · 문장 목록 등). 빈 목록이면 요약만 보인다. */
+	changes: PlanChange[],
+	rules: PlanRules,
+	/**  `sha256:<hex>`. 승인은 이것에 묶인다. */
+	hash: string,
 };
 
 export type ToolSource = 

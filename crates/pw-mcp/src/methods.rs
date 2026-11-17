@@ -7,7 +7,9 @@
 //! - 문장(오류 글)은 사람이 보는 화면 쪽이지만 RPC 오류 글은 지금 저장소의 다른 RPC 처럼 영어다. 화면 글자는 웹뷰의 i18n 이다.
 //! - 이벤트: [`crate::sessions`] 의 `mcp.sessionsChanged` · `mcp.activity`. payload 는 수 · id 뿐이라 화면은 받으면 이 RPC 를
 //!   다시 부른다.
-//! - 다른 행이 더하는 메서드: `mcp.approvals` · `mcp.approval.answer`(M5-12), `mcp.settings.set`(M5-15).
+//! - 승인(M5-12): 창이 떠 있는 동안 여는 스트림 `mcp.approvals { projectId? }` 와 그 답 `mcp.approval.answer { id, answer }`
+//!   ([`crate::approval`]). 프로젝트 창은 자기 프로젝트로 열고, 웰컴 · 설정 창은 프로젝트 없이 연다(프로젝트 없는 요청만 받는다).
+//! - 다른 행이 더하는 메서드: `mcp.settings.set`(M5-15).
 //!   더할 때 [`register`] 안의 `router`(그 문을 지나는 [`WindowsOnly`])에 붙이고, 필요한 것은 [`HostParts`] 에서 꺼낸다.
 
 use std::sync::{Arc, OnceLock};
@@ -21,6 +23,7 @@ use pw_rpc::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::approval::{AnswerError, Answerer, Connection, McpApprovalAnswer, McpApprovalEvent};
 use crate::audit::{self, AuditLog, AuditRow, Outcome};
 use crate::catalog::Catalog;
 use crate::exposure::{self, Exposure, ExposureRule};
@@ -116,6 +119,28 @@ pub struct McpAuditCleared {
     pub deleted: u64,
 }
 
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct McpApprovalsParams {
+    /// 이 창의 프로젝트. 그 프로젝트 창의 연결만 줄 수 있다. 없으면(웰컴 · 설정 창) 프로젝트 없는 요청만 받는다.
+    #[serde(default)]
+    pub project_id: Option<String>,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct McpApprovalAnswerParams {
+    /// `mcp.approvals` 가 보낸 요청의 `id`.
+    #[specta(type = pw_rpc::JsNumber)]
+    pub id: u64,
+    /// 그 요청의 `answers` 가운데 하나.
+    pub answer: McpApprovalAnswer,
+}
+
 rpc_method! {
     /// 이 앱에 열린 MCP 세션(시작 순서): id · 클라이언트 · 세션 프로젝트 · 전송 · 시작 시각 · 호출 수. 열고 닫히면
     /// `mcp.sessionsChanged`(Host 범위)가 나간다. 앱 없이 뜬 `pitwall mcp` 의 헤드리스 세션은 보이지 않는다.
@@ -149,6 +174,27 @@ rpc_method! {
     pub McpAuditClear: "mcp.audit.clear" {
         params: McpAuditClearParams,
         result: McpAuditCleared,
+        tier: Write,
+        roles: [Owner],
+    }
+}
+
+rpc_method! {
+    /// 창이 떠 있는 동안 열어 두는 승인 요청 스트림(16-m5-plan M5-12). 열 때 아직 대기 중인 그 창의 요청이 먼저 온다. 프로젝트
+    /// 요청은 그 프로젝트 창에만, 프로젝트 없는 요청은 가장 최근에 앞에 있던 창 하나에 온다. `projectId` 는 그 프로젝트 창의
+    /// 연결만 줄 수 있다.
+    pub McpApprovals: "mcp.approvals" {
+        params: McpApprovalsParams,
+        stream: McpApprovalEvent,
+        tier: Read,
+        roles: [Owner],
+    }
+
+    /// 승인 요청의 답. 프로젝트 요청은 그 프로젝트 창의 연결만, 프로젝트 없는 요청은 그 요청을 받은 창의 연결만 답한다.
+    /// 이미 끝난 요청이면 not found, 그 요청이 받지 않는 답이면 invalid params.
+    pub McpApprovalAnswerMethod: "mcp.approval.answer" {
+        params: McpApprovalAnswerParams,
+        result: (),
         tier: Write,
         roles: [Owner],
     }
@@ -341,6 +387,65 @@ impl WindowsOnly<'_> {
 /// 핸들러를 붙인다. 모두 [`WindowsOnly`] 를 지난다 — 이 함수 안에서 `Router` 를 직접 쓰지 않는다.
 pub fn register(router: &mut Router, mcp: Arc<Mcp>) {
     let mut router = WindowsOnly(router);
+    let approvals = mcp.sessions.approvals().clone();
+    router.stream(
+        McpApprovals,
+        move |ctx, params: McpApprovalsParams, sink| {
+            let approvals = approvals.clone();
+            async move {
+                match (&params.project_id, ctx.scope()) {
+                    (Some(project), scope)
+                        if !pw_core::registry::state::scope_may_write(scope, project) =>
+                    {
+                        return Err(not_project_window("hear the approval requests of"));
+                    }
+                    (Some(_), _) | (None, ConnectionScope::Host | ConnectionScope::Project(_)) => {}
+                    (None, ConnectionScope::File(_) | ConnectionScope::Agent) => {
+                        return Err(not_project_window("hear the approval requests of"));
+                    }
+                }
+                let mut listener = approvals.listen(
+                    params.project_id.as_deref(),
+                    ctx.window(),
+                    Connection::of(ctx.session()),
+                );
+                while let Some(event) = listener.recv().await {
+                    sink.send(event).await?;
+                }
+                Ok(())
+            }
+        },
+    );
+    let approvals = mcp.sessions.approvals().clone();
+    router.unary(
+        McpApprovalAnswerMethod,
+        move |ctx, params: McpApprovalAnswerParams| {
+            let approvals = approvals.clone();
+            async move {
+                approvals
+                    .answer(
+                        &Answerer {
+                            scope: ctx.scope(),
+                            connection: Connection::of(ctx.session()),
+                        },
+                        params.id,
+                        params.answer,
+                    )
+                    .map_err(|e| match e {
+                        AnswerError::NotFound => RpcError::new(
+                            code::NOT_FOUND,
+                            "no such open approval request (already answered or withdrawn)",
+                        ),
+                        AnswerError::NotYours => {
+                            not_project_window("answer the approval requests of")
+                        }
+                        AnswerError::NotOffered => RpcError::invalid_params(
+                            "that answer is not offered for this approval request",
+                        ),
+                    })
+            }
+        },
+    );
     let sessions = mcp.sessions.clone();
     router.unary(McpSessions, move |_ctx, ()| {
         let sessions = sessions.clone();
@@ -370,6 +475,15 @@ pub fn register(router: &mut Router, mcp: Arc<Mcp>) {
             blocking(move || mcp.clear(&params)).await
         }
     });
+}
+
+/// 그 창의 연결이 아니다(`PERMISSION_DENIED`, `data.reason = "notProjectWindow"` — `mcp.audit.clear` 와 같은 꼴).
+fn not_project_window(what: &str) -> RpcError {
+    RpcError::new(
+        code::PERMISSION_DENIED,
+        format!("only the project's own window may {what} the project"),
+    )
+    .with_data(serde_json::json!({ "reason": "notProjectWindow" }))
 }
 
 async fn blocking<T: Send + 'static>(

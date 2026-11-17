@@ -624,6 +624,7 @@ fn main() {
         .manage(diagnostics)
         .manage(perf)
         .manage(update_settings)
+        .manage(mcp_sessions.clone())
         // 메뉴(`menu::build`)가 지금 언어로 글자를 만든다 — 메뉴보다 먼저 등록한다.
         .manage(i18n)
         .menu(menu::build)
@@ -671,6 +672,9 @@ fn main() {
             // Tauri 는 이 뒤에 `std::process::exit` 로 끝나 Drop 이 돌지 않는다. 터미널의 셸 · 그 자식(SIGHUP 을 무시하는 것 포함)을
             // 여기서 기다려 끝낸다(M1-08). 업데이트를 설치하고 창을 모두 닫은 것이면 그 뒤 새 버전으로 다시 시작한다.
             if let tauri::RunEvent::Exit = event {
+                // MCP: 대기 중인 승인을 거두고 세션들의 감사 큐를 비운다 — 최대 2초 종료가 늦어질 수 있다(16-m5-plan M5-12).
+                app.state::<pw_mcp::sessions::Sessions>()
+                    .shutdown(std::time::Duration::from_secs(2));
                 pw_run::shutdown();
                 // DB 의 SSH 터널(M3-11) — 남은 ssh 프로세스 그룹을 끝낸다.
                 pw_db_driver::tunnel::shutdown();
