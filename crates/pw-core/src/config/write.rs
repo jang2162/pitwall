@@ -508,7 +508,11 @@ fn with_table(
             Some(Item::Value(old)) if old.is_inline_table() => {
                 let mut next = toml_edit::Value::InlineTable(fresh.into_inline_table());
                 *next.decor_mut() = old.decor().clone();
-                parent.insert(name, Item::Value(next));
+                // 그 자리에서 바꾼다 — `insert` 는 키를 새로 만들어 키 위의 주석 줄을 지운다(`with_key` 와 같은 까닭, 16-m5-plan
+                // M5-15 리뷰).
+                if let Some(slot) = parent.get_mut(name) {
+                    *slot = Item::Value(next);
+                }
             }
             Some(old) if !old.is_table() => {
                 return Err(format!(
@@ -887,6 +891,35 @@ mod tests {
         );
         apply_planned(&edit, Links::Follow).unwrap();
         assert_eq!(fs::read_to_string(&file).unwrap(), edit.after);
+    }
+
+    /// 인라인 표를 바꿔도 그 키 위의 주석 줄 · 꼬리 주석 · 다른 키는 남는다(16-m5-plan M5-15 리뷰 — 키를 새로 만들지 않는다).
+    #[test]
+    fn plan_table_keeps_the_comment_line_above_an_inline_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(SETTINGS_FILE);
+        fs::write(
+            &file,
+            "schema = 1\n[open_with.tools]\n# 내 zed 주석\nzed = { command = [\"old\"] } # 꼬리\nvim = { command = [\"vim\"] }\n",
+        )
+        .unwrap();
+        let edit = plan_table(&file, SETTINGS_KIND, &TOOL, &zed_entries()).unwrap();
+        assert!(
+            edit.after.contains("# 내 zed 주석\nzed = {"),
+            "{}",
+            edit.after
+        );
+        assert!(edit.after.contains("} # 꼬리\n"), "{}", edit.after);
+        assert!(
+            edit.after.contains("vim = { command = [\"vim\"] }"),
+            "{}",
+            edit.after
+        );
+        let doc: DocumentMut = edit.after.parse().unwrap();
+        assert_eq!(
+            doc["open_with"]["tools"]["zed"]["label"].as_str(),
+            Some("Zed")
+        );
     }
 
     /// 없는 파일 · 없는 표는 `schema = 1` 과 그 표 하나로(바깥 표 머리글 없이). 인라인 표였으면 인라인 표로.
