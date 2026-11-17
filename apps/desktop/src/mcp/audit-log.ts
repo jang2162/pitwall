@@ -7,7 +7,8 @@
 // - `mcp.activity` 는 행 id 를 싣는다(새 행, 그리고 선기록된 행이 끝날 때 같은 id 로 한 번 더 — crates/pw-mcp/src/server.rs
 //   `audit_writer`). 이벤트가 몰려도 새로 읽기는 하나씩만 돈다 — 도는 중에 온 것은 가장 작은 id 하나로 모아 끝난 뒤 한 번 더 읽는다.
 // - 다른 프로세스(헤드리스 `pitwall mcp` · `pitwall tool`)가 쓴 행은 이벤트가 없다 — 창이 앞으로 올 때 `refreshAll` 이 맨 위부터
-//   받아 둔 가장 최신 행까지, 그리고 받아 둔 행 중 아직 `started` 인 가장 오래된 행까지 다시 읽는다(carry-notes R8).
+//   받아 둔 가장 최신 행까지 읽고, 화면에 보이는 행 중 아직 `started` 인 것만 id 로 하나씩 다시 읽는다(carry-notes R8). 받아 둔
+//   전부를 다시 읽지 않는다 — 끝을 못 쓴 `started` 행은 영영 남으므로 그것까지 내려가면 포커스마다 수 쪽을 읽는다(M5-13 리뷰 F3).
 // - 거르기(결과 · 툴)는 Host 가 거른다(`mcp.audit.list` 의 `outcome` · `tool`). 바꾸면 처음부터 다시 읽는다. 클라이언트 거르기는
 //   RPC 에 칸이 없어 화면이 받은 행에서 거른다(agent-activity.tsx).
 // - 처음부터 다시 읽을 때(`reset` — 거르기를 바꿈 · 기록 지우기 뒤)는 세대를 올린다. 옛 세대의 응답(지우기 전에 떠난 다음 쪽 등)은
@@ -49,8 +50,11 @@ export interface AuditLog {
   loadMore(): void;
   /** `mcp.activity` 로 받은 행 id 들 — 그 행까지 맨 위부터 다시 읽는다. */
   activity(ids: readonly number[]): void;
-  /** 창이 앞으로 왔다 — 다른 프로세스가 쓰거나 끝낸 행을 다시 읽는다. */
-  refreshAll(): void;
+  /**
+   * 창이 앞으로 왔다 — 다른 프로세스가 쓴 새 행(맨 위부터 받아 둔 가장 최신 행까지)과, `visible`(화면에 그려진 행 id) 중 아직
+   * `started` 인 행을 다시 읽는다.
+   */
+  refreshAll(visible?: readonly number[]): void;
   /** 떠 있는 읽기를 기다린다(시험 · 지우기 뒤). */
   idle(): Promise<void>;
   dispose(): void;
@@ -247,17 +251,42 @@ export function createAuditLog(options: {
     refresh(from);
   };
 
-  const refreshAll = () => {
-    const { rows } = store.getState();
+  /**
+   * 행 하나를 id 로 다시 읽는다 — 그 id 바로 위를 커서로 한 행만 묻는다(커서는 행 id 이고 그보다 작은 id 부터 준다 — 05-mcp.md
+   * 「감사 로그」 의 읽기 줄). 답의 행이 그 id 가 아니면 그 행은 지워졌거나 거르기에 더는 맞지 않는다 — 목록에서 뺀다.
+   */
+  const recheck = async (id: number, mine: number) => {
+    const got = await options.fetch({ ...params(String(id + 1)), limit: 1 });
+    if (disposed || mine !== generation) return;
+    const same = got.entries.filter((r) => r.id === id);
+    store.setState((s) => ({ rows: mergeRows(s.rows, same, id, id + 1), error: undefined }));
+  };
+
+  const refreshAll = (visible: readonly number[] = []) => {
+    const { rows, loading } = store.getState();
     const newest = rows[0]?.id;
     if (newest === undefined) {
       // 아무것도 받지 못했으면(빈 기록 · 첫 읽기 실패) 첫 쪽부터.
-      if (!store.getState().loading) reset();
+      if (!loading) reset();
       return;
     }
-    let from = newest;
-    for (const r of rows) if (r.outcome === "started" && r.id < from) from = r.id;
-    refresh(from);
+    // 새 행: 맨 위부터 받아 둔 가장 최신 행까지(대개 첫 쪽 하나).
+    refresh(newest);
+    // 끝난 `started` 행: 화면에 보이는 것만 id 로 하나씩. 받아 둔 목록 아래쪽에 오래 남은 `started` 행(끝을 못 쓰고 죽은 호출)
+    // 때문에 창이 앞으로 올 때마다 받아 둔 전부를 다시 읽지 않는다 — 보이지 않는 행은 스크롤해 다시 보일 때 다음 다시 읽기가 본다.
+    const wanted = new Set(visible);
+    const started = rows.filter(
+      (r) => r.outcome === "started" && r.id < newest && wanted.has(r.id),
+    );
+    if (started.length === 0) return;
+    const mine = generation;
+    void track(
+      (async () => {
+        for (const r of started) await recheck(r.id, mine);
+      })().catch((e: unknown) => {
+        if (!disposed && mine === generation) fail(e);
+      }),
+    );
   };
 
   reset();

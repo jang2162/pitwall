@@ -189,12 +189,51 @@ describe("audit log", () => {
     // 이벤트 없이(다른 프로세스) 새 행 두 개와 21 의 끝이 쓰였다.
     audit.add(row(41, { client: "pitwall-cli", tool: "git_status" }), row(42));
     audit.rows[20] = row(21, { outcome: "ok", client: "pitwall-cli", durationMs: 9 });
-    log.refreshAll();
+    const before = audit.calls.length;
+    // 21 이 화면에 보인다.
+    log.refreshAll([22, 21]);
     await log.idle();
     const rows = log.store.getState().rows;
     expect(ids(rows).slice(0, 2)).toEqual([42, 41]);
     expect(rows.find((r) => r.id === 21)?.outcome).toBe("ok");
     expect(new Set(ids(rows)).size).toBe(rows.length);
+    // 첫 쪽 하나와 21 을 id 로 한 번(그 바로 위를 커서로 한 행).
+    expect(audit.calls.slice(before).map((c) => [c.cursor, c.limit])).toEqual([
+      [null, 10],
+      ["22", 1],
+    ]);
+  });
+
+  it("does not chase a started row that is not on screen when the window comes forward (F3)", async () => {
+    const audit = new FakeAudit();
+    // 1,000행 중 id 5 가 끝을 못 쓴 채 남았다.
+    audit.add(...range(1, 4), row(5, { outcome: "started", durationMs: 0 }), ...range(6, 1_000));
+    const log = await opened(audit, 200);
+    for (let i = 0; i < 5; i++) {
+      log.loadMore();
+      await log.idle();
+    }
+    expect(log.store.getState()).toMatchObject({ end: true });
+    expect(log.store.getState().rows).toHaveLength(1_000);
+    const before = audit.calls.length;
+    // 맨 위를 보고 있다 — 5 는 화면에 없다.
+    log.refreshAll(range(985, 1_000).map((r) => r.id));
+    await log.idle();
+    // 예전에는 5 까지 맨 위부터 다섯 쪽(1,000행)을 다시 읽었다.
+    expect(audit.calls.length - before).toBe(1);
+  });
+
+  it("drops a started row on recheck when it no longer matches the filter", async () => {
+    const audit = new FakeAudit();
+    audit.add(...range(1, 3), row(4, { outcome: "started", durationMs: 0 }), ...range(5, 30));
+    const log = await opened(audit, 10);
+    log.setFilter({ outcome: "started", tool: null });
+    await log.idle();
+    expect(ids(log.store.getState().rows)).toEqual([4]);
+    audit.rows[3] = row(4, { outcome: "ok" });
+    log.refreshAll([4]);
+    await log.idle();
+    expect(ids(log.store.getState().rows)).toEqual([]);
   });
 
   it("drops a page that left before the log was read again from the start (clearing)", async () => {

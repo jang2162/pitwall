@@ -25,7 +25,7 @@ import type { KeymapNative } from "../keymap/native";
 import { createThemeStore } from "../theme/theme-store";
 import { ThemeStoreProvider } from "../theme/theme-switcher";
 import { parseTheme } from "../theme/tokens";
-import { ACTIVITY_ROW_HEIGHT } from "./agent-activity";
+import { ACTIVITY_ROW_HEIGHT, WAKE_COALESCE_MS } from "./agent-activity";
 import { AUDIT_PAGE } from "./audit-log";
 import { mcpStrings } from "./strings";
 
@@ -398,8 +398,7 @@ it("reads again when the window comes forward, for rows another process wrote (R
   await settle();
   expect(rowIds()).toEqual([2, 1]);
   await act(async () => window.dispatchEvent(new Event("focus")));
-  await settle();
-  expect(rowIds()).toEqual([3, 2, 1]);
+  await vi.waitFor(() => expect(rowIds()).toEqual([3, 2, 1]));
   expect(panel()!.querySelector('[data-mcp-row="3"]')?.textContent).toContain("pitwall-cli");
   expect(panel()!.querySelector('[data-mcp-row="2"] [data-mcp-outcome]')?.textContent).toBe(
     T.activity.outcome.error,
@@ -407,8 +406,7 @@ it("reads again when the window comes forward, for rows another process wrote (R
   // 보이지 않다가 보이게 될 때도.
   host.audit.push(row(4));
   await act(async () => document.dispatchEvent(new Event("visibilitychange")));
-  await settle();
-  expect(rowIds()).toEqual([4, 3, 2, 1]);
+  await vi.waitFor(() => expect(rowIds()).toEqual([4, 3, 2, 1]));
 });
 
 it("filters by result and tool on the host and by client in the panel", async () => {
@@ -481,6 +479,20 @@ it("clears the log only after confirmation, keeping rows without a project", asy
   expect(host.clearCalls).toEqual([]);
   expect(rowIds()).toEqual([3, 2, 1]);
 
+  // Esc 로 닫아도 지우지 않는다(M5-13 리뷰 F4 — 되돌릴 수 없는 삭제가 닫기 길로 새지 않게).
+  await act(async () => clearButton.click());
+  await settle();
+  expect(dialog()).not.toBeNull();
+  await act(async () => {
+    document.activeElement!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+  });
+  await settle();
+  expect(dialog()).toBeNull();
+  expect(host.clearCalls).toEqual([]);
+  expect(rowIds()).toEqual([3, 2, 1]);
+
   await act(async () => clearButton.click());
   await settle();
   await act(async () =>
@@ -515,4 +527,101 @@ it("shows control and bidi characters agents sent as replacement marks", async (
   expect(text.includes("\u202E") || text.includes("\u0007")).toBe(false);
   expect(text).toContain("a\uFFFDgnp.exe");
   expect(text).toContain("evil\uFFFD 1.0");
+});
+
+const listCallsAfter = async (act_: () => Promise<void>) => {
+  const before = host.listCalls.length;
+  await act_();
+  // 묶는 간격이 지나고 읽기가 끝날 때까지.
+  await act(async () => new Promise((r) => setTimeout(r, WAKE_COALESCE_MS * 2)));
+  await settle();
+  return host.listCalls.slice(before);
+};
+
+const wakeWindow = () =>
+  act(async () => {
+    window.dispatchEvent(new Event("focus"));
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+
+async function scrollTo(top: number) {
+  await act(async () => {
+    table().scrollTop = top;
+    table().dispatchEvent(new Event("scroll"));
+  });
+  await settle();
+}
+
+it("reads one page when the window comes forward, not down to an old started row (F3)", async () => {
+  // 리뷰어의 측정: 1,000행을 모두 받아 둔 뒤 id 5 가 started 로 남은 경우 — 포커스 한 번에 5쪽, focus · visibilitychange 가
+  // 함께면 10쪽이었다.
+  for (let id = 1; id <= 1_000; id++)
+    host.audit.push(row(id, id === 5 ? { outcome: "started", durationMs: 0 } : {}));
+  await openPanel();
+  for (let i = 0; i < 10 && Number(table().getAttribute("aria-rowcount")) - 1 < 1_000; i++)
+    await scrollTo((Number(table().getAttribute("aria-rowcount")) - 1) * ACTIVITY_ROW_HEIGHT);
+  expect(Number(table().getAttribute("aria-rowcount"))).toBe(1_001);
+  await scrollTo(0);
+  const calls = await listCallsAfter(wakeWindow);
+  expect(calls.map((c) => c.cursor)).toEqual([null]);
+
+  // 그 started 행이 화면에 있으면 그 행만 id 로 다시 읽는다.
+  host.audit[4] = row(5, { outcome: "error" });
+  await scrollTo(990 * ACTIVITY_ROW_HEIGHT);
+  const again = await listCallsAfter(wakeWindow);
+  expect(again.map((c) => [c.cursor, c.limit])).toEqual([
+    [null, AUDIT_PAGE],
+    ["6", 1],
+  ]);
+  expect(panel()!.querySelector('[data-mcp-row="5"] [data-mcp-outcome]')?.textContent).toBe(
+    T.activity.outcome.error,
+  );
+});
+
+it("does not read while the panel is collapsed, and reads once when it shows again (F3)", async () => {
+  host.audit = [row(1)];
+  await openPanel();
+  const status = document.querySelector<HTMLElement>("[data-testid=status-mcp]")!;
+  // 열려 있는 툴 윈도우의 열기 액션은 그 dock 을 접는다.
+  await act(async () => status.click());
+  await settle();
+  host.audit.push(row(2));
+  const hidden = await listCallsAfter(async () => {
+    await wakeWindow();
+    await act(async () => host.emitProject("mcp.activity", { id: 2, projectId: "p1" }));
+  });
+  expect(hidden).toEqual([]);
+  const shown = await listCallsAfter(async () => {
+    await act(async () => status.click());
+  });
+  expect(shown.map((c) => c.cursor)).toEqual([null]);
+  expect(rowIds()).toEqual([2, 1]);
+});
+
+it("keeps the row being read in place when new calls arrive above it, and shows them at the top (R1)", async () => {
+  for (let id = 1; id <= 100; id++) host.audit.push(row(id));
+  await openPanel();
+  await scrollTo(10 * ACTIVITY_ROW_HEIGHT);
+  const firstVisible = () => {
+    const top = table().scrollTop;
+    return logRows().find((r) => {
+      const y = Number(/translateY\((\d+)px\)/.exec(r.style.transform)?.[1]);
+      return y === top;
+    })?.dataset.mcpRow;
+  };
+  expect(firstVisible()).toBe("90");
+  host.audit.push(row(101), row(102), row(103));
+  await act(async () => host.emitProject("mcp.activity", { id: 101, projectId: "p1" }));
+  await act(async () => host.emitProject("mcp.activity", { id: 103, projectId: "p1" }));
+  await settle();
+  expect(table().scrollTop).toBe(13 * ACTIVITY_ROW_HEIGHT);
+  expect(firstVisible()).toBe("90");
+
+  // 맨 위에 있으면 새 행이 그대로 보인다.
+  await scrollTo(0);
+  host.audit.push(row(104));
+  await act(async () => host.emitProject("mcp.activity", { id: 104, projectId: "p1" }));
+  await settle();
+  expect(table().scrollTop).toBe(0);
+  expect(firstVisible()).toBe("104");
 });

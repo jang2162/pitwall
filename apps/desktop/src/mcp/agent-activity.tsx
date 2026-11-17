@@ -29,9 +29,9 @@ import type {
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import type { IDockviewPanelProps } from "dockview-react";
+import type { DockviewPanelApi, IDockviewPanelProps } from "dockview-react";
 import { Trash2 } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 
 import { useKeymapPopup } from "../keymap/keymap-provider";
@@ -100,12 +100,60 @@ const OUTCOME_CLASS: Record<AuditOutcome, string> = {
 
 // ---- 이벤트 · 창 앞으로 ---------------------------------------------------------------------------------------------------------
 
+/** 창이 앞으로 올 때 함께 오는 `focus` · `visibilitychange` 를 한 번의 다시 읽기로 묶는 간격. */
+export const WAKE_COALESCE_MS = 100;
+
+/** 툴 윈도우가 지금 보이는가: 그 그룹의 활성 탭이고, 그 그룹이 접힌 가장자리 dock 이 아니다. */
+function isShown(api: DockviewPanelApi): boolean {
+  const group = api.group?.api;
+  return api.isVisible && !(group?.location.type === "edge" && group.isCollapsed());
+}
+
+function usePanelShown(api: DockviewPanelApi): boolean {
+  const [shown, setShown] = useState(() => isShown(api));
+  useEffect(() => {
+    const update = () => setShown(isShown(api));
+    let groupOff: { dispose(): void } | undefined;
+    const watchGroup = () => {
+      groupOff?.dispose();
+      groupOff = api.group?.api.onDidCollapsedChange(update);
+      update();
+    };
+    watchGroup();
+    const visibility = api.onDidVisibilityChange(update);
+    const moved = api.onDidGroupChange(watchGroup);
+    return () => {
+      groupOff?.dispose();
+      visibility.dispose();
+      moved.dispose();
+    };
+  }, [api]);
+  return shown;
+}
+
 /**
  * 로그를 살아 있게 둔다: `mcp.activity` 를 이 프로젝트 범위와 Host 범위(프로젝트 없는 호출)로 구독해 행 id 를 넘기고, 세션의 호출
  * 수도 다시 읽게 한다. 구독이 열리면 한 번 다시 읽는다(첫 쪽과 구독 사이에 쓰인 행). 창이 앞으로 오면 다시 읽는다.
+ *
+ * 패널이 보이지 않는 동안(다른 탭 뒤 · 접힌 dock)은 읽지 않고 「밀렸다」 고만 적어 두었다가, 다시 보일 때 한 번 읽는다(M5-13 리뷰
+ * F3). 창이 앞으로 올 때 `focus` 와 `visibilitychange` 가 함께 오면 [`WAKE_COALESCE_MS`] 안의 것을 한 번으로 묶는다.
  */
-function useLiveLog(log: AuditLog, client: RpcClient, host: string, projectId: string) {
+function useLiveLog(
+  log: AuditLog,
+  client: RpcClient,
+  host: string,
+  projectId: string,
+  shown: boolean,
+  visibleIds: () => readonly number[],
+) {
   const queryClient = useQueryClient();
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
+  const visibleRef = useRef(visibleIds);
+  visibleRef.current = visibleIds;
+  /** 보이지 않는 동안 놓친 것이 있다. */
+  const missed = useRef(false);
+
   useEffect(() => {
     let disposed = false;
     let ids: number[] = [];
@@ -115,8 +163,9 @@ function useLiveLog(log: AuditLog, client: RpcClient, host: string, projectId: s
       const batch = ids;
       ids = [];
       if (disposed) return;
-      log.activity(batch);
       void queryClient.invalidateQueries({ queryKey: rpcQueryKey(host, "mcp.sessions") });
+      if (shownRef.current) log.activity(batch);
+      else missed.current = true;
     };
     const onEvent = (event: { topic: string; payload: unknown }) => {
       if (disposed || event.topic !== ACTIVITY_TOPIC) return;
@@ -143,7 +192,9 @@ function useLiveLog(log: AuditLog, client: RpcClient, host: string, projectId: s
       ),
     );
     void Promise.all(subscriptions).then(() => {
-      if (!disposed) log.refreshAll();
+      if (disposed) return;
+      if (shownRef.current) log.refreshAll(visibleRef.current());
+      else missed.current = true;
     });
     return () => {
       disposed = true;
@@ -152,17 +203,34 @@ function useLiveLog(log: AuditLog, client: RpcClient, host: string, projectId: s
   }, [log, client, host, projectId, queryClient]);
 
   useEffect(() => {
-    const onFocus = () => log.refreshAll();
-    const onVisible = () => {
-      if (document.visibilityState === "visible") log.refreshAll();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const wake = () => {
+      // 보이는지는 묶은 뒤에 본다(아래) — 보이지 않으면 밀린 것으로만 적는다.
+      if (timer !== undefined) return;
+      timer = setTimeout(() => {
+        timer = undefined;
+        if (shownRef.current) log.refreshAll(visibleRef.current());
+        else missed.current = true;
+      }, WAKE_COALESCE_MS);
     };
-    window.addEventListener("focus", onFocus);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") wake();
+    };
+    window.addEventListener("focus", wake);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
-      window.removeEventListener("focus", onFocus);
+      clearTimeout(timer);
+      window.removeEventListener("focus", wake);
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [log]);
+
+  // 다시 보이면 숨어 있는 동안 밀린 것을 한 번 읽는다.
+  useEffect(() => {
+    if (!shown || !missed.current) return;
+    missed.current = false;
+    log.refreshAll(visibleRef.current());
+  }, [shown, log]);
 }
 
 // ---- 툴 윈도우 ------------------------------------------------------------------------------------------------------------------
@@ -176,19 +244,25 @@ export function AgentActivityToolWindow({ api }: IDockviewPanelProps) {
       className="flex h-full flex-col bg-ui-panel text-ui-foreground outline-none"
     >
       {/* 프로젝트가 없으면(도킹 영역만의 시험 · 프로젝트 없는 창) Host 도 찾지 않는다. */}
-      {projectId !== undefined && <AgentActivity projectId={projectId} />}
+      {projectId !== undefined && <AgentActivity api={api} projectId={projectId} />}
     </div>
   );
 }
 
-function AgentActivity({ projectId }: { projectId: string }) {
+function AgentActivity({ api, projectId }: { api: DockviewPanelApi; projectId: string }) {
   const { client, key } = useHost();
   return (
     <>
       <PendingApprovals projectId={projectId} />
       <ConnectedAgents projectId={projectId} />
       {client && (
-        <CallLog key={`${key}\n${projectId}`} client={client} host={key} projectId={projectId} />
+        <CallLog
+          key={`${key}\n${projectId}`}
+          api={api}
+          client={client}
+          host={key}
+          projectId={projectId}
+        />
       )}
     </>
   );
@@ -238,10 +312,12 @@ function clientKey(client: string | null) {
 }
 
 function CallLog({
+  api,
   client,
   host,
   projectId,
 }: {
+  api: DockviewPanelApi;
   client: RpcClient;
   host: string;
   projectId: string;
@@ -253,7 +329,6 @@ function CallLog({
     createAuditLog({ fetch: (params) => client.call("mcp.audit.list", params), projectId }),
   );
   useEffect(() => () => log.dispose(), [log]);
-  useLiveLog(log, client, host, projectId);
   const { rows, end, loading, error, filter } = useStore(log.store);
   const [clientFilter, setClientFilter] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
@@ -271,6 +346,9 @@ function CallLog({
     () => clientChoices(sessions, rows, clientFilter),
     [sessions, rows, clientFilter],
   );
+  // 클라이언트 거르기는 받은 행에서 한다 — `mcp.audit.list` 에 client 인자가 없다. 한계: 고른 클라이언트의 행이 드물면(또는 없으면)
+  // 맞는 줄이 화면을 채울 때까지 쪽을 이어 읽어 보관 기간 전부를 받고 쥔다. Host 에 인자를 더하는 것은 M5-12 병합 뒤 후속이다
+  // (16-m5-plan M5-10 ③, M5-13 리뷰 F2) — 그때 결과 · 툴과 같이 `AuditFilter` 로 옮긴다.
   const shown = useMemo(
     () => (clientFilter === null ? rows : rows.filter((r) => clientKey(r.client) === clientFilter)),
     [rows, clientFilter],
@@ -283,8 +361,36 @@ function CallLog({
     getItemKey: (index) => shown[index]?.id ?? index,
     overscan: 10,
   });
+  // 아래로 내려 읽는 중에 맨 위에 새 행이 붙으면, 보던 줄이 그 자리에 있게 붙은 만큼 스크롤을 내린다. 맨 위(0)에 있을 때는
+  // 그대로 두어 새 행이 보인다(M5-13 리뷰 R1). 보던 줄은 화면 맨 위 줄로 잡는다 — 그 줄이 새 목록의 몇째로 갔는지로 붙은 수를 센다.
+  const anchor = useRef<{ rows: readonly AuditRow[]; top: number }>({ rows: shown, top: 0 });
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const before = anchor.current;
+    anchor.current = { rows: shown, top: el?.scrollTop ?? 0 };
+    if (!el || before.rows === shown || before.top <= 0) return;
+    const was = Math.floor(before.top / ACTIVITY_ROW_HEIGHT);
+    const id = before.rows[was]?.id;
+    if (id === undefined) return;
+    const now = shown.findIndex((r) => r.id === id);
+    if (now < 0 || now === was) return;
+    const top = before.top + (now - was) * ACTIVITY_ROW_HEIGHT;
+    // 스크롤 상자를 직접 옮긴다 — 가상 목록은 그 스크롤 이벤트로 따라온다.
+    el.scrollTop = top;
+    anchor.current = { rows: shown, top };
+  }, [shown]);
+  const onScroll = () => {
+    anchor.current = { rows: anchor.current.rows, top: scrollRef.current?.scrollTop ?? 0 };
+  };
   const items = virtualizer.getVirtualItems();
   const lastDrawn = items.at(-1)?.index ?? -1;
+  const shownPanel = usePanelShown(api);
+  const drawnIds = () =>
+    virtualizer
+      .getVirtualItems()
+      .map((item) => shown[item.index]?.id)
+      .filter((id): id is number => id !== undefined);
+  useLiveLog(log, client, host, projectId, shownPanel, drawnIds);
   // 끝에 가까워지면(거른 줄이 적어 끝이 보이는 때도) 다음 쪽.
   useEffect(() => {
     if (!loading && !end && lastDrawn >= shown.length - LOAD_AHEAD) log.loadMore();
@@ -393,6 +499,7 @@ function CallLog({
         aria-rowcount={shown.length + 1}
         tabIndex={0}
         data-testid="mcp-log-rows"
+        onScroll={onScroll}
         className="min-h-0 flex-1 overflow-auto text-[12px] outline-none"
       >
         <div role="rowgroup" className="sticky top-0 z-10 min-w-[640px] bg-ui-panel">
