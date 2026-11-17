@@ -358,18 +358,6 @@ async function moveCursor(line: number) {
   );
 }
 
-/** 문서 끝에 글자 하나를 붙인다 — 큰 이동의 연속을 끊는 편집(기록된 줄은 그대로). */
-async function editAtEnd() {
-  const view = activeView();
-  (document.activeElement as HTMLElement | null)?.blur();
-  await act(async () =>
-    view.dispatch({
-      changes: { from: view.state.doc.length, insert: "x" },
-      userEvent: "input.type",
-    }),
-  );
-}
-
 const toasts = () =>
   [...document.querySelectorAll("[data-sonner-toast]")].map((t) => t.textContent ?? "");
 
@@ -500,11 +488,21 @@ it("records a cursor move of more than 10 lines, not a smaller one nor a move by
 it(`keeps the last ${NAV_HISTORY_LIMIT} places in Recent Locations, newest first, and opens the chosen one`, async () => {
   await mount();
   await openRequest(LIB, 299, 1);
-  // 큰 이동 101번: 첫 기록(299줄)이 빠진다. 이어지는 큰 이동은 한 칸이라 이동마다 편집으로 연속을 끊는다.
-  for (let i = 0; i < NAV_HISTORY_LIMIT + 1; i++) {
-    await moveCursor(i % 2 ? 1 + (i % 40) : 150 + (i % 40));
-    await editAtEnd();
-  }
+  // 큰 이동 101번: 첫 기록(299줄)이 빠진다. 이어지는 큰 이동은 한 칸이라 이동마다 문서 끝에 글자 하나를 붙여(기록된 줄은 그대로)
+  // 연속을 끊는다. 기록은 뷰의 갱신에서 곧바로 든다(extensions/cursor-report.ts) — 그래서 한 act 로 묶는다. 이동마다 act 로
+  // React 를 비우면(202번) 그 일이 부하만큼 늘어 동시 빌드 아래서 시한에 걸렸다.
+  const view = activeView();
+  (document.activeElement as HTMLElement | null)?.blur();
+  await act(async () => {
+    for (let i = 0; i < NAV_HISTORY_LIMIT + 1; i++) {
+      const line = i % 2 ? 1 + (i % 40) : 150 + (i % 40);
+      view.dispatch({ selection: { anchor: view.state.doc.line(line).from }, userEvent: "select" });
+      view.dispatch({
+        changes: { from: view.state.doc.length, insert: "x" },
+        userEvent: "input.type",
+      });
+    }
+  });
   await recentLocations();
   const rows = recentRows();
   expect(rows).toHaveLength(NAV_HISTORY_LIMIT);
