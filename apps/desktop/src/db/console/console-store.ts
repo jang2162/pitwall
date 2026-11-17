@@ -209,29 +209,42 @@ function consoleActions(store: StoreApi<ConsoleState>, deps: ConsoleDeps) {
     }
   }
 
-  const actions = {
-    /** 탭이 처음 그려질 때: Host 가 보존한 세션을 찾아 잇는다. 새 연결은 열지 않는다(결정 M3-D13). */
-    async resume() {
-      if (get().resumed) return;
-      try {
-        const found = await client().call("db.session.resume", {
-          projectId: deps.projectId,
-          tabId: get().spec.tabId,
-        });
-        // 돌아오기 전에 탭이 닫혔으면 보존 세션을 아무도 닫지 않는다 — 곧바로 닫는다(사람이 탭을 닫았다. 열린 트랜잭션은
-        // DB 가 롤백한다).
-        if (found && disposed) {
-          await client()
-            .call("db.session.close", { sessionId: found.session.sessionId })
-            .catch(() => undefined);
-          return;
-        }
-        if (found && !get().opened) set({ opened: found });
-      } catch (e) {
-        set({ error: e });
-      } finally {
-        set({ resumed: true });
+  /** 도는 재개(`resume`). */
+  let resuming: Promise<void> | undefined;
+  const resumeOnce = async () => {
+    try {
+      const found = await client().call("db.session.resume", {
+        projectId: deps.projectId,
+        tabId: get().spec.tabId,
+      });
+      // 돌아오기 전에 탭이 닫혔으면 보존 세션을 아무도 닫지 않는다 — 곧바로 닫는다(사람이 탭을 닫았다. 열린 트랜잭션은
+      // DB 가 롤백한다).
+      if (found && disposed) {
+        await client()
+          .call("db.session.close", { sessionId: found.session.sessionId })
+          .catch(() => undefined);
+        return;
       }
+      if (found && !get().opened) set({ opened: found });
+    } catch (e) {
+      set({ error: e });
+    } finally {
+      set({ resumed: true });
+    }
+  };
+
+  const actions = {
+    /**
+     * 탭이 처음 그려질 때: Host 가 보존한 세션을 찾아 잇는다. 새 연결은 열지 않는다(결정 M3-D13). 도는 중에 다시 부르면 그 재개를
+     * 함께 기다린다 — StrictMode(dev)가 effect 를 다시 걸어 두 번 부르면 RPC 가 두 번 나가고, 탭이 그사이 닫히면 같은 세션을 두 번
+     * 닫았다(M5-13b).
+     */
+    resume() {
+      if (get().resumed) return Promise.resolve();
+      resuming ??= resumeOnce().finally(() => {
+        resuming = undefined;
+      });
+      return resuming;
     },
 
     /** [연결]: 고른 연결 · DB · 스키마로 세션을 연다. */
