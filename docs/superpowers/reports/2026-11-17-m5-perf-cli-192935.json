@@ -1,0 +1,414 @@
+{
+ "meta": {
+  "commit": "6fdd904a0271ce25d4e9269afc3734d674b10680",
+  "dirty": false,
+  "os": "macOS 27.2.1 (26B131)",
+  "hardware": "Mac17,9 · Apple M5 Pro · 15 CPUs · 48 GiB",
+  "display": "built-in Color LCD only, 3024 x 1964",
+  "app": "target/release/bundle/macos/Pitwall.app (release, default features)",
+  "driver": "scratch Rust binary (not committed) linking pw-perf: temp PITWALL_*_DIR + untrusted registered empty project (pw_perf::register_untrusted), disclaimed spawn of <bundle>/Contents/MacOS/pitwall <project> (pw_perf::macos::spawn_disclaimed), first_frame mark, memory = phys_footprint sum over the responsible-pid group (same as pw-perf), quit by pid (AppKit terminate)",
+  "MB": "10^6 bytes",
+  "what": "wall clock of `pitwall tool project_list` from spawn to exit, 1 warm-up + 20 back-to-back calls; app: the app instance up 10 s after its first frame (cli log: connected to the running app x21); headless: no app (cli log: no running app; serving headless x21)"
+ },
+ "headless": {
+  "calls": [
+   {
+    "exit": 0,
+    "i": 0,
+    "lists_project": true,
+    "load1": 4.83056640625,
+    "ms": 11.766041,
+    "stdout_bytes": 344,
+    "warmup": true
+   },
+   {
+    "exit": 0,
+    "i": 1,
+    "lists_project": true,
+    "load1": 4.83056640625,
+    "ms": 9.351292,
+    "stdout_bytes": 344,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 2,
+    "lists_project": true,
+    "load1": 4.83056640625,
+    "ms": 10.60625,
+    "stdout_bytes": 344,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 3,
+    "lists_project": true,
+    "load1": 4.83056640625,
+    "ms": 9.636875,
+    "stdout_bytes": 344,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 4,
+    "lists_project": true,
+    "load1": 4.83056640625,
+    "ms": 10.389249999999999,
+    "stdout_bytes": 344,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 5,
+    "lists_project": true,
+    "load1": 4.83056640625,
+    "ms": 10.23075,
+    "stdout_bytes": 344,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 6,
+    "lists_project": true,
+    "load1": 4.83056640625,
+    "ms": 9.53975,
+    "stdout_bytes": 344,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 7,
+    "lists_project": true,
+    "load1": 4.83056640625,
+    "ms": 9.414375,
+    "stdout_bytes": 344,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 8,
+    "lists_project": true,
+    "load1": 4.83056640625,
+    "ms": 8.820082999999999,
+    "stdout_bytes": 344,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 9,
+    "lists_project": true,
+    "load1": 4.83056640625,
+    "ms": 9.043292,
+    "stdout_bytes": 344,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 10,
+    "lists_project": true,
+    "load1": 4.83056640625,
+    "ms": 9.001708,
+    "stdout_bytes": 344,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 11,
+    "lists_project": true,
+    "load1": 4.83056640625,
+    "ms": 8.838417,
+    "stdout_bytes": 344,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 12,
+    "lists_project": true,
+    "load1": 4.83056640625,
+    "ms": 9.723374999999999,
+    "stdout_bytes": 344,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 13,
+    "lists_project": true,
+    "load1": 4.83056640625,
+    "ms": 9.90025,
+    "stdout_bytes": 344,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 14,
+    "lists_project": true,
+    "load1": 4.83056640625,
+    "ms": 9.358875,
+    "stdout_bytes": 344,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 15,
+    "lists_project": true,
+    "load1": 4.83056640625,
+    "ms": 8.810749999999999,
+    "stdout_bytes": 344,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 16,
+    "lists_project": true,
+    "load1": 4.83056640625,
+    "ms": 8.766667,
+    "stdout_bytes": 344,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 17,
+    "lists_project": true,
+    "load1": 4.83056640625,
+    "ms": 8.86275,
+    "stdout_bytes": 344,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 18,
+    "lists_project": true,
+    "load1": 4.83056640625,
+    "ms": 9.204291999999999,
+    "stdout_bytes": 344,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 19,
+    "lists_project": true,
+    "load1": 4.83056640625,
+    "ms": 8.882042,
+    "stdout_bytes": 344,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 20,
+    "lists_project": true,
+    "load1": 4.83056640625,
+    "ms": 9.081083,
+    "stdout_bytes": 344,
+    "warmup": false
+   }
+  ],
+  "load1_start": 4.83056640625,
+  "log_connected": 0,
+  "log_no_app": 21,
+  "mode": "cli-headless"
+ },
+ "app": {
+  "app_pid": 51599,
+  "calls": [
+   {
+    "exit": 0,
+    "i": 0,
+    "lists_project": true,
+    "load1": 4.71533203125,
+    "ms": 15.204125000000001,
+    "stdout_bytes": 353,
+    "warmup": true
+   },
+   {
+    "exit": 0,
+    "i": 1,
+    "lists_project": true,
+    "load1": 4.71533203125,
+    "ms": 10.236625,
+    "stdout_bytes": 353,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 2,
+    "lists_project": true,
+    "load1": 4.71533203125,
+    "ms": 8.916500000000001,
+    "stdout_bytes": 353,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 3,
+    "lists_project": true,
+    "load1": 4.71533203125,
+    "ms": 9.064083,
+    "stdout_bytes": 353,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 4,
+    "lists_project": true,
+    "load1": 4.71533203125,
+    "ms": 8.533334,
+    "stdout_bytes": 353,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 5,
+    "lists_project": true,
+    "load1": 4.71533203125,
+    "ms": 8.352,
+    "stdout_bytes": 353,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 6,
+    "lists_project": true,
+    "load1": 4.71533203125,
+    "ms": 7.8862499999999995,
+    "stdout_bytes": 353,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 7,
+    "lists_project": true,
+    "load1": 4.71533203125,
+    "ms": 7.941458,
+    "stdout_bytes": 353,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 8,
+    "lists_project": true,
+    "load1": 4.71533203125,
+    "ms": 9.4315,
+    "stdout_bytes": 353,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 9,
+    "lists_project": true,
+    "load1": 4.71533203125,
+    "ms": 7.683833,
+    "stdout_bytes": 353,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 10,
+    "lists_project": true,
+    "load1": 4.71533203125,
+    "ms": 7.70875,
+    "stdout_bytes": 353,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 11,
+    "lists_project": true,
+    "load1": 4.71533203125,
+    "ms": 7.572041,
+    "stdout_bytes": 353,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 12,
+    "lists_project": true,
+    "load1": 4.71533203125,
+    "ms": 7.832916000000001,
+    "stdout_bytes": 353,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 13,
+    "lists_project": true,
+    "load1": 4.71533203125,
+    "ms": 7.6245829999999994,
+    "stdout_bytes": 353,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 14,
+    "lists_project": true,
+    "load1": 4.71533203125,
+    "ms": 7.762417,
+    "stdout_bytes": 353,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 15,
+    "lists_project": true,
+    "load1": 4.71533203125,
+    "ms": 7.7659590000000005,
+    "stdout_bytes": 353,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 16,
+    "lists_project": true,
+    "load1": 4.71533203125,
+    "ms": 8.031042000000001,
+    "stdout_bytes": 353,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 17,
+    "lists_project": true,
+    "load1": 4.71533203125,
+    "ms": 8.1975,
+    "stdout_bytes": 353,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 18,
+    "lists_project": true,
+    "load1": 4.71533203125,
+    "ms": 8.753583,
+    "stdout_bytes": 353,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 19,
+    "lists_project": true,
+    "load1": 4.71533203125,
+    "ms": 8.388584,
+    "stdout_bytes": 353,
+    "warmup": false
+   },
+   {
+    "exit": 0,
+    "i": 20,
+    "lists_project": true,
+    "load1": 4.71533203125,
+    "ms": 7.882416999999999,
+    "stdout_bytes": 353,
+    "warmup": false
+   }
+  ],
+  "load1_start": 4.71533203125,
+  "locked": false,
+  "log_connected": 21,
+  "log_no_app": 0,
+  "mode": "cli-app",
+  "shutdown": {
+   "killed": false,
+   "leftovers": [],
+   "si_socket_left": false
+  }
+ }
+}
