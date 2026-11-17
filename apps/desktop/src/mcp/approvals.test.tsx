@@ -535,7 +535,7 @@ it("a file change is drawn with the diff view", async () => {
   expect(file.textContent).toContain("t⟨U+200B⟩wo");
 });
 
-it("planDiff turns the before and after text into hunks", () => {
+it("planDiff turns the before and after text into hunks", async () => {
   const changed = planDiff("/w/a.txt", "a\nb\nc\n", "a\nB\nc\nd");
   expect(changed.file.status).toBe("modified");
   expect(changed.file.hunks.map((h) => [h.oldStart, h.oldLines, h.newStart, h.newLines])).toEqual([
