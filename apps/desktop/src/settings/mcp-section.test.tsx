@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 // 설정 창(App kind="settings")의 「MCP」(16-m5-plan M5-15): 그룹 · 툴 토글과 프리셋 · 자동 승인 · 보관 일수가 `mcp.settings.set` 으로
-// 가고(전역만 — 판정은 Host), 검색이 목록을 거르고, 고른 프로젝트가 판정을 바꾼 툴에 표지를 달고 토글을 잠그며, 등록 문구를
+// 가고(전역만 — 판정은 Host), 검색이 목록을 거르고, 고른 프로젝트에서의 판정을 툴 줄마다 나란히 보이고(전역 토글은 잠그지 않는다), 등록 문구를
 // 복사한다. 가짜 Host 는 판정을 흉내 내지 않는다 — 돌려줄 값을 시험이 정한다(Host 쪽 판정 · 파일 쓰기는
 // crates/pw-mcp/tests/settings.rs).
 
@@ -149,6 +149,7 @@ function view(): McpSettingsView {
     })),
     retentionDays: 90,
     defaultRetentionDays: 90,
+    maxRetentionDays: 3650,
     warnings: [],
     project: null,
   };
@@ -321,25 +322,41 @@ it("search narrows the list by name, group or description", async () => {
   expect(part("tools").textContent).toContain(S.noTools);
 });
 
-it("marks and locks the tools a chosen project overrides, and opens only the host's files", async () => {
+it("shows each tool's verdict in a chosen project beside the global switch, which stays editable", async () => {
   await mount();
   const picker = part("project").querySelector("select")!;
   await choose(picker, "p1");
-  await vi.waitFor(() => expect(row("db_query")!.dataset.overridden).toBe(""));
-  const overridden = row("db_query")!;
-  expect(toolBox("db_query").disabled).toBe(true);
-  expect(overridden.querySelector("[data-project-verdict]")!.textContent).toContain(
-    S.overridden(S.stateOff, S.rule.group("db")),
+  await vi.waitFor(() => expect(row("db_query")!.dataset.differs).toBe(""));
+  // 판정이 다른 툴: 「전역과 다름」 표지와 그 프로젝트에서의 판정 · 까닭(Host 의 verdict 그대로).
+  const differing = row("db_query")!.querySelector("[data-project-verdict]")!;
+  expect(differing.textContent).toContain(S.differsBadge);
+  expect(differing.textContent).toContain(S.inProject(S.stateOff, S.rule.group("db")));
+  // 판정이 같은 툴도 그 프로젝트에서의 판정을 보이고, 표지는 없다.
+  expect(row("git_status")!.dataset.differs).toBeUndefined();
+  const same = row("git_status")!.querySelector("[data-project-verdict]")!;
+  expect(same.textContent).toBe(S.inProject(S.stateOn, S.rule.preset("standard")));
+  expect(part("project").querySelector("[data-project-note]")!.textContent).toBe(S.projectNote);
+  // 전역 토글은 잠기지 않는다 — 전역의 툴 키는 그 프로젝트의 그룹 판정에도 닿는다(crates/pw-mcp/tests/settings.rs 의
+  // a_global_tool_key_reaches_a_tool_the_project_turned_off_by_group).
+  expect(toolBox("db_query").disabled).toBe(false);
+  host.projectTools = host.projectTools.map((t) =>
+    t.name === "db_query" ? { ...t, enabled: false, rule: "tool", key: "db_query" } : t,
   );
-  // 판정이 같은 툴은 표지가 없고 전역 토글 그대로다.
-  expect(row("git_status")!.dataset.overridden).toBeUndefined();
-  expect(toolBox("git_status").disabled).toBe(false);
+  await click(toolBox("db_query"));
+  expect(sets()).toEqual([{ key: "tool", name: "db_query", value: false }]);
+  // 고친 뒤 Host 가 다시 낸 그 프로젝트의 판정이 보인다.
+  await vi.waitFor(() =>
+    expect(row("db_query")!.querySelector("[data-project-verdict]")!.textContent).toBe(
+      S.inProject(S.stateOff, S.rule.tool),
+    ),
+  );
+  expect(row("db_query")!.dataset.differs).toBeUndefined();
   // 그 프로젝트가 적은 값과 파일.
   const overrides = part("project").querySelector("[data-project-overrides]")!;
   expect(overrides.querySelector('[data-override-key="groups.db"]')!.textContent).toContain(
     "false",
   );
-  expect(groupSelect("db").closest("[data-group]")!.textContent).toContain(S.overriddenBadge);
+  expect(groupSelect("db").closest("[data-group]")!.textContent).toContain(S.projectSets);
   const shared = overrides.querySelector('[data-file="shared"]')!;
   await click(shared.querySelector("button")!);
   expect(native.opened).toEqual(["/work/alpha/.pitwall/project.toml"]);
@@ -348,12 +365,33 @@ it("marks and locks the tools a chosen project overrides, and opens only the hos
   // 전역 파일도 Host 가 준 경로로 연다.
   await click([...section().querySelectorAll("button")].find((b) => b.textContent === S.openFile)!);
   expect(native.opened[1]).toBe("/home/me/.config/pitwall/settings.toml");
-  // 프로젝트를 고르는 것은 아무것도 쓰지 않는다.
-  expect(sets()).toEqual([]);
-  // 없음으로 돌리면 표지가 사라진다.
+  // 프로젝트를 고르는 것은 아무것도 쓰지 않는다(위의 토글 하나뿐).
+  expect(sets()).toHaveLength(1);
+  // 없음으로 돌리면 프로젝트 줄이 사라진다.
   await choose(picker, "");
-  await vi.waitFor(() => expect(row("db_query")!.dataset.overridden).toBeUndefined());
-  expect(toolBox("db_query").disabled).toBe(false);
+  await vi.waitFor(() =>
+    expect(row("db_query")!.querySelector("[data-project-verdict]")).toBeNull(),
+  );
+});
+
+it("shows the value the project's later file sets when two files set the same key", async () => {
+  host.projectView = {
+    ...host.projectView!,
+    overrides: [
+      { key: "groups.db", value: true, file: "shared" },
+      { key: "groups.db", value: false, file: "local" },
+    ],
+  };
+  await mount();
+  await choose(part("project").querySelector("select")!, "p1");
+  await vi.waitFor(() =>
+    expect(
+      groupSelect("db").closest("[data-group]")!.querySelector("[data-override]"),
+    ).toBeTruthy(),
+  );
+  expect(
+    groupSelect("db").closest("[data-group]")!.querySelector("[data-override]")!.textContent,
+  ).toBe(`${S.projectSets}: false ${S.overrideFrom(S.file.local)}`);
 });
 
 it("the retention field shows the value and edits it, and shows why the host refused", async () => {
@@ -380,6 +418,9 @@ it("the retention field shows the value and edits it, and shows why the host ref
     [...part("retentionDays").querySelectorAll("button")].find((b) => b.textContent === S.reset)!,
   );
   expect(sets()[2]).toEqual({ key: "retentionDays", name: null, value: null });
+  // 「기본값으로」 뒤에는 칸이 Host 가 돌려준 값(기본 90)으로 다시 맞춰진다 — 거절된 「-1」 이 남지 않는다.
+  await vi.waitFor(() => expect(input.value).toBe("90"));
+  expect(part("retentionDays").textContent).toContain(S.retentionHint(3650, 90));
 });
 
 it("preset and auto-approve go to the host, and there is no dangerous auto-approve box", async () => {
@@ -406,5 +447,7 @@ it("copies each agent's registration text", async () => {
     expect(line.querySelector("[role=status]")!.textContent).toBe(S.copied);
   }
   expect(native.copied).toEqual(REGISTRATIONS.map((r) => r.text));
-  expect(native.copied[0]).toBe("claude mcp add --scope user pitwall -- pitwall mcp");
+  expect(native.copied[0]).toBe(
+    "claude mcp add --transport stdio --scope user pitwall -- pitwall mcp",
+  );
 });

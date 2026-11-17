@@ -6,9 +6,12 @@
 //   까닭(`McpSettingRefused`)을 번역해 보인다. 프로젝트 설정은 여기서 쓰지 않는다.
 // - **판정을 화면에서 다시 하지 않는다**(메인 판정 2026-11-17): 툴의 켜짐과 까닭은 `mcp.tools.list` 의 `enabled` · `rule` · `key`
 //   그대로, 프리셋 · 자동 승인 · 그룹 · 보관 일수는 `mcp.settings.get` 이 Host 가 쓰는 값으로 준다.
-// - **프로젝트 덮어쓰기 보기**(읽기만): 고른 프로젝트의 `mcp.tools.list { projectId }` 판정이 전역 판정과 다른 툴에 「프로젝트가
-//   덮음」 표지를 달고 그 툴 토글은 잠근다(전역을 고쳐도 그 프로젝트에서는 바뀌지 않는다). 그 프로젝트 파일이 `[mcp]` 아래에
-//   적은 값과 파일은 `mcp.settings.get { projectId }` 가 준다. 「파일로 열기」 는 Host 가 준 경로만 연다(화면이 조립하지 않는다).
+// - **프로젝트 덮어쓰기 보기**(읽기만): 고른 프로젝트에서의 실제 판정(`mcp.tools.list { projectId }` 의 `enabled` · `rule` · `key`)을
+//   툴 줄마다 「이 프로젝트에서: 켜짐/꺼짐 — 까닭」 으로 전역 판정 옆에 나란히 보이고, 두 판정이 다르면 「전역과 다름」 표지를 단다.
+//   **전역 토글은 잠그지 않는다**(메인 판정 2026-11-17 — M5-15 리뷰): 전역의 정확한 툴 키는 프로젝트가 그룹 · 프리셋 · glob 으로
+//   바꾼 판정에도 닿고(정확한 키가 앞선다), 프로젝트 파일의 정확한 키 · 공유 설정의 좁히기에는 닿지 않는다 — 어느 쪽인지는
+//   화면이 추론하지 않고, 고친 뒤 Host 가 다시 낸 「이 프로젝트에서」 줄이 보인다. 그 프로젝트 파일이 `[mcp]` 아래에 적은 값과
+//   파일은 `mcp.settings.get { projectId }` 가 준다. 「파일로 열기」 는 Host 가 준 경로만 연다(화면이 조립하지 않는다).
 // - 툴 설명은 영어 그대로다(에이전트가 읽는 글 — 결정 M5-D39).
 // - 에이전트 등록 문구는 복사만 한다 — 자동 등록(F10-5)은 하지 않는다(결정 M5-D33). 문구의 출처는 아래 `REGISTRATIONS`.
 
@@ -44,13 +47,17 @@ const AUTO_TIERS: readonly Tier[] = ["read", "write", "exec"];
 
 /**
  * 에이전트 클라이언트별 등록 문구(결정 M5-D33 — 복사만). 각 클라이언트의 공식 문서에서 확인한 꼴이다(2026-11-17):
- * - Claude Code: https://code.claude.com/docs/en/mcp — `claude mcp add [options] <name> -- <command> [args...]`, `--scope user` 는
- *   모든 프로젝트.
+ * - Claude Code: https://code.claude.com/docs/en/mcp — `claude mcp add [options] <name> -- <command> [args...]`, 그 페이지의 stdio
+ *   예는 `--transport stdio` 를 적는다(https://code.claude.com/docs/en/mcp-quickstart 는 생략해도 stdio 가 기본이라 적는다 —
+ *   명시해 둔다). `--scope user` 는 모든 프로젝트.
  * - Codex: https://developers.openai.com/codex/mcp — `codex mcp add <name> -- <command>`(설정은 `~/.codex/config.toml`).
  * - Cursor: https://cursor.com/docs/mcp — 명령이 없고 `~/.cursor/mcp.json`(전역) · `.cursor/mcp.json`(프로젝트)의 `mcpServers`.
  */
 export const REGISTRATIONS = [
-  { id: "claudeCode", text: "claude mcp add --scope user pitwall -- pitwall mcp" },
+  {
+    id: "claudeCode",
+    text: "claude mcp add --transport stdio --scope user pitwall -- pitwall mcp",
+  },
   { id: "codex", text: "codex mcp add pitwall -- pitwall mcp" },
   {
     id: "cursor",
@@ -79,8 +86,8 @@ export function ruleText(tool: Pick<McpToolInfo, "rule" | "key">, S: T): string 
   }
 }
 
-/** 프로젝트의 판정이 전역 판정과 다른가 — 켜짐 · 규칙 · 키 가운데 하나라도. */
-export function overridden(global: McpToolInfo, project: McpToolInfo | undefined): boolean {
+/** 프로젝트의 판정이 전역 판정과 다른가 — 켜짐 · 규칙 · 키 가운데 하나라도. 표지만 단다(토글은 잠그지 않는다). */
+export function differs(global: McpToolInfo, project: McpToolInfo | undefined): boolean {
   return (
     project !== undefined &&
     (project.enabled !== global.enabled ||
@@ -234,9 +241,12 @@ export function McpSection({ native }: { native: SettingsNative }) {
   );
 }
 
-/** 그 프로젝트가 `[mcp]` 아래에 적은 키의 값과 파일(`groups.db` 처럼 점으로 이은 키). */
+/**
+ * 그 프로젝트가 `[mcp]` 아래에 적은 키의 값과 파일(`groups.db` 처럼 점으로 이은 키). 같은 키를 여러 파일이 적었으면 병합에서
+ * 이기는 마지막 것(Host 가 공유 → 개인 차례로 준다)을 보인다.
+ */
 function overrideOf(view: McpSettingsView, key: string) {
-  return view.project?.overrides.find((o) => o.key === key);
+  return view.project?.overrides.filter((o) => o.key === key).at(-1);
 }
 
 function OverrideNote({ view, settingKey }: { view: McpSettingsView; settingKey: string }) {
@@ -245,7 +255,7 @@ function OverrideNote({ view, settingKey }: { view: McpSettingsView; settingKey:
   if (!o) return null;
   return (
     <span data-override={settingKey} className={NOTE}>
-      {S.overriddenBadge}: {JSON.stringify(o.value)} {S.overrideFrom(S.file[o.file])}
+      {S.projectSets}: {JSON.stringify(o.value)} {S.overrideFrom(S.file[o.file])}
     </span>
   );
 }
@@ -361,7 +371,9 @@ function RetentionRow({ view }: { view: McpSettingsView }) {
           {S.reset}
         </button>
       </form>
-      <span className={NOTE}>{S.retentionHint(view.defaultRetentionDays)}</span>
+      <span className={NOTE}>
+        {S.retentionHint(view.maxRetentionDays, view.defaultRetentionDays)}
+      </span>
       <ErrorLine error={error} />
     </div>
   );
@@ -396,6 +408,9 @@ function ProjectPicker({
       </label>
       {project && project.projectId === projectId && (
         <div data-project-overrides="" className="flex flex-col gap-1 pl-3">
+          <span data-project-note="" className={NOTE}>
+            {S.projectNote}
+          </span>
           <span className={NOTE}>{S.projectFiles}</span>
           {project.files.map((f) => (
             <div key={f.path} data-file={f.kind} className="flex items-center gap-2">
@@ -526,13 +541,11 @@ function ToolList({
           </thead>
           <tbody>
             {shown.map((tool) => {
-              const theirs = byName.get(tool.name);
-              const locked = overridden(tool, theirs);
               return (
                 <ToolRow
                   key={tool.name}
                   tool={tool}
-                  theirs={locked ? theirs : undefined}
+                  theirs={byName.get(tool.name)}
                   tierText={tier[tool.tier]}
                   busy={busy}
                   open={open === tool.name}
@@ -560,7 +573,7 @@ function ToolRow({
   onReset,
 }: {
   tool: McpToolInfo;
-  /** 고른 프로젝트가 판정을 바꿨으면 그 판정 — 토글을 잠근다. */
+  /** 고른 프로젝트에서의 판정(프로젝트를 고르지 않았거나 아직 읽는 중이면 없다). 토글은 잠그지 않는다. */
   theirs: McpToolInfo | undefined;
   tierText: string;
   busy: boolean;
@@ -570,15 +583,16 @@ function ToolRow({
   onReset(): void;
 }) {
   const S = useMcpStrings().settings;
+  const different = differs(tool, theirs);
   return (
     <>
-      <tr data-tool={tool.name} data-overridden={theirs ? "" : undefined} className="align-top">
+      <tr data-tool={tool.name} data-differs={different ? "" : undefined} className="align-top">
         <td className="pr-2">
           <input
             type="checkbox"
             aria-label={tool.name}
             checked={tool.enabled}
-            disabled={busy || theirs !== undefined}
+            disabled={busy}
             onChange={(e) => onToggle(e.target.checked)}
           />
         </td>
@@ -600,11 +614,13 @@ function ToolRow({
             </button>
           )}
           {theirs && (
-            <div data-project-verdict="" className={ALERT}>
-              <span className="mr-1 rounded-sm border border-ui-border px-1">
-                {S.overriddenBadge}
-              </span>
-              {S.overridden(theirs.enabled ? S.stateOn : S.stateOff, ruleText(theirs, S))}
+            <div data-project-verdict="" className={different ? ALERT : NOTE}>
+              {different && (
+                <span className="mr-1 rounded-sm border border-ui-border px-1">
+                  {S.differsBadge}
+                </span>
+              )}
+              {S.inProject(theirs.enabled ? S.stateOn : S.stateOff, ruleText(theirs, S))}
             </div>
           )}
         </td>

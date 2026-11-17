@@ -166,8 +166,8 @@ mcp-settings-auto-approve = Approve without asking
 mcp-settings-auto-approve-note = Dangerous tools always ask. Calls from another machine are never auto-approved.
 mcp-settings-retention = Keep the agent activity log
 mcp-settings-retention-unit = days
-# $days: default number of days
-mcp-settings-retention-hint = 0 keeps everything · default { $days } days
+# $max: most days, $days: default days
+mcp-settings-retention-hint = 0 to { $max } days · 0 keeps everything · default { $days } days
 mcp-settings-apply = Apply
 mcp-settings-reset = Default
 mcp-settings-groups = Tool groups
@@ -208,9 +208,11 @@ mcp-settings-project-no-overrides = This project sets nothing under [mcp].
 mcp-settings-override-from = ({ $file })
 mcp-settings-project-auto-approve = Approved without asking in this project
 mcp-settings-project-auto-approve-none = none
-# $state: on or off, $why: the rule
-mcp-settings-overridden = This project: { $state } — { $why }
-mcp-settings-overridden-badge = Project overrides
+mcp-settings-project-note = The switches below always change the global settings. Each tool row also shows the result in this project — a key in the project's own files, or the shared settings narrowing, can keep it different.
+mcp-settings-project-sets = This project sets
+# $state: on or off, $why: the rule in that project
+mcp-settings-in-project = In this project: { $state } — { $why }
+mcp-settings-differs-badge = Differs from global
 mcp-settings-state-on = on
 mcp-settings-state-off = off
 mcp-settings-register = Register with an agent

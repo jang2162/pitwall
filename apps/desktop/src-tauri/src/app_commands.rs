@@ -28,7 +28,8 @@ pub const COMMANDS: &[(&str, &[WindowKind])] = &[
     ("window_close_cancelled", ALL),
     ("install_shell_command", ALL),
     // 웰컴 창의 S1 · S2(src/welcome/native.ts)와 설정 창 「MCP」 의 「파일로 열기」(src/settings/native.ts — 전역 settings.toml ·
-    // 고른 프로젝트의 설정 파일, 경로는 Host 가 준 것만 — 16-m5-plan M5-15).
+    // 고른 프로젝트의 설정 파일, 16-m5-plan M5-15). 「Host 가 준 경로만」 은 설정 창 화면의 약속이다 — 이 명령은 웰컴 창에서처럼
+    // 절대 경로의 파일인지만 본다(launch.rs).
     ("open_file_window", &[Welcome, Settings]),
     ("take_pending_find_project", &[Welcome]),
     ("path_kind", &[Welcome]),

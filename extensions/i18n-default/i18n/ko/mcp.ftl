@@ -143,8 +143,8 @@ mcp-settings-auto-approve = 묻지 않고 허용
 mcp-settings-auto-approve-note = 위험 등급은 늘 묻는다. 다른 머신을 겨누는 호출은 자동 허용하지 않는다.
 mcp-settings-retention = 에이전트 활동 기록 보관
 mcp-settings-retention-unit = 일
-# $days: 기본 일수
-mcp-settings-retention-hint = 0 은 지우지 않음 · 기본 { $days }일
+# $max: 상한 일수, $days: 기본 일수
+mcp-settings-retention-hint = 0 ~ { $max }일 · 0 은 지우지 않음 · 기본 { $days }일
 mcp-settings-apply = 적용
 mcp-settings-reset = 기본값으로
 mcp-settings-groups = 툴 그룹
@@ -185,9 +185,11 @@ mcp-settings-project-no-overrides = 이 프로젝트는 [mcp] 아래에 적은 �
 mcp-settings-override-from = ({ $file })
 mcp-settings-project-auto-approve = 이 프로젝트에서 묻지 않고 허용
 mcp-settings-project-auto-approve-none = 없음
-# $state: 켬 · 끔, $why: 정한 규칙
-mcp-settings-overridden = 이 프로젝트: { $state } — { $why }
-mcp-settings-overridden-badge = 프로젝트가 덮음
+mcp-settings-project-note = 아래 토글은 늘 전역 설정을 고친다. 툴 줄마다 이 프로젝트에서의 결과도 보인다 — 프로젝트 파일의 키나 공유 설정의 좁히기 때문에 전역과 다르게 남을 수 있다.
+mcp-settings-project-sets = 이 프로젝트가 적은 값
+# $state: 켬 · 끔, $why: 그 프로젝트에서 정한 규칙
+mcp-settings-in-project = 이 프로젝트에서: { $state } — { $why }
+mcp-settings-differs-badge = 전역과 다름
 mcp-settings-state-on = 켬
 mcp-settings-state-off = 끔
 mcp-settings-register = 에이전트에 등록
