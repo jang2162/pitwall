@@ -9,7 +9,7 @@
 // 있으면 첫 프레임을 기다리지 않고 바로 `onHidden` 을 부른다 — 프레임이 멈춰 회가 실패했을 때 측정하는 쪽이 그때 창이
 // 가려져 있었는지 표시 파일만으로 가른다.
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 export function perfMarkRequested(search: string): boolean {
   return new URLSearchParams(search).get("perf") === "1";
@@ -59,6 +59,8 @@ export function FirstFrameMark({
   frame?: (callback: () => void) => void;
   doc?: Visibility;
 }) {
+  /** 처음부터 가려진 것을 알렸다 — StrictMode(dev)가 effect 를 다시 걸어도 한 번만(M5-13b). */
+  const startReported = useRef(false);
   useEffect(() => {
     let cancelled = false;
     let hidden = doc.visibilityState === "hidden";
@@ -72,7 +74,10 @@ export function FirstFrameMark({
       onHidden?.();
     };
     doc.addEventListener("visibilitychange", watch);
-    if (hidden) onHidden?.();
+    if (hidden && !startReported.current) {
+      startReported.current = true;
+      onHidden?.();
+    }
     frame(() =>
       frame(() => {
         if (!cancelled) onFrame({ hidden });
