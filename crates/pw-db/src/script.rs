@@ -278,20 +278,32 @@ pub(crate) fn refuse_non_queries(
     )
 }
 
-/// 범위의 시작 줄(1 부터). `range` 는 `source` 기준 UTF-16 오프셋이다.
+/// 범위의 시작 줄(1 부터). `range` 는 `source` 기준 UTF-16 오프셋이다. 글을 한 번 걷는다 — 문장마다 줄을 구하면 [`LineIndex`].
 pub(crate) fn line_of(source: &str, range: SqlRange) -> u32 {
-    let mut utf16 = 0u32;
-    let mut line = 1u32;
-    for c in source.chars() {
-        if utf16 >= range.from {
-            break;
+    LineIndex::new(source).line(range)
+}
+
+/// 글의 줄 시작 표(둘째 줄부터의 UTF-16 오프셋). 문장마다 [`line_of`] 로 글 처음부터 세면 문장 수의 제곱이 든다 — 2 000 문장이
+/// debug 에서 1 초를 넘었다. 한 번 만들고 문장마다 이진 탐색한다.
+pub(crate) struct LineIndex(Vec<u32>);
+
+impl LineIndex {
+    pub(crate) fn new(source: &str) -> Self {
+        let mut starts = Vec::new();
+        let mut utf16 = 0u32;
+        for c in source.chars() {
+            utf16 += c.len_utf16() as u32;
+            if c == '\n' {
+                starts.push(utf16);
+            }
         }
-        if c == '\n' {
-            line += 1;
-        }
-        utf16 += c.len_utf16() as u32;
+        Self(starts)
     }
-    line
+
+    /// 범위의 시작 줄(1 부터) — 그 앞에서 끝난 줄바꿈의 수 + 1.
+    pub(crate) fn line(&self, range: SqlRange) -> u32 {
+        1 + self.0.partition_point(|&start| start <= range.from) as u32
+    }
 }
 
 /// The result of one statement.
@@ -597,9 +609,10 @@ pub(crate) async fn run_script(
         unlisted: None,
     };
     let mut spent = ResponseRoom::spent();
+    let lines = LineIndex::new(source);
     for (at, statement) in planned.iter().enumerate() {
         let started = Instant::now();
-        let line = line_of(source, statement.range);
+        let line = lines.line(statement.range);
         let listing = ran.unlisted.is_none();
         let budget = if listing { &mut *room } else { &mut spent };
         match run_one(
@@ -628,7 +641,7 @@ pub(crate) async fn run_script(
                     && let Some(next) = planned.get(at + 1)
                 {
                     let count = u32::try_from(planned.len() - at - 1).unwrap_or(u32::MAX);
-                    let line = line_of(source, next.range);
+                    let line = lines.line(next.range);
                     match mode {
                         ScriptMode::ReadOnly => {
                             ran.not_run = Some(DbScriptNotRun {
@@ -685,7 +698,7 @@ pub(crate) async fn run_script(
                 let next = &planned[at + 1];
                 ran.error = Some(DbScriptError {
                     index: next.index,
-                    line: line_of(source, next.range),
+                    line: lines.line(next.range),
                     range: next.range,
                     error,
                 });
@@ -860,6 +873,33 @@ mod tests {
         assert_eq!(at("select 1"), 1);
         assert_eq!(at("select 2"), 3);
         assert_eq!(at("select 3"), 5);
+    }
+
+    /// 한 번 만든 줄 표가 글 처음부터 센 줄과 모든 오프셋에서 같다 — 줄바꿈 앞 · 위 · 뒤, 대리쌍, 글 끝 너머.
+    #[test]
+    fn one_line_index_answers_every_offset_like_counting_from_the_start() {
+        let source = "select 1;\n-- 한글 😀\r\nselect 2;\n\nselect 3\n";
+        let counted = |from: u32| {
+            let mut utf16 = 0u32;
+            let mut line = 1u32;
+            for c in source.chars() {
+                if utf16 >= from {
+                    break;
+                }
+                if c == '\n' {
+                    line += 1;
+                }
+                utf16 += c.len_utf16() as u32;
+            }
+            line
+        };
+        let lines = LineIndex::new(source);
+        let end = source.encode_utf16().count() as u32;
+        for from in 0..=end + 2 {
+            let range = SqlRange { from, to: from };
+            assert_eq!(lines.line(range), counted(from), "offset {from}");
+            assert_eq!(line_of(source, range), counted(from), "offset {from}");
+        }
     }
 
     #[test]

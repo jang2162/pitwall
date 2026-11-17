@@ -28,7 +28,7 @@ use pw_rpc::{RpcError, Tier};
 use serde::Serialize;
 
 use crate::gate::{DbGrant, Planned};
-use crate::script::{ScriptFile, line_of};
+use crate::script::{LineIndex, ScriptFile};
 
 /// 승인 계획의 규칙: `auto_approve` 를 적용하지 않고 세션 허용도 없다(매번 묻는다).
 pub const EVERY_TIME: PlanRules = PlanRules {
@@ -120,6 +120,7 @@ pub(crate) fn sql_change(
     irreversible: bool,
 ) -> PlanChange {
     let marks = grant.agent_marks().unwrap_or_default();
+    let lines = LineIndex::new(source);
     PlanChange::Sql {
         connection: SqlTarget {
             name: grant.agent_connection_name().unwrap_or("?").to_owned(),
@@ -134,7 +135,7 @@ pub(crate) fn sql_change(
             .iter()
             .map(|s| SqlStatement {
                 index: s.index,
-                line: line_of(source, s.range),
+                line: lines.line(s.range),
                 grade: sql_grade(s.grade),
                 text: s.text.clone(),
             })
