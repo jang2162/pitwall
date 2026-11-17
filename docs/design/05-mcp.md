@@ -212,6 +212,7 @@
 - **프로젝트 지정**: 입력에 `projectId` 가 있으면 프로젝트 툴이다. 세션에 프로젝트가 있으면(`--project` · cwd) `projectId` 를 필수에서 빼고 빠지면 서버가 채운다. 입력에 `worktree` 가 있고 비었으면(없음 · `null` · 빈 글자열) 세션의 활성 워크트리 꼭대기(`project.resolve` 의 `worktree.top`)로 채운다(세션을 연 경로가 미등록 워크트리 안일 때 — Orca 워크트리 안의 에이전트가 메인 체크아웃이 아니라 자기 워크트리를 본다). 준 값은 덮지 않고, 호출이 세션 프로젝트가 아닌 `projectId` 를 겨누면 채우지 않는다 — 세션의 워크트리는 세션 프로젝트의 것이다
 - **지금 툴**: `project_list`(← `project.list`), `project_info`(← `project.info`: 프로젝트 · 루트 폴더 유무 · 빌드 파일 · 빌드 파일에서 짐작한 언어 · 설정 폴더와 그 안의 설정 파일 id. 설정 내용은 읽지 않는다 — 읽으면 구버전 파일의 마이그레이션이 따라와 조회 툴이 저장소를 고친다), `git_status` · `git_log` · `git_diff` · `git_blame` · `git_branch_list`(← `git.tool.*` 툴 메서드, 앱 Host 만 — 「Git」 절), `db_connection_list`(← 툴 메서드 `db.tool.connectionList`) · `db_schema`(← 툴 메서드 `db.tool.schema`) · `db_query`(← 툴 메서드 `db.tool.query`) — 셋 다 앱 Host 만, 「DB」, `settings_get`(← 툴 메서드 `config.tool.get`, 코어 툴) · `open_with_list`(← `openWith.list`, 앱 Host 만) · `project_open`(← 툴 메서드 `project.tool.open`, 앱 Host 만 — 「프로젝트」 · 「외부 도구」 표 아래 「지금 구현」)
 - MCP 메시지(툴 설명 · 오류)는 번역하지 않는다
+- **툴 설명 · 스키마 설명 · 툴의 오류 문장은 영어다**(사용자 결정 2026-11-17 — 에이전트가 읽는 글, 16-m5-plan 결정 M5-D39). 입출력 스키마의 설명은 `rpc_method!` 선언과 입출력 타입(그 타입이 쓰는 타입 포함)의 문서 주석에서 오므로 그 문서 주석을 영어로 쓴다. `apps/desktop/src-tauri/src/mcp_tests.rs` 의 `tool_descriptions_and_schemas_are_english` 가 툴 설명 · 입력 · 출력 스키마의 한글을 잡는다 — 툴이 런타임에 내는 오류 · 안내 글은 이 시험이 보지 않는다
 
 ## 3. 권한 모델
 
