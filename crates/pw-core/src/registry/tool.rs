@@ -19,6 +19,12 @@
 //!   등록하면 그 프로젝트는 메인 저장소 프로젝트의 신뢰를 따른다([`super::trust`]) — 에이전트가 등록한 프로젝트가 신뢰된 채
 //!   생기지 않게 막는다. 등록된 프로젝트들을 **품는** 위 폴더는 받는다(그 프로젝트들은 계속 자기 루트로 풀리고, 새 프로젝트의
 //!   신뢰는 따로다).
+//! - **기존 프로젝트의 신뢰 판정을 바꾸는 경로**([`Registry::trust_shift`] — `super::trust` 의 신뢰 주인 규칙 그대로): 새 루트가
+//!   등록된 프로젝트의 신뢰를 따르게 되거나(그 저장소의 연결 워크트리 안), **등록된 워크트리 프로젝트의 신뢰 주인이 되는**
+//!   경우(사람이 워크트리만 등록 · 신뢰한 저장소의 메인 체크아웃). 뒤의 것을 받으면 사람이 신뢰한 워크트리가 이벤트 없이 미신뢰가
+//!   되고, 사람이 다시 신뢰하면 에이전트가 등록한 프로젝트의 행이 신뢰된다(리뷰 B1). `auto_approve` 와 상관없이 묻기 전에 거절한다.
+//! - **줄바꿈 · 제어 문자 · 양방향 제어 문자가 든 `root` · `name`** — 승인 창의 계획 글에 가짜 줄을 심지 못하게(리뷰 F1). 계획 글은
+//!   값을 인용해(`"…"`) 보인다.
 //!
 //! # 신뢰
 //!
@@ -96,20 +102,24 @@ impl PlannedRegistration {
     /// 승인 요청이 보일 계획. 해시는 입력과 푼 루트 · 이름 · 방식을 덮는다 — 승인 뒤 링크가 다른 폴더를 가리키게 되면 다시 만든
     /// 계획의 해시가 달라 돌지 않는다.
     pub fn plan(&self, params: &ProjectRegisterToolParams) -> ToolPlan {
+        // 값은 인용해 보인다(`{:?}`) — 거절을 지난 글이라도 줄 구조를 깨지 못하게 한 번 더 막는다.
         let root = self.root.display().to_string();
         let settings = match self.config_mode {
             ConfigMode::Repository => format!(
-                "repository ({}, committed with the code)",
-                self.root.join(crate::config::PROJECT_DIR).display()
+                "repository ({:?}, committed with the code)",
+                self.root
+                    .join(crate::config::PROJECT_DIR)
+                    .display()
+                    .to_string()
             ),
             ConfigMode::Personal => "personal (outside the repository, not committed)".to_owned(),
         };
         ToolPlan::builder(METHOD, Tier::Write, params)
-            .summary(format!("Register {root} as the project `{}`", self.name))
+            .summary(format!("Register {root:?} as the project {:?}", self.name))
             .change(PlanChange::Text {
                 label: "project".to_owned(),
                 text: format!(
-                    "root: {root}\nname: {}\nsettings: {settings}\ntrusted: no",
+                    "root: {root:?}\nname: {:?}\nsettings: {settings}\ntrusted: no",
                     self.name
                 ),
             })
@@ -129,13 +139,38 @@ impl Registry {
     ) -> Result<PlannedRegistration, RegistryError> {
         // 쓸 수 없는 저장소면 사람에게 묻기 전에 알린다.
         self.ensure_writable()?;
+        refuse_unprintable("root", Path::new(&params.root), &params.root)?;
         let root = existing_dir(Path::new(&params.root))?;
         let root_text = utf8(&root)?.to_owned();
+        // 링크를 풀면 다른 이름이 나올 수 있다 — 실제 경로도 본다.
+        refuse_unprintable("root", &root, &root_text)?;
         let home = self.inner.home.as_deref().and_then(|h| normalize(h).ok());
         if root.parent().is_none() || home.as_deref().is_some_and(|h| h.starts_with(&root)) {
             return Err(RegistryError::InvalidPath {
                 path: root,
                 reason: "is too broad to be a project (the file system root, the home folder or a folder above it); register the project's own folder".into(),
+            });
+        }
+        // 신뢰 판정을 바꾸는 등록은 묻지 않고 거절한다(16-m5-plan M5-16 리뷰 B1). 판정은 `trust.rs` 의 규칙 그대로다.
+        let shift = self.trust_shift(&root)?;
+        if let Some(owner) = &shift.follows {
+            return Err(RegistryError::InvalidPath {
+                path: root,
+                reason: format!(
+                    "is in a git worktree of the registered project `{}` ({}), so its trust would follow that project; open it with `project_open` instead",
+                    owner.id, owner.name
+                ),
+            });
+        }
+        if let Some(moved) = shift.moved.first() {
+            return Err(RegistryError::InvalidPath {
+                path: root,
+                reason: format!(
+                    "would become the trust owner of the registered project `{}` ({}, root {}): that project's trust would follow this folder. Only a person may register this folder in Pitwall",
+                    moved.id,
+                    moved.name,
+                    moved.root().display()
+                ),
             });
         }
         if let Some(found) = self.resolve(&root)? {
@@ -145,17 +180,17 @@ impl Registry {
                     project_id: found.project.id,
                 });
             }
-            let reason = match &found.worktree {
-                Some(w) => format!(
-                    "is in a git worktree ({}) of the registered project `{}` ({}); open it with `project_open` instead",
-                    w.top, found.project.id, found.project.name
-                ),
-                None => format!(
-                    "is inside the registered project `{}` ({}, root {}); open it with `project_open` instead",
+            return Err(RegistryError::InvalidPath {
+                path: root,
+                reason: format!(
+                    "already opens as the registered project `{}` ({}, root {}); open it with `project_open` instead",
                     found.project.id, found.project.name, found.root
                 ),
-            };
-            return Err(RegistryError::InvalidPath { path: root, reason });
+            });
+        }
+        // 다듬기 전의 글을 본다 — `trim` 이 지우는 제어 문자(NEL 등)도 받지 않는다.
+        if let Some(name) = &params.name {
+            refuse_unprintable("name", &root, name)?;
         }
         let name = match params.name.as_deref().map(str::trim) {
             Some(name) if !name.is_empty() => name.to_owned(),
@@ -198,6 +233,29 @@ impl Registry {
             tags: Vec::new(),
         })
         .map_err(rpc_error)
+    }
+}
+
+/// 줄바꿈 · 제어 문자 · 양방향 제어 문자가 든 값은 거절한다(16-m5-plan M5-16 리뷰 F1) — 승인 창의 계획 글에 가짜 줄
+/// (`trusted: yes`)을 심거나 글의 방향을 뒤집지 못하게. 문자 집합은 `pw_git::write::prompt` 의 askpass 다듬기와 같다(C0 · DEL ·
+/// C1 · ALM · LRM · RLM · LRE…RLO · LRI…PDI).
+fn refuse_unprintable(field: &str, path: &Path, value: &str) -> Result<(), RegistryError> {
+    let bad = |c: char| {
+        c.is_control()
+            || matches!(
+                c,
+                '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+            )
+    };
+    match value.chars().find(|c| bad(*c)) {
+        None => Ok(()),
+        Some(c) => Err(RegistryError::InvalidPath {
+            path: path.to_path_buf(),
+            reason: format!(
+                "`{field}` contains the control character {:?}; line breaks, control and bidirectional characters are not accepted",
+                c
+            ),
+        }),
     }
 }
 

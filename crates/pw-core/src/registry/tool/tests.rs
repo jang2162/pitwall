@@ -116,9 +116,12 @@ async fn the_plan_step_has_no_side_effect_and_the_approved_call_registers_untrus
     assert_eq!(plan.tier, Tier::Write);
     assert_eq!(
         plan.summary,
-        format!("Register {} as the project `alpha`", root.display())
+        format!(
+            "Register {:?} as the project \"alpha\"",
+            root.display().to_string()
+        )
     );
-    assert!(plan_text(&plan).contains(&format!("root: {}", root.display())));
+    assert!(plan_text(&plan).contains(&format!("root: {:?}", root.display().to_string())));
     assert!(plan_text(&plan).contains("trusted: no"));
     assert_eq!(plan.rules, crate::registry::plan::PlanRules::default());
     assert_eq!(
@@ -157,7 +160,7 @@ fn the_name_and_settings_mode_are_planned_and_used() {
         ..params(&root)
     };
     let plan = f.plan(&p).plan;
-    assert!(plan_text(&plan).contains("name: Beta app\nsettings: personal"));
+    assert!(plan_text(&plan).contains("name: \"Beta app\"\nsettings: personal"));
     let project = f.call(&p, Some(&plan.hash)).unwrap().info.project;
     assert_eq!(
         (project.name.as_str(), project.config_mode),
@@ -187,7 +190,7 @@ fn links_and_dots_resolve_to_the_real_folder_in_the_plan() {
     f.dir("other");
     let plan = f.plan(&params(&dotted)).plan;
     assert!(
-        plan_text(&plan).starts_with(&format!("root: {}\n", real.display())),
+        plan_text(&plan).starts_with(&format!("root: {:?}\n", real.display().to_string())),
         "{}",
         plan_text(&plan)
     );
@@ -284,7 +287,10 @@ fn a_root_inside_a_registered_project_is_refused_before_asking() {
     f.approve(&params(&outer));
     for (root, says) in [
         (outer.clone(), "already the root"),
-        (f.dir("outer/sub/deeper"), "inside the registered project"),
+        (
+            f.dir("outer/sub/deeper"),
+            "already opens as the registered project",
+        ),
     ] {
         let e = f.call(&params(&root), None).unwrap_err();
         assert_eq!(e.code, code::INVALID_PARAMS, "{e:?}");
@@ -353,7 +359,11 @@ fn a_worktree_of_a_registered_project_is_refused_so_no_trust_is_inherited() {
     for root in [wt.clone(), wt.join("app")] {
         let e = f.call(&params(&root), None).unwrap_err();
         assert_eq!(e.code, code::INVALID_PARAMS, "{e:?}");
-        assert!(detail(&e).contains("git worktree"), "{}", detail(&e));
+        assert!(
+            detail(&e).contains("git worktree") && detail(&e).contains("its trust would follow"),
+            "{}",
+            detail(&e)
+        );
     }
     assert_eq!(f.registry.list().unwrap().len(), 1);
 
@@ -379,4 +389,129 @@ fn only_an_mcp_session_may_call_it() {
         assert_eq!(e.code, code::PERMISSION_DENIED, "{scope:?}");
         assert_eq!(e.data.unwrap()["reason"], Value::from("notAgentSession"));
     }
+}
+
+/// 리뷰 B1 의 탐침: 사람이 git 워크트리만 등록 · 신뢰한 저장소에서 에이전트가 그 메인 체크아웃(또는 그 안의, 워크트리 프로젝트에
+/// 대응하는 폴더)을 등록하면 워크트리 프로젝트의 신뢰 주인이 새 프로젝트로 바뀐다 — 그래서 묻기 전에 거절하고, 워크트리의 신뢰는
+/// 그대로다. 워크트리가 메인 체크아웃 안(`<main>/.worktrees/x` — 이 저장소의 꼴)이든 밖이든 같다.
+#[test]
+fn registering_the_main_checkout_of_a_trusted_worktree_project_is_refused() {
+    for inside in [true, false] {
+        let f = Fixture::new();
+        let main = f.dir("repo");
+        fs::create_dir_all(main.join("app")).unwrap();
+        let wt = if inside {
+            main.join(".worktrees/x")
+        } else {
+            f.base.join("work/wt")
+        };
+        let (main, wt) = repo_with_worktree(&main, &wt);
+        fs::create_dir_all(wt.join("app")).unwrap();
+        // 사람(창)이 워크트리와 그 안의 하위 폴더를 등록하고 신뢰했다.
+        let human = |root: &Path| {
+            f.registry
+                .create(crate::registry::NewProject {
+                    root: root.to_path_buf(),
+                    ..crate::registry::NewProject::default()
+                })
+                .unwrap()
+        };
+        let worktree = human(&wt);
+        f.registry.set_trust(&worktree.id, true).unwrap();
+        // 메인 체크아웃 안의 다른 폴더(`main/app`)는 `wt` 의 주인이 되지 않는다(trust.rs: 대응 자리 `main` 을 품어야 한다).
+        assert_eq!(
+            f.registry.trust_shift(&main.join("app")).unwrap().moved,
+            Vec::new()
+        );
+        let e = f.call(&params(&main), None).unwrap_err();
+        assert_eq!(e.code, code::INVALID_PARAMS, "inside={inside}: {e:?}");
+        assert!(
+            detail(&e).contains("would become the trust owner of the registered project")
+                && detail(&e).contains(&worktree.id),
+            "{}",
+            detail(&e)
+        );
+        let trust = f.registry.trust(&worktree.id).unwrap();
+        assert_eq!(
+            (trust.owner_id.as_str(), trust.state),
+            (worktree.id.as_str(), TrustState::Trusted),
+            "inside={inside}"
+        );
+        assert_eq!(f.registry.list().unwrap().len(), 1, "inside={inside}");
+
+        // 워크트리 안의 하위 폴더 프로젝트만 있어도 그 메인 쪽 자리를 등록하면 주인이 바뀐다.
+        let sub = human(&wt.join("app"));
+        f.registry.set_trust(&sub.id, true).unwrap();
+        let e = f.call(&params(&main.join("app")), None).unwrap_err();
+        assert!(detail(&e).contains("trust owner"), "{}", detail(&e));
+    }
+}
+
+/// `trust_shift` 는 신뢰 판정을 바꾸지 않는 등록(남의 저장소 · 품는 위 폴더)에는 아무것도 내지 않는다.
+#[test]
+fn an_unrelated_root_shifts_no_trust() {
+    let f = Fixture::new();
+    let (main, wt) = repo_with_worktree(&f.dir("repo"), &f.base.join("work/wt"));
+    f.registry
+        .create(crate::registry::NewProject {
+            root: wt.clone(),
+            ..crate::registry::NewProject::default()
+        })
+        .unwrap();
+    for root in [f.dir("elsewhere"), f.base.join("work")] {
+        let shift = f.registry.trust_shift(&root).unwrap();
+        assert_eq!((shift.moved.len(), shift.follows), (0, None), "{root:?}");
+    }
+    assert_eq!(f.registry.trust_shift(&main).unwrap().moved.len(), 1);
+}
+
+/// 리뷰 F1: 줄바꿈 · 제어 문자 · 양방향 제어 문자가 든 이름 · 루트는 묻기 전에 거절한다 — 계획 글에 `trusted: yes` 같은 가짜
+/// 줄을 심지 못한다. 거절을 지나는 값은 계획 글에서 인용돼 한 줄이다.
+#[test]
+fn line_breaks_and_control_characters_are_refused_and_values_are_quoted() {
+    let f = Fixture::new();
+    let root = f.dir("beta");
+    for name in [
+        "beta\ntrusted: yes",
+        "beta\r\ntrusted: yes",
+        "beta\u{7}",
+        "be\u{85}ta",
+        "beta\n",
+        "a\u{202E}gnp.exe",
+        "a\u{2066}b",
+        "a\u{200F}b",
+    ] {
+        let p = ProjectRegisterToolParams {
+            name: Some(name.into()),
+            ..params(&root)
+        };
+        let e = f.call(&p, None).unwrap_err();
+        assert_eq!(e.code, code::INVALID_PARAMS, "{name:?}: {e:?}");
+        assert!(detail(&e).contains("`name`"), "{name:?}: {}", detail(&e));
+    }
+    #[cfg(unix)]
+    {
+        let odd = f.dir("odd\ntrusted: yes");
+        let e = f.call(&params(&odd), None).unwrap_err();
+        assert_eq!(e.code, code::INVALID_PARAMS);
+        assert!(detail(&e).contains("`root`"), "{}", detail(&e));
+        // 이름이 깨끗한 링크로 그 폴더를 가리켜도 실제 경로에서 걸린다.
+        let link = f.base.join("work/clean");
+        std::os::unix::fs::symlink(&odd, &link).unwrap();
+        let e = f.call(&params(&link), None).unwrap_err();
+        assert!(detail(&e).contains("`root`"), "{}", detail(&e));
+    }
+    assert_eq!(f.registry.list().unwrap(), Vec::new());
+
+    // 따옴표가 든 폴더 · 이름은 받고, 계획 글에서 인용돼 줄 구조가 그대로다.
+    let quoted = f.dir("we\"ird");
+    let p = ProjectRegisterToolParams {
+        name: Some("say \"hi\"".into()),
+        ..params(&quoted)
+    };
+    let plan = f.plan(&p).plan;
+    let text = plan_text(&plan);
+    assert_eq!(text.lines().count(), 4, "{text}");
+    assert!(text.contains("name: \"say \\\"hi\\\"\""), "{text}");
+    assert!(text.ends_with("\ntrusted: no"), "{text}");
 }

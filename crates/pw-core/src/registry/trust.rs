@@ -12,7 +12,7 @@
 //!   「묻지 않음」을 「미신뢰」로 바꾸고 바꾼 호출에만 `true` 를 준다. 같은 프로젝트의 창 둘(워크트리 프로젝트의 창, 다른
 //!   프로세스의 창)이 동시에 열려도 하나만 묻는다. 답하지 않고 창을 닫아도 다시 묻지 않는다 — 상태바의 신뢰 액션이 남는다.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -149,6 +149,39 @@ impl Registry {
         Ok(main_repository_project(project, &projects).cloned())
     }
 
+    /// 루트 `root` 를 가진 프로젝트를 새로 더하면 신뢰 판정이 어떻게 바뀌는가([`TrustShift`]). 판정은 [`Self::trust_owner`] 와
+    /// 같은 규칙([`main_repository_project`])을 새 프로젝트를 더한 목록에 다시 돌린 것이다 — 안쪽 · 바깥쪽 · 메인 체크아웃 ·
+    /// 워크트리 어느 방향이든 신뢰 주인이 바뀌는 것은 모두 여기서 나온다. 레지스트리에 쓰지 않는다. 에이전트의 등록
+    /// (`project_register`, [`super::tool`])이 기존 프로젝트의 신뢰를 흔드는 등록을 거절하는 데 쓴다.
+    pub fn trust_shift(&self, root: &Path) -> Result<TrustShift, RegistryError> {
+        let mut projects = self.read(|conn| load(conn, None))?;
+        let before: Vec<(Project, String)> = projects
+            .iter()
+            .map(|p| (p.clone(), owner_of(p, &projects)))
+            .collect();
+        let candidate = Project {
+            // 레지스트리 id 는 16진수 16자라 이 id 와 겹치지 않는다.
+            id: NEW_PROJECT.to_owned(),
+            name: String::new(),
+            host: LOCAL_HOST.to_owned(),
+            roots: vec![root.display().to_string()],
+            favorite: false,
+            tags: Vec::new(),
+            config_mode: super::ConfigMode::default(),
+            slug: String::new(),
+            created_at: 0,
+            opened_at: None,
+        };
+        projects.push(candidate.clone());
+        let moved = before
+            .into_iter()
+            .filter(|(p, owner)| owner_of(p, &projects) != *owner)
+            .map(|(p, _)| p)
+            .collect();
+        let follows = main_repository_project(&candidate, &projects).cloned();
+        Ok(TrustShift { moved, follows })
+    }
+
     /// 신뢰를 가진 프로젝트의 id. 워크트리 판정은 디스크(`.git` 파일)를 읽으므로 DB 잠금 밖에서 한다.
     fn trust_owner(&self, id: &str) -> Result<String, RegistryError> {
         let projects = self.read(|conn| load(conn, None))?;
@@ -156,9 +189,25 @@ impl Registry {
             .iter()
             .find(|p| p.id == id)
             .ok_or_else(|| RegistryError::NotFound(id.to_owned()))?;
-        Ok(main_repository_project(project, &projects)
-            .map_or_else(|| project.id.clone(), |main| main.id.clone()))
+        Ok(owner_of(project, &projects))
     }
+}
+
+/// [`Registry::trust_shift`] 가 새 프로젝트에 붙이는 임시 id.
+const NEW_PROJECT: &str = "(new project)";
+
+/// 프로젝트 하나를 더했을 때의 신뢰 판정 변화([`Registry::trust_shift`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustShift {
+    /// 신뢰 주인이 바뀌는 기존 프로젝트(새 프로젝트가 그 주인이 된다) — 그 프로젝트의 신뢰가 새 프로젝트의 행을 따르게 된다.
+    pub moved: Vec<Project>,
+    /// 새 프로젝트가 신뢰를 따르게 될 기존 프로젝트(새 루트가 그 저장소의 연결 워크트리 안이다).
+    pub follows: Option<Project>,
+}
+
+/// `project` 의 신뢰 주인 id(`all` 기준).
+fn owner_of(project: &Project, all: &[Project]) -> String {
+    main_repository_project(project, all).map_or_else(|| project.id.clone(), |main| main.id.clone())
 }
 
 /// `project` 의 루트가 연결 워크트리 안이면 메인 체크아웃 쪽 같은 자리를 포함하는 등록 프로젝트([`super::resolve`] 의 2 단계와
