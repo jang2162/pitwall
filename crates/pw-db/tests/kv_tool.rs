@@ -245,6 +245,18 @@ async fn a_redis_connection_the_user_never_opened_is_refused() {
             .all(|c| *c == FakeKvCall::Connect { db: 3 })
     );
 
+    // `database` 입력은 그 DB 번호의 연결 하나다(`SELECT` 를 보내지 않는다).
+    e.scan(&mut agent, "cache", json!({ "database": "5" }))
+        .await
+        .unwrap();
+    assert_eq!(
+        e.kv.calls()
+            .iter()
+            .filter(|c| matches!(c, FakeKvCall::Connect { .. }))
+            .last(),
+        Some(&FakeKvCall::Connect { db: 5 })
+    );
+
     let mut w = e.f.window();
     refused(
         w.call("db.tool.kvScan", e.params("cache", json!({}))).await,
@@ -604,4 +616,158 @@ async fn the_console_classifies_memory_usage_like_the_tool() {
             "k".to_owned()
         ]]
     );
+}
+
+/// 앞 묶음의 마지막 키를 다음 묶음 앞에 다시 붙여 주는 KV 연결 — Redis `SCAN` 이 재해시 중에 같은 키를 두 번 주는 것을 흉내 낸다.
+struct Repeating {
+    inner: Box<dyn pw_db_driver::KvConnection>,
+    last: Vec<pw_db_types::KvKeyInfo>,
+}
+
+impl pw_db_driver::KvConnection for Repeating {
+    fn interrupter(&self) -> Arc<dyn pw_db_driver::Interrupt> {
+        self.inner.interrupter()
+    }
+
+    fn scan(
+        &mut self,
+        request: pw_db_types::KvScanRequest,
+    ) -> BoxFuture<'_, DbResult<pw_db_types::KvScanPage>> {
+        Box::pin(async move {
+            let mut page = self.inner.scan(request).await?;
+            // 앞 묶음의 마지막 키 하나를 다시 준다(쪽 안에 들 만큼 작게 — 묶음 전체를 되풀이하면 `limit` 을 넘어 다음 쪽으로 넘어간다).
+            let again = self.last.last().cloned();
+            self.last = page.keys.clone();
+            page.keys.splice(0..0, again);
+            Ok(page)
+        })
+    }
+
+    fn key_info(
+        &mut self,
+        key: pw_db_types::KvKey,
+    ) -> BoxFuture<'_, DbResult<Option<pw_db_types::KvKeyInfo>>> {
+        self.inner.key_info(key)
+    }
+
+    fn read(
+        &mut self,
+        key: pw_db_types::KvKey,
+        range: pw_db_types::KvRange,
+    ) -> BoxFuture<'_, DbResult<pw_db_types::KvValuePage>> {
+        self.inner.read(key, range)
+    }
+
+    fn set_ttl(&mut self, key: pw_db_types::KvKey, ttl_ms: u64) -> BoxFuture<'_, DbResult<bool>> {
+        self.inner.set_ttl(key, ttl_ms)
+    }
+
+    fn persist(&mut self, key: pw_db_types::KvKey) -> BoxFuture<'_, DbResult<bool>> {
+        self.inner.persist(key)
+    }
+
+    fn delete(&mut self, keys: Vec<pw_db_types::KvKey>) -> BoxFuture<'_, DbResult<u64>> {
+        self.inner.delete(keys)
+    }
+
+    fn rename(
+        &mut self,
+        from: pw_db_types::KvKey,
+        to: pw_db_types::KvKey,
+        overwrite: bool,
+    ) -> BoxFuture<'_, DbResult<pw_db_types::KvRenameOutcome>> {
+        self.inner.rename(from, to, overwrite)
+    }
+
+    fn command(&mut self, argv: Vec<String>) -> BoxFuture<'_, DbResult<pw_db_types::KvReply>> {
+        self.inner.command(argv)
+    }
+
+    fn close(self: Box<Self>) -> BoxFuture<'static, DbResult<()>> {
+        self.inner.close()
+    }
+}
+
+struct RepeatingRedis(FakeKvDriver);
+
+impl DbDriver for RepeatingRedis {
+    fn id(&self) -> &str {
+        "redis"
+    }
+
+    fn dialect(&self) -> Option<SqlDialect> {
+        None
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.0.capabilities()
+    }
+
+    fn connect(&self, spec: ConnectionSpec) -> BoxFuture<'_, DbResult<Connected>> {
+        Box::pin(async move {
+            let mut connected = self.0.connect(spec).await?;
+            if let pw_db_driver::DbConnection::Kv(inner) = connected.connection {
+                connected.connection = pw_db_driver::DbConnection::Kv(Box::new(Repeating {
+                    inner,
+                    last: Vec::new(),
+                }));
+            }
+            Ok(connected)
+        })
+    }
+}
+
+/// `SCAN` 이 같은 키를 두 번 주어도(앞 묶음의 키가 다음 묶음에 다시 온다) 한 쪽 안에서는 한 번만 싣는다. 끝까지 모으면 키가 빠지지
+/// 않는다(쪽 사이의 중복은 그대로 준다 — 툴 설명).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scan_repeats_are_dropped_within_a_page() {
+    let kv = FakeKvDriver::new();
+    let mut drivers = pw_db::DriverRegistry::new();
+    drivers
+        .register(Arc::new(RepeatingRedis(kv.clone())))
+        .unwrap();
+    let f = Fixture::build(true, |router, connections| {
+        pw_db::register(
+            router,
+            Arc::new(DbSessions::new(Arc::clone(connections), drivers)),
+        );
+    });
+    f.write_db("cache.toml", CACHE);
+    for i in 0..300 {
+        kv.insert(
+            3,
+            format!("k:{i:03}").as_bytes(),
+            FakeKvValue::String(b"x".to_vec()),
+        );
+    }
+    let e = Env { f, kv };
+    e.human_opens("cache", None).await;
+    let mut agent = e.agent();
+    let mut all = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut extra = json!({ "limit": 100 });
+        if let Some(c) = &cursor {
+            extra["cursor"] = json!(c);
+        }
+        let page = e.scan(&mut agent, "cache", extra).await.unwrap();
+        let mut keys: Vec<String> = page["keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|k| k["key"].as_str().unwrap().to_owned())
+            .collect();
+        let n = keys.len();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(keys.len(), n, "a key twice within one page");
+        all.extend(keys);
+        match page["nextCursor"].as_str() {
+            Some(c) => cursor = Some(c.to_owned()),
+            None => break,
+        }
+    }
+    all.sort();
+    all.dedup();
+    assert_eq!(all.len(), 300);
 }
