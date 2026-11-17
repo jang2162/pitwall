@@ -47,6 +47,19 @@ pub enum Notice {
     Attention,
 }
 
+/// 창 하나에 온 요청 하나.
+#[derive(Debug, Clone, Copy)]
+pub struct Arrival<'a> {
+    /// 창 label.
+    pub window: &'a str,
+    /// 그 창이 지금 앞에 있는가.
+    pub in_front: bool,
+    /// 요청 id.
+    pub request: u64,
+    pub title: &'a str,
+    pub body: &'a str,
+}
+
 /// 창마다의 알림 상태. 앱에 하나(`manage`).
 #[derive(Default)]
 pub struct ApprovalNotices {
@@ -67,17 +80,20 @@ impl ApprovalNotices {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// 창 `window` 에 요청 `request` 가 왔다. `in_front` 는 그 창이 지금 앞에 있는가, `attention` 은 창의 주의 요청.
+    /// 요청이 왔다. `attention` 은 그 창의 주의 요청.
     pub fn announce(
         &self,
-        window: &str,
-        in_front: bool,
-        request: u64,
-        title: &str,
-        body: &str,
+        arrival: Arrival<'_>,
         notifier: &dyn Notifier,
         attention: impl FnOnce(),
     ) -> Notice {
+        let Arrival {
+            window,
+            in_front,
+            request,
+            title,
+            body,
+        } = arrival;
         if in_front {
             return Notice::InFront;
         }
@@ -177,11 +193,13 @@ pub async fn mcp_approval_notify<R: Runtime>(
     let in_front = window.is_focused().unwrap_or(false);
     let notifier = PluginNotifier(window.app_handle().clone());
     notices.announce(
-        window.label(),
-        in_front,
-        request,
-        &title,
-        &body,
+        Arrival {
+            window: window.label(),
+            in_front,
+            request,
+            title: &title,
+            body: &body,
+        },
         &notifier,
         || {
             if let Err(error) = window.request_user_attention(Some(UserAttentionType::Critical)) {
@@ -272,11 +290,13 @@ mod tests {
         attention: &Cell<u32>,
     ) -> Notice {
         notices.announce(
-            window,
-            in_front,
-            request,
-            "Pitwall approval request",
-            "agent is waiting for approval of fake_write",
+            Arrival {
+                window,
+                in_front,
+                request,
+                title: "Pitwall approval request",
+                body: "agent is waiting for approval of fake_write",
+            },
             notifier,
             || attention.set(attention.get() + 1),
         )

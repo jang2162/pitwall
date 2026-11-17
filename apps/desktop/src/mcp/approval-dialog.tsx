@@ -31,7 +31,7 @@ import { BUTTON } from "../git/dialogs/git-dialogs";
 import { DiffView } from "../git/diff/diff-view";
 import { useKeymapPopup } from "../keymap/keymap-provider";
 import { keepOpenWhileComposing } from "../ui/ime";
-import { agentBlock, agentLine, hasHidden } from "./agent-text";
+import { agentBlock, agentLine, BLOCK_CHARS, hasHidden } from "./agent-text";
 import { planDiff } from "./plan-diff";
 import { type McpStrings, useMcpStrings } from "./strings";
 
@@ -124,7 +124,7 @@ function AgentBlock({
       </pre>
       {shown.cut && (
         <span className="text-[11px] text-ui-muted-foreground">
-          {T.textCut(max ?? shown.text.length)}
+          {T.textCut(max ?? BLOCK_CHARS)}
         </span>
       )}
     </div>

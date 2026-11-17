@@ -195,7 +195,6 @@ it("a request opens the dialog with the agent, tool and tier; the first focus is
   expect(text("mcp-approval-position")).toBe(T.position(1, 1));
   expect(document.activeElement).toBe(button("deny"));
   expect(popup.calls).toContain(true);
-  // Enter 한 번(처음 포커스)은 거절이다.
   expect(answerButtons().map((b) => b.answer)).toEqual(["deny", "once", "session"]);
 });
 
