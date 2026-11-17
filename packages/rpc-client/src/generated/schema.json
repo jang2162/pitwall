@@ -12812,7 +12812,7 @@
       "tier": "read"
     },
     "db.tool.kvGet": {
-      "description": "Read one page of a Redis key's value, by type: a string in byte windows, a hash · set in scan pages, a list ·\nzset by index, a stream by entry id, a RedisJSON document whole. `nextCursor` reads the next page; a missing key\nis `\"missing\"`. Values that are not UTF-8 come as hex bytes. The response is limited to about 192 KiB — a page\nholds fewer elements to fit, and an element too large on its own is cut (`truncated`). There is no command\ninput — this tool only reads. Uses only connections the person opened in Pitwall's DB explorer during this app\nrun (`notOpenedByUser`) and never uses a Redis server marked production (`productionBlocked`). Redis connections\nonly.",
+      "description": "Read one page of a Redis key's value, by type: a string in byte windows, a hash · set in scan pages, a list ·\nzset by index, a stream by entry id, a RedisJSON document whole. `nextCursor` reads the next page; a missing key\nis `\"missing\"`. Values that are not UTF-8 come as hex bytes. The response is limited to about 192 KiB — a page\nholds fewer elements to fit, and an element too large on its own is cut (`truncated`); a stream entry with too\nmany fields shows only its first fields (`omitted` says how many — the rest cannot be read here). There is no command\ninput — this tool only reads. Uses only connections the person opened in Pitwall's DB explorer during this app\nrun (`notOpenedByUser`) and never uses a Redis server marked production (`productionBlocked`). Redis connections\nonly.",
       "kind": "unary",
       "params": {
         "$defs": {
@@ -12964,6 +12964,46 @@
               "typeName"
             ],
             "type": "object"
+          },
+          "DbToolKvOmitted": {
+            "properties": {
+              "of": {
+                "$ref": "#/$defs/DbToolKvOmittedKind"
+              },
+              "shown": {
+                "description": "How many are shown (the first ones, in order).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "total": {
+                "description": "How many there were on this page (elements) or in the entry (fields).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "of",
+              "shown",
+              "total"
+            ],
+            "type": "object"
+          },
+          "DbToolKvOmittedKind": {
+            "description": "What a page left out to fit the response.",
+            "oneOf": [
+              {
+                "const": "elements",
+                "description": "The last elements of this page (a hash · set page that Redis returned in one step). `nextCursor` continues after\nthem, so those elements are not shown by any page.",
+                "type": "string"
+              },
+              {
+                "const": "fields",
+                "description": "The last fields of this page's one stream entry. Redis reads an entry whole, so the left-out fields cannot be\nread through this tool; `nextCursor` continues with the next entry.",
+                "type": "string"
+              }
+            ]
           },
           "DbTruncated": {
             "description": "A value truncated at the cell limit.",
@@ -13385,6 +13425,17 @@
               "null"
             ]
           },
+          "omitted": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DbToolKvOmitted"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Trailing parts left out of this page to fit the response (`null` when nothing was left out)."
+          },
           "total": {
             "description": "Whole length (elements; bytes for a string). `null` if unknown.",
             "format": "uint64",
@@ -13395,7 +13446,7 @@
             ]
           },
           "truncated": {
-            "description": "Some element values of this page were cut to fit the response (those values are marked `truncated`).",
+            "description": "Something was left out to fit the response: some element values were cut (those values are marked `truncated`)\nand/or trailing elements or fields were left out (`omitted`).",
             "type": "boolean"
           },
           "ttlMs": {
@@ -13418,7 +13469,8 @@
           "value",
           "total",
           "nextCursor",
-          "truncated"
+          "truncated",
+          "omitted"
         ],
         "type": "object"
       },

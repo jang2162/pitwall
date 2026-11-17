@@ -23,8 +23,10 @@
 //!   싣거나 싣지 않는다 — 응답 예산이나 `limit` 을 넘칠 묶음은 다음 쪽으로 넘기고(그 묶음 앞의 커서를 `nextCursor` 로), 쪽의 첫
 //!   묶음은 늘 싣는다(그래서 커서가 나아간다 — `limit` 을 넘는 것은 `SCAN` 한 걸음이 혼자 더 준 때뿐이다). 첫 묶음이 응답 예산을
 //!   넘치면 묶음 크기를 반씩 줄여 다시 묻는다.
-//!   값 읽기는 쪽의 원소 수(string 은 바이트 창)를 반씩 줄여 다시 묻고, 원소 하나가 넘치면 그 원소의 값만 앞부분으로 자른다
-//!   (`truncated`). string 은 자르지 않고 창만 줄인다 — 자르면 다음 쪽 커서와 사이가 빈다.
+//!   값 읽기는 쪽의 원소 수(string 은 바이트 창)를 반씩 줄여 다시 묻고, 더 줄일 수 없으면 [`cut_to_fit`]: 긴 값을 앞부분으로
+//!   자르고(`truncated` — 감싸서 커지는 짧은 값은 두지 않는다), 그래도 넘치면 뒤쪽 필드(스트림 항목 하나) · 원소(한 걸음에 온 hash ·
+//!   set 쪽)를 덜어 `omitted` 에 남긴다(리뷰 F1). 그래도 넘치면 거절한다 — 응답은 늘 예산 안이다. string 은 자르지 않고 창만
+//!   줄인다 — 자르면 다음 쪽 커서와 사이가 빈다.
 //! - **`SCAN` 의 중복**(이 행이 정한 것): Redis `SCAN` 은 같은 키를 두 번 줄 수 있다(재해시 중 · 다음 쪽이 넘긴 묶음을 다시 읽을
 //!   때). **한 쪽 안에서는 거르고, 쪽 사이의 중복은 그대로 준다** — 툴 설명에 적는다. 끝까지 있던 키는 빠지지 않는다(`SCAN` 의
 //!   보장 — 커서는 실은 묶음 뒤로만 나아간다).
@@ -144,8 +146,37 @@ pub struct DbToolKvGet {
     pub total: Option<u64>,
     /// Cursor of the next page (pass it back as `cursor`). Missing means this is the last page.
     pub next_cursor: Option<String>,
-    /// Some element values of this page were cut to fit the response (those values are marked `truncated`).
+    /// Something was left out to fit the response: some element values were cut (those values are marked `truncated`)
+    /// and/or trailing elements or fields were left out (`omitted`).
     pub truncated: bool,
+    /// Trailing parts left out of this page to fit the response (`null` when nothing was left out).
+    pub omitted: Option<DbToolKvOmitted>,
+}
+
+/// What a page left out to fit the response.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum DbToolKvOmittedKind {
+    /// The last elements of this page (a hash · set page that Redis returned in one step). `nextCursor` continues after
+    /// them, so those elements are not shown by any page.
+    Elements,
+    /// The last fields of this page's one stream entry. Redis reads an entry whole, so the left-out fields cannot be
+    /// read through this tool; `nextCursor` continues with the next entry.
+    Fields,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct DbToolKvOmitted {
+    pub of: DbToolKvOmittedKind,
+    /// How many are shown (the first ones, in order).
+    pub shown: u32,
+    /// How many there were on this page (elements) or in the entry (fields).
+    pub total: u32,
 }
 
 rpc_method! {
@@ -168,7 +199,8 @@ rpc_method! {
     /// Read one page of a Redis key's value, by type: a string in byte windows, a hash · set in scan pages, a list ·
     /// zset by index, a stream by entry id, a RedisJSON document whole. `nextCursor` reads the next page; a missing key
     /// is `"missing"`. Values that are not UTF-8 come as hex bytes. The response is limited to about 192 KiB — a page
-    /// holds fewer elements to fit, and an element too large on its own is cut (`truncated`). There is no command
+    /// holds fewer elements to fit, and an element too large on its own is cut (`truncated`); a stream entry with too
+    /// many fields shows only its first fields (`omitted` says how many — the rest cannot be read here). There is no command
     /// input — this tool only reads. Uses only connections the person opened in Pitwall's DB explorer during this app
     /// run (`notOpenedByUser`) and never uses a Redis server marked production (`productionBlocked`). Redis connections
     /// only.
@@ -413,6 +445,7 @@ async fn read_page(
             total: None,
             next_cursor: None,
             truncated: false,
+            omitted: None,
         });
     };
     let windowed = matches!(info.kind, KvType::String | KvType::Json);
@@ -441,7 +474,17 @@ async fn read_page(
             count /= 2;
             continue;
         }
-        let truncated = !fits && cut_to_fit(&mut value, room);
+        let (truncated, omitted) = if fits {
+            (false, None)
+        } else {
+            let cut = cut_to_fit(&mut value, room);
+            if json_len(&value) > room {
+                return Err(RpcError::invalid_params(
+                    "the value at this cursor is too large for one tool response even after cutting it",
+                ));
+            }
+            (cut.values || cut.omitted.is_some(), cut.omitted)
+        };
         return Ok(DbToolKvGet {
             // 그사이 키가 지워졌으면(`missing`) 타입 · TTL 도 없다.
             kind: (!matches!(value, KvValue::Missing)).then_some(info.kind),
@@ -452,6 +495,7 @@ async fn read_page(
             total,
             next_cursor,
             truncated,
+            omitted,
         });
     }
 }
@@ -485,21 +529,87 @@ fn values_mut(value: &mut KvValue) -> Vec<&mut DbValue> {
     }
 }
 
-/// 쪽이 `room` 안에 들 때까지 값마다 같은 몫으로 앞부분만 남긴다. 잘랐으면 `true`.
-fn cut_to_fit(value: &mut KvValue, room: usize) -> bool {
+/// 값을 자를 때 남기는 몫의 하한(바이트). 이보다 짧은 값은 자르지 않는다 — 감싼 표지(`truncated` 의 틀)가 값보다 커진다.
+const MIN_CUT: usize = 1024;
+
+/// [`cut_to_fit`] 이 한 것.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Cut {
+    /// 값 하나 이상을 앞부분으로 잘랐다.
+    values: bool,
+    /// 뒤쪽 원소 · 필드를 덜었다.
+    omitted: Option<DbToolKvOmitted>,
+}
+
+/// 쪽이 `room` 안에 들게 한다. ① 긴 값을 같은 몫(하한 [`MIN_CUT`])으로 앞부분만 남긴다 — 감싸서 커지는 값은 건드리지 않는다
+/// ② 그래도 넘치면 뒤에서부터 덜어 낸다: 스트림 항목 하나면 그 항목의 필드를, 원소가 여럿이면 원소를(덜어 낸 수를 남긴다). 다 해도
+/// 넘치면 부른 쪽이 거절한다(필드 이름 하나가 예산보다 큰 꼴 등은 ①이 막는다).
+fn cut_to_fit(value: &mut KvValue, room: usize) -> Cut {
+    let mut cut = Cut::default();
     let n = values_mut(value).len().max(1);
     let mut share = room / n;
-    let mut cut = false;
-    while json_len(value) > room && share > 0 {
+    while json_len(value) > room && share >= MIN_CUT {
         for v in values_mut(value) {
-            cut |= cut_value(v, share);
+            cut.values |= cut_value(v, share);
         }
         share /= 2;
+    }
+    if json_len(value) > room {
+        cut.omitted = omit_tail(value, room);
     }
     cut
 }
 
-/// 값 하나를 `max` 바이트(글은 UTF-8 바이트, 바이트 값은 hex 글자) 안으로. 잘랐으면 `true`.
+/// 뒤쪽 부분을 덜어 `room` 안에 들게 한다. 첫 부분은 남긴다(쪽이 비면 읽을 것이 없다 — 그 부분 하나가 넘치면 부른 쪽이 거절한다).
+fn omit_tail(value: &mut KvValue, room: usize) -> Option<DbToolKvOmitted> {
+    fn keep<T: Serialize>(parts: &mut Vec<T>, base: usize, room: usize) -> (u32, u32) {
+        let total = parts.len();
+        let mut used = base;
+        let mut kept = 0;
+        for part in parts.iter() {
+            let size = json_len(part) + 1;
+            if kept > 0 && used + size > room {
+                break;
+            }
+            used += size;
+            kept += 1;
+        }
+        parts.truncate(kept);
+        (
+            u32::try_from(kept).unwrap_or(u32::MAX),
+            u32::try_from(total).unwrap_or(u32::MAX),
+        )
+    }
+    // 틀의 크기: 그 목록을 비운 값.
+    let base = |value: &KvValue| {
+        let mut empty = value.clone();
+        match &mut empty {
+            KvValue::Stream(entries) if entries.len() == 1 => entries[0].fields.clear(),
+            KvValue::Hash(v) => v.clear(),
+            KvValue::List(v) | KvValue::Set(v) => v.clear(),
+            KvValue::Zset(v) => v.clear(),
+            KvValue::Stream(v) => v.clear(),
+            KvValue::Missing | KvValue::String(_) | KvValue::Json(_) => {}
+        }
+        json_len(&empty)
+    };
+    let frame = base(value);
+    let (of, (shown, total)) = match value {
+        KvValue::Stream(entries) if entries.len() == 1 => (
+            DbToolKvOmittedKind::Fields,
+            keep(&mut entries[0].fields, frame, room),
+        ),
+        KvValue::Stream(v) => (DbToolKvOmittedKind::Elements, keep(v, frame, room)),
+        KvValue::Hash(v) => (DbToolKvOmittedKind::Elements, keep(v, frame, room)),
+        KvValue::List(v) | KvValue::Set(v) => (DbToolKvOmittedKind::Elements, keep(v, frame, room)),
+        KvValue::Zset(v) => (DbToolKvOmittedKind::Elements, keep(v, frame, room)),
+        KvValue::Missing | KvValue::String(_) | KvValue::Json(_) => return None,
+    };
+    (shown < total).then_some(DbToolKvOmitted { of, shown, total })
+}
+
+/// 값 하나를 `max` 바이트(글은 UTF-8 바이트, 바이트 값은 hex 글자) 안으로. 자른 결과의 JSON 이 원래보다 작을 때만 바꾼다.
+/// 바꿨으면 `true`.
 fn cut_value(value: &mut DbValue, max: usize) -> bool {
     let prefix = |text: &str| {
         let mut end = max.min(text.len());
@@ -508,30 +618,35 @@ fn cut_value(value: &mut DbValue, max: usize) -> bool {
         }
         text[..end].to_owned()
     };
-    let whole = match &*value {
-        DbValue::Text(text) if text.len() > max => Some((TruncatedKind::Text, text)),
-        DbValue::Json(text) if text.len() > max => Some((TruncatedKind::Json, text)),
-        _ => None,
-    };
-    if let Some((of, text)) = whole {
-        let cut = DbValue::Truncated(DbTruncated {
-            of,
+    let candidate = match &*value {
+        DbValue::Text(text) if text.len() > max => Some(DbValue::Truncated(DbTruncated {
+            of: TruncatedKind::Text,
             prefix: prefix(text),
             size: text.len() as u64,
             type_name: None,
-        });
-        *value = cut;
-        return true;
-    }
-    match value {
-        DbValue::Truncated(t) if t.prefix.len() > max => {
-            t.prefix = prefix(&t.prefix);
-            true
-        }
+        })),
+        DbValue::Json(text) if text.len() > max => Some(DbValue::Truncated(DbTruncated {
+            of: TruncatedKind::Json,
+            prefix: prefix(text),
+            size: text.len() as u64,
+            type_name: None,
+        })),
+        DbValue::Truncated(t) if t.prefix.len() > max => Some(DbValue::Truncated(DbTruncated {
+            prefix: prefix(&t.prefix),
+            ..t.clone()
+        })),
         DbValue::Bytes(b) if b.hex.len() > max.max(2) => {
             let keep = max.saturating_sub(2) / 2;
+            let mut b = b.clone();
             b.hex.truncate(2 + keep * 2);
             b.truncated = true;
+            Some(DbValue::Bytes(b))
+        }
+        _ => None,
+    };
+    match candidate {
+        Some(smaller) if json_len(&smaller) < json_len(&*value) => {
+            *value = smaller;
             true
         }
         _ => false,
@@ -575,7 +690,7 @@ mod tests {
             field: DbValue::text("f", CellLimit::DEFAULT),
             value: DbValue::text(big.clone(), CellLimit(usize::MAX)),
         }]);
-        assert!(cut_to_fit(&mut value, 64 * 1024));
+        assert!(cut_to_fit(&mut value, 64 * 1024).values);
         assert!(json_len(&value) <= 64 * 1024);
         let KvValue::Hash(fields) = &value else {
             unreachable!()
@@ -591,7 +706,7 @@ mod tests {
             &[0xff; 200_000],
             CellLimit(usize::MAX),
         )]);
-        assert!(cut_to_fit(&mut bytes, 64 * 1024));
+        assert!(cut_to_fit(&mut bytes, 64 * 1024).values);
         let KvValue::List(items) = &bytes else {
             unreachable!()
         };
@@ -602,6 +717,112 @@ mod tests {
         assert!(json_len(&bytes) <= 64 * 1024);
 
         let mut small = KvValue::Set(vec![DbValue::text("a", CellLimit::DEFAULT)]);
-        assert!(!cut_to_fit(&mut small, 64 * 1024));
+        assert_eq!(cut_to_fit(&mut small, 64 * 1024), Cut::default());
+    }
+
+    fn text(t: &str) -> DbValue {
+        DbValue::text(t, CellLimit::DEFAULT)
+    }
+
+    /// 리뷰 F1: 필드가 아주 많은 스트림 항목 하나는 값 자르기로는 들지 않는다 — 짧은 값을 감싸 키우지 않고, 항목의 뒤 필드를
+    /// 덜어 예산 안에 들며 몇 개를 실었는지 남긴다.
+    #[test]
+    fn a_stream_entry_with_too_many_fields_keeps_its_first_fields_within_the_room() {
+        let room = RESPONSE_BUDGET - FRAME_ROOM;
+        let fields: Vec<KvField> = (0..30_000)
+            .map(|i| KvField {
+                field: text(&format!("f{i}")),
+                value: text("v"),
+            })
+            .collect();
+        let mut value = KvValue::Stream(vec![pw_db_types::KvStreamEntry {
+            id: "1-1".into(),
+            fields,
+        }]);
+        let before = json_len(&value);
+        let cut = cut_to_fit(&mut value, room);
+        assert!(json_len(&value) <= room && json_len(&value) < before);
+        assert!(!cut.values, "short values are not wrapped");
+        let omitted = cut.omitted.unwrap();
+        assert_eq!(
+            (omitted.of, omitted.total),
+            (DbToolKvOmittedKind::Fields, 30_000)
+        );
+        let KvValue::Stream(entries) = &value else {
+            unreachable!()
+        };
+        assert_eq!(entries[0].fields.len() as u32, omitted.shown);
+        assert!(
+            omitted.shown > 1_000 && omitted.shown < 30_000,
+            "{omitted:?}"
+        );
+        assert_eq!(entries[0].fields[0].field, text("f0"));
+        assert!(
+            entries[0]
+                .fields
+                .iter()
+                .all(|f| matches!((&f.field, &f.value), (DbValue::Text(_), DbValue::Text(_))))
+        );
+    }
+
+    /// 감싼 결과가 원래보다 크면 자르지 않는다 — 짧은 값은 몫이 작아도 그대로다.
+    #[test]
+    fn cutting_never_makes_a_value_larger() {
+        // 감싼 표지(`truncated` 의 틀)가 남는 앞부분보다 큰 값은 그대로 둔다.
+        for (value, max) in [(text("abcdef"), 3), (text(&"x".repeat(80)), 40)] {
+            let mut v = value.clone();
+            assert!(!cut_value(&mut v, max), "{value:?}");
+            assert_eq!(v, value);
+        }
+        // 바이트 값은 틀이 같아(`truncated` 칸이 늘 있다) 자르면 늘 작아진다.
+        let bytes = DbValue::bytes(&[1, 2, 3, 4, 5, 6], CellLimit::DEFAULT);
+        let mut b = bytes.clone();
+        assert!(cut_value(&mut b, 6));
+        assert!(json_len(&b) < json_len(&bytes));
+        let mut long = text(&"y".repeat(10_000));
+        assert!(cut_value(&mut long, 2_000));
+        assert!(json_len(&long) < 10_000);
+    }
+
+    /// Redis 가 한 걸음에 준 원소가 많은 쪽(작은 hash · set — listpack)이 원소 하나로 줄일 수 없을 때는 뒤 원소를 덜고 그 수를 남긴다.
+    #[test]
+    fn a_page_of_many_elements_that_cannot_shrink_omits_its_tail() {
+        let room = 64 * 1024;
+        let mut value = KvValue::Hash(
+            (0..5_000)
+                .map(|i| KvField {
+                    field: text(&format!("field{i:05}")),
+                    value: text(&"v".repeat(40)),
+                })
+                .collect(),
+        );
+        let cut = cut_to_fit(&mut value, room);
+        assert!(json_len(&value) <= room);
+        let omitted = cut.omitted.unwrap();
+        assert_eq!(
+            (omitted.of, omitted.total),
+            (DbToolKvOmittedKind::Elements, 5_000)
+        );
+        assert!(omitted.shown > 0 && omitted.shown < 5_000);
+        assert!(!cut.values);
+    }
+
+    /// zset 의 멤버 하나 · set 의 멤버 하나가 예산보다 크면 그 값만 자른다(덜지 않는다).
+    #[test]
+    fn one_huge_member_is_cut_not_omitted() {
+        let room = RESPONSE_BUDGET - FRAME_ROOM;
+        let big = "m".repeat(600 * 1024);
+        for mut value in [
+            KvValue::Zset(vec![pw_db_types::KvScored {
+                member: DbValue::text(big.clone(), CellLimit(usize::MAX)),
+                score: "1".into(),
+            }]),
+            KvValue::Set(vec![DbValue::text(big.clone(), CellLimit(usize::MAX))]),
+            KvValue::Json(DbValue::json(big.clone(), CellLimit(usize::MAX))),
+        ] {
+            let cut = cut_to_fit(&mut value, room);
+            assert!(json_len(&value) <= room);
+            assert_eq!((cut.values, cut.omitted), (true, None));
+        }
     }
 }

@@ -355,6 +355,101 @@ async fn live_redis_kv_tool_a_missing_key_is_missing() {
     assert!(page["kind"].is_null() && page["ttlMs"].is_null(), "{page}");
 }
 
+/// 리뷰 F1 의 재현: 필드 2만 개의 스트림 항목 하나(응답 1.96 MB 였다). 응답이 192 KiB 안이고(MCP 세션의 256 KiB 상한 오류가 나지
+/// 않는다 — 세션은 이 결과 JSON 의 크기를 잰다), 앞 필드만 실으며 몇 개를 실었는지 `omitted` 에 남긴다. 짧은 값은 감싸지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_redis_kv_tool_a_stream_entry_with_20000_fields_fits_the_response() {
+    let mut admin = admin().await;
+    run(&mut admin, &["DEL", "m519:f1:stream"]).await;
+    let mut xadd = vec![
+        "XADD".to_owned(),
+        "m519:f1:stream".to_owned(),
+        "1-1".to_owned(),
+    ];
+    for i in 0..20_000 {
+        xadd.push(format!("field{i:05}"));
+        xadd.push("v".to_owned());
+    }
+    admin.command(xadd).await.unwrap();
+    let mut e = env().await;
+    let page = e
+        .call(
+            "db.tool.kvGet",
+            json!({ "key": "m519:f1:stream", "limit": 1 }),
+        )
+        .await;
+    let size = page.to_string().len();
+    println!("a 20,000-field stream entry: {size} JSON bytes");
+    assert!(size <= pw_db::script::RESPONSE_BUDGET, "{size}");
+    assert!(size < 256 * 1024);
+    assert_eq!(page["truncated"], true);
+    assert_eq!(page["omitted"]["of"], "fields");
+    assert_eq!(page["omitted"]["total"], 20_000);
+    let shown = page["omitted"]["shown"].as_u64().unwrap();
+    assert!(shown > 1_000 && shown < 20_000, "{shown}");
+    let fields = page["value"]["stream"][0]["fields"].as_array().unwrap();
+    assert_eq!(fields.len() as u64, shown);
+    assert_eq!(fields[0]["field"]["text"], "field00000");
+    assert!(
+        fields.iter().all(|f| f["value"]["text"] == "v"),
+        "short values stay as they are"
+    );
+    // 다음 쪽은 다음 항목부터다 — 이 항목을 되풀이하지 않고, 항목이 하나뿐이라 비고 끝난다(`limit: 1` 이면 드라이버가 끝을 알기 전에
+    // 커서를 준다).
+    if let Some(cursor) = page["nextCursor"].as_str() {
+        let next = e
+            .call(
+                "db.tool.kvGet",
+                json!({ "key": "m519:f1:stream", "limit": 1, "cursor": cursor }),
+            )
+            .await;
+        assert_eq!(next["value"]["stream"], json!([]), "{next}");
+        assert!(next["nextCursor"].is_null());
+    }
+}
+
+/// 원소 하나가 응답 예산보다 큰 꼴은 다른 타입에도 없다 — hash 의 값 · list 의 원소 · set · zset 의 멤버 하나가 600 KiB 면 그 값만
+/// 앞부분으로 잘리고(`truncated`, 덜지 않는다) 응답이 192 KiB 안이다. 600 KiB string 은 자르지 않고 창으로 쪽을 나눈다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_redis_kv_tool_one_huge_element_of_each_type_fits_the_response() {
+    let big = "b".repeat(600 * 1024);
+    let mut admin = admin().await;
+    for key in [
+        "m519:f1:hash",
+        "m519:f1:list",
+        "m519:f1:set",
+        "m519:f1:zset",
+    ] {
+        run(&mut admin, &["DEL", key]).await;
+    }
+    run(&mut admin, &["HSET", "m519:f1:hash", "f", &big]).await;
+    run(&mut admin, &["RPUSH", "m519:f1:list", &big]).await;
+    run(&mut admin, &["SADD", "m519:f1:set", &big]).await;
+    run(&mut admin, &["ZADD", "m519:f1:zset", "1", &big]).await;
+    run(&mut admin, &["SET", "m519:f1:string", &big]).await;
+    let mut e = env().await;
+    for (key, kind) in [
+        ("m519:f1:hash", "hash"),
+        ("m519:f1:list", "list"),
+        ("m519:f1:set", "set"),
+        ("m519:f1:zset", "zset"),
+    ] {
+        let page = e.call("db.tool.kvGet", json!({ "key": key })).await;
+        let size = page.to_string().len();
+        assert!(size <= pw_db::script::RESPONSE_BUDGET, "{key}: {size}");
+        assert_eq!(page["truncated"], true, "{key}");
+        assert!(page["omitted"].is_null(), "{key}: {}", page["omitted"]);
+        assert_eq!(page["kind"], kind);
+    }
+    let pages = e.read_all(json!("m519:f1:string"), None).await;
+    assert!(pages.iter().all(|p| p["truncated"] == false));
+    let joined: String = pages
+        .iter()
+        .map(|p| p["value"]["string"]["text"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(joined.len(), big.len());
+}
+
 // --- 보낸 명령(MONITOR) -------------------------------------------------------------------------------------------------
 
 /// `MONITOR` 한 줄: `+<시각> [<db> <주소>] "<인자>" …`. 인자는 서버의 repr(`\"` · `\\` · `\n` · `\r` · `\t` · `\a` · `\b` · `\xhh`).
