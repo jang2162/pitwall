@@ -104,6 +104,11 @@ export interface OutsideSourcesRuntime extends OutsideSources {
   binding(): OutsideBinding | undefined;
   /** 탭의 뷰가 생길 때 둘 커서(`open` 이 남긴 것)를 꺼낸다. */
   takeCursor(panelId: string): Cursor | undefined;
+  /**
+   * 탭의 뷰가 사라질 때 그 커서를 남긴다 — 같은 탭의 뷰가 다시 생기면(StrictMode(dev)의 effect 정리 · 다시 걸기, 글꼴 바뀜) 그
+   * 자리에서 시작한다. 남기지 않으면 `open` 이 둔 위치가 첫 뷰와 함께 사라져 1줄로 갔다(M5-13b).
+   */
+  keepCursor(panelId: string, cursor: Cursor): void;
 }
 
 let current: OutsideSourcesRuntime | undefined;
@@ -140,6 +145,9 @@ export function createOutsideSources(): OutsideSourcesRuntime {
       const cursor = cursors.get(panelId);
       cursors.delete(panelId);
       return cursor;
+    },
+    keepCursor(panelId, cursor) {
+      cursors.set(panelId, cursor);
     },
 
     async open(location: NavTarget & { token: string }, { travel }) {
@@ -295,6 +303,7 @@ export function OutsideSourcePanel({ panelId, spec }: { panelId: string; spec: O
     return () => {
       unfollow();
       unregister();
+      runtime?.keepCursor(panelId, cursorOf(view));
       view.destroy();
     };
   }, [runtime, text, spec.token, spec.path, spec.language, panelId, workspace, font, tab]);
