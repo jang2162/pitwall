@@ -22,7 +22,7 @@ import {
 } from "./file-window/file-window";
 import { ProjectWindow } from "./layout/project-window";
 import { projectIdFromQuery } from "./project-open";
-import { HostProvider } from "./rpc/host";
+import { HostProvider, useRpcQuery } from "./rpc/host";
 import { type SettingsNative, tauriSettingsNative } from "./settings/native";
 import { SettingsWindow } from "./settings/settings-window";
 import type { HostTarget } from "./tauri-transport";
@@ -85,13 +85,22 @@ function AppActions({ native, kind }: { native: KeymapNative; kind: WindowKind }
 
 function WindowTitle({ kind }: { kind: WindowKind }) {
   const titles = useAppStrings().windowTitles;
+  if (kind === "project") return <ProjectWindowTitle />;
   const title =
     kind === "welcome"
       ? WELCOME_TITLE
       : kind === "file"
         ? fileWindowTitle(filePathFromQuery(window.location.search) ?? "")
-        : titles[kind];
+        : titles.settings;
   return <span data-tauri-drag-region>{title}</span>;
+}
+
+/** 프로젝트 창의 제목 줄은 그 프로젝트의 이름이다 — OS 창 제목과 같다(src-tauri/src/windows.rs `open_project_as`). 읽기 전에는 비운다. */
+function ProjectWindowTitle() {
+  const project = useRpcQuery("project.get", {
+    id: projectIdFromQuery(window.location.search) ?? "",
+  });
+  return <span data-tauri-drag-region>{project.data?.name ?? ""}</span>;
 }
 
 export function App({

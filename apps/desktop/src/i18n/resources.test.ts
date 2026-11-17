@@ -249,7 +249,6 @@ describe("built-in translations", () => {
       ];
       expect(nativeIds.filter((id) => id.startsWith("shell-command-")).length).toBe(5);
       expect(nativeIds.filter((id) => id.startsWith("window-title-")).sort()).toEqual([
-        "window-title-project",
         "window-title-settings",
       ]);
       const { t, problems } = strictTranslator(locale);

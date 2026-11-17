@@ -13,7 +13,6 @@ import { type Translate, translator } from "./localization";
 export function appStrings(t: Translate) {
   return {
     windowTitles: {
-      project: t("window-title-project"),
       settings: t("window-title-settings"),
     },
     actions: {

@@ -134,12 +134,14 @@ mod tests {
         }
     }
 
-    /// 언어를 바꾸면 메뉴 글자와 함께 프로젝트 · 설정 창의 OS 제목이 그 언어로 바뀐다. 모르는 창(label `main`)은 건드리지 않는다.
+    /// 언어를 바꾸면 메뉴 글자와 함께 설정 창의 OS 제목이 그 언어로 바뀐다. 프로젝트 창(제목이 프로젝트 이름)과 모르는 창(label
+    /// `main`)은 건드리지 않는다.
     #[test]
     fn a_language_change_retitles_the_open_windows() {
         let app = tauri::test::mock_app();
         app.manage(crate::windows::PendingOpens::default());
-        crate::windows::open_project(app.handle(), "ab12", &Default::default()).unwrap();
+        crate::windows::open_project(app.handle(), "ab12", "billing-api", &Default::default())
+            .unwrap();
         crate::windows::open_settings(app.handle()).unwrap();
         tauri::WebviewWindowBuilder::new(&app, "main", tauri::WebviewUrl::default())
             .build()
@@ -160,14 +162,10 @@ mod tests {
             titles.sort();
             titles
         };
-        let pairs = |p: &str, s: &str| {
-            vec![
-                ("project-ab12".to_owned(), p.to_owned()),
-                ("settings".to_owned(), s.to_owned()),
-            ]
-        };
-        assert_eq!(titles(&["ko", "en"]), pairs("프로젝트", "설정"));
-        assert_eq!(titles(&["en"]), pairs("Project", "Settings"));
+        // 프로젝트 창의 제목은 프로젝트 이름이라 언어를 바꿔도 다시 달지 않는다.
+        let settings = |s: &str| vec![("settings".to_owned(), s.to_owned())];
+        assert_eq!(titles(&["ko", "en"]), settings("설정"));
+        assert_eq!(titles(&["en"]), settings("Settings"));
         assert_eq!(*ui.menu_calls.lock().unwrap(), 2);
     }
 

@@ -3,7 +3,6 @@
 # 그 언어로 쓴 그 언어의 이름. 언어 고르기는 언어마다 그 언어의 이 메시지로 이름을 보여 준다.
 language-name = 한국어
 
-window-title-project = 프로젝트
 window-title-settings = 설정
 
 action-find = 액션 찾기

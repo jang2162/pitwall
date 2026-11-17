@@ -60,13 +60,13 @@ impl WindowKind {
     /// (docs/design/07-extensibility.md 「UI 언어 (i18n)」 표의 「번역하지 않는 것」 행). 웹뷰의 제목 줄과 같은 메시지다
     /// (`src/i18n/app-strings.ts` 의 `windowTitles`).
     ///
-    /// 단일 파일 창은 그 파일의 이름이라(번역하지 않는다) 이 값이 없다 — [`open_file`] 이 단다.
+    /// 프로젝트 창은 그 프로젝트의 이름, 단일 파일 창은 그 파일의 이름이라(번역하지 않는다) 이 값이 없다 — [`open_project_as`] ·
+    /// [`open_file`] 이 단다. 언어를 바꿔도 그 제목은 그대로다([`retitle`]).
     pub fn title(self, l: &Localizer) -> Option<String> {
         match self {
             WindowKind::Welcome => Some("Pitwall".to_owned()),
-            WindowKind::Project => Some(l.text("window-title-project")),
             WindowKind::Settings => Some(l.text("window-title-settings")),
-            WindowKind::File => None,
+            WindowKind::Project | WindowKind::File => None,
         }
     }
 
@@ -250,9 +250,10 @@ pub async fn open_settings_window<R: Runtime>(app: AppHandle<R>) -> Result<(), S
 pub fn open_project<R: Runtime>(
     app: &AppHandle<R>,
     project_id: &str,
+    name: &str,
     open: &ProjectOpen,
 ) -> tauri::Result<WebviewWindow<R>> {
-    open_project_as(app, project_id, open, Activation::Front).map(|(window, _)| window)
+    open_project_as(app, project_id, name, open, Activation::Front).map(|(window, _)| window)
 }
 
 /// 창을 열 때 사람의 화면을 어떻게 다루나.
@@ -267,10 +268,12 @@ pub enum Activation {
 
 /// 프로젝트 창을 연다. `open` 은 그 창의 [`PendingOpens`] 큐에 넣는다. 창이 이미 있으면 [`PROJECT_OPEN_EVENT`] 로 알린다
 /// ([`Activation::Front`] 면 앞으로 가져온다). 없으면 `?window=project&project=<id>` 창을 만든다(창은 마운트할 때 큐를 꺼낸다).
-/// 프로젝트가 레지스트리에 있는지는 부르는 쪽이 본다(`launch::open_project_as`). 돌려주는 `bool` 은 창을 새로 만들었는가.
+/// 프로젝트가 레지스트리에 있는지는 부르는 쪽이 본다(`launch::open_project_as`). 새 창의 OS 제목은 `name`(프로젝트 이름 — 웹뷰의
+/// 제목 줄과 같다, `src/App.tsx` 의 `WindowTitle`)이다. 돌려주는 `bool` 은 창을 새로 만들었는가.
 pub fn open_project_as<R: Runtime>(
     app: &AppHandle<R>,
     project_id: &str,
+    name: &str,
     open: &ProjectOpen,
     activation: Activation,
 ) -> tauri::Result<(WebviewWindow<R>, bool)> {
@@ -296,15 +299,12 @@ pub fn open_project_as<R: Runtime>(
     pending.reset(&label, (!open.is_empty()).then(|| open.clone()));
     let mut query = vec![("project", project_id)];
     query.extend(crate::perf::project_query(app));
-    let title = WindowKind::Project
-        .title(&localizer(app))
-        .unwrap_or_default();
     build_titled(
         app,
         WindowKind::Project,
         &label,
         WindowKind::Project.url_with(&query),
-        &title,
+        name,
         activation == Activation::Front,
     )
     .map(|window| (window, true))
@@ -458,7 +458,7 @@ fn build_titled<R: Runtime>(
 ) -> tauri::Result<WebviewWindow<R>> {
     let (width, height) = kind.inner_size();
     #[cfg(test)]
-    tests::built(label, focused);
+    tests::built(label, title, focused);
     let builder = WebviewWindowBuilder::new(app, label, url)
         .title(title)
         .inner_size(width, height)
@@ -517,8 +517,9 @@ pub(crate) mod tests {
     /// 모든 스레드에서 [`focus`] 가 앞으로 가져온 창의 label. 블로킹 스레드에서 창을 여는 길(에이전트의 `project_open`)을 보는
     /// 시험이 쓴다 — 시험마다 다른 label 로 거른다(시험은 나란히 돈다).
     static FOCUSED_ANYWHERE: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    /// 모든 스레드에서 [`build_titled`] 가 만든 창의 label 과, 포커스를 받게 만들었는가. mock 런타임은 포커스를 기억하지 않는다.
-    static BUILT: Mutex<Vec<(String, bool)>> = Mutex::new(Vec::new());
+    /// 모든 스레드에서 [`build_titled`] 가 만든 창의 label · OS 제목과, 포커스를 받게 만들었는가. mock 런타임은 포커스 · 제목을
+    /// 기억하지 않는다.
+    static BUILT: Mutex<Vec<(String, String, bool)>> = Mutex::new(Vec::new());
 
     pub(super) fn focused(label: &str) {
         FOCUSED.with(|f| f.borrow_mut().push(label.to_owned()));
@@ -534,8 +535,11 @@ pub(crate) mod tests {
         FOCUSED_ANYWHERE.lock().unwrap().iter().any(|l| l == label)
     }
 
-    pub(super) fn built(label: &str, focused: bool) {
-        BUILT.lock().unwrap().push((label.to_owned(), focused));
+    pub(super) fn built(label: &str, title: &str, focused: bool) {
+        BUILT
+            .lock()
+            .unwrap()
+            .push((label.to_owned(), title.to_owned(), focused));
     }
 
     /// 그 label 로 만든 창마다 포커스를 받게 만들었는가(만든 순서).
@@ -544,8 +548,19 @@ pub(crate) mod tests {
             .lock()
             .unwrap()
             .iter()
-            .filter(|(l, _)| l == label)
-            .map(|(_, focused)| *focused)
+            .filter(|(l, _, _)| l == label)
+            .map(|(_, _, focused)| *focused)
+            .collect()
+    }
+
+    /// 그 label 로 만든 창마다 단 OS 제목(만든 순서).
+    pub(crate) fn built_titles(label: &str) -> Vec<String> {
+        BUILT
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(l, _, _)| l == label)
+            .map(|(_, title, _)| title.clone())
             .collect()
     }
 
@@ -573,23 +588,31 @@ pub(crate) mod tests {
     /// OS 창 제목은 UI 언어의 메시지다. 웰컴 창은 앱 이름 그대로다.
     #[test]
     fn window_titles_follow_the_ui_language() {
-        let kinds = [
-            WindowKind::Welcome,
-            WindowKind::Project,
-            WindowKind::Settings,
-        ];
+        let kinds = [WindowKind::Welcome, WindowKind::Settings];
         let ko = builtin_localizer(&["ko", "en"]);
         let en = builtin_localizer(&["en"]);
-        assert_eq!(
-            kinds.map(|k| k.title(&ko).unwrap()),
-            ["Pitwall", "프로젝트", "설정"]
-        );
+        assert_eq!(kinds.map(|k| k.title(&ko).unwrap()), ["Pitwall", "설정"]);
         assert_eq!(
             kinds.map(|k| k.title(&en).unwrap()),
-            ["Pitwall", "Project", "Settings"]
+            ["Pitwall", "Settings"]
         );
-        // 단일 파일 창의 제목은 파일 이름이라 언어를 따르지 않는다.
+        // 프로젝트 창 · 단일 파일 창의 제목은 프로젝트 · 파일 이름이라 언어를 따르지 않는다.
+        assert_eq!(WindowKind::Project.title(&ko), None);
         assert_eq!(WindowKind::File.title(&ko), None);
+    }
+
+    /// 프로젝트 창의 OS 제목은 그 프로젝트의 이름이다(창 전환기 · Window 메뉴 · Dock 에서 프로젝트를 가른다).
+    #[test]
+    fn a_project_window_is_titled_with_the_project_name() {
+        let app = app();
+        open_project(
+            app.handle(),
+            "title-aaaa",
+            "billing-api",
+            &ProjectOpen::default(),
+        )
+        .unwrap();
+        assert_eq!(built_titles("project-title-aaaa"), ["billing-api"]);
     }
 
     /// 언어를 바꿀 때 제목을 고칠 창을 label 로 고른다.
@@ -680,9 +703,9 @@ pub(crate) mod tests {
     #[test]
     fn a_project_window_is_opened_once_per_project() {
         let app = app();
-        let first = open_project(app.handle(), "aaaa", &ProjectOpen::default()).unwrap();
-        let again = open_project(app.handle(), "aaaa", &ProjectOpen::default()).unwrap();
-        let other = open_project(app.handle(), "bbbb", &ProjectOpen::default()).unwrap();
+        let first = open_project(app.handle(), "aaaa", "aaaa", &ProjectOpen::default()).unwrap();
+        let again = open_project(app.handle(), "aaaa", "aaaa", &ProjectOpen::default()).unwrap();
+        let other = open_project(app.handle(), "bbbb", "bbbb", &ProjectOpen::default()).unwrap();
         assert_eq!(first.label(), "project-aaaa");
         assert_eq!(again.label(), "project-aaaa");
         assert_eq!(other.label(), "project-bbbb");
@@ -696,14 +719,14 @@ pub(crate) mod tests {
     #[test]
     fn opening_an_already_open_project_brings_that_window_forward() {
         let app = app();
-        open_project(app.handle(), "aaaa", &ProjectOpen::default()).unwrap();
-        open_project(app.handle(), "bbbb", &ProjectOpen::default()).unwrap();
+        open_project(app.handle(), "aaaa", "aaaa", &ProjectOpen::default()).unwrap();
+        open_project(app.handle(), "bbbb", "bbbb", &ProjectOpen::default()).unwrap();
         assert_eq!(
             take_focused(),
             Vec::<String>::new(),
             "새 창은 앞으로 가져온 것이 아니다"
         );
-        let window = open_project(app.handle(), "aaaa", &ProjectOpen::default()).unwrap();
+        let window = open_project(app.handle(), "aaaa", "aaaa", &ProjectOpen::default()).unwrap();
         assert_eq!(window.label(), "project-aaaa");
         assert_eq!(take_focused(), ["project-aaaa"]);
         let mut labels = labels(app.handle());
@@ -724,6 +747,7 @@ pub(crate) mod tests {
         let (window, created) = open_project_as(
             app.handle(),
             "bg-aaaa",
+            "bg-aaaa",
             &file("/p/a.rs", Some(1)),
             Activation::Background,
         )
@@ -736,6 +760,7 @@ pub(crate) mod tests {
         );
         let (again, created) = open_project_as(
             app.handle(),
+            "bg-aaaa",
             "bg-aaaa",
             &file("/p/b.rs", Some(2)),
             Activation::Background,
@@ -757,7 +782,7 @@ pub(crate) mod tests {
             [file("/p/a.rs", Some(1)), file("/p/b.rs", Some(2))]
         );
 
-        open_project(app.handle(), "fg-aaaa", &ProjectOpen::default()).unwrap();
+        open_project(app.handle(), "fg-aaaa", "fg-aaaa", &ProjectOpen::default()).unwrap();
         assert_eq!(built_focus("project-fg-aaaa"), [true]);
     }
 
@@ -770,7 +795,7 @@ pub(crate) mod tests {
             line: Some(3),
             col: Some(4),
         };
-        let window = open_project(app.handle(), "aaaa", &open).unwrap();
+        let window = open_project(app.handle(), "aaaa", "aaaa", &open).unwrap();
         let url = window.url().unwrap();
         let query: Vec<(String, String)> = url.query_pairs().into_owned().collect();
         assert_eq!(
@@ -786,7 +811,7 @@ pub(crate) mod tests {
     fn a_project_window_in_measurement_mode_asks_for_the_first_frame_mark() {
         let app = app();
         app.manage(crate::perf::PerfMarks::at(Some("/tmp/marks.jsonl".into())));
-        let window = open_project(app.handle(), "aaaa", &ProjectOpen::default()).unwrap();
+        let window = open_project(app.handle(), "aaaa", "aaaa", &ProjectOpen::default()).unwrap();
         let query: Vec<(String, String)> =
             window.url().unwrap().query_pairs().into_owned().collect();
         assert_eq!(
@@ -800,10 +825,10 @@ pub(crate) mod tests {
     #[test]
     fn requests_wait_in_order_until_the_window_takes_them() {
         let app = app();
-        let window = open_project(app.handle(), "aaaa", &file("/r/a.rs", None)).unwrap();
-        open_project(app.handle(), "aaaa", &file("/r/b.rs", Some(2))).unwrap();
-        open_project(app.handle(), "aaaa", &ProjectOpen::default()).unwrap();
-        let other = open_project(app.handle(), "bbbb", &ProjectOpen::default()).unwrap();
+        let window = open_project(app.handle(), "aaaa", "aaaa", &file("/r/a.rs", None)).unwrap();
+        open_project(app.handle(), "aaaa", "aaaa", &file("/r/b.rs", Some(2))).unwrap();
+        open_project(app.handle(), "aaaa", "aaaa", &ProjectOpen::default()).unwrap();
+        let other = open_project(app.handle(), "bbbb", "bbbb", &ProjectOpen::default()).unwrap();
         assert_eq!(
             take(app.handle(), &other),
             [],
@@ -835,7 +860,7 @@ pub(crate) mod tests {
         let threads = ["/r/a.rs", "/r/b.rs"].map(|path| {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
-                open_project(&handle, "aaaa", &file(path, None))
+                open_project(&handle, "aaaa", "aaaa", &file(path, None))
                     .map(drop)
                     .map_err(|e| e.to_string())
             })
@@ -855,7 +880,7 @@ pub(crate) mod tests {
         let app = app();
         app.state::<PendingOpens>()
             .push("project-aaaa", file("/stale.rs", None));
-        let window = open_project(app.handle(), "aaaa", &file("/r/a.rs", None)).unwrap();
+        let window = open_project(app.handle(), "aaaa", "aaaa", &file("/r/a.rs", None)).unwrap();
         assert_eq!(take(app.handle(), &window), [file("/r/a.rs", None)]);
     }
 
@@ -866,15 +891,15 @@ pub(crate) mod tests {
         use tauri::Listener;
 
         let app = app();
-        let window = open_project(app.handle(), "aaaa", &ProjectOpen::default()).unwrap();
+        let window = open_project(app.handle(), "aaaa", "aaaa", &ProjectOpen::default()).unwrap();
         let received = Arc::new(Mutex::new(Vec::<String>::new()));
         let sink = Arc::clone(&received);
         window.listen(PROJECT_OPEN_EVENT, move |event| {
             sink.lock().unwrap().push(event.payload().to_owned())
         });
         // 빈 요청은 창만 앞으로 가져온다.
-        open_project(app.handle(), "aaaa", &ProjectOpen::default()).unwrap();
-        open_project(app.handle(), "aaaa", &file("/r/a.rs", Some(7))).unwrap();
+        open_project(app.handle(), "aaaa", "aaaa", &ProjectOpen::default()).unwrap();
+        open_project(app.handle(), "aaaa", "aaaa", &file("/r/a.rs", Some(7))).unwrap();
         assert_eq!(*received.lock().unwrap(), ["null"]);
         assert_eq!(take(app.handle(), &window), [file("/r/a.rs", Some(7))]);
         assert_eq!(labels(app.handle()), ["project-aaaa"]);

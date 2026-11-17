@@ -3,7 +3,6 @@
 # The language's own name. The language switcher lists every language by this message of that language.
 language-name = English
 
-window-title-project = Project
 window-title-settings = Settings
 
 action-find = Find Action
