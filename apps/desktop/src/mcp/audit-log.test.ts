@@ -3,7 +3,7 @@
 // 커서).
 
 import type { AuditRow, McpAuditListParams, McpAuditPage } from "@pitwall/rpc-client";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createAuditLog, mergeRows } from "./audit-log";
 
@@ -273,6 +273,32 @@ describe("audit log", () => {
     audit.release(true);
     await log.idle();
     expect(ids(log.store.getState().rows)).toEqual([6]);
+  });
+
+  it("reads the next page again when a refresh moved the cursor while it was in flight (R2)", async () => {
+    const audit = new FakeAudit();
+    audit.add(...range(1, 25));
+    const log = await opened(audit);
+    // 받아 둔 것: 16~25, 커서는 16 아래.
+    audit.hold = true;
+    log.loadMore();
+    // 그 사이 새 행 다섯이 위에 붙고, 16 의 이벤트로 새로 읽기가 첫 쪽(30~21) · 둘째 쪽(20~11)까지 내려가 커서를 11 아래로 옮긴다.
+    audit.add(...range(26, 30));
+    audit.hold = false;
+    log.activity([16]);
+    // 새로 읽기가 끝날 때까지(붙잡힌 다음 쪽은 아직 떠 있어 `idle` 을 기다릴 수 없다).
+    await vi.waitFor(() => expect(log.store.getState().rows.at(-1)?.id).toBe(11));
+    // 붙잡아 둔 다음 쪽(15~6)이 늦게 닿는다 — 낡아서 버리고, 지금 커서(11 아래)로 다시 읽는다.
+    audit.release();
+    await log.idle();
+    const { rows, end } = log.store.getState();
+    expect(ids(rows)).toEqual(
+      range(1, 30)
+        .map((r) => r.id)
+        .reverse(),
+    );
+    expect(end).toBe(true);
+    expect(audit.calls.at(-1)?.cursor).toBe("11");
   });
 
   it("asks the host to filter by result and tool, and starts over when they change", async () => {

@@ -496,7 +496,9 @@ function CallLog({
         ref={scrollRef}
         role="table"
         aria-labelledby={titleId}
-        aria-rowcount={shown.length + 1}
+        // 다 읽기 전에는 전체 줄 수를 모른다 — ARIA 의 「모름」 은 -1 이다. 받은 줄 수는 `data-loaded-rows` 에 둔다.
+        aria-rowcount={end ? shown.length + 1 : -1}
+        data-loaded-rows={shown.length}
         tabIndex={0}
         data-testid="mcp-log-rows"
         onScroll={onScroll}
@@ -518,13 +520,22 @@ function CallLog({
           </div>
         </div>
         {shown.length === 0 ? (
-          <p data-testid="mcp-log-empty" className="px-2 py-1 text-ui-muted-foreground">
-            {loading || (!end && clientFilter !== null)
-              ? T.loading
-              : clientFilter !== null || filter.outcome !== null || filter.tool !== null
-                ? T.emptyFiltered
-                : T.empty}
-          </p>
+          // 표 아래의 글도 행 · 셀로 둔다 — 표에 행이 아닌 자식이 있으면 보조 기술이 표를 잘못 읽는다.
+          <div role="rowgroup">
+            <div role="row">
+              <p
+                role="cell"
+                data-testid="mcp-log-empty"
+                className="px-2 py-1 text-ui-muted-foreground"
+              >
+                {loading || (!end && clientFilter !== null)
+                  ? T.loading
+                  : clientFilter !== null || filter.outcome !== null || filter.tool !== null
+                    ? T.emptyFiltered
+                    : T.empty}
+              </p>
+            </div>
+          </div>
         ) : (
           <div
             role="rowgroup"

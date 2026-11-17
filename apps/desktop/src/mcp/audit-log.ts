@@ -171,8 +171,12 @@ export function createAuditLog(options: {
         (got) => {
           if (disposed || mine !== generation) return;
           moreInFlight = false;
-          // 새로 읽기가 그새 커서를 지나 내려갔으면 이 쪽은 낡았다 — 버리고 지금 커서로 다시 읽게 둔다.
-          if (cursor !== from) return;
+          // 새로 읽기가 그새 커서를 지나 내려갔으면 이 쪽은 낡았다 — 버리고 지금 커서로 바로 다시 읽는다. 화면이 다음 쪽을 부르는
+          // 것은 그려진 줄이 바뀔 때뿐이라, 여기서 다시 부르지 않으면 다음 쪽이 멈출 수 있다(M5-13 리뷰 R2).
+          if (cursor !== from) {
+            loadMore();
+            return;
+          }
           const last = got.entries.at(-1);
           const low = got.nextCursor === null || !last ? -Infinity : last.id;
           setCursor(got);

@@ -39,6 +39,8 @@ const host = vi.hoisted(() => ({
   audit: [] as AuditRow[],
   listCalls: [] as McpAuditListParams[],
   clearCalls: [] as unknown[],
+  /** `events.subscribe` 에 답하기 직전에 부른다(구독 사이에 쓰인 행 흉내). */
+  onSubscribe: (_params: { projectId?: string; topics: string[] }) => {},
   emitHost: (_topic: string, _payload: unknown) => {},
   emitProject: (_topic: string, _payload: unknown) => {},
 }));
@@ -142,6 +144,7 @@ vi.mock("../tauri-transport", async () => {
           }
           case "events.subscribe": {
             const id = next++;
+            host.onSubscribe(m.params as { projectId?: string; topics: string[] });
             subs.set(id, m.params as { projectId?: string; topics: string[] });
             return reply({ subscriptionId: id });
           }
@@ -214,6 +217,7 @@ beforeEach(() => {
   host.audit = [];
   host.listCalls = [];
   host.clearCalls = [];
+  host.onSubscribe = () => {};
   localStorage.clear();
   // 호출 로그 표(role=table)가 400 px 높이다 — 보이는 줄 수가 정해진다.
   for (const prop of ["offsetHeight", "clientHeight"] as const)
@@ -308,9 +312,12 @@ it("draws only the visible rows of a 5,000-row log, reading it page by page", as
   for (let id = 1; id <= 5_000; id++) host.audit.push(row(id));
   await openPanel();
   const scroller = table();
+  // 다 읽기 전에는 전체 줄 수를 모른다(R3).
+  expect(scroller.getAttribute("aria-rowcount")).toBe("-1");
+  expect(scroller.dataset.loadedRows).toBe(String(AUDIT_PAGE));
   // 끝까지 스크롤해 쪽을 모두 읽는다.
   for (let i = 0; i < 40; i++) {
-    const loaded = Number(scroller.getAttribute("aria-rowcount")) - 1;
+    const loaded = Number(scroller.dataset.loadedRows);
     if (loaded >= 5_000) break;
     await act(async () => {
       scroller.scrollTop = loaded * ACTIVITY_ROW_HEIGHT;
@@ -521,10 +528,13 @@ it("refreshes the call counts of the connected agents on mcp.activity", async ()
 });
 
 it("shows control and bidi characters agents sent as replacement marks", async () => {
-  host.audit = [row(1, { args: '{"path":"a\u202Egnp.exe"}', client: "evil\u0007 1.0" })];
+  host.audit = [
+    row(1, { args: '{"path":"a\u202Egnp.exe","b":"\u2066x\u2069"}', client: "evil\u0007 1.0" }),
+  ];
   await openPanel();
   const text = logRows()[0]!.textContent!;
-  expect(text.includes("\u202E") || text.includes("\u0007")).toBe(false);
+  expect(/[\u202E\u2066\u2069]/u.test(text) || text.includes("\u0007")).toBe(false);
+  expect(text).toContain('"\uFFFDx\uFFFD"');
   expect(text).toContain("a\uFFFDgnp.exe");
   expect(text).toContain("evil\uFFFD 1.0");
 });
@@ -558,8 +568,8 @@ it("reads one page when the window comes forward, not down to an old started row
   for (let id = 1; id <= 1_000; id++)
     host.audit.push(row(id, id === 5 ? { outcome: "started", durationMs: 0 } : {}));
   await openPanel();
-  for (let i = 0; i < 10 && Number(table().getAttribute("aria-rowcount")) - 1 < 1_000; i++)
-    await scrollTo((Number(table().getAttribute("aria-rowcount")) - 1) * ACTIVITY_ROW_HEIGHT);
+  for (let i = 0; i < 10 && Number(table().dataset.loadedRows) < 1_000; i++)
+    await scrollTo(Number(table().dataset.loadedRows) * ACTIVITY_ROW_HEIGHT);
   expect(Number(table().getAttribute("aria-rowcount"))).toBe(1_001);
   await scrollTo(0);
   const calls = await listCallsAfter(wakeWindow);
@@ -624,4 +634,16 @@ it("keeps the row being read in place when new calls arrive above it, and shows 
   await settle();
   expect(table().scrollTop).toBe(0);
   expect(firstVisible()).toBe("104");
+});
+
+it("reads once more when the subscription opens, for rows written between the first page and it", async () => {
+  host.audit = [row(1)];
+  // 첫 쪽에 답한 뒤 · 구독이 열리기 전에 쓰인 행 — 이벤트가 오지 않는다.
+  host.onSubscribe = (p) => {
+    // 창의 다른 기능도 프로젝트 범위로 구독한다 — 이 패널의 `mcp.activity` 구독일 때만.
+    if (p.projectId === "p1" && p.topics.includes("mcp.activity") && host.audit.length === 1)
+      host.audit.push(row(2));
+  };
+  await openPanel();
+  await vi.waitFor(() => expect(rowIds()).toEqual([2, 1]));
 });
