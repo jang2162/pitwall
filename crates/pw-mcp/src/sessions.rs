@@ -70,6 +70,9 @@ pub struct McpActivity {
 // 이벤트 payload 는 메서드가 참조하지 않으므로 TS 에 따로 등록한다(CONTRIBUTING.md 「RPC 타입 생성」).
 pw_rpc::rpc_type!(McpSessionsChanged, McpActivity);
 
+/// 등록 전 호출을 세어 두는 세션 수의 상한([`Sessions::called`]).
+const MAX_EARLY: usize = 64;
+
 /// 열린 세션의 등록부. 복제해도 같은 표다.
 #[derive(Clone, Default)]
 pub struct Sessions(Arc<Shared>);
@@ -77,6 +80,9 @@ pub struct Sessions(Arc<Shared>);
 #[derive(Default)]
 struct Shared {
     live: Mutex<BTreeMap<String, McpSessionInfo>>,
+    /// 등록 전에 받은 호출(수 · 클라이언트). 세션은 초기화를 마친 뒤에 등록하는데, 그 사이 rmcp 의 서비스 루프가 먼저 받은
+    /// `tools/call` 이 끝날 수 있다(16-m5-plan M5-10 → M5-11 R7). 등록하면 옮기고, 등록 없이 끝나면 버린다.
+    early: Mutex<BTreeMap<String, (u64, Option<String>)>>,
     /// 이벤트를 낼 버스. 붙기 전에는 이벤트를 내지 않는다(헤드리스 · 시험).
     bus: OnceLock<EventBus>,
 }
@@ -111,16 +117,18 @@ impl Sessions {
         project_id: Option<String>,
         transport: &str,
     ) -> Registered {
-        let info = McpSessionInfo {
-            id: id.to_owned(),
-            client,
-            project_id,
-            transport: transport.to_owned(),
-            started_at: now_millis(),
-            calls: 0,
-        };
         let total = {
+            // 앞서 받은 호출을 옮기는 것과 올리는 것을 `live` 잠금 안에서 한다 — 그 사이의 `called` 가 빠지지 않는다.
             let mut live = self.live();
+            let (calls, early_client) = self.early().remove(id).unwrap_or_default();
+            let info = McpSessionInfo {
+                id: id.to_owned(),
+                client: client.or(early_client),
+                project_id,
+                transport: transport.to_owned(),
+                started_at: now_millis(),
+                calls,
+            };
             live.insert(id.to_owned(), info);
             live.len()
         };
@@ -131,13 +139,29 @@ impl Sessions {
         }
     }
 
-    /// 세션 `id` 가 툴 호출 하나를 받았다. 클라이언트를 알면 그것으로 고친다. 이벤트는 내지 않는다.
+    /// 세션 `id` 가 툴 호출 하나를 받았다. 클라이언트를 알면 그것으로 고친다. 이벤트는 내지 않는다. 아직 등록 전이면 세어 두었다가
+    /// 등록할 때 옮긴다.
     pub fn called(&self, id: &str, client: Option<&str>) {
-        if let Some(info) = self.live().get_mut(id) {
+        // 잠금 순서는 `live` → `early`([`Self::register`] 와 같다). `live` 를 쥔 채 `early` 에 세어야 그 사이의 등록이 이 수를
+        // 놓치지 않는다.
+        let mut live = self.live();
+        if let Some(info) = live.get_mut(id) {
             info.calls += 1;
             if let Some(client) = client {
                 client.clone_into(info.client.get_or_insert_with(String::new));
             }
+            return;
+        }
+        let mut early = self.early();
+        // 끝난 세션의 늦은 호출(끊긴 뒤 5초까지 도는 핸들러 — 05 「호출 취소」)도 여기로 와 등록 없이 남는다. 쌓이지 않게 상한을
+        // 둔다 — 등록을 기다리는 세션이 이만큼 동시에 있을 일은 없다.
+        if early.len() >= MAX_EARLY && !early.contains_key(id) {
+            early.clear();
+        }
+        let (calls, known) = early.entry(id.to_owned()).or_default();
+        *calls += 1;
+        if let Some(client) = client {
+            *known = Some(client.to_owned());
         }
     }
 
@@ -159,6 +183,7 @@ impl Sessions {
     fn unregister(&self, id: &str) {
         let total = {
             let mut live = self.live();
+            self.early().remove(id);
             if live.remove(id).is_none() {
                 return;
             }
@@ -181,6 +206,10 @@ impl Sessions {
 
     fn live(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, McpSessionInfo>> {
         self.0.live.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn early(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, (u64, Option<String>)>> {
+        self.0.early.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -242,5 +271,27 @@ mod tests {
             .collect();
         assert_eq!(totals, [1, 2, 1, 0]);
         assert_eq!(sessions.total(), 0);
+    }
+
+    /// 등록 전에 끝난 호출도 센다(R7) — 세션은 초기화를 마친 뒤 등록하는데 그 사이 서비스 루프가 받은 호출이 먼저 끝날 수 있다.
+    #[test]
+    fn calls_before_registration_are_counted_when_the_session_registers() {
+        let sessions = Sessions::new();
+        sessions.called("a", Some("codex 2"));
+        sessions.called("a", None);
+        sessions.called("other", None);
+        let a = sessions.register("a", None, None, "socket");
+        let list = sessions.list();
+        assert_eq!(list.len(), 1, "등록하지 않은 세션은 목록에 없다");
+        assert_eq!(list[0].calls, 2);
+        assert_eq!(list[0].client.as_deref(), Some("codex 2"));
+        sessions.called("a", None);
+        assert_eq!(sessions.list()[0].calls, 3);
+        // initialize 로 안 이름이 있으면 그것이다.
+        drop(a);
+        sessions.called("b", Some("early 1"));
+        let _b = sessions.register("b", Some("rmcp 1".into()), None, "socket");
+        assert_eq!(sessions.list()[0].client.as_deref(), Some("rmcp 1"));
+        assert_eq!(sessions.list()[0].calls, 1);
     }
 }
