@@ -328,7 +328,12 @@ function CallLog({
   const [log] = useState(() =>
     createAuditLog({ fetch: (params) => client.call("mcp.audit.list", params), projectId }),
   );
-  useEffect(() => () => log.dispose(), [log]);
+  // 시작과 정리를 짝으로 건다 — 정리만 걸면 StrictMode(dev)가 effect 를 한 번 정리했다 다시 걸 때 로그가 정리된 채 남아 첫 쪽을
+  // 버리고 「불러오는 중」 에 멈춘다(M5-13b).
+  useEffect(() => {
+    log.start();
+    return () => log.dispose();
+  }, [log]);
   const { rows, end, loading, error, filter } = useStore(log.store);
   const [clientFilter, setClientFilter] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);

@@ -78,6 +78,7 @@ const ids = (rows: readonly AuditRow[]) => rows.map((r) => r.id);
 
 async function opened(audit: FakeAudit, page = 10) {
   const log = createAuditLog({ fetch: audit.fetch, projectId: "p1", page });
+  log.start();
   await log.idle();
   return log;
 }
@@ -330,12 +331,49 @@ describe("audit log", () => {
       projectId: "p1",
       fetch: (p) => (fail ? Promise.reject(new Error("disk")) : audit.fetch(p)),
     });
+    log.start();
     await log.idle();
     expect(log.store.getState()).toMatchObject({ error: "disk", loading: false, rows: [] });
     fail = false;
     log.refreshAll();
     await log.idle();
     expect(log.store.getState()).toMatchObject({ error: undefined, loading: false });
+    expect(ids(log.store.getState().rows)).toEqual([1]);
+  });
+
+  it("reads from the start when started again after dispose, as React's StrictMode does to effects (M5-13b)", async () => {
+    // StrictMode(dev)는 effect 를 한 번 정리했다 다시 건다 — 컴포넌트가 쥔 같은 로그가 `dispose` 뒤 `start` 를 받는다. 첫 쪽이 그
+    // 사이에 떠 있으면 그 응답은 정리된 쪽의 것이라 버려지고, 다시 시작한 읽기가 첫 쪽을 채운다.
+    const audit = new FakeAudit();
+    audit.add(row(1), row(2));
+    audit.hold = true;
+    const log = createAuditLog({ fetch: audit.fetch, projectId: "p1" });
+    log.start();
+    log.dispose();
+    log.start();
+    audit.hold = false;
+    audit.release();
+    await log.idle();
+    expect(log.store.getState()).toMatchObject({ loading: false, error: undefined, end: true });
+    expect(ids(log.store.getState().rows)).toEqual([2, 1]);
+    // 다시 시작한 뒤에도 살아 있다 — 새 행 이벤트를 받는다.
+    audit.add(row(3));
+    log.activity([3]);
+    await log.idle();
+    expect(ids(log.store.getState().rows)).toEqual([3, 2, 1]);
+  });
+
+  it("reads nothing until started, and start on a running log does not read again", async () => {
+    // StrictMode(dev)는 `useState` 의 초기화도 두 번 부른다 — 버려지는 로그가 RPC 를 보내지 않는다.
+    const audit = new FakeAudit();
+    audit.add(row(1));
+    const log = createAuditLog({ fetch: audit.fetch, projectId: "p1" });
+    await log.idle();
+    expect(audit.calls).toHaveLength(0);
+    log.start();
+    log.start();
+    await log.idle();
+    expect(audit.calls).toHaveLength(1);
     expect(ids(log.store.getState().rows)).toEqual([1]);
   });
 });

@@ -14,7 +14,7 @@ import type {
   Project,
   ProjectTrust,
 } from "@pitwall/rpc-client";
-import { act } from "react";
+import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -248,9 +248,13 @@ async function mount() {
   root = createRoot(element);
   await act(async () =>
     root!.render(
-      <ThemeStoreProvider store={store}>
-        <App kind="project" native={keymapNative} />
-      </ThemeStoreProvider>,
+      // 앱(main.tsx)처럼 StrictMode 로 렌더한다 — effect 를 한 번 정리했다 다시 거는 dev 동작에서만 나는 결함이 있었다(M5-13b:
+      // 정리만 건 로그가 멈춘 채 남아 「불러오는 중」 에 멈췄다).
+      <StrictMode>
+        <ThemeStoreProvider store={store}>
+          <App kind="project" native={keymapNative} />
+        </ThemeStoreProvider>
+      </StrictMode>,
     ),
   );
   await settle();
@@ -308,6 +312,19 @@ it("opens from the status bar with the pending-approvals slot, the connected age
   expect(mine!.querySelector("[data-mcp-no-project]")).toBeNull();
 });
 
+it("leaves Loading once the first page comes, with or without rows (M5-13b)", async () => {
+  // 실기에서 표 머리 아래 「불러오는 중」 한 줄만 남았다 — 첫 쪽이 와도 그 자리를 지나지 못했다.
+  await openPanel();
+  const empty = () => panel()!.querySelector("[data-testid=mcp-log-empty]")?.textContent;
+  expect(empty()).toBe(T.activity.empty);
+  expect(table().textContent).not.toContain(T.activity.loading);
+  act(() => root?.unmount());
+  host.audit = [row(1, { projectId: null, client: "pitwall-cli", tool: "git_status" })];
+  await openPanel();
+  expect(rowIds()).toEqual([1]);
+  expect(panel()!.querySelector("[data-testid=mcp-log-empty]")).toBeNull();
+});
+
 it("draws only the visible rows of a 5,000-row log, reading it page by page", async () => {
   for (let id = 1; id <= 5_000; id++) host.audit.push(row(id));
   await openPanel();
@@ -326,14 +343,15 @@ it("draws only the visible rows of a 5,000-row log, reading it page by page", as
     await settle();
   }
   expect(Number(scroller.getAttribute("aria-rowcount"))).toBe(5_001);
-  // 다음 쪽은 겹침 없이 앞 쪽의 마지막 id 를 커서로, 한 쪽씩 한 번만. 커서 없는 읽기는 첫 쪽과 구독이 열린 뒤의 한 번이다.
+  // 다음 쪽은 겹침 없이 앞 쪽의 마지막 id 를 커서로, 한 쪽씩 한 번만. 커서 없는 읽기는 첫 쪽과 구독이 열린 뒤의 한 번이고,
+  // StrictMode(dev)가 effect 를 정리했다 다시 걸어 첫 쪽을 한 번 더 읽는다(정리된 쪽의 응답은 버린다 — M5-13b).
   const cursors = host.listCalls.map((c) => c.cursor);
   expect(cursors.filter((c) => c !== null)).toEqual(
     Array.from({ length: 5_000 / AUDIT_PAGE - 1 }, (_, i) =>
       String(5_000 - (i + 1) * AUDIT_PAGE + 1),
     ),
   );
-  expect(cursors.filter((c) => c === null).length).toBeLessThanOrEqual(2);
+  expect(cursors.filter((c) => c === null).length).toBeLessThanOrEqual(3);
   const body = scroller.querySelector<HTMLElement>("[role=rowgroup][style]")!;
   expect(body.style.height).toBe(`${5_000 * ACTIVITY_ROW_HEIGHT}px`);
   // 400 px / 22 px + 앞뒤 여분만.

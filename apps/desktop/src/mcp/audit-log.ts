@@ -1,6 +1,9 @@
 // 「에이전트 활동」 패널의 호출 로그 모델(16-m5-plan M5-13). React 없이 `mcp.audit.list` 의 쪽들을 쥐고, 새 행 · 바뀐 행을 다시 읽는다.
 //
 // - 행은 최신부터(id 내림차순)다. 첫 쪽을 읽고, 화면이 끝에 닿으면 다음 쪽(`nextCursor`)을 읽는다(`loadMore`).
+// - 만들기만 해서는 읽지 않는다. `start` 가 첫 쪽을 읽고 `dispose` 가 멈춘다 — 화면이 effect 에서 짝으로 부른다. StrictMode(dev)가
+//   effect 를 정리했다 다시 걸면 같은 로그가 `dispose` 뒤 `start` 를 받아 처음부터 다시 읽는다(M5-13b — 정리만 걸었을 때 로그가
+//   멈춘 채 남아 첫 쪽을 버렸다).
 // - 새로 읽기(`refresh(from)`)는 맨 위부터 쪽을 읽어 id 가 `from` 이하인 행까지 덮는다. 읽은 쪽들은 그 id 구간의 정답이라 구간 안의
 //   옛 행을 갈아 끼운다 — 새 행이 맨 위에 붙고, 선기록된 행(`started`)이 끝나 바뀐 것도 그 자리에서 바뀌고, 결과 거르기에 더는 맞지
 //   않는 행은 빠진다. 받아 둔 행보다 아래로는 내려가지 않는다(아직 읽지 않은 행은 스크롤로 읽는다).
@@ -42,7 +45,7 @@ export type AuditFetch = (params: McpAuditListParams) => Promise<McpAuditPage>;
 
 export interface AuditLog {
   readonly store: StoreApi<AuditLogState>;
-  /** 처음부터 다시 읽는다. 떠 있는 읽기의 응답은 버린다. */
+  /** 처음부터 다시 읽는다. 떠 있는 읽기의 응답은 버린다. 멈춰 있으면 아무것도 하지 않는다. */
   reset(): void;
   /** 거르기를 바꾸고 처음부터 다시 읽는다. */
   setFilter(filter: AuditFilter): void;
@@ -57,6 +60,13 @@ export interface AuditLog {
   refreshAll(visible?: readonly number[]): void;
   /** 떠 있는 읽기를 기다린다(시험 · 지우기 뒤). */
   idle(): Promise<void>;
+  /**
+   * 처음부터 읽기 시작한다 — 만든 직후와 `dispose` 뒤. 돌고 있으면 아무것도 하지 않는다. 만들기만 해서는 읽지 않는다. 화면은
+   * effect 에서 `start` 와 `dispose` 를 짝으로 부른다 — StrictMode(dev)가 effect 를 한 번 정리했다 다시 걸면 같은 로그가
+   * `dispose` 뒤 `start` 를 받는다(M5-13b).
+   */
+  start(): void;
+  /** 멈춘다: 읽지 않고, 떠 있는 읽기의 응답도 버린다(`start` 로 다시 시작한다). */
   dispose(): void;
 }
 
@@ -103,7 +113,8 @@ export function createAuditLog(options: {
   /** 새로 읽는 중에 온 요청 — 가장 작은 id 하나로 모은다. `undefined` 면 없음. */
   let pending: number | undefined;
   const inflight = new Set<Promise<unknown>>();
-  let disposed = false;
+  /** 읽지도, 응답을 반영하지도 않는다 — `start` 전과 `dispose` 뒤. */
+  let stopped = true;
 
   const track = <T>(p: Promise<T>) => {
     inflight.add(p);
@@ -125,6 +136,8 @@ export function createAuditLog(options: {
   const fail = (e: unknown) => store.setState({ error: message(e), loading: false });
 
   const reset = () => {
+    // 멈춘 동안은 거르기만 바꿔 둔다 — `start` 가 그 거르기로 처음부터 읽는다.
+    if (stopped) return;
     generation += 1;
     const mine = generation;
     cursor = undefined;
@@ -135,7 +148,7 @@ export function createAuditLog(options: {
     void track(
       options.fetch(params(null)).then(
         (got) => {
-          if (disposed || mine !== generation) return;
+          if (stopped || mine !== generation) return;
           setCursor(got);
           store.setState({
             rows: got.entries,
@@ -147,7 +160,7 @@ export function createAuditLog(options: {
           drain();
         },
         (e: unknown) => {
-          if (disposed || mine !== generation) return;
+          if (stopped || mine !== generation) return;
           fail(e);
         },
       ),
@@ -162,14 +175,14 @@ export function createAuditLog(options: {
 
   const loadMore = () => {
     const state = store.getState();
-    if (disposed || moreInFlight || state.loading || state.end || !cursor) return;
+    if (stopped || moreInFlight || state.loading || state.end || !cursor) return;
     const mine = generation;
     const from = cursor;
     moreInFlight = true;
     void track(
       options.fetch(params(from.value)).then(
         (got) => {
-          if (disposed || mine !== generation) return;
+          if (stopped || mine !== generation) return;
           moreInFlight = false;
           // 새로 읽기가 그새 커서를 지나 내려갔으면 이 쪽은 낡았다 — 버리고 지금 커서로 바로 다시 읽는다. 화면이 다음 쪽을 부르는
           // 것은 그려진 줄이 바뀔 때뿐이라, 여기서 다시 부르지 않으면 다음 쪽이 멈출 수 있다(M5-13 리뷰 R2).
@@ -187,7 +200,7 @@ export function createAuditLog(options: {
           }));
         },
         (e: unknown) => {
-          if (disposed || mine !== generation) return;
+          if (stopped || mine !== generation) return;
           moreInFlight = false;
           fail(e);
         },
@@ -197,7 +210,7 @@ export function createAuditLog(options: {
 
   /** 맨 위부터 id 가 `from` 이하인 행이 나올 때까지(받아 둔 행 아래로는 내려가지 않는다). */
   const refresh = (from: number) => {
-    if (disposed) return;
+    if (stopped) return;
     if (refreshing || store.getState().loading) {
       pending = pending === undefined ? from : Math.min(pending, from);
       return;
@@ -214,7 +227,7 @@ export function createAuditLog(options: {
       let got: McpAuditPage;
       do {
         got = await options.fetch(params(next));
-        if (disposed || mine !== generation) return;
+        if (stopped || mine !== generation) return;
         fetched.push(...got.entries);
         next = got.nextCursor;
       } while (next !== null && (fetched.at(-1)?.id ?? -Infinity) > stop);
@@ -239,7 +252,7 @@ export function createAuditLog(options: {
           drain();
         },
         (e: unknown) => {
-          if (disposed || mine !== generation) return;
+          if (stopped || mine !== generation) return;
           refreshing = false;
           fail(e);
           drain();
@@ -261,7 +274,7 @@ export function createAuditLog(options: {
    */
   const recheck = async (id: number, mine: number) => {
     const got = await options.fetch({ ...params(String(id + 1)), limit: 1 });
-    if (disposed || mine !== generation) return;
+    if (stopped || mine !== generation) return;
     const same = got.entries.filter((r) => r.id === id);
     store.setState((s) => ({ rows: mergeRows(s.rows, same, id, id + 1), error: undefined }));
   };
@@ -288,12 +301,10 @@ export function createAuditLog(options: {
       (async () => {
         for (const r of started) await recheck(r.id, mine);
       })().catch((e: unknown) => {
-        if (!disposed && mine === generation) fail(e);
+        if (!stopped && mine === generation) fail(e);
       }),
     );
   };
-
-  reset();
 
   return {
     store,
@@ -311,8 +322,14 @@ export function createAuditLog(options: {
     async idle() {
       while (inflight.size > 0) await Promise.allSettled(inflight);
     },
+    start() {
+      if (!stopped) return;
+      stopped = false;
+      // 다시 시작이면 멈춘 동안 버린 응답이 있을 수 있다 — 쥔 것을 믿지 않고 처음부터 읽는다.
+      reset();
+    },
     dispose() {
-      disposed = true;
+      stopped = true;
     },
   };
 }
