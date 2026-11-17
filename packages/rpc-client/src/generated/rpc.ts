@@ -17,9 +17,11 @@ export type UnaryMethods = {
 	 */
 	"config.paths": { params: null; result: ConfigPathsInfo };
 	/**
-	 * 설정 키 조회 — 디스크에 쓰지 않고 읽는다. `projectId` 가 없으면(`null`) 전역 설정, 있으면 그 프로젝트의 병합된 설정(전역
-	 * 위에 프로젝트 설정). `key`(`표.키` 접두)로 좁힌다. 값마다 어느 레이어(builtin · global · shared · personal)에서 왔는지 싣는다.
-	 * 키 이름이 비밀을 가리키는 값은 가린다. 그 밖의 값은 설정 파일 그대로다 — 에이전트가 파일을 직접 읽는 것과 같은 범위.
+	 * Read settings keys without writing to disk. Without `projectId` (`null`) the global settings; with it, that
+	 * project's merged settings (project settings over the global ones). `key` (a `table.key` prefix) narrows the
+	 * result. Each value carries the layer it came from (builtin · global · shared · personal). Values whose key name
+	 * points at a secret are redacted. Other values are as in the settings files — the same reach as an agent reading
+	 * the files directly.
 	 */
 	"config.tool.get": { params: SettingsGetToolParams; result: SettingsGetToolResult };
 	/**
@@ -261,31 +263,38 @@ export type UnaryMethods = {
 	 */
 	"db.ssh.hosts": { params: DbProjectParams; result: DbSshHosts };
 	/**
-	 * 이 프로젝트의 DB 연결 목록(비밀 없음): id · 이름 · 드라이버 · 대상(호스트 · 포트 · DB · SQLite 경로) · read-only · 프로덕션 ·
-	 * 상태, 그리고 에이전트의 DB 툴이 지금 쓸 수 있는가(`usable`)와 그 까닭. 에이전트의 DB 툴은 사람이 이번 앱 실행에서 Pitwall 의
-	 * DB 탐색기로 연 연결만 쓰고(`notOpenedByUser`), 프로덕션 표지가 있는 연결은 쓰지 않는다(`productionBlocked`). 연결을 열지 않는다.
+	 * This project's DB connections (no secrets): id · name · driver · target (host · port · database · SQLite path) ·
+	 * read-only · production · state, plus whether the agent DB tools can use it now (`usable`) and why not. The agent
+	 * DB tools use only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`)
+	 * and never use connections marked production (`productionBlocked`). Does not open any connection.
 	 */
 	"db.tool.connectionList": { params: DbToolConnectionListParams; result: DbToolConnectionList };
 	/**
-	 * 조회 SQL 실행(SQL 드라이버만 — PG · MySQL/MariaDB · SQLite). 입력은 `sql`(글) 또는 `file`(프로젝트 루트 기준 SQL 파일 경로 —
-	 * Pitwall 이 실행하는 그때 읽는다) 가운데 하나. 문장을 방언대로 나눠 읽기 전용 트랜잭션 하나에서 차례로 돌리고, 문장마다 결과
-	 * 하나(열 · 행 · `truncated` · 소요)를 돌려준다. **조회만 돈다** — 조회가 아닌 문장(쓰기 · DDL · `SET` · 트랜잭션 제어 ·
-	 * `ATTACH` · 읽지 못하는 글)이 하나라도 있으면 아무것도 돌리지 않고 거절한다(`notAQuery` — 쓰기는 `db_execute`). 문장 하나가
-	 * 실패하면 거기서 멈추고 그때까지의 결과와 `error`(문장 번호 · 줄)를 준다. 행은 문장마다 `maxRows`(기본 100), 셀은 4 KiB 에서
-	 * 잘린다(`truncated` 값). 응답 전체는 약 192 KiB 까지 — 행을 읽다 그만큼 차면 그 문장은 `truncated` 이고 뒤 문장은 돌리지 않고
-	 * `notRun`(`index` 부터 `count` 개, `reason: "responseBudget"`)으로 알린다. **다음 쪽은 없다** — 잘렸으면 WHERE · LIMIT · 열을
-	 * 좁혀 다시 부른다(다시 부르면 다른 스냅숏이다).
-	 * 사람이 이번 앱 실행에서 Pitwall 의 DB 탐색기로 연 연결만 쓰고(`notOpenedByUser`), 프로덕션 표지가 있는 대상 — MySQL ·
-	 * MariaDB 는 같은 서버 · 사용자의 어느 DB 라도 — 은 쓰지 않는다(`productionBlocked`). 결과의 `audit` 은 감사 로그에 남는
-	 * 상세(문장 수 · 등급 · 해시)이고 에이전트에게도 보인다.
+	 * Run read-only SQL (SQL drivers only — PG · MySQL/MariaDB · SQLite). The input is either `sql` (text) or `file`
+	 * (an SQL file path relative to the project root — Pitwall reads it when it runs). The statements are split by the
+	 * dialect and run in order in one read-only transaction, with one result per statement (columns · rows ·
+	 * `truncated` · duration). **Only queries run** — if any statement is not a query (a write · DDL · `SET` ·
+	 * transaction control · `ATTACH` · text that cannot be parsed), nothing runs and the call is refused (`notAQuery`
+	 * — writes go through `db_execute`). If a statement fails, it stops there and returns the results so far with
+	 * `error` (statement index · line). Rows are limited to `maxRows` per statement (default 100), cells are cut at 4
+	 * KiB (`truncated` values). The whole response is limited to about 192 KiB — when the rows fill it, that statement
+	 * is `truncated` and the later statements do not run and are reported as `notRun` (`count` from `index`, `reason:
+	 * "responseBudget"`). **There is no next page** — if a result was cut, narrow the WHERE · LIMIT · columns and call
+	 * again (a new call sees a different snapshot).
+	 * Uses only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`) and
+	 * never uses a target marked production — for MySQL · MariaDB, any database on the same server · user
+	 * (`productionBlocked`). The result's `audit` is the detail kept in the audit log (statement count · grade ·
+	 * hashes) and is shown to the agent too.
 	 */
 	"db.tool.query": { params: DbToolQueryParams; result: DbToolQuery };
 	/**
-	 * DB 스키마 조회(SQL 드라이버만 — PG · MySQL/MariaDB · SQLite). `object` 가 없으면 한 단계의 목록 한 쪽(`kind`: `database` ·
-	 * `schema` · `table`(기본) · `view` 등 — 객체 목록은 `database` · `schema` 안에서, `filter` 로 거른다), 있으면 그 객체의 열(이름 ·
-	 * 타입 · null · 기본값 · 기본 키) · 인덱스 · FK, `detail: "ddl"` 이면 DDL 글. Pitwall 의 DB 탐색기와 같은 것을 본다. 사람이 이번
-	 * 앱 실행에서 Pitwall 의 DB 탐색기로 연 연결만 쓰고(아니면 `notOpenedByUser` — 사람이 한 번 연 뒤 다시), 프로덕션 표지가 있는
-	 * 연결은 쓰지 않는다. Redis 연결이면 `unsupported` — `db_kv_scan` 을 쓴다.
+	 * Read a DB schema (SQL drivers only — PG · MySQL/MariaDB · SQLite). Without `object`, one page of one level's
+	 * list (`kind`: `database` · `schema` · `table` (default) · `view`, etc. — object lists are within `database` ·
+	 * `schema` and filtered by `filter`); with it, that object's columns (name · type · null · default · primary key)
+	 * · indexes · foreign keys, or its DDL text with `detail: "ddl"`. Sees the same as Pitwall's DB explorer. Uses
+	 * only connections the person opened in Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` —
+	 * try again after the person has opened it once) and never uses connections marked production. For a Redis
+	 * connection, `unsupported` — use `db_kv_scan`.
 	 */
 	"db.tool.schema": { params: DbToolSchemaParams; result: DbToolSchema };
 	/**
@@ -550,27 +559,32 @@ export type UnaryMethods = {
 	 */
 	"git.tag.create": { params: GitTagCreateParams; result: GitTagResult };
 	/**
-	 * 파일 한 리비전(없으면 HEAD)의 줄 범위(`startLine` ~ `endLine`, 한 번에 500줄까지)를 마지막으로 바꾼 커밋 · 작성자 · 시각 ·
-	 * 제목. 범위가 파일 밖이거나 그 리비전에 파일이 없으면 invalid params. 응답 크기 상한에 닿으면 `truncated` 와 `nextLine`.
+	 * The commit · author · time · subject that last changed a range of lines (`startLine` – `endLine`, up to 500
+	 * lines at a time) of a file at one revision (HEAD if not given). A range outside the file, or a file missing at
+	 * that revision, is invalid params. When the response size limit is reached, `truncated` and `nextLine`.
 	 */
 	"git.tool.blame": { params: GitBlameToolParams; result: GitBlameToolResult };
 	/**
-	 * 프로젝트 git 저장소의 로컬 · 원격 브랜치(이름 · 해시 · upstream 과 ahead/behind · HEAD 여부). 태그는 `includeTags`.
+	 * Local and remote branches of the project's git repository (name · hash · upstream and ahead/behind · whether
+	 * HEAD). Tags with `includeTags`.
 	 */
 	"git.tool.branchList": { params: GitBranchListToolParams; result: GitBranchListToolResult };
 	/**
-	 * 두 쪽(커밋 · index · 작업 트리)의 diff. 기본은 바뀐 파일 목록(상태 · 경로 · 더한 · 뺀 줄 수), `detail` 이나 `path` 를
-	 * 주면 hunk 를 unified diff 로 싣는다. 응답 크기 상한에 닿으면 `truncated`. 저장소가 없으면 invalid params.
+	 * Diff of two sides (commit · index · working tree). By default the list of changed files (status · path · lines
+	 * added · removed); with `detail` or `path`, the hunks as a unified diff. `truncated` when the response size limit
+	 * is reached. invalid params if there is no repository.
 	 */
 	"git.tool.diff": { params: GitDiffToolParams; result: GitDiffToolResult };
 	/**
-	 * 커밋 로그의 한 쪽: 커밋마다 해시 · 부모 · 작성자 · 작성 시각 · 제목 · 가리키는 ref(본문은 `detail`). 시작은 `branch`(없으면
-	 * HEAD), 필터는 작성자 · 메시지 · 기간 · 경로. 저장소가 없거나 HEAD 에 아직 커밋이 없으면 빈 쪽이다.
+	 * One page of the commit log: for each commit its hash · parents · author · author time · subject · refs pointing
+	 * at it (body with `detail`). Starts at `branch` (HEAD if missing); filters by author · message · time range ·
+	 * path. An empty page if there is no repository or HEAD has no commits yet.
 	 */
 	"git.tool.log": { params: GitLogToolParams; result: GitLogToolResult };
 	/**
-	 * 프로젝트 git 저장소의 작업 트리 상태: 요약(HEAD · upstream 과 ahead/behind · 진행 중 작업 · 스테이징 · 미스테이징 ·
-	 * untracked · 충돌 파일 수)과 바뀐 파일 목록의 한 쪽(경로 · 스테이징한 변경 · 스테이징하지 않은 변경 · 충돌).
+	 * Working tree state of the project's git repository: a summary (HEAD · upstream and ahead/behind · operation in
+	 * progress · counts of staged · unstaged · untracked · conflicted files) and one page of the changed files (path ·
+	 * staged change · unstaged change · conflict).
 	 */
 	"git.tool.status": { params: GitStatusToolParams; result: GitStatusToolResult };
 	/**
@@ -830,9 +844,10 @@ export type UnaryMethods = {
 	 */
 	"lsp.workspaceSymbol": { params: LspWorkspaceSymbolParams; result: LspWorkspaceSymbols };
 	/**
-	 * 이 OS 에서 쓸 수 있는 외부 도구(id · 이름 · 기여한 확장 · 파일까지 여는가 · 설정 형식 오류)와 기본 도구. `projectId` 를
-	 * 주면 그 프로젝트 설정의 `[open_with] default` 까지 보고 기본 도구를 고른다(세션에 프로젝트가 있으면 키를 빼면 세션 프로젝트다
-	 * — 전역 기본값만 보려면 `null`). 실행 명령은 싣지 않는다.
+	 * External tools available on this OS (id · name · contributing extension · whether it opens files too · settings
+	 * format errors) and the default tool. With `projectId`, the default tool is chosen including that project's
+	 * `[open_with] default` (when the session has a project, leaving the key out means the session's project — pass
+	 * `null` for the global default only). Launch commands are not included.
 	 */
 	"openWith.list": { params: OpenWithListParams; result: OpenWithList };
 	/**
@@ -881,11 +896,12 @@ export type UnaryMethods = {
 	 */
 	"project.get": { params: ProjectIdParams; result: Project };
 	/**
-	 * 프로젝트 요약: 루트, 빌드 파일, 빌드 파일에서 짐작한 언어, 설정 폴더와 그 안의 설정 파일 이름. 없는 id 면 invalid params 오류.
+	 * Project summary: roots, build files, languages guessed from the build files, the settings folder and the
+	 * settings file names in it. An unknown id is an invalid params error.
 	 */
 	"project.info": { params: ProjectScopedParams; result: ProjectInfo };
 	/**
-	 * 등록된 프로젝트 전부, 이름순.
+	 * All registered projects, sorted by name.
 	 */
 	"project.list": { params: null; result: Project[] };
 	/**
@@ -928,9 +944,10 @@ export type UnaryMethods = {
 	 */
 	"project.storage": { params: null; result: StorageStatus };
 	/**
-	 * Pitwall 앱에서 프로젝트 · 파일 · 줄을 연다. 창을 앞으로 가져오지 않는다 — 그 프로젝트 창이 열려 있으면 그 안에 탭만 열고,
-	 * 없으면 활성화하지 않고 창을 만든다. `path` 는 프로젝트 루트 안만(상대 경로는 루트 기준). 모든 에이전트
-	 * 호출을 합쳐 10초에 5번까지(넘으면 `rateLimited`). 앱이 실행 중이어야 한다.
+	 * Open a project, file or line in the Pitwall app. Does not bring a window to the front — if the project's window
+	 * is open, only a tab opens in it; otherwise a window is created without activating it. `path` must be inside the
+	 * project root (relative paths are relative to the root). At most 5 calls per 10 seconds across all agents (beyond
+	 * that `rateLimited`). The app must be running.
 	 */
 	"project.tool.open": { params: ProjectOpenToolParams; result: ProjectOpenToolResult };
 	/**
@@ -1138,7 +1155,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"cli.status": {"name":"cli.status","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"CliStatus","doc":" 「Orca 에서 Pitwall 열기」 안내의 검사(04 F8-6): 설치 위치의 심링크가 이 앱을 가리키는가, 로그인 셸 PATH 로 찾은\n `pitwall` 이 이 앱인가. 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n","mcp":null,"fileScope":false},
 	"config.get": {"name":"config.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ConfigGetParams","output":"ConfigView","doc":" 병합된 설정 스냅숏. `projectId` 가 없으면 전역(`$CONFIG`), 있으면 그 프로젝트(설정을 붙여 연 프로젝트만).\n","mcp":null,"fileScope":true},
 	"config.paths": {"name":"config.paths","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ConfigPathsInfo","doc":" 해석된 `$CONFIG`/`$DATA`/`$STATE`/`$CACHE`. 설정 화면의 「설정 폴더 열기」 · 「경로 복사」 가 쓴다.\n","mcp":null,"fileScope":false},
-	"config.tool.get": {"name":"config.tool.get","kind":"unary","tier":"read","roles":["owner"],"params":"SettingsGetToolParams","output":"SettingsGetToolResult","doc":" 설정 키 조회 — 디스크에 쓰지 않고 읽는다. `projectId` 가 없으면(`null`) 전역 설정, 있으면 그 프로젝트의 병합된 설정(전역\n 위에 프로젝트 설정). `key`(`표.키` 접두)로 좁힌다. 값마다 어느 레이어(builtin · global · shared · personal)에서 왔는지 싣는다.\n 키 이름이 비밀을 가리키는 값은 가린다. 그 밖의 값은 설정 파일 그대로다 — 에이전트가 파일을 직접 읽는 것과 같은 범위.\n","mcp":{"group":"project","name":"settings_get"},"fileScope":false},
+	"config.tool.get": {"name":"config.tool.get","kind":"unary","tier":"read","roles":["owner"],"params":"SettingsGetToolParams","output":"SettingsGetToolResult","doc":" Read settings keys without writing to disk. Without `projectId` (`null`) the global settings; with it, that\n project's merged settings (project settings over the global ones). `key` (a `table.key` prefix) narrows the\n result. Each value carries the layer it came from (builtin · global · shared · personal). Values whose key name\n points at a secret are redacted. Other values are as in the settings files — the same reach as an agent reading\n the files directly.\n","mcp":{"group":"project","name":"settings_get"},"fileScope":false},
 	"db.connection.approve": {"name":"db.connection.approve","kind":"unary","tier":"write","roles":["owner"],"params":"DbConnectionApproveParams","output":"()","doc":" 사람이 확인한 것을 기록한다 — `env` 참조의 (변수, 대상), 루트 밖 SQLite 의 실제 경로, SSH 터널 목적지 · 인증서 파일의\n (값, 대상). 지금 설정에서 나오는 것과 같을 때만\n 기록하고 다르면 conflict 오류(그 사이 설정이 바뀌었다). 확인 기록이 깨져 있으면 덮지 않고 storage unavailable. 그 프로젝트 창의\n 연결 + 신뢰한 프로젝트만.\n","mcp":null,"fileScope":false},
 	"db.connection.delete": {"name":"db.connection.delete","kind":"unary","tier":"write","roles":["owner"],"params":"DbConnectionParams","output":"()","doc":" 연결 설정 파일(공유 · 개인 둘 다)과 그 연결의 비밀 · 확인 기록을 지운다. 그 프로젝트 창의 연결만.\n","mcp":null,"fileScope":false},
 	"db.connection.get": {"name":"db.connection.get","kind":"unary","tier":"read","roles":["owner"],"params":"DbConnectionParams","output":"DbConnectionEntry","doc":" 연결 하나. 없으면 not found 오류.\n","mcp":null,"fileScope":false},
@@ -1187,9 +1204,9 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"db.sql.split": {"name":"db.sql.split","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlSplitParams","output":"SqlSplitResult","doc":" SQL 스크립트를 문장으로 나눈다(방언별 따옴표 · 주석 · 달러 인용 · `DELIMITER` · 루틴 본문을 지나 구분자로). 범위는\n UTF-16 이고 끝의 구분자와 앞뒤 공백 · 주석을 뺀다. 파서가 못 읽는 문장도 나뉜다. `sql` 이 16 MiB 를 넘으면\n `INVALID_PARAMS`.\n","mcp":null,"fileScope":false},
 	"db.sql.statementAt": {"name":"db.sql.statementAt","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlStatementAtParams","output":"SqlStatementAtResult","doc":" 커서(UTF-16 오프셋)의 「현재 문장」 — 빈 줄이 아니라 구분자 기준. 두 문장 사이면 앞 문장, 첫 문장 앞이면 첫 문장.\n 오프셋이 `sql` 의 길이를 넘으면 `INVALID_PARAMS`.\n","mcp":null,"fileScope":false},
 	"db.ssh.hosts": {"name":"db.ssh.hosts","kind":"unary","tier":"read","roles":["owner"],"params":"DbProjectParams","output":"DbSshHosts","doc":" `~/.ssh/config`(과 그 `Include`)의 `Host` 이름 — 와일드카드 · 부정 패턴이 없고 터널 목적지로 쓸 수 있는 것만. 다른 값은\n 읽지 않는다. 읽지 못하면 빈 목록. 그 프로젝트 창의 연결 + 신뢰한 프로젝트만.\n","mcp":null,"fileScope":false},
-	"db.tool.connectionList": {"name":"db.tool.connectionList","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolConnectionListParams","output":"DbToolConnectionList","doc":" 이 프로젝트의 DB 연결 목록(비밀 없음): id · 이름 · 드라이버 · 대상(호스트 · 포트 · DB · SQLite 경로) · read-only · 프로덕션 ·\n 상태, 그리고 에이전트의 DB 툴이 지금 쓸 수 있는가(`usable`)와 그 까닭. 에이전트의 DB 툴은 사람이 이번 앱 실행에서 Pitwall 의\n DB 탐색기로 연 연결만 쓰고(`notOpenedByUser`), 프로덕션 표지가 있는 연결은 쓰지 않는다(`productionBlocked`). 연결을 열지 않는다.\n","mcp":{"group":"db","name":"db_connection_list"},"fileScope":false},
-	"db.tool.query": {"name":"db.tool.query","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolQueryParams","output":"DbToolQuery","doc":" 조회 SQL 실행(SQL 드라이버만 — PG · MySQL/MariaDB · SQLite). 입력은 `sql`(글) 또는 `file`(프로젝트 루트 기준 SQL 파일 경로 —\n Pitwall 이 실행하는 그때 읽는다) 가운데 하나. 문장을 방언대로 나눠 읽기 전용 트랜잭션 하나에서 차례로 돌리고, 문장마다 결과\n 하나(열 · 행 · `truncated` · 소요)를 돌려준다. **조회만 돈다** — 조회가 아닌 문장(쓰기 · DDL · `SET` · 트랜잭션 제어 ·\n `ATTACH` · 읽지 못하는 글)이 하나라도 있으면 아무것도 돌리지 않고 거절한다(`notAQuery` — 쓰기는 `db_execute`). 문장 하나가\n 실패하면 거기서 멈추고 그때까지의 결과와 `error`(문장 번호 · 줄)를 준다. 행은 문장마다 `maxRows`(기본 100), 셀은 4 KiB 에서\n 잘린다(`truncated` 값). 응답 전체는 약 192 KiB 까지 — 행을 읽다 그만큼 차면 그 문장은 `truncated` 이고 뒤 문장은 돌리지 않고\n `notRun`(`index` 부터 `count` 개, `reason: \"responseBudget\"`)으로 알린다. **다음 쪽은 없다** — 잘렸으면 WHERE · LIMIT · 열을\n 좁혀 다시 부른다(다시 부르면 다른 스냅숏이다).\n 사람이 이번 앱 실행에서 Pitwall 의 DB 탐색기로 연 연결만 쓰고(`notOpenedByUser`), 프로덕션 표지가 있는 대상 — MySQL ·\n MariaDB 는 같은 서버 · 사용자의 어느 DB 라도 — 은 쓰지 않는다(`productionBlocked`). 결과의 `audit` 은 감사 로그에 남는\n 상세(문장 수 · 등급 · 해시)이고 에이전트에게도 보인다.\n","mcp":{"group":"db","name":"db_query"},"fileScope":false},
-	"db.tool.schema": {"name":"db.tool.schema","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolSchemaParams","output":"DbToolSchema","doc":" DB 스키마 조회(SQL 드라이버만 — PG · MySQL/MariaDB · SQLite). `object` 가 없으면 한 단계의 목록 한 쪽(`kind`: `database` ·\n `schema` · `table`(기본) · `view` 등 — 객체 목록은 `database` · `schema` 안에서, `filter` 로 거른다), 있으면 그 객체의 열(이름 ·\n 타입 · null · 기본값 · 기본 키) · 인덱스 · FK, `detail: \"ddl\"` 이면 DDL 글. Pitwall 의 DB 탐색기와 같은 것을 본다. 사람이 이번\n 앱 실행에서 Pitwall 의 DB 탐색기로 연 연결만 쓰고(아니면 `notOpenedByUser` — 사람이 한 번 연 뒤 다시), 프로덕션 표지가 있는\n 연결은 쓰지 않는다. Redis 연결이면 `unsupported` — `db_kv_scan` 을 쓴다.\n","mcp":{"group":"db","name":"db_schema"},"fileScope":false},
+	"db.tool.connectionList": {"name":"db.tool.connectionList","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolConnectionListParams","output":"DbToolConnectionList","doc":" This project's DB connections (no secrets): id · name · driver · target (host · port · database · SQLite path) ·\n read-only · production · state, plus whether the agent DB tools can use it now (`usable`) and why not. The agent\n DB tools use only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`)\n and never use connections marked production (`productionBlocked`). Does not open any connection.\n","mcp":{"group":"db","name":"db_connection_list"},"fileScope":false},
+	"db.tool.query": {"name":"db.tool.query","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolQueryParams","output":"DbToolQuery","doc":" Run read-only SQL (SQL drivers only — PG · MySQL/MariaDB · SQLite). The input is either `sql` (text) or `file`\n (an SQL file path relative to the project root — Pitwall reads it when it runs). The statements are split by the\n dialect and run in order in one read-only transaction, with one result per statement (columns · rows ·\n `truncated` · duration). **Only queries run** — if any statement is not a query (a write · DDL · `SET` ·\n transaction control · `ATTACH` · text that cannot be parsed), nothing runs and the call is refused (`notAQuery`\n — writes go through `db_execute`). If a statement fails, it stops there and returns the results so far with\n `error` (statement index · line). Rows are limited to `maxRows` per statement (default 100), cells are cut at 4\n KiB (`truncated` values). The whole response is limited to about 192 KiB — when the rows fill it, that statement\n is `truncated` and the later statements do not run and are reported as `notRun` (`count` from `index`, `reason:\n \"responseBudget\"`). **There is no next page** — if a result was cut, narrow the WHERE · LIMIT · columns and call\n again (a new call sees a different snapshot).\n Uses only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`) and\n never uses a target marked production — for MySQL · MariaDB, any database on the same server · user\n (`productionBlocked`). The result's `audit` is the detail kept in the audit log (statement count · grade ·\n hashes) and is shown to the agent too.\n","mcp":{"group":"db","name":"db_query"},"fileScope":false},
+	"db.tool.schema": {"name":"db.tool.schema","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolSchemaParams","output":"DbToolSchema","doc":" Read a DB schema (SQL drivers only — PG · MySQL/MariaDB · SQLite). Without `object`, one page of one level's\n list (`kind`: `database` · `schema` · `table` (default) · `view`, etc. — object lists are within `database` ·\n `schema` and filtered by `filter`); with it, that object's columns (name · type · null · default · primary key)\n · indexes · foreign keys, or its DDL text with `detail: \"ddl\"`. Sees the same as Pitwall's DB explorer. Uses\n only connections the person opened in Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` —\n try again after the person has opened it once) and never uses connections marked production. For a Redis\n connection, `unsupported` — use `db_kv_scan`.\n","mcp":{"group":"db","name":"db_schema"},"fileScope":false},
 	"diag.collect": {"name":"diag.collect","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"DiagnosticsText","doc":" 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.\n 경로 · 비밀 · 홈 디렉터리 이름은 가린다.\n","mcp":null,"fileScope":false},
 	"ext.list": {"name":"ext.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ExtensionList","doc":" 등록된 확장과 읽는 중에 나온 진단.\n","mcp":null,"fileScope":false},
 	"fs.copy": {"name":"fs.copy","kind":"unary","tier":"write","roles":["owner"],"params":"FsFromToParams","output":"FsCopied","doc":" 파일이나 폴더(그 아래 전부)를 복사한다. 심링크는 따르지 않고 링크로 복사한다. 대상 이름이 있으면 덮지 않고 `CONFLICT`.\n","mcp":null,"fileScope":false},
@@ -1251,11 +1268,11 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.stash.push": {"name":"git.stash.push","kind":"unary","tier":"write","roles":["owner"],"params":"GitStashPushParams","output":"GitStashPushResult","doc":" stash 를 만든다(`git stash push`) — 메시지 · untracked 포함을 고른다. 작업 트리 전체가 바뀌므로 미저장 문서를 먼저 확인한다.\n","mcp":null,"fileScope":false},
 	"git.status": {"name":"git.status","kind":"unary","tier":"read","roles":["owner"],"params":"GitStatusParams","output":"GitStatus","doc":" 작업 트리 상태(gix): HEAD↔index · index↔작업 트리 · untracked(파일마다) · 충돌 · 스테이징한 이름 바뀜. 경로는 저장소 작업\n 트리 기준(`/`). `paths` 를 주면 그 경로만 다시 본다. 저장소가 없으면 `workTree: null`. 큰 저장소의 전체 status 는 작업으로\n 돌고, 작업을 취소하면 cancelled 오류다.\n","mcp":null,"fileScope":false},
 	"git.tag.create": {"name":"git.tag.create","kind":"unary","tier":"write","roles":["owner"],"params":"GitTagCreateParams","output":"GitTagResult","doc":" 태그를 만든다(`git tag`, 메시지가 있으면 주석 태그).\n","mcp":null,"fileScope":false},
-	"git.tool.blame": {"name":"git.tool.blame","kind":"unary","tier":"read","roles":["owner"],"params":"GitBlameToolParams","output":"GitBlameToolResult","doc":" 파일 한 리비전(없으면 HEAD)의 줄 범위(`startLine` ~ `endLine`, 한 번에 500줄까지)를 마지막으로 바꾼 커밋 · 작성자 · 시각 ·\n 제목. 범위가 파일 밖이거나 그 리비전에 파일이 없으면 invalid params. 응답 크기 상한에 닿으면 `truncated` 와 `nextLine`.\n","mcp":{"group":"git","name":"git_blame"},"fileScope":false},
-	"git.tool.branchList": {"name":"git.tool.branchList","kind":"unary","tier":"read","roles":["owner"],"params":"GitBranchListToolParams","output":"GitBranchListToolResult","doc":" 프로젝트 git 저장소의 로컬 · 원격 브랜치(이름 · 해시 · upstream 과 ahead/behind · HEAD 여부). 태그는 `includeTags`.\n","mcp":{"group":"git","name":"git_branch_list"},"fileScope":false},
-	"git.tool.diff": {"name":"git.tool.diff","kind":"unary","tier":"read","roles":["owner"],"params":"GitDiffToolParams","output":"GitDiffToolResult","doc":" 두 쪽(커밋 · index · 작업 트리)의 diff. 기본은 바뀐 파일 목록(상태 · 경로 · 더한 · 뺀 줄 수), `detail` 이나 `path` 를\n 주면 hunk 를 unified diff 로 싣는다. 응답 크기 상한에 닿으면 `truncated`. 저장소가 없으면 invalid params.\n","mcp":{"group":"git","name":"git_diff"},"fileScope":false},
-	"git.tool.log": {"name":"git.tool.log","kind":"unary","tier":"read","roles":["owner"],"params":"GitLogToolParams","output":"GitLogToolResult","doc":" 커밋 로그의 한 쪽: 커밋마다 해시 · 부모 · 작성자 · 작성 시각 · 제목 · 가리키는 ref(본문은 `detail`). 시작은 `branch`(없으면\n HEAD), 필터는 작성자 · 메시지 · 기간 · 경로. 저장소가 없거나 HEAD 에 아직 커밋이 없으면 빈 쪽이다.\n","mcp":{"group":"git","name":"git_log"},"fileScope":false},
-	"git.tool.status": {"name":"git.tool.status","kind":"unary","tier":"read","roles":["owner"],"params":"GitStatusToolParams","output":"GitStatusToolResult","doc":" 프로젝트 git 저장소의 작업 트리 상태: 요약(HEAD · upstream 과 ahead/behind · 진행 중 작업 · 스테이징 · 미스테이징 ·\n untracked · 충돌 파일 수)과 바뀐 파일 목록의 한 쪽(경로 · 스테이징한 변경 · 스테이징하지 않은 변경 · 충돌).\n","mcp":{"group":"git","name":"git_status"},"fileScope":false},
+	"git.tool.blame": {"name":"git.tool.blame","kind":"unary","tier":"read","roles":["owner"],"params":"GitBlameToolParams","output":"GitBlameToolResult","doc":" The commit · author · time · subject that last changed a range of lines (`startLine` – `endLine`, up to 500\n lines at a time) of a file at one revision (HEAD if not given). A range outside the file, or a file missing at\n that revision, is invalid params. When the response size limit is reached, `truncated` and `nextLine`.\n","mcp":{"group":"git","name":"git_blame"},"fileScope":false},
+	"git.tool.branchList": {"name":"git.tool.branchList","kind":"unary","tier":"read","roles":["owner"],"params":"GitBranchListToolParams","output":"GitBranchListToolResult","doc":" Local and remote branches of the project's git repository (name · hash · upstream and ahead/behind · whether\n HEAD). Tags with `includeTags`.\n","mcp":{"group":"git","name":"git_branch_list"},"fileScope":false},
+	"git.tool.diff": {"name":"git.tool.diff","kind":"unary","tier":"read","roles":["owner"],"params":"GitDiffToolParams","output":"GitDiffToolResult","doc":" Diff of two sides (commit · index · working tree). By default the list of changed files (status · path · lines\n added · removed); with `detail` or `path`, the hunks as a unified diff. `truncated` when the response size limit\n is reached. invalid params if there is no repository.\n","mcp":{"group":"git","name":"git_diff"},"fileScope":false},
+	"git.tool.log": {"name":"git.tool.log","kind":"unary","tier":"read","roles":["owner"],"params":"GitLogToolParams","output":"GitLogToolResult","doc":" One page of the commit log: for each commit its hash · parents · author · author time · subject · refs pointing\n at it (body with `detail`). Starts at `branch` (HEAD if missing); filters by author · message · time range ·\n path. An empty page if there is no repository or HEAD has no commits yet.\n","mcp":{"group":"git","name":"git_log"},"fileScope":false},
+	"git.tool.status": {"name":"git.tool.status","kind":"unary","tier":"read","roles":["owner"],"params":"GitStatusToolParams","output":"GitStatusToolResult","doc":" Working tree state of the project's git repository: a summary (HEAD · upstream and ahead/behind · operation in\n progress · counts of staged · unstaged · untracked · conflicted files) and one page of the changed files (path ·\n staged change · unstaged change · conflict).\n","mcp":{"group":"git","name":"git_status"},"fileScope":false},
 	"git.unstage": {"name":"git.unstage","kind":"unary","tier":"write","roles":["owner"],"params":"GitPathsParams","output":"GitWorkTree","doc":" 경로의 스테이징을 푼다(`git reset`): index 를 HEAD 의 것으로(HEAD 에 없으면 index 에서 뺀다 — 커밋이 없는 저장소도 된다).\n 충돌 중인 경로는 `git.stage` 처럼 거절한다(HEAD 쪽을 담아 충돌을 조용히 풀지 않는다). 이름 바뀜은 옛 경로와 새 경로를 둘\n 다 넘긴다.\n","mcp":null,"fileScope":false},
 	"git.unstageLines": {"name":"git.unstageLines","kind":"unary","tier":"write","roles":["owner"],"params":"GitLinesParams","output":"GitWorkTree","doc":" 스테이징된 diff(HEAD ↔ index)의 hunk · 줄을 골라 스테이징을 푼다(`git apply --cached -R`). 이름이 바뀐 파일은 `oldPath` 를\n 함께 넘긴다.\n","mcp":null,"fileScope":false},
 	"git.watch": {"name":"git.watch","kind":"stream","tier":"read","roles":["owner"],"params":"GitRepoParams","output":"GitWatching","doc":" 프로젝트(활성 워크트리)의 저장소를 감시한다. 스트림이 열려 있는 동안 바뀜이 프로젝트 범위 이벤트 `git.statusChanged` ·\n `git.refsChanged` 로 나가고, 닫으면 놓는다. 첫 항목이 오면 그 뒤의 바뀜은 놓치지 않는다. 작업 트리의 바뀜은 같은 창의\n `fs.watch` 가 열려 있어야 온다.\n","mcp":null,"fileScope":false},
@@ -1310,7 +1327,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lsp.tool.diagnostics": {"name":"lsp.tool.diagnostics","kind":"unary","tier":"read","roles":["owner"],"params":"DiagnosticsToolParams","output":"DiagnosticsToolResult","doc":" Language server diagnostics (errors, warnings, hints) for a project, one page at a time: files in path order, each\n file's diagnostics most severe first. Filter by one file (`path`, absolute or relative to the project root) and by\n `minSeverity`. Lines and columns start at 1; columns count UTF-16 code units. Only what the language servers have\n published on their own: servers run while the project is open in a Pitwall window (they start when a file of that\n language is opened there), and many servers only report files that are open in the editor, so files nobody opened\n may be missing — an empty list is not proof the project builds. `servers` tells \"no problems\" apart from \"no server\n yet / still starting / still indexing\" (a `progress` means more diagnostics may come). This tool never starts a\n server. An untrusted project runs no language servers: the result is empty with `unavailable.reason = \"untrusted\"`.\n","mcp":{"group":"code","name":"diagnostics"},"fileScope":false},
 	"lsp.typeDefinition": {"name":"lsp.typeDefinition","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspLocationsResult","doc":" 타입 정의로(`textDocument/typeDefinition`).\n","mcp":null,"fileScope":false},
 	"lsp.workspaceSymbol": {"name":"lsp.workspaceSymbol","kind":"unary","tier":"read","roles":["owner"],"params":"LspWorkspaceSymbolParams","output":"LspWorkspaceSymbols","doc":" 프로젝트의 언어 서버들에 `workspace/symbol` 을 묻는다(심볼로 이동 · 클래스로 이동 · SE 「심볼」 탭 — M4-16). 이 창이 문서를 연\n 떠 있는 서버에만 묻고 서버를 띄우지 않는다. 루트 밖 위치는 읽기 토큰과 함께(결정 M4-D13). 미신뢰면 untrusted.\n","mcp":null,"fileScope":false},
-	"openWith.list": {"name":"openWith.list","kind":"unary","tier":"read","roles":["owner"],"params":"OpenWithListParams","output":"OpenWithList","doc":" 이 OS 에서 쓸 수 있는 외부 도구(id · 이름 · 기여한 확장 · 파일까지 여는가 · 설정 형식 오류)와 기본 도구. `projectId` 를\n 주면 그 프로젝트 설정의 `[open_with] default` 까지 보고 기본 도구를 고른다(세션에 프로젝트가 있으면 키를 빼면 세션 프로젝트다\n — 전역 기본값만 보려면 `null`). 실행 명령은 싣지 않는다.\n","mcp":{"group":null,"name":null},"fileScope":false},
+	"openWith.list": {"name":"openWith.list","kind":"unary","tier":"read","roles":["owner"],"params":"OpenWithListParams","output":"OpenWithList","doc":" External tools available on this OS (id · name · contributing extension · whether it opens files too · settings\n format errors) and the default tool. With `projectId`, the default tool is chosen including that project's\n `[open_with] default` (when the session has a project, leaving the key out means the session's project — pass\n `null` for the global default only). Launch commands are not included.\n","mcp":{"group":null,"name":null},"fileScope":false},
 	"openWith.run": {"name":"openWith.run","kind":"unary","tier":"exec","roles":["owner"],"params":"OpenWithRunParams","output":"OpenWithOutcome","doc":" 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n 그 프로젝트의 창이 아니면 permission denied 오류다 — 웰컴 창(Host 연결)만 예외로, 목록에 있는 도구(또는 기본 도구)로\n 프로젝트 루트를 여는 것(`worktree` · `file` · `line` · `column` 없이)은 된다.\n","mcp":null,"fileScope":false},
 	"project.candidates": {"name":"project.candidates","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Vec<RootCandidate>","doc":" 경로의 루트 후보: 워크트리의 메인 저장소, 가장 가까운 `.git`, 빌드 파일이 있는 상위 폴더(가까운 것부터).\n 홈 디렉터리와 그 위, 파일 시스템 루트는 넣지 않는다.\n","mcp":null,"fileScope":false},
 	"project.claimTrustPrompt": {"name":"project.claimTrustPrompt","kind":"unary","tier":"write","roles":["owner"],"params":"ProjectIdParams","output":"bool","doc":" 신뢰 확인 다이얼로그를 띄울 차례인가. 아직 묻지 않은 프로젝트면 미신뢰로 기록하고 `true` — 같은 프로젝트의 창이 여럿이어도\n 처음 부른 하나만 `true` 를 받는다. 이미 물었으면 `false`.\n","mcp":null,"fileScope":false},
@@ -1321,8 +1338,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"project.create": {"name":"project.create","kind":"unary","tier":"write","roles":["owner"],"params":"CreateProjectParams","output":"Project","doc":" 프로젝트를 등록한다. 루트는 정규화해(심링크 · `..` 를 풀어) 저장하고, 이미 다른 프로젝트의 루트면 오류다.\n","mcp":null,"fileScope":false},
 	"project.delete": {"name":"project.delete","kind":"unary","tier":"write","roles":["owner"],"params":"ProjectIdParams","output":"()","doc":" 레지스트리에서 지운다. 프로젝트 폴더와 설정 파일은 그대로 둔다.\n","mcp":null,"fileScope":false},
 	"project.get": {"name":"project.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ProjectIdParams","output":"Project","doc":" 프로젝트 하나. 없으면 invalid params 오류.\n","mcp":null,"fileScope":false},
-	"project.info": {"name":"project.info","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ProjectScopedParams","output":"ProjectInfo","doc":" 프로젝트 요약: 루트, 빌드 파일, 빌드 파일에서 짐작한 언어, 설정 폴더와 그 안의 설정 파일 이름. 없는 id 면 invalid params 오류.\n","mcp":{"group":null,"name":null},"fileScope":false},
-	"project.list": {"name":"project.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"Vec<Project>","doc":" 등록된 프로젝트 전부, 이름순.\n","mcp":{"group":null,"name":null},"fileScope":false},
+	"project.info": {"name":"project.info","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ProjectScopedParams","output":"ProjectInfo","doc":" Project summary: roots, build files, languages guessed from the build files, the settings folder and the\n settings file names in it. An unknown id is an invalid params error.\n","mcp":{"group":null,"name":null},"fileScope":false},
+	"project.list": {"name":"project.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"Vec<Project>","doc":" All registered projects, sorted by name.\n","mcp":{"group":null,"name":null},"fileScope":false},
 	"project.markOpened": {"name":"project.markOpened","kind":"unary","tier":"write","roles":["owner"],"params":"ProjectIdParams","output":"Project","doc":" 프로젝트를 열었다고 기록한다(최근 목록 순서).\n","mcp":null,"fileScope":false},
 	"project.recent": {"name":"project.recent","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"RecentParams","output":"Vec<Project>","doc":" 최근에 연 프로젝트, 최근 것부터. 연 적 없는 프로젝트는 빠진다.\n","mcp":null,"fileScope":false},
 	"project.resolve": {"name":"project.resolve","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Option<Resolution>","doc":" 경로를 포함하는 프로젝트(가장 깊은 루트). 등록되지 않은 git 워크트리 안이면 메인 저장소의 프로젝트와 그 워크트리.\n 없으면 `null` — 그때는 `project.candidates` 로 루트 후보를 보여 준다.\n","mcp":null,"fileScope":false},
@@ -1330,7 +1347,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"project.state.get": {"name":"project.state.get","kind":"unary","tier":"read","roles":["owner"],"params":"ProjectScopedParams","output":"ProjectState","doc":" 프로젝트 창의 상태(`$DATA/projects/<id>/state.json`). 없거나 읽지 못했으면 `state: null`(읽지 못한 이유는 `problem`).\n 레지스트리에 없는 id 면 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"project.state.set": {"name":"project.state.set","kind":"unary","tier":"write","roles":["owner"],"params":"SetProjectStateParams","output":"()","doc":" 프로젝트 창의 상태를 통째로 바꾼다. 원자적으로 쓰고, JSON 객체가 아니거나 1 MiB 를 넘으면 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"project.storage": {"name":"project.storage","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"StorageStatus","doc":" 레지스트리 파일(`$DATA/state.db`)의 상태. `readOnly` · `memory` 면 쓰기 메서드가 오류로 거절된다 — 웰컴 화면은 정상이 아니면\n `reason` 을 배너로 보여 준다.\n","mcp":null,"fileScope":false},
-	"project.tool.open": {"name":"project.tool.open","kind":"unary","tier":"read","roles":["owner"],"params":"ProjectOpenToolParams","output":"ProjectOpenToolResult","doc":" Pitwall 앱에서 프로젝트 · 파일 · 줄을 연다. 창을 앞으로 가져오지 않는다 — 그 프로젝트 창이 열려 있으면 그 안에 탭만 열고,\n 없으면 활성화하지 않고 창을 만든다. `path` 는 프로젝트 루트 안만(상대 경로는 루트 기준). 모든 에이전트\n 호출을 합쳐 10초에 5번까지(넘으면 `rateLimited`). 앱이 실행 중이어야 한다.\n","mcp":{"group":"project","name":"project_open"},"fileScope":false},
+	"project.tool.open": {"name":"project.tool.open","kind":"unary","tier":"read","roles":["owner"],"params":"ProjectOpenToolParams","output":"ProjectOpenToolResult","doc":" Open a project, file or line in the Pitwall app. Does not bring a window to the front — if the project's window\n is open, only a tab opens in it; otherwise a window is created without activating it. `path` must be inside the\n project root (relative paths are relative to the root). At most 5 calls per 10 seconds across all agents (beyond\n that `rateLimited`). The app must be running.\n","mcp":{"group":"project","name":"project_open"},"fileScope":false},
 	"project.trust": {"name":"project.trust","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ProjectIdParams","output":"ProjectTrust","doc":" 프로젝트의 신뢰. 워크트리 프로젝트는 메인 저장소 프로젝트의 신뢰를 따른다(`ownerId`). 없는 id 면 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"project.update": {"name":"project.update","kind":"unary","tier":"write","roles":["owner"],"params":"UpdateProjectParams","output":"Project","doc":" 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.\n","mcp":null,"fileScope":false},
 	"runtime.get": {"name":"runtime.get","kind":"unary","tier":"read","roles":["owner"],"params":"RuntimeGetParams","output":"RuntimeInfo","doc":" 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.\n","mcp":null,"fileScope":false},
@@ -1428,12 +1445,12 @@ export type BlameChunk = {
 export type BlameCommit = {
 	/**  전체 해시(16진). */
 	hash: string,
-	/**  작성자(mailmap 적용). */
+	/**  Author (with mailmap applied). */
 	authorName: string,
 	authorEmail: string,
-	/**  작성 시각(유닉스 초). */
+	/**  Author time (Unix seconds). */
 	authorTime: number,
-	/**  제목(메시지 첫 문단을 한 줄로). */
+	/**  Subject (the message's first paragraph on one line). */
 	subject: string,
 	/**
 	 *  경계 커밋(git 의 `boundary`): 첫 커밋(`blame.showRoot` 를 켜지 않았으면 — git 의 기본)이거나 얕은 클론의 끝이라 그 앞을 볼
@@ -1443,9 +1460,12 @@ export type BlameCommit = {
 };
 
 export type BlameEngine = 
-/**  `git blame --incremental` — 줄 수가 10만 줄([`MOVES_MAX_LINES`]) 이하면 `-M` 으로 파일 안에서 옮긴 줄을 원래 커밋으로 돌린다. */
+/**
+ *  `git blame --incremental` — for files of at most 100,000 lines ([`MOVES_MAX_LINES`]), `-M` attributes lines
+ *  moved within the file to their original commit.
+ */
 "git" | 
-/**  gix blame — `git blame`(`-M` 없이)과 같다. 옮긴 줄은 옮긴 커밋의 것이다. */
+/**  gix blame — the same as `git blame` (without `-M`). Moved lines belong to the commit that moved them. */
 "gix";
 
 /**  blame 한 파일. 첫 청크에만 실린다. */
@@ -1571,17 +1591,17 @@ export type ColumnInfo = {
 	name: string,
 	dbType: string,
 	nullable: boolean,
-	/**  기본값 식의 글. */
+	/**  Text of the default expression. */
 	default: string | null,
 	comment: string | null,
 };
 
-/**  결과 열 하나. */
+/**  One result column. */
 export type ColumnMeta = {
 	name: string,
-	/**  DB 가 부르는 타입 이름(`int8` · `BIGINT UNSIGNED` · `TEXT` …). */
+	/**  The type name the DB uses (`int8` · `BIGINT UNSIGNED` · `TEXT` …). */
 	dbType: string,
-	/**  열이 NULL 을 받을 수 있는지. 드라이버가 모르면 `None`. */
+	/**  Whether the column accepts NULL. `None` if the driver does not know. */
 	nullable: boolean | null,
 };
 
@@ -1615,11 +1635,11 @@ export type ConfigLayer = {
 	readOnly: boolean,
 };
 
-/**  프로젝트 설정을 어디에 두는가(설계 D9). */
+/**  Where the project settings live (design D9). */
 export type ConfigMode = 
-/**  저장소의 `<root>/.pitwall/`. */
+/**  The repository's `<root>/.pitwall/`. */
 "repository" | 
-/**  개인 전용 `$CONFIG/projects/<slug>/`. 저장소의 `.pitwall/` 은 읽지 않는다. */
+/**  Personal-only `$CONFIG/projects/<slug>/`. The repository's `.pitwall/` is not read. */
 "personal";
 
 export type ConfigNotice = 
@@ -1645,12 +1665,15 @@ export type ConfigSnapshot = {
 	notices: ConfigNotice[],
 };
 
-/**  설정을 어디서 읽는가와 거기 있는 파일. 내용은 담지 않는다. */
+/**  Where the settings are read from and the files there. Contents are not included. */
 export type ConfigSummary = {
 	mode: ConfigMode,
-	/**  저장소 모드면 `<root>/.pitwall`, 개인 전용이면 `$CONFIG/projects/<slug>`. */
+	/**  `<root>/.pitwall` in repository mode, `$CONFIG/projects/<slug>` for a personal-only project. */
 	dir: string,
-	/**  그 폴더의 설정 파일 id(`project`, `run/dev-server` …). `.local.toml` 은 같은 id 로 합친다. 이름순. */
+	/**
+	 *  Settings file ids in that folder (`project`, `run/dev-server` …). A `.local.toml` file is merged into the same
+	 *  id. Sorted by name.
+	 */
 	files: string[],
 };
 
@@ -1797,11 +1820,11 @@ export type DbApprovalRequest =
 /**  인증서 파일을 읽어 `target` 과의 TLS 에 쓴다(M3-11). `previous` 는 전에 확인한 (파일, 대상). */
 { kind: "certFiles"; files: DbCertFiles; target: DbSecretTarget; previous: DbCertBinding | null };
 
-/**  바이트 값. */
+/**  A bytes value. */
 export type DbBytes = {
-	/**  `0x` 로 시작하는 소문자 hex. 잘렸으면 앞부분만. */
+	/**  Lowercase hex starting with `0x`. Only the beginning if truncated. */
 	hex: string,
-	/**  원래 크기(바이트). */
+	/**  Original size (bytes). */
 	size: number,
 	truncated: boolean,
 };
@@ -1903,7 +1926,7 @@ export type DbConnectionEntry = {
 };
 
 export type DbConnectionList = {
-	/**  id 순. */
+	/**  Sorted by id. */
 	connections: DbConnectionEntry[],
 	/**  프로젝트 설정을 읽지 못한 이유(그러면 목록이 비어 있다). 설정 계층은 파일 하나라도 깨지면 전체가 실패다(03 「데이터 저장」). */
 	problem: string | null,
@@ -1923,7 +1946,7 @@ export type DbConnectionParams = {
 export type DbConnectionState = 
 /**  프로젝트를 신뢰하지 않았다 — 연결 · 비밀 읽기를 하지 않는다(결정 M3-D13). */
 { kind: "untrusted" } | 
-/**  설정 파일이 틀렸다. */
+/**  The settings file is wrong. */
 { kind: "invalid"; message: string } | 
 /**
  *  키체인에 비밀이 없거나, 저장할 때의 대상(호스트 · TLS 등)과 지금 설정이 다르다 — 이전(`previous`) → 지금(`target`) 대상을
@@ -2132,56 +2155,61 @@ export type DbEnvBinding = {
 
 export type DbError = {
 	kind: DbErrorKind,
-	/**  사람이 읽는 글(서버 메시지 그대로일 수 있다). */
+	/**  Human-readable text (may be the server's message as is). */
 	message: string,
-	/**  서버의 오류 코드(PG SQLSTATE `25006`, MySQL 오류 번호 `1792` 등). */
+	/**  The server's error code (PG SQLSTATE `25006`, MySQL error number `1792`, etc.). */
 	code: string | null,
 	/**
-	 *  서버 · 드라이버가 트랜잭션 전체를 되돌렸을 때만 true — 파이프라인(M3-05)이 세션 상태를 idle 로 맞추고 사람에게 알린다
-	 *  (SQLite 수동 트랜잭션 안의 쓰기를 취소했을 때 등). 없으면 false 로 받는다.
+	 *  True only when the server or driver rolled back the whole transaction — the pipeline (M3-05) sets the session
+	 *  state to idle and tells the person (e.g. a write inside a manual SQLite transaction was cancelled). Missing
+	 *  means false.
 	 */
 	rolledBack?: boolean,
 };
 
 export type DbErrorKind = 
-/**  서버에 닿지 못했다(이름 풀기 · TCP · 터널). */
+/**  Could not reach the server (name resolution · TCP · tunnel). */
 "connect" | 
-/**  인증 실패. */
+/**  Authentication failed. */
 "auth" | 
-/**  TLS 협상 · 인증서 검증 실패. */
+/**  TLS negotiation or certificate verification failed. */
 "tls" | 
-/**  예산(연결 · 응답 · 비활동 타임아웃)을 넘었다. */
+/**  A budget (connect · response · idle timeout) was exceeded. */
 "timeout" | 
-/**  취소됐다(SQLite 의 `interrupted` 포함). */
+/**  Cancelled (including SQLite's `interrupted`). */
 "cancelled" | 
-/**  잠금을 기다리다 포기했다(SQLite `busy`). */
+/**  Gave up waiting for a lock (SQLite `busy`). */
 "busy" | 
-/**  읽기 전용 트랜잭션 · 연결에서 쓰기가 거절됐다(PG 25006 · MySQL 1792 · SQLite `readonly`). */
+/**  A write was refused on a read-only transaction or connection (PG 25006 · MySQL 1792 · SQLite `readonly`). */
 "readOnly" | 
-/**  드라이버가 지원하지 않는 기능(지원 플래그가 꺼진 trait 메서드). */
+/**  A feature the driver does not support (a trait method whose capability flag is off). */
 "unsupported" | 
-/**  서버가 문장을 거절했다(문법 · 제약 · 권한 등). `code` 에 서버 코드. */
+/**  The server refused the statement (syntax · constraint · permission, etc.). `code` holds the server's code. */
 "server" | 
-/**  연결이 끊겼다. 다시 붙는 것은 사람이 누를 때다(결정 M3-D13). */
+/**  The connection was lost. It reconnects only when the person asks for it (decision M3-D13). */
 "disconnected" | 
-/**  요청이 틀렸다(커서 없이 `fetch`, 알 수 없는 세이브포인트 등). */
+/**  The request was wrong (`fetch` without a cursor, an unknown savepoint, etc.). */
 "invalid";
 
-/**  실수 값. 유한하지 않은 값은 그 이름의 문자열이다 — [`DbValue::float`] 로 만든다. 받을 때 그 셋 밖의 글은 거절한다. */
+/**
+ *  A floating-point value. Non-finite values are strings with their names — build it with [`DbValue::float`]. Any other
+ *  text is refused when received.
+ */
 export type DbFloat = number | 
 /**  `NaN` · `Infinity` · `-Infinity`. */
 string;
 
 /**
- *  정수 값. 수인지 문자열인지는 값의 크기가 정한다 — [`DbValue::int`] 로 만든다.
+ *  An integer value. Its size decides whether it is a number or a string — build it with [`DbValue::int`].
  * 
- *  받을 때는 규칙대로 다시 고른다 — `{"int": 9007199254740993}` 은 문자열로, `{"int": "5"}` 는 수로 받는다(창이 보낸 바인드
- *  값 · 프로세스 밖 드라이버가 규칙을 어겨도 같은 값이 같은 모양이 된다). 정수가 아닌 글은 거절한다.
+ *  When received it is chosen again by the rule — `{"int": 9007199254740993}` is taken as a string and `{"int": "5"}`
+ *  as a number (so the same value gets the same shape even when a bind value from the window or an out-of-process
+ *  driver breaks the rule). Text that is not an integer is refused.
  */
 export type DbInt = 
-/**  |값| ≤ 2^53 − 1. */
+/**  |value| ≤ 2^53 − 1. */
 number | 
-/**  그 밖. 10진 문자열. */
+/**  Anything else. A decimal string. */
 string;
 
 /**  확인이 필요한 일. */
@@ -2283,10 +2311,10 @@ export type DbOpenTransaction = {
 	failed: boolean,
 };
 
-/**  분류되지 않은 값. */
+/**  A value that fits no other kind. */
 export type DbOther = {
 	text: string,
-	/**  DB 가 부르는 타입 이름(PG `tsvector`, MySQL `GEOMETRY` 등). */
+	/**  The type name the DB uses (PG `tsvector`, MySQL `GEOMETRY`, etc.). */
 	typeName: string,
 };
 
@@ -2416,7 +2444,7 @@ export type DbSchemaConnectionParams = {
 	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). */
 	worktree?: string | null,
 	connectionId: string,
-	/**  앞 쪽의 `nextCursor`. 처음 쪽은 비운다. */
+	/**  `nextCursor` from the previous page. Empty for the first page. */
 	cursor?: string | null,
 	/**  쪽 크기(1 ~ 500, 기본 500). */
 	limit?: number | null,
@@ -2490,52 +2518,55 @@ export type DbSchemaSchemasParams = {
 	projectId: string,
 	worktree?: string | null,
 	connectionId: string,
-	/**  비우면 연결 설정의 DB. */
+	/**  Empty means the connection settings' database. */
 	database?: string | null,
 	cursor?: string | null,
 	limit?: number | null,
 };
 
-/**  실패한 문장. 그 뒤의 문장은 돌지 않았다. */
+/**  The statement that failed. The statements after it did not run. */
 export type DbScriptError = {
-	/**  몇 번째 문장인가(0 부터). */
+	/**  Which statement it is (from 0). */
 	index: number,
-	/**  그 문장이 시작하는 줄(1 부터). */
+	/**  Line the statement starts on (from 1). */
 	line: number,
-	/**  문장의 범위(`sql` 또는 파일 글 기준 UTF-16). */
+	/**  Range of the statement (UTF-16, in the `sql` or file text). */
 	range: SqlRange,
 	error: DbError,
 };
 
-/**  응답 예산 때문에 돌리지 않은 문장들(머리 주석 ⑥): `index` 부터 끝까지 `count` 개. */
+/**  Statements not run because of the response budget (header comment ⑥): `count` statements from `index` to the end. */
 export type DbScriptNotRun = {
-	/**  돌리지 않은 첫 문장의 번호(0 부터). */
+	/**  Index of the first statement not run (from 0). */
 	index: number,
-	/**  그 문장이 시작하는 줄(1 부터). */
+	/**  Line the statement starts on (from 1). */
 	line: number,
-	/**  돌리지 않은 문장 수(`index` 부터 끝까지). */
+	/**  Number of statements not run (from `index` to the end). */
 	count: number,
 	reason: DbScriptNotRunReason,
 };
 
-/**  문장을 돌리지 않은 까닭. */
+/**  Why the statements were not run. */
 export type DbScriptNotRunReason = 
-/**  앞 문장들의 행이 응답 예산([`RESPONSE_BUDGET`])을 다 썼다. */
+/**  The rows of the earlier statements used up the response budget ([`RESPONSE_BUDGET`]). */
 "responseBudget";
 
-/**  문장 하나의 결과. */
+/**  The result of one statement. */
 export type DbScriptResult = {
-	/**  나눈 문장 가운데 몇 번째인가(0 부터 — `db.sql.split` 의 순서). */
+	/**  Which of the split statements it is (from 0 — the order of `db.sql.split`). */
 	index: number,
-	/**  문장이 시작하는 줄(1 부터 — `sql` 또는 파일 기준). */
+	/**  Line the statement starts on (from 1 — in `sql` or the file). */
 	line: number,
 	grade: RiskGrade,
-	/**  행을 돌려주는 문장의 열. 행이 없는 문장은 빈 목록이다. */
+	/**  Columns of a statement that returns rows. Empty for a statement without rows. */
 	columns: ColumnMeta[],
 	rows: DbValue[][],
-	/**  바뀐 행 수(행이 없는 문장 — 드라이버가 알려 주면). */
+	/**  Number of rows changed (for a statement without rows — if the driver reports it). */
 	rowsAffected: number | null,
-	/**  행 상한(`maxRows`)이나 응답 크기에서 끊었다 — 더 있었다. 다음 쪽은 없다(좁혀서 다시 부른다). */
+	/**
+	 *  Cut at the row limit (`maxRows`) or the response size — there was more. There is no next page (narrow the query
+	 *  and call again).
+	 */
 	truncated: boolean,
 	elapsedMs: number,
 };
@@ -2564,7 +2595,7 @@ export type DbSecretSetParams = {
 export type DbSecretTarget = {
 	driver: DriverKind,
 	host: string | null,
-	/**  쓰이는 포트(적지 않았으면 드라이버 기본). */
+	/**  Port in use (the driver's default if not set). */
 	port: number | null,
 	user: string | null,
 	/**  터널 목적지(`ssh_tunnel.host_ref`). */
@@ -2804,190 +2835,211 @@ export type DbStatementClass = {
 	reasons: RiskReason[],
 };
 
-/**  열 하나. */
+/**  One column. */
 export type DbToolColumn = {
 	name: string,
-	/**  DB 의 타입 글. */
+	/**  The DB's type text. */
 	type: string,
 	nullable: boolean,
-	/**  기본값 식의 글. */
+	/**  Text of the default expression. */
 	default: string | null,
-	/**  기본 키에 든 열인가. */
+	/**  Whether the column is part of the primary key. */
 	primaryKey: boolean,
 	comment: string | null,
 };
 
-/**  연결 하나(비밀 없음). */
+/**  One connection (no secrets). */
 export type DbToolConnection = {
-	/**  연결 id(다른 DB 툴의 `connectionId`). */
+	/**  Connection id (`connectionId` for the other DB tools). */
 	id: string,
-	/**  설정이 틀렸으면 `null`. */
+	/**  `null` if the settings are wrong. */
 	name: string | null,
 	driver: DriverKind | null,
 	host: string | null,
-	/**  쓰이는 포트(적지 않았으면 드라이버 기본). */
+	/**  Port in use (the driver's default if not set). */
 	port: number | null,
 	database: string | null,
-	/**  SQLite 파일(설정에 적힌 그대로 — 상대 경로면 프로젝트 루트 기준). */
+	/**  SQLite file (as written in the settings — a relative path is relative to the project root). */
 	path: string | null,
-	/**  read-only 표지 — 에이전트에게 적용하는 것(이 대상에서 이번 앱 실행 중 본 가장 엄한 것). */
+	/**  Read-only mark as applied to agents (the strictest one seen for this target during this app run). */
 	readOnly: boolean,
-	/**  프로덕션 표지 — 에이전트에게 적용하는 것(같은 규칙). 켜져 있으면 DB 툴이 쓰지 않는다. */
+	/**  Production mark as applied to agents (same rule). When on, the DB tools do not use the connection. */
 	production: boolean,
 	state: DbToolConnectionState,
-	/**  에이전트의 DB 툴(`db_schema` 등)이 지금 이 연결을 쓸 수 있는가. */
+	/**  Whether the agent DB tools (`db_schema`, etc.) can use this connection now. */
 	usable: boolean,
-	/**  쓸 수 없는 까닭(`usable` 이 참이면 `null`). */
+	/**  Why it cannot be used (`null` when `usable` is true). */
 	unusableReason: DbToolUnusable | null,
-	/**  설정이 틀렸으면 그 안내 글(값을 싣지 않는다 — 까닭은 Pitwall 에서 본다). */
+	/**  If the settings are wrong, a short notice (the values are not included — see the reason in Pitwall). */
 	message: string | null,
 };
 
 export type DbToolConnectionList = {
-	/**  id 순. */
+	/**  Sorted by id. */
 	connections: DbToolConnection[],
 	trusted: boolean,
-	/**  프로젝트 설정을 읽지 못했으면 그 안내 글(그러면 목록이 비어 있다. 값을 싣지 않는다). */
+	/**  If the project settings could not be read, a short notice (the list is then empty; no values are included). */
 	problem: string | null,
 };
 
 export type DbToolConnectionListParams = {
 	projectId: string,
 	/**
-	 *  워크트리 꼭대기(절대 경로). 연결 설정(`.pitwall/db/*.toml`)을 그 워크트리에서 읽는다. 비우면 세션의 워크트리, 없으면 메인
-	 *  체크아웃.
+	 *  Top of the worktree (absolute path). Connection settings (`.pitwall/db/*.toml`) are read from that worktree.
+	 *  Empty means the session's worktree, or else the main checkout.
 	 */
 	worktree?: string | null,
 };
 
-/**  연결을 지금 열 수 있는가(창의 상태와 같다 — 비밀 · 확인이 필요하면 에이전트는 답할 수 없다). */
+/**
+ *  Whether the connection can be opened now (the same as the window's state — when a secret or a confirmation is
+ *  needed, an agent cannot answer it).
+ */
 export type DbToolConnectionState = 
-/**  프로젝트를 신뢰하지 않았다. */
+/**  The project is not trusted. */
 "untrusted" | 
-/**  설정 파일이 틀렸다(`message`). */
+/**  The settings file is wrong (`message`). */
 "invalid" | 
-/**  비밀번호가 필요하다 — 사람이 Pitwall 에서 넣는다. */
+/**  A password is needed — the person enters it in Pitwall. */
 "secretRequired" | 
-/**  사람의 확인이 필요하다 — 사람이 Pitwall 에서 확인한다. */
+/**  The person's confirmation is needed — the person confirms it in Pitwall. */
 "approvalRequired" | "ready";
 
 export type DbToolQuery = {
-	/**  나눈 문장 수. */
+	/**  Number of statements after splitting. */
 	statements: number,
-	/**  돈 문장마다 결과 하나(차례대로). 실패한 문장과 그 뒤 문장은 없다. */
+	/**  One result per statement that ran (in order). The failed statement and the ones after it are not included. */
 	results: DbScriptResult[],
-	/**  문장이 실패했으면 그 문장과 오류. 그 뒤의 문장은 돌지 않았다. */
+	/**  If a statement failed, that statement and its error. The statements after it did not run. */
 	error: DbScriptError | null,
 	/**
-	 *  응답 예산을 다 써서 돌리지 않은 문장들(`index` 부터 끝까지 `count` 개, `reason: "responseBudget"`). 그 앞 문장은 `truncated`
-	 *  다. 좁혀서(행 · 열을 줄여) 다시 부르거나 그 문장만 따로 부른다.
+	 *  Statements not run because the response budget was used up (`count` statements from `index` to the end, `reason:
+	 *  "responseBudget"`). The statement before them is `truncated`. Narrow the query (fewer rows · columns) and call
+	 *  again, or call those statements on their own.
 	 */
 	notRun: DbScriptNotRun | null,
-	/**  `file` 을 줬으면 읽은 파일(루트 기준 경로). */
+	/**  The file read, when `file` was given (path relative to the root). */
 	file: string | null,
-	/**  감사 로그에 남는 상세 — 문장 수 · 가장 높은 등급 · 문장 해시(`file` 이면 경로와 내용 해시). SQL 원문 · 값은 없다. */
+	/**
+	 *  Details kept in the audit log — statement count · highest grade · statement hashes (for `file`, its path and
+	 *  content hash). No SQL text or values.
+	 */
 	audit: string,
 };
 
 export type DbToolQueryParams = {
 	projectId: string,
-	/**  워크트리 꼭대기(절대 경로). 연결 설정과 `file` 을 그 워크트리에서 읽는다. 비우면 세션의 워크트리, 없으면 메인 체크아웃. */
+	/**
+	 *  Top of the worktree (absolute path). Connection settings and `file` are read from that worktree. Empty means the
+	 *  session's worktree, or else the main checkout.
+	 */
 	worktree?: string | null,
-	/**  `db_connection_list` 의 연결 id. */
+	/**  Connection id from `db_connection_list`. */
 	connectionId: string,
-	/**  돌릴 SQL(문장 여럿 — 방언의 구분자로 나눈다). `file` 과 함께 줄 수 없다. */
+	/**  SQL to run (several statements — split by the dialect's delimiter). Cannot be given together with `file`. */
 	sql?: string | null,
 	/**
-	 *  SQL 파일 — 프로젝트 루트(워크트리를 줬으면 그 워크트리 안의 프로젝트 루트) 기준 경로. 루트 안의 UTF-8 일반 파일, 5 MiB 까지.
-	 *  `sql` 과 함께 줄 수 없다.
+	 *  SQL file — a path relative to the project root (inside the chosen worktree, if one is given). A UTF-8 regular
+	 *  file inside the root, up to 5 MiB. Cannot be given together with `sql`.
 	 */
 	file?: string | null,
-	/**  문장마다 돌려줄 행의 상한(1 ~ 10000, 기본 100). 쪽 단위가 아니다 — 넘으면 그 문장의 `truncated`. */
+	/**  Maximum rows returned per statement (1 – 10000, default 100). Not paged — past it the statement is `truncated`. */
 	maxRows?: number | null,
 };
 
 export type DbToolSchema = {
 	level: DbToolSchemaLevel,
-	/**  목록이면 그 쪽(`object` 를 줬으면 빈 목록). */
+	/**  The page, for a list (empty when `object` was given). */
 	items: DbToolSchemaItem[],
-	/**  `object` 를 줬으면 읽은 객체(한정한 이름). */
+	/**  The object read, when `object` was given (qualified name). */
 	object: ObjectRef | null,
 	columns: DbToolColumn[] | null,
 	indexes: IndexInfo[] | null,
 	foreignKeys: ForeignKeyInfo[] | null,
 	ddl: string | null,
-	/**  다음 쪽의 커서(그대로 `cursor` 로 돌려준다). 없으면 마지막 쪽이다. */
+	/**  Cursor of the next page (pass it back as `cursor`). Missing means this is the last page. */
 	nextCursor: string | null,
 };
 
-/**  `object` 를 줬을 때 무엇을 읽는가. */
+/**  What to read when `object` is given. */
 export type DbToolSchemaDetail = 
-/**  열 · 인덱스 · FK. */
+/**  Columns · indexes · foreign keys. */
 "columns" | 
-/**  DDL 글. */
+/**  DDL text. */
 "ddl";
 
-/**  목록의 한 항목. */
+/**  One item of a list. */
 export type DbToolSchemaItem = {
 	name: string,
-	/**  객체 목록이면 그 종류. */
+	/**  The kind, for an object list. */
 	kind: ObjectKind | null,
 	comment: string | null,
 };
 
-/**  목록의 단계. `database` · `schema` 는 DB · 스키마 목록, 나머지는 그 종류의 객체 목록이다. */
+/**  What to list. `database` · `schema` list databases · schemas; the rest list objects of that kind. */
 export type DbToolSchemaKind = "database" | "schema" | "table" | "view" | "materializedView" | "sequence" | "function" | "procedure" | "trigger";
 
-/**  결과가 무엇인가. */
+/**  What the result is. */
 export type DbToolSchemaLevel = "databases" | "schemas" | "objects" | "object" | "ddl";
 
 export type DbToolSchemaParams = {
 	projectId: string,
-	/**  워크트리 꼭대기(절대 경로). 연결 설정을 그 워크트리에서 읽는다. 비우면 세션의 워크트리, 없으면 메인 체크아웃. */
+	/**
+	 *  Top of the worktree (absolute path). Connection settings are read from that worktree. Empty means the session's
+	 *  worktree, or else the main checkout.
+	 */
 	worktree?: string | null,
-	/**  `db_connection_list` 의 연결 id. */
+	/**  Connection id from `db_connection_list`. */
 	connectionId: string,
-	/**  비우면 연결 설정의 DB. */
+	/**  Empty means the connection settings' database. */
 	database?: string | null,
-	/**  비우면 연결의 기본 스키마(PG `current_schema()`). 스키마가 없는 드라이버(MySQL · SQLite)는 쓰지 않는다. */
+	/**
+	 *  Empty means the connection's default schema (PG `current_schema()`). Not used by drivers without schemas (MySQL
+	 *  · SQLite).
+	 */
 	schema?: string | null,
 	/**
-	 *  테이블 · 뷰 등의 이름. 주면 그 객체의 열 · 인덱스 · FK(또는 `detail: "ddl"` 이면 DDL). `schema.name` 꼴이면 점 앞을 스키마로
-	 *  (스키마가 없는 드라이버는 DB 로) 읽는다 — `schema`(또는 `database`)를 따로 주면 점째 이름이다.
+	 *  Name of a table, view, etc. When given, that object's columns · indexes · foreign keys (or its DDL with `detail:
+	 *  "ddl"`). In the form `schema.name` the part before the dot is read as the schema (the database for drivers
+	 *  without schemas) — when `schema` (or `database`) is given separately, the whole name including the dot is the
+	 *  name.
 	 */
 	object?: string | null,
-	/**  `object` 가 없을 때 무엇의 목록인가. 기본 `table`. */
+	/**  What to list when `object` is not given. Defaults to `table`. */
 	kind?: DbToolSchemaKind | null,
-	/**  객체 목록: 이름에 이 글이 든 것만(서버 쪽, 대소문자 무시). */
+	/**  Object lists: only names containing this text (server side, case-insensitive). */
 	filter?: string | null,
-	/**  앞 쪽의 `nextCursor`. 처음 쪽은 비운다. */
+	/**  `nextCursor` from the previous page. Empty for the first page. */
 	cursor?: string | null,
-	/**  쪽 크기(1 ~ 500, 기본 100). */
+	/**  Page size (1 – 500, default 100). */
 	limit?: number | null,
-	/**  `object` 를 줬을 때: `columns`(기본 — 열 · 인덱스 · FK) 또는 `ddl`. */
+	/**  When `object` is given: `columns` (default — columns · indexes · foreign keys) or `ddl`. */
 	detail?: DbToolSchemaDetail | null,
 };
 
-/**  에이전트가 이 연결을 지금 쓸 수 없는 까닭(DB 툴이 거절할 때의 `data.reason` 과 같다). */
+/**  Why the agent cannot use this connection now (the same as `data.reason` when a DB tool refuses). */
 export type DbToolUnusable = 
-/**  프로젝트를 신뢰하지 않았다. */
+/**  The project is not trusted. */
 "untrusted" | 
-/**  설정 파일이 틀렸다. */
+/**  The settings file is wrong. */
 "invalid" | 
-/**  프로덕션 표지가 있는 대상이다 — 에이전트 툴은 쓰지 않는다. */
+/**  The target is marked production — agent tools do not use it. */
 "productionBlocked" | 
-/**  사람이 이번 앱 실행에서 Pitwall 의 DB 탐색기로 이 연결(지금 대상)을 연 적이 없다 — 사람이 한 번 연 뒤 다시. */
+/**
+ *  The person has not opened this connection (with its current target) in Pitwall's DB explorer during this app run
+ *  — try again after the person has opened it once.
+ */
 "notOpenedByUser";
 
-/**  셀 상한을 넘어 잘린 값. */
+/**  A value truncated at the cell limit. */
 export type DbTruncated = {
-	/**  원래 값의 종류. */
+	/**  Kind of the original value. */
 	of: TruncatedKind,
-	/**  앞부분(UTF-8 문자 경계에서 자른다). */
+	/**  The beginning (cut at a UTF-8 character boundary). */
 	prefix: string,
-	/**  원래 크기(UTF-8 바이트). */
+	/**  Original size (UTF-8 bytes). */
 	size: number,
-	/**  `of` 가 `other` 일 때의 DB 타입 이름. */
+	/**  The DB type name when `of` is `other`. */
 	typeName: string | null,
 };
 
@@ -3025,23 +3077,23 @@ export type DbUnattendedRollbacksParams = {
 	projectId: string,
 };
 
-/**  셀 값. */
+/**  A cell value. */
 export type DbValue = "null" | ({ bool: boolean }) & { array?: never; bytes?: never; datetime?: never; decimal?: never; float?: never; int?: never; json?: never; other?: never; text?: never; truncated?: never; uuid?: never } | 
-/**  정수. ±(2^53−1) 안은 수, 밖은 문자열. */
+/**  Integer. A number within ±(2^53−1), a string outside it. */
 ({ int: DbInt }) & { array?: never; bool?: never; bytes?: never; datetime?: never; decimal?: never; float?: never; json?: never; other?: never; text?: never; truncated?: never; uuid?: never } | 
-/**  실수. 유한하면 수, `NaN` · `Infinity` · `-Infinity` 는 문자열(JSON 에 그 수가 없다). */
+/**  Floating point. A number when finite; `NaN` · `Infinity` · `-Infinity` are strings (JSON has no such numbers). */
 ({ float: DbFloat }) & { array?: never; bool?: never; bytes?: never; datetime?: never; decimal?: never; int?: never; json?: never; other?: never; text?: never; truncated?: never; uuid?: never } | 
-/**  decimal · numeric · money. 정밀도를 잃지 않게 늘 문자열. */
+/**  decimal · numeric · money. Always a string, so no precision is lost. */
 ({ decimal: string }) & { array?: never; bool?: never; bytes?: never; datetime?: never; float?: never; int?: never; json?: never; other?: never; text?: never; truncated?: never; uuid?: never } | ({ text: string }) & { array?: never; bool?: never; bytes?: never; datetime?: never; decimal?: never; float?: never; int?: never; json?: never; other?: never; truncated?: never; uuid?: never } | 
-/**  바이트. 늘 `0x` hex, 셀 상한을 넘으면 앞부분만. */
+/**  Bytes. Always `0x` hex; only the beginning past the cell limit. */
 ({ bytes: DbBytes }) & { array?: never; bool?: never; datetime?: never; decimal?: never; float?: never; int?: never; json?: never; other?: never; text?: never; truncated?: never; uuid?: never } | 
-/**  json · jsonb. 서버가 준 글 그대로(파싱하지 않는다). */
+/**  json · jsonb. The text as the server sent it (not parsed). */
 ({ json: string }) & { array?: never; bool?: never; bytes?: never; datetime?: never; decimal?: never; float?: never; int?: never; other?: never; text?: never; truncated?: never; uuid?: never } | 
-/**  날짜 · 시각 · 타임스탬프. 서버가 준 텍스트 그대로 — timestamptz 는 서버 세션 시간대의 텍스트다. */
+/**  Date · time · timestamp. The text as the server sent it — timestamptz is text in the server session's time zone. */
 ({ datetime: string }) & { array?: never; bool?: never; bytes?: never; decimal?: never; float?: never; int?: never; json?: never; other?: never; text?: never; truncated?: never; uuid?: never } | ({ uuid: string }) & { array?: never; bool?: never; bytes?: never; datetime?: never; decimal?: never; float?: never; int?: never; json?: never; other?: never; text?: never; truncated?: never } | ({ array: DbValue[] }) & { bool?: never; bytes?: never; datetime?: never; decimal?: never; float?: never; int?: never; json?: never; other?: never; text?: never; truncated?: never; uuid?: never } | 
-/**  셀 상한을 넘은 텍스트 · json · 그 밖 값의 앞부분. */
+/**  The beginning of a text · json · other value past the cell limit. */
 ({ truncated: DbTruncated }) & { array?: never; bool?: never; bytes?: never; datetime?: never; decimal?: never; float?: never; int?: never; json?: never; other?: never; text?: never; uuid?: never } | 
-/**  위 어디에도 들지 않는 값: 서버의 텍스트 표현과 DB 타입 이름. */
+/**  A value that fits none of the above: the server's text form and the DB type name. */
 ({ other: DbOther }) & { array?: never; bool?: never; bytes?: never; datetime?: never; decimal?: never; float?: never; int?: never; json?: never; text?: never; truncated?: never; uuid?: never };
 
 /**  객체의 DDL 글. */
@@ -3049,11 +3101,11 @@ export type Ddl = {
 	text: string,
 };
 
-/**  기본 도구. */
+/**  The default tool. */
 export type DefaultToolInfo = { kind: "tool"; id: string } | 
-/**  프로젝트 · 전역 설정 어디에도 `open_with.default` 가 없다. */
+/**  Neither the project nor the global settings have `open_with.default`. */
 { kind: "unset" } | 
-/**  고른 도구가 이 OS 의 목록에 없다. */
+/**  The chosen tool is not in this OS's list. */
 { kind: "unknown"; id: string };
 
 export type DemoTaskParams = {
@@ -3071,16 +3123,16 @@ export type DiagnosticsText = {
 	text: string,
 };
 
-/**  파일 하나의 진단. */
+/**  Diagnostics of one file. */
 export type DiagnosticsToolFile = {
-	/**  절대 경로. */
+	/**  Absolute path. */
 	path: string,
 	diagnostics: DiagnosticsToolItem[],
-	/**  이 파일의 진단이 상한에 걸려 일부만 있다. */
+	/**  This file's diagnostics hit the limit, so only some are included. */
 	truncated: boolean,
 };
 
-/**  진단 하나. 줄 · 열은 1 부터, 열은 UTF-16 코드 단위. */
+/**  One diagnostic. Lines and columns are from 1; columns are in UTF-16 code units. */
 export type DiagnosticsToolItem = {
 	severity: LspSeverity,
 	line: number,
@@ -3088,42 +3140,45 @@ export type DiagnosticsToolItem = {
 	endLine: number,
 	endColumn: number,
 	message: string,
-	/**  진단 코드(`E0308` 등). */
+	/**  Diagnostic code (`E0308`, etc.). */
 	code: string | null,
-	/**  진단을 낸 도구(`rustc` · `ts` 등 — 서버가 알린 것). */
+	/**  The tool that produced the diagnostic (`rustc` · `ts`, etc. — as reported by the server). */
 	source: string | null,
-	/**  낸 언어 서버 id(`servers[].server`). */
+	/**  Id of the language server that produced it (`servers[].server`). */
 	server: string,
-	/**  코드 설명 링크. */
+	/**  Link describing the code. */
 	codeHref: string | null,
-	/**  `unnecessary`(쓰이지 않는 코드) · `deprecated`. */
+	/**  `unnecessary` (unused code) · `deprecated`. */
 	tags: LspDiagnosticTag[],
-	/**  관련된 다른 자리. */
+	/**  Other related locations. */
 	related: DiagnosticsToolRelated[],
 };
 
 export type DiagnosticsToolParams = {
 	projectId: string,
 	/**
-	 *  볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. 그 프로젝트의 워크트리가
-	 *  아니면 invalid params.
+	 *  Top of the worktree to read (absolute path). Empty means the session's worktree, or else the project's main
+	 *  checkout. invalid params if it is not a worktree of the project.
 	 */
 	worktree?: string | null,
-	/**  이 파일만. 절대 경로나 프로젝트 루트(워크트리면 그 안의 프로젝트 루트) 기준 상대 경로(`src/lib.rs`). */
+	/**
+	 *  Only this file. An absolute path, or a path relative to the project root (inside the worktree, for a worktree)
+	 *  (`src/lib.rs`).
+	 */
 	path?: string | null,
-	/**  이 심각도와 그보다 심한 것만(`warning` 이면 오류 · 경고). */
+	/**  Only this severity and more severe ones (`warning` means errors · warnings). */
 	minSeverity?: LspSeverity | null,
-	/**  앞 쪽의 `nextCursor`. 비면 처음부터. */
+	/**  `nextCursor` from the previous page. Empty means from the start. */
 	cursor?: string | null,
-	/**  한 쪽의 진단 수, 1 ~ 5000(기본 100). */
+	/**  Diagnostics per page, 1 – 5000 (default 100). */
 	limit?: number | null,
 };
 
-/**  진단의 관련 정보. 줄 · 열은 1 부터. */
+/**  Related information of a diagnostic. Lines and columns are from 1. */
 export type DiagnosticsToolRelated = {
-	/**  파일이면 그 절대 경로. */
+	/**  Its absolute path, if it is a file. */
 	path: string | null,
-	/**  파일이 아니면(`path` 가 없으면) 서버가 준 URI. */
+	/**  The URI the server gave, if it is not a file (no `path`). */
 	uri: string | null,
 	line: number,
 	column: number,
@@ -3132,30 +3187,37 @@ export type DiagnosticsToolRelated = {
 
 export type DiagnosticsToolResult = {
 	/**
-	 *  이 프로젝트(워크트리)의 언어 서버 인스턴스와 상태 — 빈 목록이 「오류 없음」 인지 「서버가 아직 없다 · 준비 중이다」 인지 가른다.
-	 *  비어 있으면 띄운 서버가 없다(Pitwall 창에서 그 언어의 파일을 열면 뜬다). `state.kind` 가 `ready` 가 아니면 답하지 않는 중이고,
-	 *  `progress` 가 있으면 서버가 색인 · 검사 중이라 진단이 더 올 수 있다.
+	 *  Language server instances of this project (worktree) and their state — tells "no errors" apart from "no server
+	 *  yet · still starting" for an empty list. Empty means no server has been started (one starts when a file of that
+	 *  language is opened in a Pitwall window). If `state.kind` is not `ready` the server is not answering; if
+	 *  `progress` is present the server is indexing · checking, so more diagnostics may come.
 	 */
 	servers: LspInstanceStatus[],
-	/**  경로 차례로 파일들. 파일 안은 심각도(오류 먼저) · 위치 차례. 한 파일의 진단이 두 쪽에 걸칠 수 있다. */
+	/**
+	 *  Files in path order. Within a file, by severity (errors first) and position. One file's diagnostics can span two
+	 *  pages.
+	 */
 	files: DiagnosticsToolFile[],
-	/**  다음 쪽을 부를 `cursor`. 마지막 쪽이면 `null`. */
+	/**  The `cursor` for the next page. `null` on the last page. */
 	nextCursor: string | null,
-	/**  서버가 진단을 쏟아부어 상한(파일당 1000 · 프로젝트 10만)에서 잘렸다 — 심한 것부터 남겼다. */
+	/**
+	 *  The server flooded diagnostics, so they were cut at the limit (1000 per file · 100,000 per project) — the most
+	 *  severe were kept.
+	 */
 	truncated: boolean,
-	/**  진단을 볼 수 없는 까닭(그러면 `files` 는 비어 있다). */
+	/**  Why diagnostics cannot be read (`files` is then empty). */
 	unavailable: DiagnosticsUnavailable | null,
 };
 
-/**  진단을 볼 수 없는 까닭. */
+/**  Why diagnostics cannot be read. */
 export type DiagnosticsUnavailable = {
 	reason: DiagnosticsUnavailableReason,
-	/**  사람이 할 일을 담은 한 줄(영어). */
+	/**  One line saying what the person should do (in English). */
 	message: string,
 };
 
 export type DiagnosticsUnavailableReason = 
-/**  프로젝트를 신뢰하지 않아 언어 서버가 뜨지 않는다. */
+/**  The project is not trusted, so language servers do not start. */
 "untrusted";
 
 export type DiffFile = {
@@ -3165,7 +3227,7 @@ export type DiffFile = {
 	 *  Windows 에서도).
 	 */
 	path: string,
-	/**  이름이 바뀌었으면 옛 경로. */
+	/**  Old path, if renamed. */
 	oldPath: string | null,
 	/**  git 의 8진 모드(`100644` · `100755` · `120000` 심링크 · `160000` 서브모듈). 그쪽에 없으면 `null`. */
 	oldMode: string | null,
@@ -3194,7 +3256,7 @@ export type DiffFile = {
 	generated: boolean,
 	/**  서브모듈 포인터가 바뀌었다(한쪽이라도 `160000`). hunk 가 없다. */
 	submodule: SubmodulePointer | null,
-	/**  더한 줄 · 뺀 줄 수(`git diff --numstat`). */
+	/**  Number of lines added · removed (`git diff --numstat`). */
 	added: number,
 	removed: number,
 	hunks: DiffHunk[],
@@ -3228,13 +3290,13 @@ export type DiffLine = {
 	noNewline: boolean,
 };
 
-/**  diff 의 한쪽. */
+/**  One side of a diff. */
 export type DiffSide = 
-/**  커밋의 트리. `rev` 는 [`GitRevParams::rev`] 와 같은 리비전 문법이다. */
+/**  A commit's tree. `rev` uses the same revision syntax as [`GitRevParams::rev`]. */
 { kind: "commit"; rev: string } | 
-/**  index(스테이징 영역). 충돌 중인 경로(단계 1~3)는 빠진다. */
+/**  The index (staging area). Paths in conflict (stages 1–3) are left out. */
 { kind: "index" } | 
-/**  작업 트리. 추적하는 파일만 본다(`git diff` 와 같이 untracked 는 빠진다). */
+/**  The working tree. Only tracked files (untracked files are left out, as in `git diff`). */
 { kind: "workTree" };
 
 /**  등록된 드라이버 하나(드라이버 등록부 — `pw_db::DriverRegistry`). */
@@ -3247,10 +3309,10 @@ export type DriverInfo = {
 };
 
 /**
- *  내장 드라이버. 설정 파일의 `driver` 값이다.
+ *  A built-in driver. The `driver` value in the settings file.
  * 
- *  드라이버 등록부의 키는 이 enum 이 아니라 문자열 id 다([`DriverKind::id`]) — 프로세스 밖 드라이버(JDBC 브리지 F6-3b)가
- *  이 enum 을 고치지 않고 들어올 자리다.
+ *  The driver registry is keyed by string ids ([`DriverKind::id`]), not by this enum — that is where out-of-process
+ *  drivers (the JDBC bridge, F6-3b) come in without changing this enum.
  */
 export type DriverKind = "postgres" | "mysql" | "sqlite" | "redis";
 
@@ -3304,13 +3366,13 @@ export type ExtensionList = {
 export type ExternalToolInfo = {
 	id: string,
 	label: string,
-	/**  기여한 확장의 id. 전역 설정에서만 정의한 도구면 `null`. */
+	/**  Id of the contributing extension. `null` for a tool defined only in the global settings. */
 	extension: string | null,
-	/**  전역 설정(`[open_with.tools.<id>]`)이 고쳤거나 더했는가. */
+	/**  Whether the global settings (`[open_with.tools.<id>]`) changed or added it. */
 	fromSettings: boolean,
-	/**  파일까지 여는 명령(`file_command`)이 있는가. */
+	/**  Whether it has a command that opens a file too (`file_command`). */
 	opensFiles: boolean,
-	/**  설정 형식 오류. 있으면 실행하지 않는다(실행하면 `invalidTool` 로 끝난다). */
+	/**  A settings format error. When present, the tool does not run (running it ends with `invalidTool`). */
 	problem: string | null,
 };
 
@@ -3350,10 +3412,10 @@ export type FileHistoryRow = {
 	parents: string[],
 	/**  제목(메시지의 첫 문단을 한 줄로). */
 	subject: string,
-	/**  작성자(mailmap 적용). */
+	/**  Author (with mailmap applied). */
 	authorName: string,
 	authorEmail: string,
-	/**  작성 시각(유닉스 초). */
+	/**  Author time (Unix seconds). */
 	authorTime: number,
 	/**  이 커밋에서의 경로(저장소 꼭대기 기준, `/` 구분). 지운 커밋이면 지운 경로. */
 	path: string,
@@ -3381,14 +3443,14 @@ export type FileMatch = {
 };
 
 export type FileStatus = "added" | "deleted" | 
-/**  내용이나 모드(실행 비트)가 바뀌었다. */
+/**  The content or mode (executable bit) changed. */
 "modified" | 
-/**  이름이 바뀌었다(내용 50% 이상이 같다 — `git diff --find-renames`). 내용도 바뀌었을 수 있다. */
+/**  Renamed (at least 50% of the content is the same — `git diff --find-renames`). The content may have changed too. */
 "renamed" | 
-/**  종류가 바뀌었다(파일 ↔ 심링크 ↔ 서브모듈). git 의 patch 는 지우기 + 더하기 둘로 보인다. */
+/**  The type changed (file ↔ symlink ↔ submodule). git's patch shows it as a deletion plus an addition. */
 "typeChanged";
 
-/**  외래 키. */
+/**  A foreign key. */
 export type ForeignKeyInfo = {
 	name: string,
 	columns: string[],
@@ -3493,7 +3555,7 @@ export type FsPathParams = {
 	projectId: string,
 	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 그 워크트리 안의 프로젝트 루트도 접근 범위가 된다. */
 	worktree?: string | null,
-	/**  절대 경로. */
+	/**  Absolute path. */
 	path: string,
 };
 
@@ -3518,7 +3580,7 @@ export type FsReadBytesParams = {
 	projectId: string,
 	/**  활성 워크트리의 꼭대기(`fs.read` 와 같다). */
 	worktree?: string | null,
-	/**  절대 경로. */
+	/**  Absolute path. */
 	path: string,
 	/**  시작 바이트. */
 	offset: number,
@@ -3529,7 +3591,7 @@ export type FsReadBytesParams = {
 export type FsReadParams = {
 	projectId: string,
 	worktree?: string | null,
-	/**  절대 경로. */
+	/**  Absolute path. */
 	path: string,
 	/**  범위 읽기의 시작 바이트. `offset` · `length` 가 모두 없으면 파일 전체를 읽는다(50 MiB 까지). */
 	offset?: number | null,
@@ -3636,49 +3698,61 @@ export type GitBlameParams = {
 
 export type GitBlameToolParams = {
 	projectId: string,
-	/**  볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. */
+	/**
+	 *  Top of the worktree to read (absolute path). Empty means the session's worktree, or else the project's main
+	 *  checkout.
+	 */
 	worktree?: string | null,
-	/**  작업 트리 기준 파일 경로(`/` 구분). */
+	/**  File path relative to the working tree (`/`-separated). */
 	path: string,
-	/**  리비전(해시 · 브랜치 · 태그 · `HEAD~1`). 비면 HEAD. 작업 트리의 커밋하지 않은 변경은 blame 하지 않는다. */
+	/**
+	 *  Revision (hash · branch · tag · `HEAD~1`). Empty means HEAD. Uncommitted changes in the working tree are not
+	 *  blamed.
+	 */
 	rev?: string | null,
-	/**  첫 줄(1부터). */
+	/**  First line (from 1). */
 	startLine: number,
-	/**  끝 줄(포함). `startLine` 부터 500줄까지. */
+	/**  Last line (inclusive). Up to 500 lines from `startLine`. */
 	endLine: number,
 };
 
 export type GitBlameToolRange = {
 	startLine: number,
-	/**  끝 줄(포함). */
+	/**  Last line (inclusive). */
 	endLine: number,
-	/**  이 줄들을 마지막으로 바꾼 커밋. */
+	/**  The commit that last changed these lines. */
 	commit: string,
-	/**  그 커밋에서의 경로(이름이 바뀌었으면 옛 이름). */
+	/**  Path in that commit (the old name if it was renamed). */
 	sourcePath: string,
-	/**  작성자(mailmap 적용). */
+	/**  Author (with mailmap applied). */
 	authorName: string,
 	authorEmail: string,
-	/**  작성 시각(유닉스 초). */
+	/**  Author time (Unix seconds). */
 	authorTime: number,
-	/**  커밋 제목. */
+	/**  Commit subject. */
 	subject: string,
 };
 
 export type GitBlameToolResult = {
-	/**  blame 한 커밋(`rev` 를 푼 해시). */
+	/**  The commit blamed (the hash `rev` resolved to). */
 	commit: string,
-	/**  그 커밋에서의 파일 줄 수. */
+	/**  Number of lines of the file in that commit. */
 	lines: number,
-	/**  `git`(`git blame -M` — 파일 안에서 옮긴 줄을 원래 커밋으로 돌린다) 또는 `gix`(옮긴 줄은 옮긴 커밋의 것). */
+	/**
+	 *  `git` (`git blame -M` — lines moved within the file are attributed to their original commit) or `gix` (moved
+	 *  lines belong to the commit that moved them).
+	 */
 	engine: BlameEngine,
-	/**  파일 안에서 옮긴 줄을 원래 커밋으로 돌렸는가. */
+	/**  Whether lines moved within the file were attributed to their original commit. */
 	moves: boolean,
-	/**  묻은 줄 범위를 덮는 범위들(줄 순서, 겹치지 않는다). `truncated` 면 앞쪽만. */
+	/**  Ranges covering the requested lines (in line order, not overlapping). Only the first ones when `truncated`. */
 	ranges: GitBlameToolRange[],
-	/**  응답 크기 상한에 닿아 `nextLine` 부터를 싣지 못했다 — `startLine` 을 그 줄로 다시 부른다. */
+	/**
+	 *  The response size limit was reached, so lines from `nextLine` on are not included — call again with `startLine`
+	 *  set to that line.
+	 */
 	truncated: boolean,
-	/**  `truncated` 일 때 싣지 못한 첫 줄. 아니면 `null`. */
+	/**  The first line not included when `truncated`; otherwise `null`. */
 	nextLine: number | null,
 };
 
@@ -3729,12 +3803,12 @@ export type GitBlobParams = {
 };
 
 export type GitBranch = {
-	/**  짧은 이름(`main`, `feat/x`). */
+	/**  Short name (`main`, `feat/x`). */
 	name: string,
 	/**  `refs/heads/…`. */
 	refName: string,
 	commit: string,
-	/**  이 작업 트리의 HEAD 가 이 브랜치에 있다. */
+	/**  This working tree's HEAD is on this branch. */
 	head: boolean,
 	upstream: GitUpstream | null,
 };
@@ -3767,27 +3841,27 @@ export type GitBranchDeleteResult = {
 export type GitBranchListToolParams = {
 	projectId: string,
 	/**
-	 *  볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. HEAD 여부가 워크트리마다
-	 *  다르다.
+	 *  Top of the worktree to read (absolute path). Empty means the session's worktree, or else the project's main
+	 *  checkout. Which branch is HEAD differs per worktree.
 	 */
 	worktree?: string | null,
-	/**  태그도 싣는다. */
+	/**  Include tags too. */
 	includeTags?: boolean,
 };
 
 export type GitBranchListToolResult = {
-	/**  저장소의 작업 트리 꼭대기. `null` 이면 프로젝트에 git 저장소가 없다. */
+	/**  Top of the repository's working tree. `null` means the project has no git repository. */
 	workTree: string | null,
 	head: RepoHead | null,
-	/**  로컬 브랜치(이름 · 해시 · HEAD 여부 · upstream 과 ahead/behind), ref 이름순. */
+	/**  Local branches (name · hash · whether HEAD · upstream and ahead/behind), sorted by ref name. */
 	branches: GitBranch[],
-	/**  원격 추적 브랜치, ref 이름순. */
+	/**  Remote-tracking branches, sorted by ref name. */
 	remoteBranches: GitRemoteBranch[],
-	/**  `includeTags` 일 때만 있다. */
+	/**  Present only with `includeTags`. */
 	tags: GitTag[] | null,
-	/**  응답 크기 상한에 닿아 뒤쪽(원격 브랜치 · 태그부터)을 싣지 못했다. */
+	/**  The response size limit was reached, so the tail (from remote branches · tags on) is not included. */
 	truncated: boolean,
-	/**  읽지 못하는 저장소 형식이면 그 까닭(나머지는 빈다). */
+	/**  If the repository format cannot be read, the reason (the rest is empty). */
 	unsupported: GitUnsupported | null,
 };
 
@@ -3816,21 +3890,21 @@ export type GitBrokenRef = {
 	error: string,
 };
 
-/**  경로 하나의 변경 종류(porcelain v2 의 `XY` 글자 하나). */
+/**  Kind of change for one path (one letter of porcelain v2's `XY`). */
 export type GitChange = 
-/**  `A`. 작업 트리 쪽(`unstaged`)이면 `git add --intent-to-add` 한 파일. */
+/**  `A`. On the working tree side (`unstaged`), a file added with `git add --intent-to-add`. */
 "added" | 
-/**  `M`(서브모듈이면 가리키는 커밋이 바뀌었다). */
+/**  `M` (for a submodule, the commit it points at changed). */
 "modified" | 
 /**  `D`. */
 "deleted" | 
-/**  `R` — 스테이징한 쪽만, `origPath` 에서 옮겼다. */
+/**  `R` — staged side only, moved from `origPath`. */
 "renamed" | 
-/**  `C` — 스테이징한 쪽만, `origPath` 에서 복사했다. */
+/**  `C` — staged side only, copied from `origPath`. */
 "copied" | 
-/**  `T`(파일 ↔ 심링크 등). */
+/**  `T` (file ↔ symlink, etc.). */
 "typeChanged" | 
-/**  `?` — 작업 트리 쪽만. */
+/**  `?` — working tree side only. */
 "untracked";
 
 export type GitCheckoutParams = {
@@ -3908,7 +3982,7 @@ export type GitCommitsParams = {
 	commits: string[],
 };
 
-/**  병합 충돌(porcelain v2 의 `u` 줄 `XY`). */
+/**  A merge conflict (`XY` of porcelain v2's `u` line). */
 export type GitConflict = 
 /**  `DD`. */
 "bothDeleted" | 
@@ -4025,61 +4099,71 @@ export type GitDiffParams = {
 
 export type GitDiffToolFile = {
 	status: FileStatus,
-	/**  새 경로(지워졌으면 옛 경로). */
+	/**  New path (the old path if deleted). */
 	path: string,
-	/**  이름이 바뀌었으면 옛 경로. */
+	/**  Old path, if renamed. */
 	oldPath: string | null,
-	/**  더한 줄 · 뺀 줄 수(`git diff --numstat`). */
+	/**  Number of lines added · removed (`git diff --numstat`). */
 	added: number,
 	removed: number,
-	/**  바이너리라 hunk 가 없다. */
+	/**  Binary, so no hunks. */
 	binary: boolean,
-	/**  파일이 너무 커서 hunk 를 만들지 않았다. */
+	/**  The file is too large, so no hunks were made. */
 	tooLarge: boolean,
-	/**  생성 파일이다(`linguist-generated` 등). */
+	/**  A generated file (`linguist-generated`, etc.). */
 	generated: boolean,
 	/**
-	 *  hunk 의 unified diff(`@@ -a,b +c,d @@` 와 ` ` · `+` · `-` 줄). hunk 를 묻지 않았거나 없거나(바이너리 · 너무 큼 · 서브모듈)
-	 *  응답 크기 상한에 닿았으면 `null`.
+	 *  Unified diff of the hunks (`@@ -a,b +c,d @@` and ` ` · `+` · `-` lines). `null` if hunks were not asked for,
+	 *  there are none (binary · too large · submodule), or the response size limit was reached.
 	 */
 	patch: string | null,
-	/**  이 파일의 내용을 읽지 못한 까닭. */
+	/**  Why this file's content could not be read. */
 	error: string | null,
 };
 
 export type GitDiffToolParams = {
 	projectId: string,
-	/**  볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. */
+	/**
+	 *  Top of the worktree to read (absolute path). Empty means the session's worktree, or else the project's main
+	 *  checkout.
+	 */
 	worktree?: string | null,
 	/**
-	 *  옛 쪽. 짝은 넷이다:
-	 *  - `to` 가 커밋(`{"kind":"commit","rev":"…"}`): `from` 이 없으면 그 커밋의 첫 부모(`git show`), 있으면 그 커밋(두 커밋 비교).
-	 *  - `to` 가 index(`{"kind":"index"}`): `from` 은 커밋, 없으면 HEAD — `git diff --cached`.
-	 *  - `to` 가 작업 트리(`{"kind":"workTree"}`): `from` 은 index(없어도) — `git diff`.
+	 *  The old side. There are four pairings:
+	 *  - `to` is a commit (`{"kind":"commit","rev":"…"}`): without `from`, the commit's first parent (`git show`); with
+	 *    it, that commit (comparing two commits).
+	 *  - `to` is the index (`{"kind":"index"}`): `from` is a commit, HEAD if missing — `git diff --cached`.
+	 *  - `to` is the working tree (`{"kind":"workTree"}`): `from` is the index (or missing) — `git diff`.
 	 */
 	from?: DiffSide | null,
-	/**  새 쪽. 비면 작업 트리(`git diff` — 스테이징하지 않은 변경). */
+	/**  The new side. Empty means the working tree (`git diff` — unstaged changes). */
 	to?: DiffSide | null,
-	/**  이 경로(작업 트리 기준, `/` 구분, 파일이나 폴더)와 그 아래만 보고 hunk 를 싣는다. */
+	/**
+	 *  Only this path (relative to the working tree, `/`-separated, a file or a folder) and what is under it, with
+	 *  hunks included.
+	 */
 	path?: string | null,
-	/**  모든 파일의 hunk 를 싣는다. */
+	/**  Include the hunks of every file. */
 	detail?: boolean,
-	/**  공백을 모두 무시한다(`git diff -w`). */
+	/**  Ignore all whitespace (`git diff -w`). */
 	ignoreWhitespace?: boolean,
 };
 
 export type GitDiffToolResult = {
-	/**  파일 경로의 기준인 작업 트리 꼭대기(절대 경로). */
+	/**  Top of the working tree that file paths are relative to (absolute path). */
 	workTree: string,
-	/**  옛 쪽 커밋의 해시. 빈 트리 · index 면 `null`. */
+	/**  Hash of the old side's commit. `null` for the empty tree · the index. */
 	oldCommit: string | null,
-	/**  새 쪽 커밋의 해시. index · 작업 트리면 `null`. */
+	/**  Hash of the new side's commit. `null` for the index · the working tree. */
 	newCommit: string | null,
-	/**  바뀐 파일(경로순). */
+	/**  Changed files (sorted by path). */
 	files: GitDiffToolFile[],
-	/**  응답 크기 상한에 닿아 뒤쪽 파일의 `patch`(또는 파일 자체 — `omittedFiles`)를 싣지 못했다. `path` 로 좁혀 다시 부른다. */
+	/**
+	 *  The response size limit was reached, so the `patch` of later files (or the files themselves — `omittedFiles`) is
+	 *  not included. Narrow with `path` and call again.
+	 */
 	truncated: boolean,
-	/**  상한에 닿아 목록에서 뺀 파일 수. */
+	/**  Number of files left out of the list because the limit was reached. */
 	omittedFiles: number,
 };
 
@@ -4183,20 +4267,20 @@ export type GitLinesParams = {
 };
 
 export type GitLogCommit = {
-	/**  전체 해시. */
+	/**  Full hash. */
 	hash: string,
-	/**  부모 해시(첫 부모가 앞). 머지 커밋이면 둘 이상. */
+	/**  Parent hashes (first parent first). Two or more for a merge commit. */
 	parents: string[],
-	/**  작성자(mailmap 적용). */
+	/**  Author (with mailmap applied). */
 	authorName: string,
 	authorEmail: string,
-	/**  작성 시각(유닉스 초). */
+	/**  Author time (Unix seconds). */
 	authorTime: number,
-	/**  제목(메시지 첫 문단을 한 줄로). */
+	/**  Subject (the message's first paragraph on one line). */
 	subject: string,
-	/**  이 커밋을 가리키는 브랜치 · 원격 브랜치 · 태그 이름(분리된 HEAD 는 `HEAD`). */
+	/**  Names of the branches · remote branches · tags pointing at this commit (`HEAD` for a detached HEAD). */
 	refs: string[],
-	/**  본문(제목 다음 문단부터, 없으면 빈 글자). `detail` 일 때만 있다. */
+	/**  Body (from the paragraph after the subject; empty text if none). Present only with `detail`. */
 	body: string | null,
 };
 
@@ -4241,35 +4325,47 @@ export type GitLogParams = {
 
 export type GitLogToolParams = {
 	projectId: string,
-	/**  볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. */
+	/**
+	 *  Top of the worktree to read (absolute path). Empty means the session's worktree, or else the project's main
+	 *  checkout.
+	 */
 	worktree?: string | null,
-	/**  이 브랜치 · ref(`main` · `origin/main` · `v1.0` · `HEAD`)에서 닿는 커밋. 비면 HEAD(`git log` 와 같다). */
+	/**
+	 *  Commits reachable from this branch · ref (`main` · `origin/main` · `v1.0` · `HEAD`). Empty means HEAD (as in
+	 *  `git log`).
+	 */
 	branch?: string | null,
-	/**  작성자 「이름 <메일>」 에 든 글자(대소문자를 가리지 않는다, 정규식이 아니다). */
+	/**  Text contained in the author's "name <email>" (case-insensitive, not a regular expression). */
 	author?: string | null,
-	/**  메시지(제목 · 본문)의 한 줄에 든 글자(대소문자를 가리지 않는다, 정규식이 아니다). */
+	/**  Text contained in one line of the message (subject · body) (case-insensitive, not a regular expression). */
 	message?: string | null,
 	/**
-	 *  이 시각 이후 커밋(커미터 시각, git `--since` 와 같은 꼴 — `2026-01-31` · `2026-01-31T09:00:00+09:00` · `2 weeks ago` ·
-	 *  유닉스 초는 `@1700000000`).
+	 *  Commits after this time (committer time, in the same forms as git's `--since` — `2026-01-31` ·
+	 *  `2026-01-31T09:00:00+09:00` · `2 weeks ago` · `@1700000000` for Unix seconds).
 	 */
 	since?: string | null,
-	/**  이 시각 이전 커밋(커미터 시각, `since` 와 같은 꼴). */
+	/**  Commits before this time (committer time, same forms as `since`). */
 	until?: string | null,
-	/**  이 경로(작업 트리 기준, `/` 구분, 파일이나 폴더) 하나라도 바꾼 커밋만. 글롭은 받지 않는다. */
+	/**
+	 *  Only commits that changed this path (relative to the working tree, `/`-separated, a file or a folder). Globs are
+	 *  not accepted.
+	 */
 	paths?: string[] | null,
-	/**  커밋마다 메시지 본문(제목 다음 문단부터)도 싣는다. */
+	/**  Include each commit's message body too (from the paragraph after the subject). */
 	detail?: boolean,
-	/**  앞 쪽의 `nextCursor`. 비면 처음부터. 그 커밋이 로그에서 사라졌으면(force push 등) invalid params — 처음부터 다시 부른다. */
+	/**
+	 *  `nextCursor` from the previous page. Empty means from the start. If that commit is gone from the log (a force
+	 *  push, etc.), invalid params — call again from the start.
+	 */
 	cursor?: string | null,
-	/**  한 쪽의 커밋 수, 1 ~ 500(기본 50). */
+	/**  Commits per page, 1 – 500 (default 50). */
 	limit?: number | null,
 };
 
 export type GitLogToolResult = {
-	/**  자식이 부모보다 먼저(`git log --topo-order`). */
+	/**  Children before their parents (`git log --topo-order`). */
 	commits: GitLogCommit[],
-	/**  다음 쪽을 부를 `cursor`. 마지막 쪽이면 `null`. */
+	/**  The `cursor` for the next page. `null` on the last page. */
 	nextCursor: string | null,
 };
 
@@ -4632,9 +4728,9 @@ export type GitRefs = {
 };
 
 export type GitRemoteBranch = {
-	/**  원격 이름(`origin`). */
+	/**  Remote name (`origin`). */
 	remote: string,
-	/**  짧은 이름(`origin/main`). */
+	/**  Short name (`origin/main`). */
 	name: string,
 	/**  `refs/remotes/…`. */
 	refName: string,
@@ -4802,15 +4898,18 @@ export type GitStatus = {
 	unsupported: GitUnsupported | null,
 };
 
-/**  경로 하나의 상태. 충돌이면 `conflict` 만 있다. */
+/**  State of one path. A conflict has only `conflict`. */
 export type GitStatusEntry = {
-	/**  저장소 작업 트리 기준 경로(`/` 구분). untracked 중첩 저장소처럼 폴더 하나로 보이는 것은 `/` 로 끝난다. */
+	/**
+	 *  Path relative to the repository's working tree (`/`-separated). Something shown as a single folder, such as an
+	 *  untracked nested repository, ends with `/`.
+	 */
 	path: string,
-	/**  스테이징한 이름 바뀜 · 복사의 원래 경로. */
+	/**  Original path of a staged rename · copy. */
 	origPath: string | null,
-	/**  HEAD↔index(스테이징한 변경). */
+	/**  HEAD ↔ index (staged changes). */
 	staged: GitChange | null,
-	/**  index↔작업 트리(스테이징하지 않은 변경). untracked 면 `untracked`. */
+	/**  Index ↔ working tree (unstaged changes). `untracked` for an untracked file. */
 	unstaged: GitChange | null,
 	conflict: GitConflict | null,
 };
@@ -4827,42 +4926,51 @@ export type GitStatusParams = {
 };
 
 export type GitStatusSummary = {
-	/**  HEAD 가 있는 브랜치 · 분리된 커밋 · 아직 커밋이 없는 브랜치. */
+	/**  The branch HEAD is on · a detached commit · a branch with no commits yet. */
 	head: RepoHead | null,
-	/**  지금 브랜치의 upstream 과 ahead/behind(그 ref 가 없어졌으면 `track: null`). */
+	/**  The current branch's upstream and ahead/behind (`track: null` if that ref is gone). */
 	upstream: GitUpstream | null,
-	/**  진행 중인 merge · rebase · cherry-pick · revert · bisect · am. */
+	/**  A merge · rebase · cherry-pick · revert · bisect · am in progress. */
 	operation: RepoOperation | null,
-	/**  스테이징한 변경이 있는 파일 수. 수는 모두 이 쪽만이 아니라 바뀐 파일 전체(`paths` 를 줬으면 그 안)의 것이다. */
+	/**
+	 *  Number of files with staged changes. All counts cover every changed file (within `paths`, if given), not just
+	 *  this page.
+	 */
 	staged: number,
-	/**  스테이징하지 않은 변경이 있는 파일 수(untracked 는 빼고). */
+	/**  Number of files with unstaged changes (untracked files excluded). */
 	unstaged: number,
 	untracked: number,
-	/**  충돌 중인 파일 수. 충돌 파일은 다른 수에 세지 않는다. */
+	/**  Number of files in conflict. Conflicted files are not counted in the other numbers. */
 	conflicted: number,
 };
 
 export type GitStatusToolParams = {
 	projectId: string,
-	/**  볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. */
+	/**
+	 *  Top of the worktree to read (absolute path). Empty means the session's worktree, or else the project's main
+	 *  checkout.
+	 */
 	worktree?: string | null,
-	/**  이 경로(작업 트리 기준, `/` 구분 — 폴더면 그 아래 전체)만 본다. */
+	/**  Only these paths (relative to the working tree, `/`-separated — a folder means everything under it). */
 	paths?: string[] | null,
-	/**  앞 쪽의 `nextCursor`. 비면 첫 파일부터. */
+	/**  `nextCursor` from the previous page. Empty means from the first file. */
 	cursor?: string | null,
-	/**  한 쪽의 파일 수, 1 ~ 1000(기본 200). */
+	/**  Files per page, 1 – 1000 (default 200). */
 	limit?: number | null,
 };
 
 export type GitStatusToolResult = {
-	/**  파일 경로의 기준인 작업 트리 꼭대기(절대 경로). `null` 이면 프로젝트에 git 저장소가 없다. */
+	/**
+	 *  Top of the working tree that file paths are relative to (absolute path). `null` means the project has no git
+	 *  repository.
+	 */
 	workTree: string | null,
 	summary: GitStatusSummary,
-	/**  바뀐 파일의 한 쪽(경로순). */
+	/**  One page of changed files (sorted by path). */
 	files: GitStatusEntry[],
-	/**  다음 쪽을 부를 `cursor`. 마지막 쪽이면 `null`. */
+	/**  The `cursor` for the next page. `null` on the last page. */
 	nextCursor: string | null,
-	/**  읽지 못하는 저장소 형식이면 그 까닭(나머지는 빈다). */
+	/**  If the repository format cannot be read, the reason (the rest is empty). */
 	unsupported: GitUnsupported | null,
 };
 
@@ -4870,9 +4978,9 @@ export type GitTag = {
 	name: string,
 	/**  `refs/tags/…`. */
 	refName: string,
-	/**  ref 가 가리키는 객체(주석 태그면 태그 객체). */
+	/**  The object the ref points at (the tag object for an annotated tag). */
 	target: string,
-	/**  주석 태그면 태그를 벗긴 객체(보통 커밋). 가벼운 태그면 `null`. */
+	/**  For an annotated tag, the object with the tag peeled off (usually a commit). `null` for a lightweight tag. */
 	peeled: string | null,
 };
 
@@ -4896,23 +5004,23 @@ export type GitTagResult = {
 
 /**  ahead/behind. */
 export type GitTrack = {
-	/**  브랜치에만 있는 커밋 수(`↑`). */
+	/**  Commits only on the branch (`↑`). */
 	ahead: number,
-	/**  upstream 에만 있는 커밋 수(`↓`). */
+	/**  Commits only on the upstream (`↓`). */
 	behind: number,
 };
 
-/**  gix 로 읽지 못하는 저장소 형식. 화면은 git 기능을 「지원하지 않는 저장소」 로 보인다(오류가 아니다). */
+/**  A repository format gix cannot read. The UI shows git features as an "unsupported repository" (not an error). */
 export type GitUnsupported = 
-/**  ref 를 reftable 로 둔 저장소(`extensions.refStorage = reftable`, `git init --ref-format=reftable`). */
+/**  A repository that keeps refs in reftable (`extensions.refStorage = reftable`, `git init --ref-format=reftable`). */
 "reftable";
 
 export type GitUpstream = {
-	/**  짧은 이름(`origin/main`, 원격이 `.` 이면 로컬 브랜치 이름). */
+	/**  Short name (`origin/main`; the local branch name when the remote is `.`). */
 	name: string,
-	/**  전체 이름(`refs/remotes/origin/main`). */
+	/**  Full name (`refs/remotes/origin/main`). */
 	refName: string,
-	/**  `null` 이면 설정은 있는데 그 ref 가 없다(git 의 `[gone]`). */
+	/**  `null` means it is configured but the ref does not exist (git's `[gone]`). */
 	track: GitTrack | null,
 };
 
@@ -5073,13 +5181,16 @@ export type IndexFileSymbolsParams = {
 	text?: string | null,
 };
 
-/**  인덱스. 그리드 편집의 키 판정(M3-10 — PK 또는 NOT NULL 열만으로 된 유일 인덱스)이 `primary` · `unique` · `partial` 을 본다. */
+/**
+ *  An index. The key check for grid editing (M3-10 — a PK, or a unique index made only of NOT NULL columns) looks at
+ *  `primary` · `unique` · `partial`.
+ */
 export type IndexInfo = {
 	name: string,
 	columns: string[],
 	primary: boolean,
 	unique: boolean,
-	/**  조건이 붙은 인덱스(PG 부분 인덱스). 키로 쓰지 않는다. */
+	/**  An index with a condition (a PG partial index). Not used as a key. */
 	partial: boolean,
 };
 
@@ -5140,11 +5251,12 @@ export type IndexSymbol = {
 	selectionRange: IndexRange,
 };
 
-/**  심볼 종류. */
+/**  Symbol kind. */
 export type IndexSymbolKind = "module" | "class" | "struct" | "interface" | "trait" | "enum" | "enumMember" | "typeAlias" | "function" | "method" | "constructor" | "field" | "property" | "constant" | "variable" | "macro" | 
 /**
- *  구현 블록(Rust 의 `impl`). 이름은 대상 타입이다. 그 안 메서드의 컨테이너가 되려고 잡는다 — 심볼 검색은 `kinds` 로 따로 고르지
- *  않으면 내지 않는다(같은 이름의 타입과 겹친다).
+ *  An implementation block (Rust's `impl`). Its name is the target type. Captured to be the container of the
+ *  methods inside it — symbol search does not return it unless chosen with `kinds` (it would overlap with the type
+ *  of the same name).
  */
 "impl";
 
@@ -5195,7 +5307,7 @@ export type IndexSymbolSearchParams = {
 	 *  경로 · 위치 순 앞에서부터. 글자 수 상한 [`MAX_QUERY_CHARS`].
 	 */
 	query: string,
-	/**  이 종류만. 없으면 `impl` 을 뺀 모든 종류. */
+	/**  Only these kinds. Without it, every kind except `impl`. */
 	kinds?: IndexSymbolKind[] | null,
 	/**  결과 수. 기본 [`DEFAULT_LIMIT`], 1 ~ [`MAX_LIMIT`]. */
 	limit?: number | null,
@@ -5609,7 +5721,7 @@ export type LogRow = {
 	subject: string,
 	authorName: string,
 	authorEmail: string,
-	/**  작성 시각(유닉스 초). */
+	/**  Author time (Unix seconds). */
 	authorTime: number,
 	/**  이 커밋을 가리키는 ref(분리된 HEAD · 지금 브랜치가 앞, 다음은 브랜치 · 원격 · 태그의 이름순). */
 	refs: LogRef[],
@@ -5818,7 +5930,7 @@ export type LspDiagnostic = {
 	message: string,
 	/**  서버 · 도구의 진단 코드(`E0308` 등). */
 	code: string | null,
-	/**  진단을 낸 도구(`rustc` · `ts` 등 — 서버가 알린 것). */
+	/**  The tool that produced the diagnostic (`rustc` · `ts`, etc. — as reported by the server). */
 	source: string | null,
 	/**  코드 설명 링크(`http(s)` 만). */
 	codeHref: string | null,
@@ -5838,11 +5950,11 @@ export type LspDiagnosticOrigin =
 /**  `textDocument/diagnostic`. */
 "pull";
 
-/**  진단 꼬리표. */
+/**  Diagnostic tag. */
 export type LspDiagnosticTag = 
-/**  쓰이지 않는 코드(흐리게). */
+/**  Unused code (shown faded). */
 "unnecessary" | 
-/**  낡은 것(취소선). */
+/**  Deprecated (shown struck through). */
 "deprecated";
 
 /**  심각도별 수(상태바). */
@@ -5871,11 +5983,11 @@ export type LspDiagnosticsEvent = {
 	truncated: boolean,
 };
 
-/**  파일 하나의 진단. */
+/**  Diagnostics of one file. */
 export type LspDiagnosticsFile = {
 	path: string,
 	diagnostics: LspDiagnostic[],
-	/**  이 파일의 진단이 상한에 걸려 일부만 있다. */
+	/**  This file's diagnostics hit the limit, so only some are included. */
 	truncated: boolean,
 };
 
@@ -6082,39 +6194,48 @@ export type LspHoverResult = {
 	hover: LspHover | null,
 };
 
-/**  인스턴스의 상태. */
+/**  State of the instance. */
 export type LspInstanceState = 
-/**  띄우는 중(`initialize` 를 기다림 · 죽은 뒤 물러남 재기동을 기다림). */
+/**  Starting (waiting for `initialize` · waiting for a backoff restart after a crash). */
 { kind: "starting" } | 
-/**  답한다. */
+/**  Answering. */
 { kind: "ready" } | 
-/**  설정 · 정의가 바뀌었다 — 다시 시작해야 새 값이 든다. 서버는 그대로 답한다. */
+/**  Settings or the definition changed — a restart is needed to pick up the new values. The server keeps answering. */
 { kind: "restartNeeded" } | 
-/**  런타임 환경이 바뀌었다(`runtime.changed`) — 다시 시작을 권한다. 서버는 그대로 답한다(저절로 다시 띄우지 않는다). */
+/**
+ *  The runtime environment changed (`runtime.changed`) — a restart is recommended. The server keeps answering (it
+ *  does not restart on its own).
+ */
 { kind: "restartSuggested" } | 
-/**  3분 안에 5번 죽어 멈췄다 — `lsp.server.restart` 로만 다시 띄운다. */
+/**  Stopped after crashing 5 times within 3 minutes — only `lsp.server.restart` starts it again. */
 { kind: "crashed" } | 
-/**  사람이 멈췄다(`lsp.server.stop`). */
+/**  Stopped by the person (`lsp.server.stop`). */
 { kind: "stopped" } | 
-/**  프로젝트를 신뢰하지 않아 띄우지 않는다(결정 M4-D8). */
+/**  Not started because the project is not trusted (decision M4-D8). */
 { kind: "untrusted" } | 
-/**  실행 파일을 찾지 못했다 — 설치를 제안한다(M4-17). */
+/**  The executable was not found — offering to install it (M4-17). */
 { kind: "notInstalled"; mason: string | null } | 
-/**  서버를 돌릴 런타임(`requires`)을 찾지 못했다(결정 M4-D6). `tool` 은 `node` · `python` · `java`, `needed` 는 판 범위. */
+/**
+ *  The runtime the server needs (`requires`) was not found (decision M4-D6). `tool` is `node` · `python` · `java`,
+ *  `needed` is the version range.
+ */
 { kind: "runtimeMissing"; tool: string; needed: string } | 
-/**  설정에서 껐다(`[lsp.<id>] enabled = false`). */
+/**  Turned off in the settings (`[lsp.<id>] enabled = false`). */
 { kind: "disabled" } | 
-/**  띄우지 못했다(설정 경로가 틀림 · 실행 실패 등 — 까닭). */
+/**  Could not start (a wrong path in the settings · a failed launch, etc. — with the reason). */
 { kind: "failed"; message: string };
 
-/**  서버 인스턴스 하나 — (프로젝트, 워크트리, 서버, 작업 공간 루트)마다 하나(결정 M4-D11). */
+/**  One server instance — one per (project, worktree, server, workspace root) (decision M4-D11). */
 export type LspInstanceStatus = {
-	/**  서버 id(`[contributes.language_servers.<id>]`). */
+	/**  Server id (`[contributes.language_servers.<id>]`). */
 	server: string,
-	/**  작업 공간 루트(실제 경로 — 워크트리마다 다르다). `lsp.server.restart` · `stop` 은 이것과 그 창의 활성 워크트리로 고른다. */
+	/**
+	 *  Workspace root (real path — differs per worktree). `lsp.server.restart` · `stop` choose by this and the window's
+	 *  active worktree.
+	 */
 	root: string,
 	state: LspInstanceState,
-	/**  서버가 알린 진행(`$/progress`) 중 가장 최근 것. 같은 진행이 `Task` 로도 나간다. */
+	/**  The latest progress the server reported (`$/progress`). The same progress also goes out as a `Task`. */
 	progress: LspProgress | null,
 };
 
@@ -6214,11 +6335,11 @@ export type LspPositionParams = {
 	offset: number,
 };
 
-/**  서버의 진행 하나(`$/progress` 의 `WorkDoneProgress`). */
+/**  One progress of the server (`WorkDoneProgress` of `$/progress`). */
 export type LspProgress = {
 	title: string,
 	message: string | null,
-	/**  0 ~ 100. 서버가 모르면 없다. */
+	/**  0 – 100. Missing if the server does not know. */
 	percentage: number | null,
 };
 
@@ -6279,7 +6400,7 @@ export type LspRenameTarget =
 
 /**  해석 결과. */
 export type LspResolution = { kind: "found"; 
-/**  절대 경로. */
+/**  Absolute path. */
 path: string; step: LspResolveStep; 
 /**  설치본만 안다(설치 기록). 그 밖은 `null`(모름). */
 version: string | null; skipped: LspSkipped[] } | 
@@ -6396,7 +6517,7 @@ export type LspSettingsOrigin =
 /**  `.pitwall/project.toml` · `project.local.toml`(또는 개인 전용 폴더). */
 "project";
 
-/**  심각도. 차례는 오류가 먼저다(작을수록 심하다 — LSP 의 수와 같은 차례). */
+/**  Severity. Errors come first (smaller is more severe — the same order as LSP's numbers). */
 export type LspSeverity = "error" | "warning" | "information" | "hint";
 
 /**  [`TOPIC_SHOW_DOCUMENT`] 의 내용. */
@@ -6626,7 +6747,7 @@ export type ObjectInfo = {
 	comment: string | null,
 };
 
-/**  객체 종류. */
+/**  Object kind. */
 export type ObjectKind = "table" | "view" | "materializedView" | "sequence" | "function" | "procedure" | "trigger";
 
 /**  객체 목록의 한 쪽. */
@@ -6649,7 +6770,7 @@ export type ObjectQuery = {
 	limit: number,
 };
 
-/**  객체를 가리키는 이름. 세션의 `USE` · `search_path` 에 기대지 않게 늘 한정한다(M3-12). */
+/**  Name of an object. Always qualified, so it does not depend on the session's `USE` · `search_path` (M3-12). */
 export type ObjectRef = {
 	database: string | null,
 	schema: string | null,
@@ -6657,15 +6778,18 @@ export type ObjectRef = {
 };
 
 export type OpenWithList = {
-	/**  이 OS 에서 쓸 수 있는 도구(`platforms` 로 거른 것). 확장 순서, 그 뒤에 설정에서만 정의한 도구. */
+	/**
+	 *  Tools available on this OS (filtered by `platforms`). In extension order, followed by tools defined only in the
+	 *  settings.
+	 */
 	tools: ExternalToolInfo[],
 	default: DefaultToolInfo,
 };
 
 export type OpenWithListParams = {
-	/**  있으면 그 프로젝트의 설정(`[open_with] default`)까지 보고 기본 도구를 고른다. */
+	/**  When given, the default tool is chosen including that project's settings (`[open_with] default`). */
 	projectId?: string | null,
-	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 그 워크트리의 `.local.toml` 을 읽는다. */
+	/**  Top of the active worktree (`ActiveWorktree.top`, absolute path). That worktree's `.local.toml` is read. */
 	worktree?: string | null,
 };
 
@@ -6691,11 +6815,11 @@ export type OpenWithRunParams = {
 	column?: number | null,
 };
 
-/**  요청이 열린 자리. */
+/**  Where the request was opened. */
 export type OpenedIn = 
-/**  이미 열린 그 프로젝트 창(앞으로 가져오지 않았다). */
+/**  The project's window that was already open (not brought to the front). */
 "existingWindow" | 
-/**  새로 만든 그 프로젝트 창(활성화하지 않았다). */
+/**  A newly created window for the project (not activated). */
 "newWindow";
 
 export type OperationAction = "continue" | "abort" | "skip";
@@ -6723,13 +6847,13 @@ export type OperationStep = {
 };
 
 export type OutgoingCommit = {
-	/**  전체 해시. */
+	/**  Full hash. */
 	hash: string,
 	/**  메시지 첫 줄(git `%s`). */
 	subject: string,
 	/**  작성자 이름(mailmap 적용). */
 	author: string,
-	/**  작성 시각(유닉스 초). */
+	/**  Author time (Unix seconds). */
 	authorTime: number,
 };
 
@@ -6759,24 +6883,24 @@ export type Pong = {
 	hostId: string,
 };
 
-/**  등록된 프로젝트. 경로는 [`path::normalize`] 로 정규화된 절대 경로다. */
+/**  A registered project. Paths are absolute paths normalized by [`path::normalize`]. */
 export type Project = {
-	/**  `$DATA/projects/<id>/` 에도 쓰이는 id(16자리 16진수). */
+	/**  Id also used in `$DATA/projects/<id>/` (16 hex digits). */
 	id: string,
 	name: string,
-	/**  프로젝트가 있는 Host. 지금은 언제나 `local`. */
+	/**  The Host the project lives on. Always `local` for now. */
 	host: string,
-	/**  첫 번째가 주 루트다. 지금은 하나뿐이고, 여럿은 멀티 루트(F1-6)가 연다. */
+	/**  The first one is the main root. There is only one for now; multi-root (F1-6) will allow several. */
 	roots: string[],
 	favorite: boolean,
-	/**  정렬 · 중복 제거된 태그. */
+	/**  Tags, sorted and deduplicated. */
 	tags: string[],
 	configMode: ConfigMode,
-	/**  개인 전용 설정 폴더 이름. 만들 때 정하고 바뀌지 않는다([`slug`]). */
+	/**  Name of the personal-only settings folder. Chosen at creation and never changed ([`slug`]). */
 	slug: string,
-	/**  만든 시각(유닉스 밀리초). */
+	/**  Creation time (Unix milliseconds). */
 	createdAt: number,
-	/**  마지막으로 연 시각(유닉스 밀리초). 한 번도 안 열었으면 `null`. */
+	/**  Last time the project was opened (Unix milliseconds). `null` if it was never opened. */
 	openedAt: number | null,
 };
 
@@ -6786,36 +6910,38 @@ export type ProjectIdParams = {
 
 export type ProjectInfo = {
 	project: Project,
-	/**  주 루트 폴더가 디스크에 있는가. 없으면(옮기거나 지운 폴더) 아래 목록은 비어 있다. */
+	/**  Whether the main root folder exists on disk. If not (moved or deleted), the lists below are empty. */
 	rootExists: boolean,
-	/**  주 루트에 있는 빌드 파일 이름(루트 후보와 같은 목록 · 순서). */
+	/**  Build file names found in the main root (the same list and order as the root candidates). */
 	buildFiles: string[],
-	/**  빌드 파일에서 짐작한 언어(`rust`, `typescript` …). 먼저 나온 빌드 파일 순. */
+	/**  Languages guessed from the build files (`rust`, `typescript` …), in the order of the build files found. */
 	languages: string[],
 	config: ConfigSummary,
 };
 
 export type ProjectOpenToolParams = {
+	/**  Project id (`id` from `project_list`). When the session has a project, leaving it out means that project. */
 	projectId: string,
 	/**
-	 *  열 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. 창은 이 워크트리를 활성
-	 *  워크트리로 연다.
+	 *  Top of the worktree to open (absolute path). Empty means the session's worktree, or else the project's main
+	 *  checkout. The window opens with this worktree as its active worktree.
 	 */
 	worktree?: string | null,
 	/**
-	 *  열 파일. 상대 경로면 프로젝트 루트(워크트리를 정했으면 그 워크트리 안의 프로젝트 루트) 기준이다. 루트 밖(심링크로 밖을
-	 *  가리키는 것 포함)은 거절한다. 폴더면 프로젝트만 연다. 없으면 프로젝트 창만.
+	 *  File to open. A relative path is relative to the project root (inside the chosen worktree, if one is given).
+	 *  Paths outside the root (including symlinks pointing outside) are refused. A folder opens only the project.
+	 *  Without it, only the project window.
 	 */
 	path?: string | null,
-	/**  커서를 둘 줄(1부터). `path` 가 있어야 한다. */
+	/**  Line to put the cursor on (from 1). Needs `path`. */
 	line?: number | null,
-	/**  커서를 둘 열(1부터). `line` 이 있어야 한다. */
+	/**  Column to put the cursor on (from 1). Needs `line`. */
 	column?: number | null,
 };
 
 export type ProjectOpenToolResult = {
 	openedIn: OpenedIn,
-	/**  연 파일의 실제 경로(절대). 파일 없이 프로젝트만 열었으면 `null`. */
+	/**  Real path (absolute) of the opened file. `null` if only the project was opened. */
 	path: string | null,
 };
 
@@ -6828,9 +6954,12 @@ export type ProjectPatch = {
 	configMode?: ConfigMode | null,
 };
 
-/**  기능 메서드의 프로젝트 지정(`docs/design/03-architecture.md` §4). MCP 서버는 세션의 프로젝트가 있으면 이 키를 채워 준다. */
+/**
+ *  The project a feature method works on (`docs/design/03-architecture.md` §4). The MCP server fills this key in when
+ *  the session has a project.
+ */
 export type ProjectScopedParams = {
-	/**  프로젝트 id(`project_list` 의 `id`). */
+	/**  Project id (`id` from `project_list`). */
 	projectId: string,
 };
 
@@ -6877,11 +7006,11 @@ export type RegistryOrigin =
 "cache";
 
 export type RepoHead = 
-/**  브랜치에 있다. `name` 은 짧은 이름(`main`, `feat/x`), `commit` 은 그 끝 커밋의 해시. */
+/**  On a branch. `name` is the short name (`main`, `feat/x`), `commit` the hash of its tip commit. */
 { kind: "branch"; name: string; commit: string } | 
-/**  아직 커밋이 없는 브랜치(새 저장소, `git checkout --orphan`). */
+/**  A branch with no commits yet (a new repository, `git checkout --orphan`). */
 { kind: "unborn"; name: string } | 
-/**  분리된 HEAD 가 가리키는 커밋(태그를 체크아웃해도 git 은 HEAD 에 커밋을 적는다). */
+/**  The commit a detached HEAD points at (even after checking out a tag, git writes a commit into HEAD). */
 { kind: "detached"; commit: string };
 
 export type RepoInfo = {
@@ -6898,9 +7027,12 @@ export type RepoInfo = {
 	operation: RepoOperation | null,
 };
 
-/**  진행 중인 작업(git 의 `wt_status_get_state` 와 같은 판정). 순차 cherry-pick · revert 와 대화형 rebase 도 각각 같은 값이다. */
+/**
+ *  An operation in progress (the same judgment as git's `wt_status_get_state`). A sequential cherry-pick · revert and
+ *  an interactive rebase each have the same value as the plain one.
+ */
 export type RepoOperation = "merge" | "rebase" | "cherryPick" | "revert" | "bisect" | 
-/**  `git am`(메일 패치 적용). */
+/**  `git am` (applying mailed patches). */
 "am";
 
 /**
@@ -6967,15 +7099,21 @@ export type ResolvedTool = {
 /**  서버 → 클라이언트 응답의 와이어 형식. [`Response`] 가 이 형태로 직렬화된다. */
 export type ResponseMessage = ({ jsonrpc: JsonRpcVersion; id: Id; result: JsonValue }) & { error?: never } | ({ jsonrpc: JsonRpcVersion; id: Id; error: RpcError }) & { result?: never };
 
-/**  등급. 순서가 위험도 순서다 — 여러 문장의 합산은 가장 높은 등급(`Ord::max`). */
+/**  Risk grade. The order is the order of risk — several statements combine to the highest grade (`Ord::max`). */
 export type RiskGrade = 
-/**  조회 — 데이터를 바꾸지 않는다. */
+/**  A read — does not change data. */
 "read" | 
-/**  쓰기(키로 한정한 `UPDATE` · `INSERT` · 부작용 함수가 든 `SELECT` · 트랜잭션 제어 등). */
+/**
+ *  A write (a key-scoped `UPDATE` · `INSERT`, a `SELECT` with a side-effecting function, transaction control,
+ *  etc.).
+ */
 "write" | 
-/**  범위 없는 쓰기(WHERE 가 없거나 항진식인 `UPDATE` · `DELETE`). */
+/**  An unscoped write (an `UPDATE` · `DELETE` with no WHERE or an always-true one). */
 "unboundedWrite" | "ddl" | 
-/**  파괴(`DROP` · `TRUNCATE`). 파서가 읽지 못한 문장도 여기다(까닭 `unparsed`, fail-closed). */
+/**
+ *  Destructive (`DROP` · `TRUNCATE`). A statement the parser could not read also lands here (reason `unparsed`,
+ *  fail-closed).
+ */
 "destructive";
 
 /**  까닭. 창(M3-19 의 확인 다이얼로그)이 문구로 바꿔 보인다 — 이름을 바꾸면 그 문구 표도 고친다. */
@@ -7288,61 +7426,71 @@ export type SetTrustParams = {
 	trusted: boolean,
 };
 
-/**  값 하나(테이블이 아닌 것 — 배열은 통째로 한 값이다). */
+/**  One value (not a table — an array is one value as a whole). */
 export type SettingEntry = {
-	/**  표와 키를 점으로 이은 것(`mcp.preset`). 점 · 공백 등이 든 키 이름은 큰따옴표로 감싼다(`mcp.tools."project_*"`). */
+	/**
+	 *  Table and key joined with dots (`mcp.preset`). A key name containing dots, spaces and the like is quoted with
+	 *  double quotes (`mcp.tools."project_*"`).
+	 */
 	key: string,
-	/**  이긴 레이어의 값. `redacted` 면 가린 값이다. */
+	/**  The value from the winning layer. When `redacted`, the value is hidden. */
 	value: JsonValue,
 	layer: SettingLayer,
-	/**  키 이름이 비밀을 가리켜(`token` · `password` · `apiKey` …) 값(또는 그 안의 비밀 키 값)을 가렸다. */
+	/**
+	 *  The key name points at a secret (`token` · `password` · `apiKey` …), so the value (or the secret key values
+	 *  inside it) is hidden.
+	 */
 	redacted: boolean,
 };
 
-/**  값이 온 레이어. 아래(먼저 적용)부터 `builtin` → `global` → `shared` → `personal` 이다. */
+/**  The layer a value came from. From the bottom (applied first): `builtin` → `global` → `shared` → `personal`. */
 export type SettingLayer = 
-/**  앱의 내장 기본값. */
+/**  The app's built-in default. */
 "builtin" | 
-/**  전역 설정(`$CONFIG/settings.toml` · `settings.local.toml`). */
+/**  Global settings (`$CONFIG/settings.toml` · `settings.local.toml`). */
 "global" | 
-/**  저장소에 커밋되는 프로젝트 설정(`.pitwall/project.toml`). */
+/**  Project settings committed to the repository (`.pitwall/project.toml`). */
 "shared" | 
-/**  커밋되지 않는 개인 프로젝트 설정(`.pitwall/project.local.toml`, 개인 전용 프로젝트의 `$CONFIG/projects/<slug>/` 파일). */
+/**
+ *  Personal project settings that are not committed (`.pitwall/project.local.toml`, or the files in
+ *  `$CONFIG/projects/<slug>/` for a personal-only project).
+ */
 "personal";
 
-/**  읽은 설정 파일 하나. */
+/**  One settings file that was read. */
 export type SettingsFileInfo = {
 	layer: SettingLayer,
 	path: string,
 	schema: number,
-	/**  앱보다 새 스키마라 읽기만 한 파일(값은 그대로 싣는다). */
+	/**  A file with a newer schema than the app, so it was only read (its values are reported as they are). */
 	readOnly: boolean,
 };
 
 export type SettingsGetToolParams = {
 	/**
-	 *  없으면(`null`) 전역 설정, 있으면 그 프로젝트의 병합된 설정(전역 위에 프로젝트 설정). 세션에 프로젝트가 있으면 키를 빼면
-	 *  세션 프로젝트다 — 전역만 보려면 `null` 을 준다.
+	 *  Without it (`null`) the global settings; with it, that project's merged settings (project settings over the
+	 *  global ones). When the session has a project, leaving the key out means the session's project — pass `null` to
+	 *  see only the global settings.
 	 */
 	projectId?: string | null,
 	/**
-	 *  볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. 커밋된
-	 *  `.pitwall/project.toml` 은 워크트리(브랜치)마다 다를 수 있다.
+	 *  Top of the worktree to read (absolute path). Empty means the session's worktree, or else the project's main
+	 *  checkout. The committed `.pitwall/project.toml` can differ per worktree (branch).
 	 */
 	worktree?: string | null,
 	/**
-	 *  이 키와 그 아래만. 표와 키를 점으로 잇는다(`mcp`, `mcp.tools`, `open_with.default`). 점 · 공백이 든 키 이름은 결과의 `key`
-	 *  처럼 큰따옴표로 감싼다.
+	 *  Only this key and what is under it. Tables and keys are joined with dots (`mcp`, `mcp.tools`,
+	 *  `open_with.default`). Quote a key name containing dots or spaces with double quotes, as the result's `key` does.
 	 */
 	key?: string | null,
 };
 
 export type SettingsGetToolResult = {
-	/**  프로젝트의 설정이면 그 id. 전역이면 `null`. */
+	/**  The project id if these are a project's settings; `null` for the global settings. */
 	projectId: string | null,
-	/**  키 이름순. */
+	/**  Sorted by key name. */
 	entries: SettingEntry[],
-	/**  값을 읽은 설정 파일(아래 레이어부터). 내장 기본값은 없다. */
+	/**  The settings files the values were read from (lowest layer first). Built-in defaults are not listed. */
 	files: SettingsFileInfo[],
 };
 
@@ -7379,7 +7527,7 @@ export type SqlInsertTextResult = {
 	text: string,
 };
 
-/**  원문 안의 범위. UTF-16 단위, `to` 는 포함하지 않는다(CodeMirror 의 `from` · `to` 와 같다). */
+/**  Range in the source text, in UTF-16 units; `to` is exclusive (like CodeMirror's `from` · `to`). */
 export type SqlRange = {
 	from: number,
 	to: number,
@@ -7532,22 +7680,22 @@ export type Subscribed = {
 	subscriptionId: number,
 };
 
-/**  맞는 심볼 하나. 줄 · 열은 1 부터, 열은 UTF-16 코드 단위. */
+/**  One matching symbol. Lines and columns are from 1; columns are in UTF-16 code units. */
 export type SymbolSearchToolMatch = {
 	name: string,
 	kind: IndexSymbolKind,
-	/**  바깥 심볼의 이름(클래스 안 메서드의 클래스 등). */
+	/**  Name of the enclosing symbol (the class of a method in a class, etc.). */
 	container: string | null,
-	/**  파일의 절대 경로. */
+	/**  Absolute path of the file. */
 	path: string,
-	/**  프로젝트 루트 기준 상대 경로(`/` 구분). */
+	/**  Path relative to the project root (`/`-separated). */
 	relative: string,
-	/**  언어 id(`rust` · `typescript` …). */
+	/**  Language id (`rust` · `typescript` …). */
 	language: string,
-	/**  이름이 있는 줄 · 열. */
+	/**  Line and column of the name. */
 	line: number,
 	column: number,
-	/**  정의 전체의 첫 줄 · 끝 줄. */
+	/**  First and last line of the whole definition. */
 	startLine: number,
 	endLine: number,
 };
@@ -7555,33 +7703,37 @@ export type SymbolSearchToolMatch = {
 export type SymbolSearchToolParams = {
 	projectId: string,
 	/**
-	 *  볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. 그 프로젝트의 워크트리가
-	 *  아니면 invalid params.
+	 *  Top of the worktree to read (absolute path). Empty means the session's worktree, or else the project's main
+	 *  checkout. invalid params if it is not a worktree of the project.
 	 */
 	worktree?: string | null,
 	/**
-	 *  찾을 것. 공백으로 가른 낱말이 모두 심볼 이름에 맞아야 한다(낱말마다 퍼지 — 글자가 그 차례로 들면 맞는다. 낱말에 대문자가
-	 *  있을 때만 대소문자를 가린다). 비면 경로 · 위치 차례로 모든 심볼. 256 자까지.
+	 *  What to look for. Every whitespace-separated word must match the symbol name (each word fuzzily — it matches
+	 *  when its letters appear in that order; case-sensitive only when the word has an uppercase letter). Empty means
+	 *  every symbol in path · position order. Up to 256 characters.
 	 */
 	query: string,
-	/**  이 종류만. 없으면 `impl` 을 뺀 모든 종류. */
+	/**  Only these kinds. Without it, every kind except `impl`. */
 	kinds?: IndexSymbolKind[] | null,
-	/**  앞 쪽의 `nextCursor`. 비면 처음부터. */
+	/**  `nextCursor` from the previous page. Empty means from the start. */
 	cursor?: string | null,
-	/**  한 쪽의 심볼 수, 1 ~ 1000(기본 50). */
+	/**  Symbols per page, 1 – 1000 (default 50). */
 	limit?: number | null,
 };
 
 export type SymbolSearchToolResult = {
-	/**  잘 맞는 차례(같으면 짧은 이름 · 경로 · 위치 차례). */
+	/**  Best match first (ties by shorter name · path · position). */
 	symbols: SymbolSearchToolMatch[],
-	/**  맞은 심볼 수(모든 쪽을 합친 것). */
+	/**  Number of matching symbols (across all pages). */
 	matched: number,
-	/**  다음 쪽을 부를 `cursor`. 마지막 쪽이면 `null`. */
+	/**  The `cursor` for the next page. `null` on the last page. */
 	nextCursor: string | null,
-	/**  색인이 없어 찾지 않은 루트(절대 경로). 비어 있지 않으면 결과가 모자랄 수 있다 — `hint`. */
+	/**
+	 *  Roots not searched because they have no index (absolute paths). If not empty, results may be incomplete — see
+	 *  `hint`.
+	 */
 	unindexed: string[],
-	/**  `unindexed` 가 있을 때 할 일(영어 한 줄). */
+	/**  What to do when `unindexed` is not empty (one line of English). */
 	hint: string | null,
 };
 
