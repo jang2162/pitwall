@@ -1,6 +1,6 @@
 //! 에이전트 DB 툴의 승인 계획(16-m5-plan.md M5-18 ① ④ — 계획 꼴은 `pw_core::registry::plan`, 승인 경로는 `pw_mcp`).
 //!
-//! 승인을 청하는 DB 툴 호출은 둘이다:
+//! 승인을 청하는 DB 툴 호출은 셋이다(셋째 `db_connection_test` 는 `crate::connection_tool`):
 //!
 //! - **`db_execute`**(`dangerous`) — 늘 묻는다. 계획은 [`PlanChange::Sql`](실제로 돌릴 문장 전부 · 문장별 등급 · 연결 이름 · 표지 ·
 //!   `file` 이면 경로와 내용 해시 · 「되돌릴 수 없다」).
@@ -36,7 +36,8 @@ pub const EVERY_TIME: PlanRules = PlanRules {
     remember: Remember::Never,
 };
 
-/// DB 툴의 계획. `grant` 는 에이전트의 증거(대상 값을 해시에 넣는다), `dialect` 는 연결의 방언(SQL 드라이버).
+/// DB 툴의 계획. `grant` 는 에이전트의 증거(대상 값을 해시에 넣는다), `dialect` 는 연결의 방언(SQL 드라이버). 규칙은
+/// [`EVERY_TIME`] — 다른 규칙이 필요한 툴(`db_connection_test` 의 「이 연결 열기」 — `Remember::Key`)은 [`db_plan_with`].
 pub fn db_plan(
     method: &str,
     tier: Tier,
@@ -46,11 +47,31 @@ pub fn db_plan(
     summary: String,
     change: Option<PlanChange>,
 ) -> ToolPlan {
+    db_plan_with(
+        method, tier, input, grant, dialect, summary, change, EVERY_TIME,
+    )
+}
+
+/// [`db_plan`] 에 승인 규칙을 준다.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the plan's parts are separate values; db_plan keeps the shorter form"
+)]
+pub fn db_plan_with(
+    method: &str,
+    tier: Tier,
+    input: &impl Serialize,
+    grant: &DbGrant,
+    dialect: Option<SqlDialect>,
+    summary: String,
+    change: Option<PlanChange>,
+    rules: PlanRules,
+) -> ToolPlan {
     let mut builder = ToolPlan::builder(method, tier, input)
         .summary(summary)
         .target("db", &grant.plan_target())
         .target("dialect", &dialect)
-        .rules(EVERY_TIME);
+        .rules(rules);
     if let Some(change) = change {
         builder = builder.change(change);
     }

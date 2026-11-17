@@ -102,6 +102,8 @@ struct Fixture {
     release: Arc<Notify>,
     /// 앱 전용 툴을 부른 연결의 범위.
     scopes: Arc<Mutex<Vec<ConnectionScope>>>,
+    /// 앱 전용 툴을 부른 Host 연결(`Ctx::session`) — 차례대로.
+    host_sessions: Arc<Mutex<Vec<pw_rpc::SessionId>>>,
     /// 켜면 `dial` 이 앱 세션을 연다(앱이 뜬 꼴).
     app_up: Arc<AtomicBool>,
     dials: Arc<AtomicUsize>,
@@ -183,6 +185,8 @@ impl Fixture {
         );
         let scopes = Arc::new(Mutex::new(Vec::new()));
         let seen = scopes.clone();
+        let host_sessions = Arc::new(Mutex::new(Vec::new()));
+        let seen_sessions = host_sessions.clone();
         let writes = Arc::new(AtomicUsize::new(0));
         let wrote = writes.clone();
         let app_host = Arc::new(
@@ -191,6 +195,7 @@ impl Fixture {
                 .methods(move |router| {
                     router.unary(fake::AppOnly, move |ctx, ()| {
                         seen.lock().unwrap().push(ctx.scope().clone());
+                        seen_sessions.lock().unwrap().push(ctx.session());
                         async { Ok::<(), RpcError>(()) }
                     });
                     router.unary(
@@ -234,6 +239,7 @@ impl Fixture {
             started,
             release,
             scopes,
+            host_sessions,
             app_up: Arc::default(),
             dials: Arc::default(),
             cancel: CancellationToken::new(),
@@ -1142,4 +1148,35 @@ async fn a_handed_over_session_asks_for_approval() {
     assert_eq!(f.writes.load(Ordering::SeqCst), 1);
     client.close();
     let _ = tokio::time::timeout(Duration::from_secs(10), running).await;
+}
+
+/// 넘겨 붙은 앱 세션도 MCP 세션 하나가 Host 연결 하나다(16-m5-plan M5-17 — DB 의 「승인받은 연결」 은 `Ctx::session` 을 세션
+/// 열쇠로 쓴다): 넘긴 뒤 같은 클라이언트의 호출은 모두 같은 Host 연결로 오고, 다른 `pitwall mcp` 의 호출은 다른 연결로 온다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_handed_over_session_keeps_one_host_connection() {
+    let f = Fixture::new();
+    f.app_up.store(true, Ordering::SeqCst);
+    let call = |id: i64| json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": APP_ONLY, "arguments": {}}});
+    let (mut client, running) = f.start();
+    client.initialize().await;
+    for id in 1..=3 {
+        let (answer, _) = client.until_after(call(id), id).await;
+        assert_eq!(answer["result"]["isError"], json!(false), "{answer}");
+    }
+    let (mut other, other_running) = f.start();
+    other.initialize().await;
+    let (answer, _) = other.until_after(call(1), 1).await;
+    assert_eq!(answer["result"]["isError"], json!(false), "{answer}");
+
+    let seen = f.host_sessions.lock().unwrap().clone();
+    assert_eq!(seen.len(), 4, "{seen:?}");
+    assert!(seen[..3].iter().all(|s| *s == seen[0]), "{seen:?}");
+    assert_ne!(
+        seen[3], seen[0],
+        "another pitwall mcp is another Host connection"
+    );
+    client.close();
+    other.close();
+    let _ = tokio::time::timeout(Duration::from_secs(10), running).await;
+    let _ = tokio::time::timeout(Duration::from_secs(10), other_running).await;
 }

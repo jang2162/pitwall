@@ -91,7 +91,8 @@ pub enum DbToolUnusable {
     /// it.
     ProductionBlocked,
     /// The person has not opened this connection (with its current target) in Pitwall's DB explorer during this app run
-    /// — try again after the person has opened it once.
+    /// — try again after the person has opened it once, or ask the person to approve opening it for this session with
+    /// `db_connection_test`.
     NotOpenedByUser,
 }
 
@@ -364,8 +365,9 @@ rpc_method! {
     /// list (`kind`: `database` · `schema` · `table` (default) · `view`, etc. — object lists are within `database` ·
     /// `schema` and filtered by `filter`); with it, that object's columns (name · type · null · default · primary key)
     /// · indexes · foreign keys, or its DDL text with `detail: "ddl"`. Sees the same as Pitwall's DB explorer. Uses
-    /// only connections the person opened in Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` —
-    /// try again after the person has opened it once) and does not use connections marked production
+    /// only connections the person opened in Pitwall's DB explorer during this app run, or that this session was
+    /// approved to open through `db_connection_test` (otherwise `notOpenedByUser`; it never asks by itself) and does
+    /// not use connections marked production
     /// (`productionBlocked`) — unless the person set them to ask, and then each call waits for the person's approval in
     /// Pitwall. For a Redis connection, `unsupported` — use `db_kv_scan`.
     pub DbToolSchemaMethod: "db.tool.schema" {
@@ -387,8 +389,8 @@ rpc_method! {
     /// is `truncated` and the later statements do not run and are reported as `notRun` (`count` from `index`, `reason:
     /// "responseBudget"`). **There is no next page** — if a result was cut, narrow the WHERE · LIMIT · columns and call
     /// again (a new call sees a different snapshot).
-    /// Uses only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`) and
-    /// does not use a target marked production — for MySQL · MariaDB, any database on the same server · user
+    /// Uses only connections the person opened in Pitwall's DB explorer during this app run, or that this session was
+    /// approved to open through `db_connection_test` (`notOpenedByUser`), and does not use a target marked production — for MySQL · MariaDB, any database on the same server · user
     /// (`productionBlocked`) — unless the person set production targets to ask, and then each call shows its statements
     /// to the person and waits for approval in Pitwall. The result's `audit` is the detail kept in the audit log
     /// (statement count · grade · hashes) and is shown to the agent too.
@@ -406,6 +408,7 @@ impl DbSessions {
     fn tool_connection_list(
         &self,
         scope: &pw_rpc::ConnectionScope,
+        session: pw_rpc::SessionId,
         p: &DbToolConnectionListParams,
     ) -> Result<DbToolConnectionList, RpcError> {
         let c = &self.connections;
@@ -456,8 +459,13 @@ impl DbSessions {
                 } else if config.is_none() {
                     (Some(DbToolUnusable::Invalid), false)
                 } else {
-                    match crate::gate::judge_for_agent(self, &loaded, connection, None, production)
-                    {
+                    let asker = crate::gate::Asker {
+                        session: Some(session),
+                        may_ask_to_open: false,
+                    };
+                    match crate::gate::judge_for_agent(
+                        self, &loaded, connection, None, production, asker,
+                    ) {
                         Ok(binding) => (None, binding.asks_approval()),
                         Err(e) => (Some(unusable_of(&e)), false),
                     }
@@ -510,16 +518,24 @@ impl DbSessions {
         // 지금 드라이버로는 두 번째 관문이 첫 관문과 같은 판정이다 — 점 이름으로 DB 를 고르는 드라이버는 MySQL · MariaDB 뿐이고 그
         // 표지 열쇠는 DB 이름을 뺀다. DB 를 열쇠에 두면서 점 이름으로 DB 를 고르는 드라이버가 생기면 그때 갈린다(이중 방어).
         let gate = |database: Option<String>| {
-            let (s, scope, project, worktree, id) = (
+            let (s, scope, session, project, worktree, id) = (
                 Arc::clone(self),
                 ctx.scope().clone(),
+                ctx.session(),
                 p.project_id.clone(),
                 p.worktree.clone(),
                 p.connection_id.clone(),
             );
             blocking(move || {
                 let agent = agent_grant(&scope, &s.connections.host()?.projects, &project)?;
-                db_grant_for_agent(&s, &agent, worktree.as_deref(), &id, database.as_deref())
+                db_grant_for_agent(
+                    &s,
+                    &agent,
+                    session,
+                    worktree.as_deref(),
+                    &id,
+                    database.as_deref(),
+                )
             })
         };
         let first = gate(p.database.clone()).await?;
@@ -674,9 +690,10 @@ impl DbSessions {
             p.worktree.clone(),
             p.connection_id.clone(),
         );
+        let session = ctx.session();
         let mut grant = blocking(move || {
             let agent = agent_grant(&scope, &s.connections.host()?.projects, &project)?;
-            db_grant_for_agent(&s, &agent, worktree.as_deref(), &id, None)
+            db_grant_for_agent(&s, &agent, session, worktree.as_deref(), &id, None)
         })
         .await?;
         let driver = grant
@@ -985,8 +1002,8 @@ pub(crate) fn register(router: &mut Router, sessions: Arc<DbSessions>) {
             move |ctx, p: DbToolConnectionListParams| {
                 let s = Arc::clone(&list_sessions);
                 async move {
-                    let scope = ctx.scope().clone();
-                    blocking(move || s.tool_connection_list(&scope, &p)).await
+                    let (scope, session) = (ctx.scope().clone(), ctx.session());
+                    blocking(move || s.tool_connection_list(&scope, session, &p)).await
                 }
             },
         )

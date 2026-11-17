@@ -12768,7 +12768,7 @@
               },
               {
                 "const": "notOpenedByUser",
-                "description": "The person has not opened this connection (with its current target) in Pitwall's DB explorer during this app run\n— try again after the person has opened it once.",
+                "description": "The person has not opened this connection (with its current target) in Pitwall's DB explorer during this app run\n— try again after the person has opened it once, or ask the person to approve opening it for this session with\n`db_connection_test`.",
                 "type": "string"
               }
             ]
@@ -12815,6 +12815,455 @@
         "owner"
       ],
       "tier": "read"
+    },
+    "db.tool.connectionTest": {
+      "description": "Test a saved DB connection: connect, report the server version and TLS, and close. The input is the connection\nid only (no draft settings, no secrets). If the person opened this connection (with its current target) in\nPitwall's DB explorer during this app run, it follows the usual approval rules for `write`. Otherwise this asks\nthe person to **open this connection for this agent session**: the request shows its target (host · port ·\ndatabase · user · SSH tunnel, or the SQLite file), and once approved the other DB tools of this session\n(`db_schema`, `db_query`, …) may use the same connection id and target until the session ends. Connections\nwhose target is marked production are refused without asking — only the person can open them. If the\nconnection needs a password or a confirmation, the person has to give it in Pitwall (a request is shown in the\nproject window); call again after that.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "connectionId": {
+            "description": "A saved connection's id (see `db_connection_list`).",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "Top of the worktree (absolute path). Connection settings are read from that worktree. Empty means the\nsession's worktree, or else the main checkout.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "connectionId"
+        ],
+        "type": "object",
+        "x-pitwall-planned": true
+      },
+      "result": {
+        "$defs": {
+          "DbToolTls": {
+            "description": "TLS of the test connection.",
+            "oneOf": [
+              {
+                "const": "verified",
+                "description": "TLS, certificate verified.",
+                "type": "string"
+              },
+              {
+                "const": "unverified",
+                "description": "TLS, certificate not verified (or its name not checked).",
+                "type": "string"
+              },
+              {
+                "const": "plaintext",
+                "description": "No TLS.",
+                "type": "string"
+              },
+              {
+                "const": "notApplicable",
+                "description": "A file DB (SQLite) — no network.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "approvedForSession": {
+            "description": "This call was approved to open a connection the person had not opened: the other DB tools of this agent\nsession may use it too (same connection id and target) until the session ends.",
+            "type": "boolean"
+          },
+          "tls": {
+            "$ref": "#/$defs/DbToolTls"
+          },
+          "version": {
+            "description": "Version the server reported.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "version",
+          "tls",
+          "approvedForSession"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "db.tool.connectionUpsert": {
+      "description": "Create or change a DB connection's settings file — `.pitwall/db/<id>.toml` (shared, `location: \"shared\"`, the\ndefault) or `<id>.local.toml` (personal, `location: \"local\"`). `config` is the whole connection: keys left out\nare removed from that file. The person sees the file's diff and approves it in Pitwall first. **No secret is\ntaken**: `password` only says where the password comes from — `{ \"kind\": \"keychain\" }` (the person enters it in\nPitwall; a request is shown in the project window) or `{ \"kind\": \"env\", \"variable\": \"NAME\" }`. Saving does not\napprove anything: SSH tunnel destinations, certificate files and environment variables are still confirmed by\nthe person when the connection is opened. Agent DB tools do not use a connection until the person opened it in\nPitwall, or approved it through `db_connection_test`.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "DbToolConfigLocation": {
+            "description": "Which file to write.",
+            "oneOf": [
+              {
+                "const": "shared",
+                "description": "`.pitwall/db/<id>.toml` in the worktree (committed, shared with the team).",
+                "type": "string"
+              },
+              {
+                "const": "local",
+                "description": "`.pitwall/db/<id>.local.toml` in the main checkout (personal, not committed).",
+                "type": "string"
+              }
+            ]
+          },
+          "DbToolConnectionConfig": {
+            "additionalProperties": false,
+            "description": "Connection settings (the whole connection — keys left out are removed from the file). No secret values.",
+            "properties": {
+              "color": {
+                "default": null,
+                "description": "Color token or `#rrggbb`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "connectTimeout": {
+                "default": null,
+                "description": "Seconds to wait when connecting (1-600).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "database": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "driver": {
+                "$ref": "#/$defs/DriverKind"
+              },
+              "host": {
+                "default": null,
+                "description": "DB host (not for SQLite). With a tunnel, the name as seen from the SSH host.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "description": "Name shown to the person.",
+                "type": "string"
+              },
+              "password": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DbToolPasswordRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Where the password comes from (no value). None means no password."
+              },
+              "path": {
+                "default": null,
+                "description": "SQLite file (relative to the project root).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "port": {
+                "default": null,
+                "description": "The driver's default if not set.",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "production": {
+                "default": false,
+                "description": "Production mark. Agent DB tools do not use production targets; a mark once seen for a target stays for this\napp run even if removed from the file.",
+                "type": "boolean"
+              },
+              "readOnly": {
+                "default": false,
+                "type": "boolean"
+              },
+              "sshTunnel": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DbToolSshTunnel"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "sslcert": {
+                "default": null,
+                "description": "Client certificate file.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslkey": {
+                "default": null,
+                "description": "Client key file.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sslmode": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DbToolSslMode"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Without it: `disable` for a loopback host, `verify-full` otherwise."
+              },
+              "sslrootcert": {
+                "default": null,
+                "description": "CA certificate file (relative to the project root).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "user": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "driver"
+            ],
+            "type": "object"
+          },
+          "DbToolPasswordRef": {
+            "description": "Where the password comes from. There is no place for the password itself: the person enters it in Pitwall\n(`keychain`), or it is read from an environment variable of the project's runtime environment (`env`).",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "description": "The person enters the password in Pitwall (it is kept in the OS keychain). After saving, Pitwall asks the\nperson in the project window.",
+                "properties": {
+                  "kind": {
+                    "const": "keychain",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "The value of this environment variable (only its name is saved). Pitwall asks the person to confirm the\nvariable before it first sends its value.",
+                "properties": {
+                  "kind": {
+                    "const": "env",
+                    "type": "string"
+                  },
+                  "variable": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "variable"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "DbToolSshTunnel": {
+            "additionalProperties": false,
+            "description": "SSH tunnel: one destination only — a host name from `~/.ssh/config` or `ssh://[user@]host[:port]`.",
+            "properties": {
+              "hostRef": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "hostRef"
+            ],
+            "type": "object"
+          },
+          "DbToolSslMode": {
+            "description": "TLS mode (libpq meaning).",
+            "oneOf": [
+              {
+                "const": "disable",
+                "description": "No TLS.",
+                "type": "string"
+              },
+              {
+                "const": "allow",
+                "description": "Plain first, TLS if the server asks (not verified).",
+                "type": "string"
+              },
+              {
+                "const": "prefer",
+                "description": "TLS first, plain if not (not verified).",
+                "type": "string"
+              },
+              {
+                "const": "require",
+                "description": "TLS required, certificate not verified.",
+                "type": "string"
+              },
+              {
+                "const": "verify-ca",
+                "description": "TLS required, certificate chain verified (not the name).",
+                "type": "string"
+              },
+              {
+                "const": "verify-full",
+                "description": "TLS required, chain and name verified.",
+                "type": "string"
+              }
+            ]
+          },
+          "DriverKind": {
+            "description": "A built-in driver. The `driver` value in the settings file.\n\nThe driver registry is keyed by string ids ([`DriverKind::id`]), not by this enum — that is where out-of-process\ndrivers (the JDBC bridge, F6-3b) come in without changing this enum.",
+            "enum": [
+              "postgres",
+              "mysql",
+              "sqlite",
+              "redis"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "config": {
+            "$ref": "#/$defs/DbToolConnectionConfig"
+          },
+          "connectionId": {
+            "description": "Connection id (= file name): letters, digits, `-`, `_`, 1-64 characters.",
+            "type": "string"
+          },
+          "location": {
+            "$ref": "#/$defs/DbToolConfigLocation",
+            "default": "shared"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "Top of the worktree (absolute path). The shared file is written in that worktree. Empty means the session's\nworktree, or else the main checkout.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "connectionId",
+          "config"
+        ],
+        "type": "object",
+        "x-pitwall-planned": true
+      },
+      "result": {
+        "$defs": {
+          "DbToolSavedState": {
+            "description": "Whether the connection can be opened now, after saving.",
+            "oneOf": [
+              {
+                "enum": [
+                  "ready"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "untrusted",
+                "description": "The project is not trusted — no connection opens until the person trusts it.",
+                "type": "string"
+              },
+              {
+                "const": "invalid",
+                "description": "The merged settings (shared and personal file) are wrong — see the reason in Pitwall.",
+                "type": "string"
+              },
+              {
+                "const": "secretRequired",
+                "description": "The password is needed — the person enters it in Pitwall (a request was shown in the project window).",
+                "type": "string"
+              },
+              {
+                "const": "approvalRequired",
+                "description": "The person's confirmation is needed (an environment variable, SSH tunnel destination, certificate files or a\nSQLite file outside the project) — the person confirms it in Pitwall when the connection is opened.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "connectionId": {
+            "type": "string"
+          },
+          "file": {
+            "description": "The file written (absolute path).",
+            "type": "string"
+          },
+          "notice": {
+            "description": "What the person has to do next, if anything.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/$defs/DbToolSavedState"
+          }
+        },
+        "required": [
+          "connectionId",
+          "file",
+          "state",
+          "notice"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
     },
     "db.tool.execute": {
       "description": "Run SQL that changes data (SQL drivers only — PG · MySQL/MariaDB · SQLite). The input is either `sql` (text) or\n`file` (an SQL file path relative to the project root — Pitwall reads it once when it runs). Queries and writes\nmay be mixed. **Every call asks the person in Pitwall first**: the request shows every statement with its risk\ngrade, the connection and its marks (and the file path and hash for `file`), and the statements run only after\nthe person allows them — exactly the statements that were shown (if the file or the connection's target · marks\nchange after approval, nothing runs). There is no \"allow for this session\" and `auto_approve` does not apply.\nThe whole call is **one transaction**: if every statement succeeds it is committed; if one fails, the call stops\nthere, the transaction is rolled back and the database's error is returned (`error`, with statement index ·\nline) — including for statements that cannot run inside a transaction (PG `CREATE INDEX CONCURRENTLY`, `VACUUM`,\n...). Statements that commit on their own (MySQL · MariaDB DDL) cannot be rolled back (`irreversible`). Refused\nbefore asking: text that cannot be classified (cannot be parsed, or a statement over 512 KiB — run it in\nPitwall's SQL console instead), transaction control (`BEGIN` · `COMMIT` · `SAVEPOINT` ...), statements that change\nhow the server reads SQL text, and anything but queries on a read-only connection. Each statement's result is the\nnumber of rows changed, or its rows (`RETURNING`, queries — up to `maxRows`, cells cut at 4 KiB). Uses only\nconnections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`) and does not use a\ntarget marked production (`productionBlocked`) unless the person set production targets to ask. If you cancel a\ncall after its last statement ran, its commit may already have been sent: the call reports cancelled but the\nchange may be committed — check with `db_query` before calling again.",
@@ -14395,7 +14844,7 @@
       "tier": "read"
     },
     "db.tool.query": {
-      "description": "Run read-only SQL (SQL drivers only — PG · MySQL/MariaDB · SQLite). The input is either `sql` (text) or `file`\n(an SQL file path relative to the project root — Pitwall reads it when it runs). The statements are split by the\ndialect and run in order in one read-only transaction, with one result per statement (columns · rows ·\n`truncated` · duration). **Only queries run** — if any statement is not a query (a write · DDL · `SET` ·\ntransaction control · `ATTACH` · text that cannot be parsed), nothing runs and the call is refused (`notAQuery`\n— writes go through `db_execute`). If a statement fails, it stops there and returns the results so far with\n`error` (statement index · line). Rows are limited to `maxRows` per statement (default 100), cells are cut at 4\nKiB (`truncated` values). The whole response is limited to about 192 KiB — when the rows fill it, that statement\nis `truncated` and the later statements do not run and are reported as `notRun` (`count` from `index`, `reason:\n\"responseBudget\"`). **There is no next page** — if a result was cut, narrow the WHERE · LIMIT · columns and call\nagain (a new call sees a different snapshot).\nUses only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`) and\ndoes not use a target marked production — for MySQL · MariaDB, any database on the same server · user\n(`productionBlocked`) — unless the person set production targets to ask, and then each call shows its statements\nto the person and waits for approval in Pitwall. The result's `audit` is the detail kept in the audit log\n(statement count · grade · hashes) and is shown to the agent too.",
+      "description": "Run read-only SQL (SQL drivers only — PG · MySQL/MariaDB · SQLite). The input is either `sql` (text) or `file`\n(an SQL file path relative to the project root — Pitwall reads it when it runs). The statements are split by the\ndialect and run in order in one read-only transaction, with one result per statement (columns · rows ·\n`truncated` · duration). **Only queries run** — if any statement is not a query (a write · DDL · `SET` ·\ntransaction control · `ATTACH` · text that cannot be parsed), nothing runs and the call is refused (`notAQuery`\n— writes go through `db_execute`). If a statement fails, it stops there and returns the results so far with\n`error` (statement index · line). Rows are limited to `maxRows` per statement (default 100), cells are cut at 4\nKiB (`truncated` values). The whole response is limited to about 192 KiB — when the rows fill it, that statement\nis `truncated` and the later statements do not run and are reported as `notRun` (`count` from `index`, `reason:\n\"responseBudget\"`). **There is no next page** — if a result was cut, narrow the WHERE · LIMIT · columns and call\nagain (a new call sees a different snapshot).\nUses only connections the person opened in Pitwall's DB explorer during this app run, or that this session was\napproved to open through `db_connection_test` (`notOpenedByUser`), and does not use a target marked production — for MySQL · MariaDB, any database on the same server · user\n(`productionBlocked`) — unless the person set production targets to ask, and then each call shows its statements\nto the person and waits for approval in Pitwall. The result's `audit` is the detail kept in the audit log\n(statement count · grade · hashes) and is shown to the agent too.",
       "kind": "unary",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -15096,7 +15545,7 @@
       "tier": "read"
     },
     "db.tool.schema": {
-      "description": "Read a DB schema (SQL drivers only — PG · MySQL/MariaDB · SQLite). Without `object`, one page of one level's\nlist (`kind`: `database` · `schema` · `table` (default) · `view`, etc. — object lists are within `database` ·\n`schema` and filtered by `filter`); with it, that object's columns (name · type · null · default · primary key)\n· indexes · foreign keys, or its DDL text with `detail: \"ddl\"`. Sees the same as Pitwall's DB explorer. Uses\nonly connections the person opened in Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` —\ntry again after the person has opened it once) and does not use connections marked production\n(`productionBlocked`) — unless the person set them to ask, and then each call waits for the person's approval in\nPitwall. For a Redis connection, `unsupported` — use `db_kv_scan`.",
+      "description": "Read a DB schema (SQL drivers only — PG · MySQL/MariaDB · SQLite). Without `object`, one page of one level's\nlist (`kind`: `database` · `schema` · `table` (default) · `view`, etc. — object lists are within `database` ·\n`schema` and filtered by `filter`); with it, that object's columns (name · type · null · default · primary key)\n· indexes · foreign keys, or its DDL text with `detail: \"ddl\"`. Sees the same as Pitwall's DB explorer. Uses\nonly connections the person opened in Pitwall's DB explorer during this app run, or that this session was\napproved to open through `db_connection_test` (otherwise `notOpenedByUser`; it never asks by itself) and does\nnot use connections marked production\n(`productionBlocked`) — unless the person set them to ask, and then each call waits for the person's approval in\nPitwall. For a Redis connection, `unsupported` — use `db_kv_scan`.",
       "kind": "unary",
       "params": {
         "$defs": {

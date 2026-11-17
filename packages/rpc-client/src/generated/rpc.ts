@@ -271,6 +271,29 @@ export type UnaryMethods = {
 	 */
 	"db.tool.connectionList": { params: DbToolConnectionListParams; result: DbToolConnectionList };
 	/**
+	 * Test a saved DB connection: connect, report the server version and TLS, and close. The input is the connection
+	 * id only (no draft settings, no secrets). If the person opened this connection (with its current target) in
+	 * Pitwall's DB explorer during this app run, it follows the usual approval rules for `write`. Otherwise this asks
+	 * the person to **open this connection for this agent session**: the request shows its target (host · port ·
+	 * database · user · SSH tunnel, or the SQLite file), and once approved the other DB tools of this session
+	 * (`db_schema`, `db_query`, …) may use the same connection id and target until the session ends. Connections
+	 * whose target is marked production are refused without asking — only the person can open them. If the
+	 * connection needs a password or a confirmation, the person has to give it in Pitwall (a request is shown in the
+	 * project window); call again after that.
+	 */
+	"db.tool.connectionTest": { params: DbToolConnectionTestParams; result: DbToolConnectionTest };
+	/**
+	 * Create or change a DB connection's settings file — `.pitwall/db/<id>.toml` (shared, `location: "shared"`, the
+	 * default) or `<id>.local.toml` (personal, `location: "local"`). `config` is the whole connection: keys left out
+	 * are removed from that file. The person sees the file's diff and approves it in Pitwall first. **No secret is
+	 * taken**: `password` only says where the password comes from — `{ "kind": "keychain" }` (the person enters it in
+	 * Pitwall; a request is shown in the project window) or `{ "kind": "env", "variable": "NAME" }`. Saving does not
+	 * approve anything: SSH tunnel destinations, certificate files and environment variables are still confirmed by
+	 * the person when the connection is opened. Agent DB tools do not use a connection until the person opened it in
+	 * Pitwall, or approved it through `db_connection_test`.
+	 */
+	"db.tool.connectionUpsert": { params: DbToolConnectionUpsertParams; result: DbToolConnectionUpsert };
+	/**
 	 * Run SQL that changes data (SQL drivers only — PG · MySQL/MariaDB · SQLite). The input is either `sql` (text) or
 	 * `file` (an SQL file path relative to the project root — Pitwall reads it once when it runs). Queries and writes
 	 * may be mixed. **Every call asks the person in Pitwall first**: the request shows every statement with its risk
@@ -332,8 +355,8 @@ export type UnaryMethods = {
 	 * is `truncated` and the later statements do not run and are reported as `notRun` (`count` from `index`, `reason:
 	 * "responseBudget"`). **There is no next page** — if a result was cut, narrow the WHERE · LIMIT · columns and call
 	 * again (a new call sees a different snapshot).
-	 * Uses only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`) and
-	 * does not use a target marked production — for MySQL · MariaDB, any database on the same server · user
+	 * Uses only connections the person opened in Pitwall's DB explorer during this app run, or that this session was
+	 * approved to open through `db_connection_test` (`notOpenedByUser`), and does not use a target marked production — for MySQL · MariaDB, any database on the same server · user
 	 * (`productionBlocked`) — unless the person set production targets to ask, and then each call shows its statements
 	 * to the person and waits for approval in Pitwall. The result's `audit` is the detail kept in the audit log
 	 * (statement count · grade · hashes) and is shown to the agent too.
@@ -344,8 +367,9 @@ export type UnaryMethods = {
 	 * list (`kind`: `database` · `schema` · `table` (default) · `view`, etc. — object lists are within `database` ·
 	 * `schema` and filtered by `filter`); with it, that object's columns (name · type · null · default · primary key)
 	 * · indexes · foreign keys, or its DDL text with `detail: "ddl"`. Sees the same as Pitwall's DB explorer. Uses
-	 * only connections the person opened in Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` —
-	 * try again after the person has opened it once) and does not use connections marked production
+	 * only connections the person opened in Pitwall's DB explorer during this app run, or that this session was
+	 * approved to open through `db_connection_test` (otherwise `notOpenedByUser`; it never asks by itself) and does
+	 * not use connections marked production
 	 * (`productionBlocked`) — unless the person set them to ask, and then each call waits for the person's approval in
 	 * Pitwall. For a Redis connection, `unsupported` — use `db_kv_scan`.
 	 */
@@ -1320,11 +1344,13 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"db.sql.statementAt": {"name":"db.sql.statementAt","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SqlStatementAtParams","output":"SqlStatementAtResult","doc":" 커서(UTF-16 오프셋)의 「현재 문장」 — 빈 줄이 아니라 구분자 기준. 두 문장 사이면 앞 문장, 첫 문장 앞이면 첫 문장.\n 오프셋이 `sql` 의 길이를 넘으면 `INVALID_PARAMS`.\n","mcp":null,"fileScope":false},
 	"db.ssh.hosts": {"name":"db.ssh.hosts","kind":"unary","tier":"read","roles":["owner"],"params":"DbProjectParams","output":"DbSshHosts","doc":" `~/.ssh/config`(과 그 `Include`)의 `Host` 이름 — 와일드카드 · 부정 패턴이 없고 터널 목적지로 쓸 수 있는 것만. 다른 값은\n 읽지 않는다. 읽지 못하면 빈 목록. 그 프로젝트 창의 연결 + 신뢰한 프로젝트만.\n","mcp":null,"fileScope":false},
 	"db.tool.connectionList": {"name":"db.tool.connectionList","kind":"unary","tier":"read","roles":["owner"],"params":"DbToolConnectionListParams","output":"DbToolConnectionList","doc":" This project's DB connections (no secrets): id · name · driver · target (host · port · database · SQLite path) ·\n read-only · production · state, plus whether the agent DB tools can use it now (`usable`) and why not. The agent\n DB tools use only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`)\n and do not use connections marked production (`productionBlocked`) unless the person allowed it with approval for\n every call (`asksApproval`). Does not open any connection.\n","mcp":{"group":"db","name":"db_connection_list"},"fileScope":false},
+	"db.tool.connectionTest": {"name":"db.tool.connectionTest","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<DbToolConnectionTestParams>","output":"DbToolConnectionTest","doc":" Test a saved DB connection: connect, report the server version and TLS, and close. The input is the connection\n id only (no draft settings, no secrets). If the person opened this connection (with its current target) in\n Pitwall's DB explorer during this app run, it follows the usual approval rules for `write`. Otherwise this asks\n the person to **open this connection for this agent session**: the request shows its target (host · port ·\n database · user · SSH tunnel, or the SQLite file), and once approved the other DB tools of this session\n (`db_schema`, `db_query`, …) may use the same connection id and target until the session ends. Connections\n whose target is marked production are refused without asking — only the person can open them. If the\n connection needs a password or a confirmation, the person has to give it in Pitwall (a request is shown in the\n project window); call again after that.\n","mcp":{"group":"db","name":"db_connection_test"},"fileScope":false},
+	"db.tool.connectionUpsert": {"name":"db.tool.connectionUpsert","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<DbToolConnectionUpsertParams>","output":"DbToolConnectionUpsert","doc":" Create or change a DB connection's settings file — `.pitwall/db/<id>.toml` (shared, `location: \"shared\"`, the\n default) or `<id>.local.toml` (personal, `location: \"local\"`). `config` is the whole connection: keys left out\n are removed from that file. The person sees the file's diff and approves it in Pitwall first. **No secret is\n taken**: `password` only says where the password comes from — `{ \"kind\": \"keychain\" }` (the person enters it in\n Pitwall; a request is shown in the project window) or `{ \"kind\": \"env\", \"variable\": \"NAME\" }`. Saving does not\n approve anything: SSH tunnel destinations, certificate files and environment variables are still confirmed by\n the person when the connection is opened. Agent DB tools do not use a connection until the person opened it in\n Pitwall, or approved it through `db_connection_test`.\n","mcp":{"group":"db","name":"db_connection_upsert"},"fileScope":false},
 	"db.tool.execute": {"name":"db.tool.execute","kind":"unary","tier":"dangerous","roles":["owner"],"params":"Planned<DbToolExecuteParams>","output":"DbToolExecute","doc":" Run SQL that changes data (SQL drivers only — PG · MySQL/MariaDB · SQLite). The input is either `sql` (text) or\n `file` (an SQL file path relative to the project root — Pitwall reads it once when it runs). Queries and writes\n may be mixed. **Every call asks the person in Pitwall first**: the request shows every statement with its risk\n grade, the connection and its marks (and the file path and hash for `file`), and the statements run only after\n the person allows them — exactly the statements that were shown (if the file or the connection's target · marks\n change after approval, nothing runs). There is no \"allow for this session\" and `auto_approve` does not apply.\n The whole call is **one transaction**: if every statement succeeds it is committed; if one fails, the call stops\n there, the transaction is rolled back and the database's error is returned (`error`, with statement index ·\n line) — including for statements that cannot run inside a transaction (PG `CREATE INDEX CONCURRENTLY`, `VACUUM`,\n ...). Statements that commit on their own (MySQL · MariaDB DDL) cannot be rolled back (`irreversible`). Refused\n before asking: text that cannot be classified (cannot be parsed, or a statement over 512 KiB — run it in\n Pitwall's SQL console instead), transaction control (`BEGIN` · `COMMIT` · `SAVEPOINT` ...), statements that change\n how the server reads SQL text, and anything but queries on a read-only connection. Each statement's result is the\n number of rows changed, or its rows (`RETURNING`, queries — up to `maxRows`, cells cut at 4 KiB). Uses only\n connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`) and does not use a\n target marked production (`productionBlocked`) unless the person set production targets to ask. If you cancel a\n call after its last statement ran, its commit may already have been sent: the call reports cancelled but the\n change may be committed — check with `db_query` before calling again.\n","mcp":{"group":"db","name":"db_execute"},"fileScope":false},
 	"db.tool.kvGet": {"name":"db.tool.kvGet","kind":"unary","tier":"read","roles":["owner"],"params":"Planned<DbToolKvGetParams>","output":"DbToolKvGet","doc":" Read one page of a Redis key's value, by type: a string in byte windows, a hash · set in scan pages, a list ·\n zset by index, a stream by entry id, a RedisJSON document whole. `nextCursor` reads the next page; a missing key\n is `\"missing\"`. Values that are not UTF-8 come as hex bytes. The response is limited to about 192 KiB — a page\n holds fewer elements to fit, and an element too large on its own is cut (`truncated`); a stream entry with too\n many fields shows only its first fields, and a hash · set that Redis returns in one step may show only its first\n elements (`omitted` says how many — the rest cannot be read through this tool). An element that cannot fit even\n cut is left out with `omitted.shown: 0`. In every case `nextCursor` continues after what this page covered, so\n reading never stops at one large element. A call is refused only when even an empty page cannot fit\n (`data.reason: \"tooLarge\"`, with `data.nextCursor`). There is no command\n input — this tool only reads. Uses only connections the person opened in Pitwall's DB explorer during this app\n run (`notOpenedByUser`) and does not use a Redis server marked production (`productionBlocked`) unless the person\n set production targets to ask (then each call waits for approval in Pitwall). Redis connections only.\n","mcp":{"group":"db","name":"db_kv_get"},"fileScope":false},
 	"db.tool.kvScan": {"name":"db.tool.kvScan","kind":"unary","tier":"read","roles":["owner"],"params":"Planned<DbToolKvScanParams>","output":"DbToolKvScan","doc":" Find Redis keys, one page at a time (Redis `SCAN` with an optional glob `match`): each key with its type · TTL ·\n size, and `nextCursor` for the next page — call again with it until `nextCursor` is missing. A page may hold\n fewer keys than `limit`, even none, while more pages remain. Keys are not repeated within one page, but **a key\n can appear again on a later page** (Redis `SCAN` may return a key twice); keys that exist for the whole scan are\n never missed. There is no command input — this tool only reads. Uses only connections the person opened in\n Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` — try again after the person has opened\n it once) and does not use a Redis server marked production — any database number on the same server · user\n (`productionBlocked`) — unless the person set production targets to ask, and then each call waits for the\n person's approval in Pitwall. Redis connections only — for SQL databases use `db_schema` · `db_query`. The only page that\n cannot be returned is one whose key name alone is larger than the response (about 192 KiB): that call is refused\n (`data.reason: \"tooLarge\"`) and `data.nextCursor` continues after it.\n","mcp":{"group":"db","name":"db_kv_scan"},"fileScope":false},
-	"db.tool.query": {"name":"db.tool.query","kind":"unary","tier":"read","roles":["owner"],"params":"Planned<DbToolQueryParams>","output":"DbToolQuery","doc":" Run read-only SQL (SQL drivers only — PG · MySQL/MariaDB · SQLite). The input is either `sql` (text) or `file`\n (an SQL file path relative to the project root — Pitwall reads it when it runs). The statements are split by the\n dialect and run in order in one read-only transaction, with one result per statement (columns · rows ·\n `truncated` · duration). **Only queries run** — if any statement is not a query (a write · DDL · `SET` ·\n transaction control · `ATTACH` · text that cannot be parsed), nothing runs and the call is refused (`notAQuery`\n — writes go through `db_execute`). If a statement fails, it stops there and returns the results so far with\n `error` (statement index · line). Rows are limited to `maxRows` per statement (default 100), cells are cut at 4\n KiB (`truncated` values). The whole response is limited to about 192 KiB — when the rows fill it, that statement\n is `truncated` and the later statements do not run and are reported as `notRun` (`count` from `index`, `reason:\n \"responseBudget\"`). **There is no next page** — if a result was cut, narrow the WHERE · LIMIT · columns and call\n again (a new call sees a different snapshot).\n Uses only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`) and\n does not use a target marked production — for MySQL · MariaDB, any database on the same server · user\n (`productionBlocked`) — unless the person set production targets to ask, and then each call shows its statements\n to the person and waits for approval in Pitwall. The result's `audit` is the detail kept in the audit log\n (statement count · grade · hashes) and is shown to the agent too.\n","mcp":{"group":"db","name":"db_query"},"fileScope":false},
-	"db.tool.schema": {"name":"db.tool.schema","kind":"unary","tier":"read","roles":["owner"],"params":"Planned<DbToolSchemaParams>","output":"DbToolSchema","doc":" Read a DB schema (SQL drivers only — PG · MySQL/MariaDB · SQLite). Without `object`, one page of one level's\n list (`kind`: `database` · `schema` · `table` (default) · `view`, etc. — object lists are within `database` ·\n `schema` and filtered by `filter`); with it, that object's columns (name · type · null · default · primary key)\n · indexes · foreign keys, or its DDL text with `detail: \"ddl\"`. Sees the same as Pitwall's DB explorer. Uses\n only connections the person opened in Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` —\n try again after the person has opened it once) and does not use connections marked production\n (`productionBlocked`) — unless the person set them to ask, and then each call waits for the person's approval in\n Pitwall. For a Redis connection, `unsupported` — use `db_kv_scan`.\n","mcp":{"group":"db","name":"db_schema"},"fileScope":false},
+	"db.tool.query": {"name":"db.tool.query","kind":"unary","tier":"read","roles":["owner"],"params":"Planned<DbToolQueryParams>","output":"DbToolQuery","doc":" Run read-only SQL (SQL drivers only — PG · MySQL/MariaDB · SQLite). The input is either `sql` (text) or `file`\n (an SQL file path relative to the project root — Pitwall reads it when it runs). The statements are split by the\n dialect and run in order in one read-only transaction, with one result per statement (columns · rows ·\n `truncated` · duration). **Only queries run** — if any statement is not a query (a write · DDL · `SET` ·\n transaction control · `ATTACH` · text that cannot be parsed), nothing runs and the call is refused (`notAQuery`\n — writes go through `db_execute`). If a statement fails, it stops there and returns the results so far with\n `error` (statement index · line). Rows are limited to `maxRows` per statement (default 100), cells are cut at 4\n KiB (`truncated` values). The whole response is limited to about 192 KiB — when the rows fill it, that statement\n is `truncated` and the later statements do not run and are reported as `notRun` (`count` from `index`, `reason:\n \"responseBudget\"`). **There is no next page** — if a result was cut, narrow the WHERE · LIMIT · columns and call\n again (a new call sees a different snapshot).\n Uses only connections the person opened in Pitwall's DB explorer during this app run, or that this session was\n approved to open through `db_connection_test` (`notOpenedByUser`), and does not use a target marked production — for MySQL · MariaDB, any database on the same server · user\n (`productionBlocked`) — unless the person set production targets to ask, and then each call shows its statements\n to the person and waits for approval in Pitwall. The result's `audit` is the detail kept in the audit log\n (statement count · grade · hashes) and is shown to the agent too.\n","mcp":{"group":"db","name":"db_query"},"fileScope":false},
+	"db.tool.schema": {"name":"db.tool.schema","kind":"unary","tier":"read","roles":["owner"],"params":"Planned<DbToolSchemaParams>","output":"DbToolSchema","doc":" Read a DB schema (SQL drivers only — PG · MySQL/MariaDB · SQLite). Without `object`, one page of one level's\n list (`kind`: `database` · `schema` · `table` (default) · `view`, etc. — object lists are within `database` ·\n `schema` and filtered by `filter`); with it, that object's columns (name · type · null · default · primary key)\n · indexes · foreign keys, or its DDL text with `detail: \"ddl\"`. Sees the same as Pitwall's DB explorer. Uses\n only connections the person opened in Pitwall's DB explorer during this app run, or that this session was\n approved to open through `db_connection_test` (otherwise `notOpenedByUser`; it never asks by itself) and does\n not use connections marked production\n (`productionBlocked`) — unless the person set them to ask, and then each call waits for the person's approval in\n Pitwall. For a Redis connection, `unsupported` — use `db_kv_scan`.\n","mcp":{"group":"db","name":"db_schema"},"fileScope":false},
 	"diag.collect": {"name":"diag.collect","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"DiagnosticsText","doc":" 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.\n 경로 · 비밀 · 홈 디렉터리 이름은 가린다.\n","mcp":null,"fileScope":false},
 	"ext.list": {"name":"ext.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ExtensionList","doc":" 등록된 확장과 읽는 중에 나온 진단.\n","mcp":null,"fileScope":false},
 	"fs.copy": {"name":"fs.copy","kind":"unary","tier":"write","roles":["owner"],"params":"FsFromToParams","output":"FsCopied","doc":" 파일이나 폴더(그 아래 전부)를 복사한다. 심링크는 따르지 않고 링크로 복사한다. 대상 이름이 있으면 덮지 않고 `CONFLICT`.\n","mcp":null,"fileScope":false},
@@ -2771,6 +2797,15 @@ export type DbSecretClearParams = {
 /**  비밀의 종류. 지금은 비밀번호 하나다. */
 export type DbSecretKey = "password";
 
+/**  [`TOPIC_SECRET_REQUESTED`] 의 payload. 비밀 값은 없다. */
+export type DbSecretRequested = {
+	connectionId: string,
+	/**  연결 이름(설정의 `name`). */
+	name: string,
+	/**  그 연결 설정을 읽은 워크트리 꼭대기(없으면 메인 체크아웃). */
+	worktree: string | null,
+};
+
 export type DbSecretSetParams = {
 	projectId: string,
 	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 공유 설정을 그 워크트리에서 읽는다. */
@@ -3039,6 +3074,13 @@ export type DbToolColumn = {
 	comment: string | null,
 };
 
+/**  Which file to write. */
+export type DbToolConfigLocation = 
+/**  `.pitwall/db/<id>.toml` in the worktree (committed, shared with the team). */
+"shared" | 
+/**  `.pitwall/db/<id>.local.toml` in the main checkout (personal, not committed). */
+"local";
+
 /**  One connection (no secrets). */
 export type DbToolConnection = {
 	/**  Connection id (`connectionId` for the other DB tools). */
@@ -3073,6 +3115,42 @@ export type DbToolConnection = {
 	message: string | null,
 };
 
+/**  Connection settings (the whole connection — keys left out are removed from the file). No secret values. */
+export type DbToolConnectionConfig = {
+	/**  Name shown to the person. */
+	name: string,
+	driver: DriverKind,
+	/**  DB host (not for SQLite). With a tunnel, the name as seen from the SSH host. */
+	host?: string | null,
+	/**  The driver's default if not set. */
+	port?: number | null,
+	database?: string | null,
+	user?: string | null,
+	/**  Where the password comes from (no value). None means no password. */
+	password?: DbToolPasswordRef | null,
+	readOnly?: boolean,
+	/**
+	 *  Production mark. Agent DB tools do not use production targets; a mark once seen for a target stays for this
+	 *  app run even if removed from the file.
+	 */
+	production?: boolean,
+	/**  Color token or `#rrggbb`. */
+	color?: string | null,
+	/**  Without it: `disable` for a loopback host, `verify-full` otherwise. */
+	sslmode?: DbToolSslMode | null,
+	/**  CA certificate file (relative to the project root). */
+	sslrootcert?: string | null,
+	/**  Client certificate file. */
+	sslcert?: string | null,
+	/**  Client key file. */
+	sslkey?: string | null,
+	sshTunnel?: DbToolSshTunnel | null,
+	/**  SQLite file (relative to the project root). */
+	path?: string | null,
+	/**  Seconds to wait when connecting (1-600). */
+	connectTimeout?: number | null,
+};
+
 export type DbToolConnectionList = {
 	/**  Sorted by id. */
 	connections: DbToolConnection[],
@@ -3103,6 +3181,50 @@ export type DbToolConnectionState =
 "secretRequired" | 
 /**  The person's confirmation is needed — the person confirms it in Pitwall. */
 "approvalRequired" | "ready";
+
+export type DbToolConnectionTest = {
+	/**  Version the server reported. */
+	version: string | null,
+	tls: DbToolTls,
+	/**
+	 *  This call was approved to open a connection the person had not opened: the other DB tools of this agent
+	 *  session may use it too (same connection id and target) until the session ends.
+	 */
+	approvedForSession: boolean,
+};
+
+export type DbToolConnectionTestParams = {
+	projectId: string,
+	/**
+	 *  Top of the worktree (absolute path). Connection settings are read from that worktree. Empty means the
+	 *  session's worktree, or else the main checkout.
+	 */
+	worktree?: string | null,
+	/**  A saved connection's id (see `db_connection_list`). */
+	connectionId: string,
+};
+
+export type DbToolConnectionUpsert = {
+	connectionId: string,
+	/**  The file written (absolute path). */
+	file: string,
+	state: DbToolSavedState,
+	/**  What the person has to do next, if anything. */
+	notice: string | null,
+};
+
+export type DbToolConnectionUpsertParams = {
+	projectId: string,
+	/**
+	 *  Top of the worktree (absolute path). The shared file is written in that worktree. Empty means the session's
+	 *  worktree, or else the main checkout.
+	 */
+	worktree?: string | null,
+	/**  Connection id (= file name): letters, digits, `-`, `_`, 1-64 characters. */
+	connectionId: string,
+	config: DbToolConnectionConfig,
+	location?: DbToolConfigLocation,
+};
 
 export type DbToolExecute = {
 	/**  Number of statements after splitting. */
@@ -3259,6 +3381,22 @@ export type DbToolKvScanParams = {
 	limit?: number | null,
 };
 
+/**
+ *  Where the password comes from. There is no place for the password itself: the person enters it in Pitwall
+ *  (`keychain`), or it is read from an environment variable of the project's runtime environment (`env`).
+ */
+export type DbToolPasswordRef = 
+/**
+ *  The person enters the password in Pitwall (it is kept in the OS keychain). After saving, Pitwall asks the
+ *  person in the project window.
+ */
+{ kind: "keychain" } | 
+/**
+ *  The value of this environment variable (only its name is saved). Pitwall asks the person to confirm the
+ *  variable before it first sends its value.
+ */
+{ kind: "env"; variable: string };
+
 export type DbToolQuery = {
 	/**  Number of statements after splitting. */
 	statements: number,
@@ -3300,6 +3438,20 @@ export type DbToolQueryParams = {
 	/**  Maximum rows returned per statement (1 – 10000, default 100). Not paged — past it the statement is `truncated`. */
 	maxRows?: number | null,
 };
+
+/**  Whether the connection can be opened now, after saving. */
+export type DbToolSavedState = 
+/**  The project is not trusted — no connection opens until the person trusts it. */
+"untrusted" | 
+/**  The merged settings (shared and personal file) are wrong — see the reason in Pitwall. */
+"invalid" | 
+/**  The password is needed — the person enters it in Pitwall (a request was shown in the project window). */
+"secretRequired" | 
+/**
+ *  The person's confirmation is needed (an environment variable, SSH tunnel destination, certificate files or a
+ *  SQLite file outside the project) — the person confirms it in Pitwall when the connection is opened.
+ */
+"approvalRequired" | "ready";
 
 export type DbToolSchema = {
 	level: DbToolSchemaLevel,
@@ -3371,6 +3523,37 @@ export type DbToolSchemaParams = {
 	detail?: DbToolSchemaDetail | null,
 };
 
+/**  SSH tunnel: one destination only — a host name from `~/.ssh/config` or `ssh://[user@]host[:port]`. */
+export type DbToolSshTunnel = {
+	hostRef: string,
+};
+
+/**  TLS mode (libpq meaning). */
+export type DbToolSslMode = 
+/**  No TLS. */
+"disable" | 
+/**  Plain first, TLS if the server asks (not verified). */
+"allow" | 
+/**  TLS first, plain if not (not verified). */
+"prefer" | 
+/**  TLS required, certificate not verified. */
+"require" | 
+/**  TLS required, certificate chain verified (not the name). */
+"verify-ca" | 
+/**  TLS required, chain and name verified. */
+"verify-full";
+
+/**  TLS of the test connection. */
+export type DbToolTls = 
+/**  TLS, certificate verified. */
+"verified" | 
+/**  TLS, certificate not verified (or its name not checked). */
+"unverified" | 
+/**  No TLS. */
+"plaintext" | 
+/**  A file DB (SQLite) — no network. */
+"notApplicable";
+
 /**  How the call's transaction ended. */
 export type DbToolTransaction = 
 /**  Every statement ran and the transaction was committed. */
@@ -3396,7 +3579,8 @@ export type DbToolUnusable =
 "productionBlocked" | 
 /**
  *  The person has not opened this connection (with its current target) in Pitwall's DB explorer during this app run
- *  — try again after the person has opened it once.
+ *  — try again after the person has opened it once, or ask the person to approve opening it for this session with
+ *  `db_connection_test`.
  */
 "notOpenedByUser";
 

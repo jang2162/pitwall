@@ -255,7 +255,7 @@ impl DbSessions {
         let (project, worktree, id, database) = target;
         check_text("worktree", worktree)?;
         check_database(database)?;
-        let (s, scope) = (Arc::clone(self), ctx.scope().clone());
+        let (s, scope, session) = (Arc::clone(self), ctx.scope().clone(), ctx.session());
         let (project_owned, worktree_owned, id_owned, database_owned) = (
             project.to_owned(),
             worktree.map(str::to_owned),
@@ -267,6 +267,7 @@ impl DbSessions {
             db_grant_for_agent(
                 &s,
                 &agent,
+                session,
                 worktree_owned.as_deref(),
                 &id_owned,
                 database_owned.as_deref(),

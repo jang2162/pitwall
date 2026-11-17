@@ -37,6 +37,8 @@ mod project_write;
 /// 앱 Host 가 내는 툴 전부. 이름순.
 const APP_TOOLS: &[&str] = &[
     "db_connection_list",
+    "db_connection_test",
+    "db_connection_upsert",
     "db_execute",
     "db_kv_get",
     "db_kv_scan",

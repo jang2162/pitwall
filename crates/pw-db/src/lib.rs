@@ -19,11 +19,14 @@
 //! - [`execute_tool`]: DB 쓰기 툴 메서드(`db_execute` — 16-m5-plan.md M5-18). 관문은 [`gate::db_grant_for_agent`], 파이프라인은
 //!   [`script`].
 //! - [`tool_plan`]: 에이전트 DB 툴의 승인 계획(`db_execute` · 프로덕션 `ask` 의 조회 — M5-18).
+//! - [`connection_tool`]: DB 연결 쓰기 툴 메서드(`db_connection_upsert` · `db_connection_test` — 16-m5-plan.md M5-17). 관문은
+//!   [`gate::db_grant_to_open`](「이 연결 열기」 승인).
 //!
 //! 모듈 배치의 주인은 M3-01 이다. 이후 행은 자기 모듈을 채우고, 메서드 등록 줄을 하나씩 더한다(14 「공유 부품의 주인」).
 
 pub mod config;
 pub mod connection;
+pub mod connection_tool;
 pub mod edit;
 pub mod execute;
 pub mod execute_tool;
@@ -52,4 +55,5 @@ pw_rpc::rpc_type!(
     gate::DbConfirmRequired,
     schema::DbSchemaChanged,
     settings::DbSettingRefused,
+    connection_tool::DbSecretRequested,
 );

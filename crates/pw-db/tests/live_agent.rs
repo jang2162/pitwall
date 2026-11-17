@@ -180,3 +180,60 @@ async fn live_mysql_db_schema_reads_tables_and_columns_for_an_agent() {
     )
     .await;
 }
+
+/// 실 PG 로 `db_connection_test`(`db.tool.connectionTest`, 16-m5-plan.md M5-17 의 live 완료 기준) 왕복: 사람이 연 적 없는 연결은
+/// 첫 호출이 서버에 붙지 않고 「이 연결 열기」 계획을 내고, 승인 표를 실은 둘째 호출이 실 서버에 붙어 판본을 돌려준다. 그 뒤 같은
+/// 세션의 `db_schema` 가 그 연결을 쓰고, 다른 세션은 쓰지 못한다.
+#[cfg(pw_live_pg)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_pg_db_connection_test_opens_an_approved_connection() {
+    use pw_core::registry::plan::{APPROVAL_KEY, APPROVAL_REQUIRED};
+    let (f, _w, _database) = host(LiveDb::Pg, Arc::new(pw_db_driver_pg::PgDriver::new())).await;
+    let mut agent = f.connect(ConnectionScope::Agent);
+    let params = json!({ "projectId": f.id, "connectionId": "dev" });
+    let asked = agent
+        .call("db.tool.connectionTest", params.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(asked.code, APPROVAL_REQUIRED, "{asked:?}");
+    let plan = &asked.data.unwrap()["plan"];
+    assert!(
+        plan["summary"]
+            .as_str()
+            .unwrap()
+            .starts_with("Open this DB connection for this agent session"),
+        "{plan}"
+    );
+    let mut approved = params.clone();
+    approved[APPROVAL_KEY] = json!({ "hash": plan["hash"] });
+    let tested = agent
+        .call("db.tool.connectionTest", approved)
+        .await
+        .unwrap();
+    assert!(
+        tested["version"].as_str().is_some_and(|v| !v.is_empty()),
+        "{tested}"
+    );
+    assert_eq!(tested["tls"], "plaintext", "{tested}");
+    assert_eq!(tested["approvedForSession"], true);
+    let schemas = agent
+        .call(
+            "db.tool.schema",
+            json!({ "projectId": f.id, "connectionId": "dev", "kind": "schema" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(schemas["level"], "schemas", "{schemas}");
+    let mut other = f.connect(ConnectionScope::Agent);
+    let refused = other
+        .call(
+            "db.tool.schema",
+            json!({ "projectId": f.id, "connectionId": "dev" }),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.data.as_ref().and_then(|d| d["reason"].as_str()),
+        Some("notOpenedByUser")
+    );
+}

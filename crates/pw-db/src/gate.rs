@@ -30,7 +30,9 @@
 //! [`db_grant_for_agent`] 는 `pw_core::registry::agent::agent_grant` 를 지난 호출(MCP 세션의 툴 메서드)에만 [`DbGrant`] 를 준다.
 //! 판정 순서: 연결 id 꼴 → 신뢰 게이트(`untrusted`) → 연결 설정 읽기(메인 체크아웃 · 그 워크트리 — 둘 다 표지를 기억에 더한다) →
 //! 표지(그 대상에서 이번 실행 중 본 가장 엄한 것 — 프로덕션이면 `[mcp.policy] production` 이 `block`(기본)일 때
-//! `productionBlocked`) → 「사람이 연 연결」(`notOpenedByUser`). 프로덕션 대상을 `ask` 로 지난 증거는 **호출마다 승인을 청한다**
+//! `productionBlocked`) → 「사람이 연 연결」 또는 그 MCP 세션의 「승인받은 연결」(아니면 `notOpenedByUser`). 연 적 없는 연결에 「이
+//! 연결 열기」 승인을 청하는 증거는 `db_connection_test` 의 입구 [`db_grant_to_open`] 만 준다(16-m5-plan M5-17 ③, 결정 M5-D21 —
+//! 프로덕션 대상은 그 입구도 묻지 않고 거절한다). 프로덕션 대상을 `ask` 로 지난 증거는 **호출마다 승인을 청한다**
 //! (16-m5-plan M5-18 ④): 툴은 계획(`pw_core::registry::plan`)을 만들어 승인을 받고 [`DbGrant::approve`] 로 그 증거에 단다 — 그
 //! 전에는 연결을 여는 자리 · 스키마 캐시가 그 증거를 거절한다(fail-closed). 정책은 MCP 세션과 같은 함수로 읽는다
 //! (`pw_core::config::mcp_policy` — 사람의 설정에서만, 메인 판정 2026-11-17). 거절은 모두
@@ -41,6 +43,10 @@
 //! - **「사람이 연 연결」**: 그 프로젝트 창의 증거([`db_grant`])로 저장한 연결을 드라이버까지 연 적이 있는 (프로젝트, 연결 id, 푼
 //!   대상). 연결을 여는 길은 모두 `crate::connection` 의 한 자리를 지나므로(세션 · 메타데이터 · 쪽 읽기 · 연결 테스트) 거기서
 //!   기록한다. 저장 전 초안의 연결 테스트는 기록하지 않는다. `DbSessions` 의 메모리에만 있다(앱을 끄면 사라진다).
+//! - **「승인받은 연결」**(M5-17): `db_connection_test` 가 「이 연결 열기」 승인을 받은 (MCP 세션, 프로젝트, 연결 id, 푼 대상). MCP
+//!   세션 하나가 Host 연결 하나라 세션 열쇠는 `pw_rpc::Ctx::session` 이다. 그 세션의 다른 DB 툴도 그 연결을 쓰고, 세션이 끝나면
+//!   지운다. 「사람이 연 연결」 기록과 섞지 않는다 — 에이전트의 증거로 연 연결은 그 기록에 더하지 않는다. 프로덕션 대상은 이
+//!   기록으로 지나지 못한다.
 //! - **표지**([`DbMarks`]): `Connections` 가 연결 설정을 읽어 올리는 자리(`load` · `refresh` — 목록 · 열기 · 툴 호출, 어느
 //!   워크트리의 것이든)에서 연결마다 프로덕션 · read-only 표지를 그 **푼 대상**([`DbTarget`])에 묶어 더한다. 연결 id 와 무관하고
 //!   사람이 열었는지와도 무관하다. 조여지기만 한다 — 설정에서 지워도, 표지 없는 새 연결 id 로 같은 대상을 가리켜도 남는다.
@@ -475,11 +481,11 @@ mod agent;
 
 pub use agent::{
     AgentBinding, DbMarks, DbPlanTarget, DbTarget, NOT_OPENED_BY_USER, PRODUCTION_BLOCKED,
-    db_grant_for_agent, not_opened_by_user, production_blocked,
+    db_grant_for_agent, db_grant_to_open, not_opened_by_user, production_blocked,
 };
 pub(crate) use agent::{
-    MarkMemory, OpenedMemory, UNREADABLE_SETTINGS, agent_view, invalid_settings, judge_for_agent,
-    production_policy,
+    ApprovedMemory, Asker, MarkMemory, OpenedMemory, UNREADABLE_SETTINGS, agent_view,
+    invalid_settings, judge_for_agent, production_policy,
 };
 
 #[cfg(test)]

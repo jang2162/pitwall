@@ -249,9 +249,10 @@ impl DbSessions {
             p.worktree.clone(),
             p.connection_id.clone(),
         );
+        let session = ctx.session();
         let mut grant = blocking(move || {
             let agent = agent_grant(&scope, &s.connections.host()?.projects, &project)?;
-            db_grant_for_agent(&s, &agent, worktree.as_deref(), &id, None)
+            db_grant_for_agent(&s, &agent, session, worktree.as_deref(), &id, None)
         })
         .await?;
         let driver = grant

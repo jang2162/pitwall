@@ -1008,54 +1008,10 @@ impl Connections {
         params: &DbConnectionUpsertParams,
     ) -> Result<DbConnectionEntry, RpcError> {
         require_project_window(scope, &params.project_id)?;
-        check_connection_id(&params.connection_id)?;
-        validate(&params.config).map_err(RpcError::invalid_params)?;
         {
             let _writing = lock(&self.writing);
-            let loaded = self.load(&params.project_id, params.worktree.as_deref())?;
-            if let Some(twin) = loaded.case_twin(&params.connection_id) {
-                return Err(RpcError::new(
-                    code::CONFLICT,
-                    format!(
-                        "db connection `{twin}` differs from `{}` only in case; edit `{twin}` instead",
-                        params.connection_id
-                    ),
-                ));
-            }
-            let dir = match params.location {
-                DbConfigLocation::Shared => loaded.source.dir(),
-                DbConfigLocation::Local => loaded.local_dir.as_path(),
-            };
-            let file = config_file(dir, &params.connection_id, params.location);
-            // 저장소 안의 개인 파일은 링크를 따르지 않고(링크 · 프로젝트 밖으로 풀리는 `.pitwall` 은 거절), 처음 만들면
-            // `.pitwall/.gitignore` 에 `*.local.toml` 을 둔다(03 「하이브리드 정책 (D9)」, 15-m4-plan M4-17 리뷰 M1 · M2).
-            let links = match params.location {
-                DbConfigLocation::Shared => Links::Follow,
-                DbConfigLocation::Local => loaded
-                    .local_source
-                    .prepare_local_write(&file)
-                    .map_err(local_write_error)?,
-            };
-            let mut doc = match fs::read_to_string(&file) {
-                Ok(text) => text.parse::<toml_edit::DocumentMut>().map_err(|e| {
-                    RpcError::invalid_params(format!("cannot rewrite {}: {e}", file.display()))
-                })?,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => toml_edit::DocumentMut::new(),
-                Err(e) => return Err(io_error("read", &file, &e)),
-            };
-            let found = doc.get("schema").and_then(toml_edit::Item::as_integer);
-            if found.is_some_and(|v| v > i64::from(SCHEMA)) {
-                return Err(RpcError::new(
-                    code::CONFLICT,
-                    format!(
-                        "{} uses a newer schema than this app; it is not rewritten",
-                        file.display()
-                    ),
-                ));
-            }
-            write_document(&mut doc, &params.config);
-            write_file_with(&file, &doc.to_string(), links)?;
-            tracing::info!(target: "pw_db", project = %params.project_id, connection = %params.connection_id, path = %file.display(), "db connection config written");
+            let plan = self.plan_upsert(params)?;
+            self.apply_upsert(params, &plan)?;
         }
         self.refresh(&params.project_id, params.worktree.as_deref());
         self.get(&DbConnectionParams {
@@ -1063,6 +1019,96 @@ impl Connections {
             worktree: params.worktree.clone(),
             connection_id: params.connection_id.clone(),
         })
+    }
+
+    /// 연결 설정 쓰기의 계획: 쓸 파일과 그 앞뒤 내용(디스크에 쓰지 않는다 — 개인 파일의 `.gitignore` 도 [`Self::apply_upsert`] 가
+    /// 둔다). 연결 범위는 부른 쪽이 본다(창: [`require_project_window`], MCP 툴: `agent_grant`). 설정을 읽어 올리므로 표지를 기억에
+    /// 더한다. 블로킹이다.
+    pub(crate) fn plan_upsert(
+        &self,
+        params: &DbConnectionUpsertParams,
+    ) -> Result<UpsertPlan, RpcError> {
+        check_connection_id(&params.connection_id)?;
+        validate(&params.config).map_err(RpcError::invalid_params)?;
+        let loaded = self.load(&params.project_id, params.worktree.as_deref())?;
+        if let Some(twin) = loaded.case_twin(&params.connection_id) {
+            return Err(RpcError::new(
+                code::CONFLICT,
+                format!(
+                    "db connection `{twin}` differs from `{}` only in case; edit `{twin}` instead",
+                    params.connection_id
+                ),
+            ));
+        }
+        let dir = match params.location {
+            DbConfigLocation::Shared => loaded.source.dir(),
+            DbConfigLocation::Local => loaded.local_dir.as_path(),
+        };
+        let file = config_file(dir, &params.connection_id, params.location);
+        let before = match fs::read_to_string(&file) {
+            Ok(text) => Some(text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(io_error("read", &file, &e)),
+        };
+        let mut doc = match &before {
+            Some(text) => text.parse::<toml_edit::DocumentMut>().map_err(|e| {
+                RpcError::invalid_params(format!("cannot rewrite {}: {e}", file.display()))
+            })?,
+            None => toml_edit::DocumentMut::new(),
+        };
+        let found = doc.get("schema").and_then(toml_edit::Item::as_integer);
+        if found.is_some_and(|v| v > i64::from(SCHEMA)) {
+            return Err(RpcError::new(
+                code::CONFLICT,
+                format!(
+                    "{} uses a newer schema than this app; it is not rewritten",
+                    file.display()
+                ),
+            ));
+        }
+        write_document(&mut doc, &params.config);
+        Ok(UpsertPlan {
+            local_source: (params.location == DbConfigLocation::Local)
+                .then(|| loaded.local_source.clone()),
+            file,
+            before,
+            after: doc.to_string(),
+        })
+    }
+
+    /// [`Self::plan_upsert`] 의 계획을 쓴다. 부르는 쪽이 `writing` 잠금을 쥔다. 파일이 계획 때 읽은 내용(`before`)과 다르면 쓰지 않고
+    /// conflict 다 — 승인 뒤에 바뀐 파일을 계획의 diff 로 덮지 않는다(TOCTOU — `pw_core::registry::plan` 머리 주석). 저장소 안의
+    /// 개인 파일은 링크를 따르지 않는다.
+    pub(crate) fn apply_upsert(
+        &self,
+        params: &DbConnectionUpsertParams,
+        plan: &UpsertPlan,
+    ) -> Result<(), RpcError> {
+        // 저장소 안의 개인 파일은 링크를 따르지 않고(링크 · 프로젝트 밖으로 풀리는 `.pitwall` 은 거절), 처음 만들면
+        // `.pitwall/.gitignore` 에 `*.local.toml` 을 둔다(03 「하이브리드 정책 (D9)」, 15-m4-plan M4-17 리뷰 M1 · M2).
+        let links = match &plan.local_source {
+            None => Links::Follow,
+            Some(source) => source
+                .prepare_local_write(&plan.file)
+                .map_err(local_write_error)?,
+        };
+        let now = match fs::read_to_string(&plan.file) {
+            Ok(text) => Some(text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(io_error("read", &plan.file, &e)),
+        };
+        if now != plan.before {
+            return Err(RpcError::new(
+                code::CONFLICT,
+                format!(
+                    "{} changed after it was read; nothing was written",
+                    plan.file.display()
+                ),
+            ));
+        }
+        write_file_with(&plan.file, &plan.after, links)?;
+        tracing::info!(target: "pw_db", project = %params.project_id, connection = %params.connection_id, path = %plan.file.display(), "db connection config written");
+        Ok(())
     }
 
     /// `db.connection.delete`.
@@ -1110,6 +1156,19 @@ impl Connections {
         self.refresh(&params.project_id, params.worktree.as_deref());
         Ok(())
     }
+}
+
+/// 연결 설정 쓰기의 계획([`Connections::plan_upsert`]).
+#[derive(Clone)]
+pub(crate) struct UpsertPlan {
+    /// 쓸 파일.
+    pub file: PathBuf,
+    /// 계획 때 읽은 내용(없던 파일이면 `None`).
+    pub before: Option<String>,
+    /// 쓸 내용.
+    pub after: String,
+    /// 개인 파일이면 그 설정(쓰기 전의 확인 · `.gitignore`).
+    local_source: Option<ConfigSource>,
 }
 
 pub(crate) fn not_found(connection_id: &str) -> RpcError {

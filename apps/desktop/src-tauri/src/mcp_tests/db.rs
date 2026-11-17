@@ -711,3 +711,155 @@ fn finished_row(host: &ToolHost, nth: usize) -> super::AuditRow {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
 }
+
+/// 감사 행의 (툴, 결과, 승인 방식).
+fn approvals_of(host: &ToolHost) -> Vec<(String, String, Option<String>)> {
+    let conn = rusqlite::Connection::open_with_flags(
+        host.services.audit.file(),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let mut stmt = conn
+        .prepare("SELECT tool, outcome, approval FROM calls ORDER BY id")
+        .unwrap();
+    stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+}
+
+/// `db_connection_test` · `db_connection_upsert`(16-m5-plan M5-17)를 진짜 세션으로: 둘 다 그룹 `db` · 등급 `write` 이고, 입력
+/// 스키마에 `draft` · `secret` · 비밀 값 칸이 없다. **`auto_approve = ["write"]` 여도 연 적 없는 연결은 묻는다** — 창의 요청은
+/// 「이 에이전트 세션 동안 이 연결 열기」 이고 답은 [거절] · [이번만 허용] · [이 세션 동안 허용] 이며 계획이 연결의 푼 대상(SQLite
+/// 파일)을 보인다. [이번만 허용] 으로도 그 세션의 `db_schema` 가 앱의 실 SQLite 로 되고, 다른 세션에는 닿지 않는다. 승인받은 뒤
+/// 같은 세션의 `db_connection_test` 는 사람이 연 연결과 같은 보통 규칙이라 `auto_approve` 로 돈다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn db_connection_test_asks_to_open_even_with_auto_approve() {
+    use pw_mcp::approval::{Connection, McpApprovalAnswer};
+    let host = ToolHost::app();
+    let alpha = host.project("alpha");
+    host.host
+        .registry()
+        .unwrap()
+        .set_trust(&alpha, true)
+        .unwrap();
+    let root = host.base.join("work").join("alpha");
+    std::fs::write(root.join("app.db"), "").unwrap();
+    std::fs::create_dir_all(root.join(".pitwall/db")).unwrap();
+    std::fs::write(
+        root.join(".pitwall/db/lite.toml"),
+        "schema = 1\nname = \"lite\"\ndriver = \"sqlite\"\npath = \"app.db\"\n",
+    )
+    .unwrap();
+    for name in ["db_connection_test", "db_connection_upsert"] {
+        let tool = host.tool(name);
+        assert_eq!(
+            (tool.group, tool.tier),
+            ("db", pw_rpc::Tier::Write),
+            "{name}"
+        );
+    }
+    host.global_settings("[mcp]\nauto_approve = [\"write\"]\n");
+    let session = host.session(SessionRequest::default()).await;
+    let listed = session.list().await;
+    let schema_of = |name: &str| {
+        let tool = listed.iter().find(|t| t.name == name).unwrap();
+        serde_json::to_value(&tool.input_schema).unwrap()
+    };
+    let test_schema = schema_of("db_connection_test");
+    let mut keys: Vec<&str> = test_schema["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        ["connectionId", "projectId", "worktree"],
+        "{test_schema}"
+    );
+    let upsert_schema = schema_of("db_connection_upsert").to_string();
+    assert!(!upsert_schema.contains("\"secret\""), "{upsert_schema}");
+    assert!(upsert_schema.contains("keychain"), "{upsert_schema}");
+
+    let mut window =
+        host.services
+            .sessions
+            .approvals()
+            .listen(Some(&alpha), None, Connection::named("window"));
+    let args = serde_json::json!({ "projectId": alpha, "connectionId": "lite" });
+    let (ran, request) = tokio::join!(
+        session.call("db_connection_test", args.clone()),
+        window_answers(&host, &mut window, &alpha, McpApprovalAnswer::Once)
+    );
+    assert_ne!(ran.is_error, Some(true), "{ran:?}");
+    assert_eq!(structured(&ran)["approvedForSession"], true);
+    assert_eq!(request.tier, pw_rpc::Tier::Write);
+    assert_eq!(
+        request.answers,
+        [
+            McpApprovalAnswer::Deny,
+            McpApprovalAnswer::Once,
+            McpApprovalAnswer::Session
+        ]
+    );
+    assert!(
+        request
+            .plan
+            .summary
+            .starts_with("Open this DB connection for this agent session"),
+        "{}",
+        request.plan.summary
+    );
+    let change = serde_json::to_value(&request.plan.changes[0]).unwrap();
+    assert_eq!(change["kind"], "text");
+    assert!(
+        change["text"].as_str().unwrap().contains("app.db"),
+        "{change}"
+    );
+
+    let tables = session.call("db_schema", args.clone()).await;
+    assert_ne!(tables.is_error, Some(true), "{tables:?}");
+    assert_eq!(structured(&tables)["level"], "objects");
+    let other = host.session(SessionRequest::default()).await;
+    let refused = other.call("db_schema", args.clone()).await;
+    assert_eq!(
+        refused
+            .meta
+            .as_ref()
+            .and_then(|m| pw_mcp::marker::Mark::read(m)),
+        Some(pw_mcp::marker::Mark::denied(
+            pw_mcp::marker::Reason::NotOpenedByUser
+        )),
+        "{refused:?}"
+    );
+    // 승인받은 연결은 같은 세션에서 보통 규칙 — `auto_approve` 의 `write` 로 묻지 않고 돈다.
+    let again = session.call("db_connection_test", args).await;
+    assert_ne!(again.is_error, Some(true), "{again:?}");
+    assert_eq!(structured(&again)["approvedForSession"], false);
+
+    let rows: Vec<_> = approvals_of(&host)
+        .into_iter()
+        .filter(|(tool, ..)| tool != "db_connection_list")
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (
+                "db_connection_test".into(),
+                "ok".into(),
+                Some("once".into())
+            ),
+            ("db_schema".into(), "ok".into(), None),
+            ("db_schema".into(), "denied".into(), None),
+            (
+                "db_connection_test".into(),
+                "ok".into(),
+                Some("auto".into())
+            ),
+        ]
+    );
+    other.close().await;
+    session.close().await;
+}

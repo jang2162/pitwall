@@ -235,6 +235,7 @@ impl DbSessions {
         params: DbConnectionTestParams,
     ) -> Result<ServerInfo, RpcError> {
         let c = Arc::clone(&self.connections);
+        self.test_hooks.before_resolve().await;
         let (worktree, saved) = (
             params.worktree.clone(),
             params

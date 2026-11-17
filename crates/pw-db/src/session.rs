@@ -889,6 +889,8 @@ pub struct DbSessions {
     pub(crate) edit_wait_ms: AtomicU64,
     /// 「사람이 연 연결」(결정 M5-D2 — `crate::gate` 의 「에이전트의 입구」). 메모리에만 있다 — 앱을 끄면 사라진다.
     pub(crate) opened: crate::gate::OpenedMemory,
+    /// 「승인받은 연결」(16-m5-plan M5-17 — MCP 세션마다, 세션이 끝나면 지운다). 「사람이 연 연결」 과 따로 둔다.
+    pub(crate) approved: crate::gate::ApprovedMemory,
     /// 시험이 실행 길의 정해진 자리에 끼워 넣는 동작([`TestHooks`]). 앱에서는 늘 비어 있다.
     #[doc(hidden)]
     pub test_hooks: TestHooks,
@@ -980,9 +982,22 @@ impl DbSessions {
             schema: crate::schema::SchemaState::default(),
             edit_wait_ms: AtomicU64::new(0),
             opened: crate::gate::OpenedMemory::default(),
+            approved: crate::gate::ApprovedMemory::default(),
             test_hooks: TestHooks::default(),
             next_id: AtomicU64::new(1),
         }
+    }
+
+    /// 「승인받은 연결」 기록 수(시험 — 세션이 끝나면 지워지는지 본다).
+    #[doc(hidden)]
+    pub fn approved_connections(&self) -> usize {
+        self.approved.len()
+    }
+
+    /// 「사람이 연 연결」 에 (프로젝트, 연결 id)가 있는가(시험 — 대상과 무관하게).
+    #[doc(hidden)]
+    pub fn opened_by_user(&self, project_id: &str, connection_id: &str) -> bool {
+        self.opened.has_connection(project_id, connection_id)
     }
 
     /// 전역 설정(`[db]` — `crate::settings`). 연결 관리자가 갖고(연결 타임아웃 기본값 · Redis 응답 타임아웃), 세션 · 실행
@@ -1725,5 +1740,6 @@ pub fn register(router: &mut Router, sessions: Arc<DbSessions>) {
     crate::tools::register(router, Arc::clone(&sessions));
     crate::kv_tool::register(router, Arc::clone(&sessions));
     crate::execute_tool::register(router, Arc::clone(&sessions));
+    crate::connection_tool::register(router, Arc::clone(&sessions));
     crate::connection::register(router, sessions);
 }
