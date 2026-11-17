@@ -4,18 +4,27 @@
 //! 줄을 고르고 옮긴다. 줄은 고치지 않는다(합성하는 `tools/list_changed` 한 줄만 새로 쓴다).
 //!
 //! - **앱 찾기는 요청 하나에 한 번**: 넘기기 전에 `tools/list` · `tools/call` 요청이 올 때마다 소켓을 한 번 본다([`run`] 의
-//!   `dial`). 주기적으로 보지 않는다 — 요청이 없으면 일도 없다. 넘긴 뒤에는 보지 않는다.
+//!   `dial`). 주기적으로 보지 않는다 — 요청이 없으면 일도 없다. 넘긴 뒤에는 보지 않는다. 「한 번」 은 상한이다: 앱 자리에 붙지
+//!   못했거나([`Dial::Failed`] — 폴더 검사 · 핸드셰이크 시한 · 거절) 앱이 다시 보낸 `initialize` 에 답하지 않거나 거절하면
+//!   [`RETRY_AFTER`] 동안 다시 찾지 않는다. 멈춘 앱이 tools 요청마다 최대 10초(소켓 핸드셰이크 5초 + [`HANDSHAKE_TIMEOUT`])씩
+//!   층을 붙잡지 않게 하고, 그 경고는 한 번만 남긴다(다음부터 debug). 앱이 없는 것([`Dial::Absent`])은 물러나지 않는다.
 //! - **넘겨 붙기**: 앱이 받으면 클라이언트가 헤드리스에 보냈던 `initialize` 와 `notifications/initialized` 를 그대로 앱에 다시
 //!   보내 앱 쪽 세션을 연다(같은 핸드셰이크 · 같은 클라이언트 이름). 앱의 `initialize` 응답은 클라이언트에 보내지 않는다 — 이미
 //!   헤드리스의 응답을 받았다. 2026-07-28 클라이언트는 `initialize` 가 없고 요청마다 `_meta` 를 싣는다 — 다시 보낼 것이 없다.
-//!   그 클라이언트가 헤드리스에 열어 둔 `subscriptions/listen` 은 같은 줄로 앱에 다시 열어 그 구독(같은 요청 id)을 앱으로 옮긴다
-//!   (앱이 보내는 두 번째 수락 알림은 삼킨다). 그 뒤 `tools/list_changed` 를 클라이언트에 보낸다 — 2025-11-25 까지는 그냥,
-//!   2026-07-28 은 툴 목록 변경을 받겠다고 한 구독마다 그 구독 id 를 실어서. 넘기게 한 요청부터 앱이 받는다.
+//!   그 클라이언트가 헤드리스에 열어 둔 `subscriptions/listen` 은 같은 줄로 앱에 다시 열어 그 구독(같은 요청 id)을 앱으로 옮긴다.
+//!   그 뒤 `tools/list_changed` 를 클라이언트에 보낸다 — 2025-11-25 까지는 그냥, 2026-07-28 은 툴 목록 변경을 받겠다고 한
+//!   구독마다 그 구독 id 를 실어서. 넘기게 한 요청부터 앱이 받는다.
+//! - **2026-07-28 구독의 수락이 언제나 먼저다**: 클라이언트(rmcp 의 `listen`)는 수락 알림보다 다른 알림이 먼저 오면 구독을
+//!   실패로 끝낸다. 헤드리스의 수락을 이미 클라이언트에 옮긴 구독은 앱의 두 번째 수락을 삼키고 곧바로 `list_changed` 를 보낸다.
+//!   수락 전에 옮긴 구독은 헤드리스의 수락을 버리고 앱의 수락을 첫 수락으로 통과시킨 뒤, 같은 처리 안에서 그 바로 뒤에
+//!   `list_changed` 를 쓴다. 클라이언트로 가는 줄은 모두 이 층의 한 루프가 차례로 쓰므로 그 순서가 그대로 닿는다.
 //! - **넘기기 전에 시작된 호출은 헤드리스에서 끝난다**: 요청 id 마다 받은 쪽을 적어 두고, 응답 · 취소 알림을 그쪽으로 돌린다.
 //!   헤드리스에 남은 요청이 없어지면 헤드리스의 입력을 닫는다 — 헤드리스 세션은 끝나며 감사 기록을 다 쓴다(`pw_mcp::serve`).
 //!   넘긴 뒤 헤드리스가 내는 툴 목록 알림은 버린다(목록의 주인은 앱이다).
 //! - **넘긴 뒤는 프록시와 같다**: 앱이 소켓을 닫으면 앱이 받은 요청마다 `-32001` 오류를 쓰고 [`End::AppClosed`]
 //!   (`pw_mcp::proxy` 와 같은 꼴). 클라이언트가 stdin 을 닫으면 양쪽 입력을 닫고 남은 응답을 [`DRAIN`] 까지 옮긴다.
+//! - 옮긴 구독에 헤드리스가 내는 최종 응답은 버린다. 지금 rmcp 는 입력이 닫힌 세션의 열린 `listen` 에 최종 응답을 쓰지 않지만
+//!   (리뷰에서 확인), 쓰게 되면 클라이언트는 앱의 구독이 끝났다고 읽는다 — 그 방어다.
 //! - 서버가 클라이언트에 보내는 요청의 응답은 그 요청을 낸 쪽으로 돌린다. 두 서버가 같은 id 를 쓰면 가를 수 없지만 Pitwall 의
 //!   세션은 클라이언트에 요청을 보내지 않는다.
 
@@ -35,6 +44,18 @@ use tokio_util::sync::CancellationToken;
 
 /// 앱이 다시 보낸 `initialize` 에 답하기를 기다리는 시간. 넘으면 넘기지 않고 헤드리스로 남는다(다음 요청이 다시 본다).
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// 앱 자리에 붙지 못했거나 넘기기가 실패한 뒤 다시 찾지 않는 시간.
+pub const RETRY_AFTER: Duration = Duration::from_secs(30);
+
+/// [`run`] 의 `dial` 이 앱을 한 번 찾아 본 결과.
+pub enum Dial<A> {
+    /// 앱이 없다(소켓이 없거나 받지 않는다). 정상이다 — 다음 tools 요청이 다시 본다.
+    Absent,
+    /// 앱 자리는 있는데 붙지 못했다(폴더 검사 · 핸드셰이크 시한 · 거절 등 — 그 까닭). [`RETRY_AFTER`] 동안 다시 찾지 않는다.
+    Failed(String),
+    Connected(A),
+}
 
 /// 앱을 찾을 때마다 로그에 남는 문장. 「요청 하나에 한 번」 을 진짜 바이너리 시험이 이 줄의 수로 본다.
 pub const CHECK_LOG: &str = "mcp handover: looking for the Pitwall app";
@@ -68,7 +89,7 @@ pub struct Outcome {
 }
 
 /// 앱 없이 시작한 `pitwall mcp` 의 본체: 헤드리스 세션을 프로세스 안 duplex 에 띄우고 [`run`] 을 그 앞에 세운다. 헤드리스 세션이
-/// 끝날 때까지(감사 기록을 다 쓸 때까지) 기다린 뒤 돌아온다. `dial` 은 앱 소켓에 붙어 본다(`super::connect_app`).
+/// 끝날 때까지(감사 기록을 다 쓸 때까지) 기다린 뒤 돌아온다. `dial` 은 앱 소켓에 붙어 본다(`super::dial_app`).
 pub async fn serve_headless<I, O, D, F, A>(
     services: Arc<Services>,
     request: SessionRequest,
@@ -80,7 +101,7 @@ where
     I: AsyncRead + Send + Unpin + 'static,
     O: AsyncWrite + Unpin,
     D: FnMut() -> F,
-    F: Future<Output = Option<A>>,
+    F: Future<Output = Dial<A>>,
     A: AsyncRead + AsyncWrite + Send + 'static,
 {
     let (ours, theirs) = tokio::io::duplex(64 * 1024);
@@ -199,6 +220,8 @@ struct Listen {
     line: Vec<u8>,
     /// 툴 목록 변경을 받겠다고 했다(`params.notifications.toolsListChanged`).
     tools: bool,
+    /// 헤드리스의 수락 알림을 클라이언트에 옮겼다.
+    acknowledged: bool,
 }
 
 /// 줄을 어느 쪽으로 보낼지의 상태.
@@ -218,8 +241,14 @@ struct Router<'a, O> {
     listens: Vec<Listen>,
     /// 앱으로 옮긴 구독 id. 헤드리스가 그 구독에 내는 것(최종 결과 · 알림)은 버린다.
     moved: HashSet<String>,
-    /// 앱이 아직 수락 알림을 보내지 않은 옮긴 구독. 그 알림은 클라이언트가 이미 받았으므로 삼킨다.
-    unacknowledged: HashSet<String>,
+    /// 클라이언트가 헤드리스의 수락을 이미 받은 옮긴 구독. 앱의 수락 알림은 두 번째라 삼킨다.
+    duplicate_acks: HashSet<String>,
+    /// 수락 전에 옮긴 구독 → 툴 목록 변경을 받겠다고 했는가. 앱의 수락을 첫 수락으로 통과시키고 그 뒤에 `list_changed` 를 쓴다.
+    first_acks: HashMap<String, bool>,
+    /// 이때까지 앱을 다시 찾지 않는다(넘기기가 실패한 뒤의 물러남).
+    retry_at: Option<tokio::time::Instant>,
+    /// 넘기기 실패를 경고로 남겼다 — 그 뒤로는 debug.
+    warned: bool,
 }
 
 impl<O: AsyncWrite + Unpin> Router<'_, O> {
@@ -261,7 +290,7 @@ impl<O: AsyncWrite + Unpin> Router<'_, O> {
     async fn on_client<D, F, A>(&mut self, line: Vec<u8>, dial: &mut D) -> io::Result<Option<Lines>>
     where
         D: FnMut() -> F,
-        F: Future<Output = Option<A>>,
+        F: Future<Output = Dial<A>>,
         A: AsyncRead + AsyncWrite + Send + 'static,
     {
         let mut opened = None;
@@ -280,6 +309,7 @@ impl<O: AsyncWrite + Unpin> Router<'_, O> {
                         line: line.clone(),
                         tools: value.pointer("/params/notifications/toolsListChanged")
                             == Some(&Value::Bool(true)),
+                        acknowledged: false,
                     });
                 }
                 let id = value.get("id").cloned().unwrap_or(Value::Null);
@@ -319,12 +349,23 @@ impl<O: AsyncWrite + Unpin> Router<'_, O> {
     async fn hand_over<D, F, A>(&mut self, dial: &mut D) -> io::Result<Option<Lines>>
     where
         D: FnMut() -> F,
-        F: Future<Output = Option<A>>,
+        F: Future<Output = Dial<A>>,
         A: AsyncRead + AsyncWrite + Send + 'static,
     {
-        tracing::info!("{CHECK_LOG}");
-        let Some(stream) = dial().await else {
+        if let Some(at) = self.retry_at
+            && tokio::time::Instant::now() < at
+        {
+            tracing::debug!("mcp handover: backing off after a failed handover");
             return Ok(None);
+        }
+        tracing::info!("{CHECK_LOG}");
+        let stream = match dial().await {
+            Dial::Absent => return Ok(None),
+            Dial::Failed(why) => {
+                self.failed(&why);
+                return Ok(None);
+            }
+            Dial::Connected(stream) => stream,
         };
         let (read, write) = tokio::io::split(stream);
         let mut read = BufReader::new(read);
@@ -361,11 +402,11 @@ impl<O: AsyncWrite + Unpin> Router<'_, O> {
             match tokio::time::timeout(HANDSHAKE_TIMEOUT, opened).await {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
-                    tracing::warn!(%e, "not handing over to the Pitwall app; staying headless");
+                    self.failed(&e.to_string());
                     return Ok(None);
                 }
                 Err(_) => {
-                    tracing::warn!("the Pitwall app did not answer initialize; staying headless");
+                    self.failed("the app did not answer initialize");
                     return Ok(None);
                 }
             }
@@ -373,7 +414,7 @@ impl<O: AsyncWrite + Unpin> Router<'_, O> {
         // 2026-07-28: 헤드리스에 열린 구독을 같은 요청 id 로 앱에 다시 연다.
         for listen in &self.listens {
             if let Err(e) = write_line(&mut write, &listen.line).await {
-                tracing::warn!(%e, "not handing over to the Pitwall app; staying headless");
+                self.failed(&e.to_string());
                 return Ok(None);
             }
         }
@@ -383,7 +424,11 @@ impl<O: AsyncWrite + Unpin> Router<'_, O> {
                 entry.0 = Side::App;
             }
             self.moved.insert(listen.key.clone());
-            self.unacknowledged.insert(listen.key.clone());
+            if listen.acknowledged {
+                self.duplicate_acks.insert(listen.key.clone());
+            } else {
+                self.first_acks.insert(listen.key.clone(), listen.tools);
+            }
         }
         tracing::info!("handed the mcp session over to the Pitwall app");
         self.app = Some(write);
@@ -391,11 +436,27 @@ impl<O: AsyncWrite + Unpin> Router<'_, O> {
         if self.initialize.is_some() {
             self.write_client(&list_changed(None)).await?;
         }
-        for listen in listens.iter().filter(|l| l.tools) {
-            let id: Value = serde_json::from_str(&listen.key).expect("id 의 키는 JSON 이다");
-            self.write_client(&list_changed(Some(id))).await?;
+        // 수락이 이미 클라이언트에 닿은 구독만 — 수락 전 구독은 앱의 수락 뒤에 쓴다(`on_app`).
+        for listen in listens.iter().filter(|l| l.tools && l.acknowledged) {
+            self.write_client(&list_changed(Some(key_id(&listen.key))))
+                .await?;
         }
         Ok(Some(lines(read)))
+    }
+
+    /// 앱 자리에 붙지 못했거나 넘기기가 실패했다: [`RETRY_AFTER`] 동안 다시 찾지 않는다. 경고는 처음 한 번만.
+    fn failed(&mut self, why: &str) {
+        self.retry_at = Some(tokio::time::Instant::now() + RETRY_AFTER);
+        if self.warned {
+            tracing::debug!(why, "not handing over to the Pitwall app; staying headless");
+        } else {
+            self.warned = true;
+            tracing::warn!(
+                why,
+                retry_after_secs = RETRY_AFTER.as_secs(),
+                "not handing over to the Pitwall app; staying headless (later failures are logged at debug)"
+            );
+        }
     }
 
     /// 넘긴 뒤 헤드리스에 남은 요청이 없으면 헤드리스의 입력을 닫는다 — 세션이 끝나며 감사 기록을 다 쓴다.
@@ -430,9 +491,20 @@ impl<O: AsyncWrite + Unpin> Router<'_, O> {
                 self.listens.retain(|l| l.key != key);
             }
             Message::Notification { method, value } => {
-                let moved = subscription_key(&value).is_some_and(|k| self.moved.contains(&k));
+                let subscription = subscription_key(&value);
+                let moved = subscription
+                    .as_ref()
+                    .is_some_and(|k| self.moved.contains(k));
                 if moved || (self.handed() && (method == LIST_CHANGED || method == ACKNOWLEDGED)) {
                     return Ok(());
+                }
+                if method == ACKNOWLEDGED
+                    && let Some(listen) = self
+                        .listens
+                        .iter_mut()
+                        .find(|l| Some(&l.key) == subscription.as_ref())
+                {
+                    listen.acknowledged = true;
                 }
             }
             Message::Request { key, .. } => {
@@ -452,9 +524,19 @@ impl<O: AsyncWrite + Unpin> Router<'_, O> {
             }
             Message::Notification { method, value } => {
                 if method == ACKNOWLEDGED
-                    && subscription_key(&value).is_some_and(|k| self.unacknowledged.remove(&k))
+                    && let Some(key) = subscription_key(&value)
                 {
-                    return Ok(());
+                    if self.duplicate_acks.remove(&key) {
+                        return Ok(());
+                    }
+                    if let Some(tools) = self.first_acks.remove(&key) {
+                        // 첫 수락을 먼저 쓰고 그 바로 뒤에 목록 변경 — 클라이언트는 수락 전의 다른 알림을 받으면 구독을 버린다.
+                        self.write_client(&line).await?;
+                        if tools {
+                            self.write_client(&list_changed(Some(key_id(&key)))).await?;
+                        }
+                        return Ok(());
+                    }
                 }
             }
             Message::Request { key, .. } => {
@@ -497,6 +579,11 @@ impl<O: AsyncWrite + Unpin> Router<'_, O> {
     }
 }
 
+/// id 의 키(`Value::to_string`)를 다시 id 로.
+fn key_id(key: &str) -> Value {
+    serde_json::from_str(key).expect("id 의 키는 JSON 이다")
+}
+
 /// `notifications/tools/list_changed` 한 줄. 2026-07-28 구독이면 그 구독 id 를 `_meta` 에 싣는다.
 fn list_changed(subscription: Option<Value>) -> Vec<u8> {
     let message = match subscription {
@@ -530,7 +617,7 @@ where
     O: AsyncWrite + Unpin,
     H: AsyncRead + AsyncWrite + Send + 'static,
     D: FnMut() -> F,
-    F: Future<Output = Option<A>>,
+    F: Future<Output = Dial<A>>,
     A: AsyncRead + AsyncWrite + Send + 'static,
 {
     let (from_headless, to_headless) = tokio::io::split(headless);
@@ -547,7 +634,10 @@ where
         server_requests: HashMap::new(),
         listens: Vec::new(),
         moved: HashSet::new(),
-        unacknowledged: HashSet::new(),
+        duplicate_acks: HashSet::new(),
+        first_acks: HashMap::new(),
+        retry_at: None,
+        warned: false,
     };
     // 끝내는 중이면 그 꼴과 남은 응답을 옮길 시한.
     let mut ending: Option<End> = None;

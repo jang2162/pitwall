@@ -106,20 +106,39 @@ pub async fn connect_app(
     key: &str,
     request: &SessionRequest,
 ) -> Option<tokio::net::UnixStream> {
+    match dial_app(paths, key, request).await {
+        handover::Dial::Connected(stream) => Some(stream),
+        handover::Dial::Absent => {
+            tracing::info!("no running app; serving headless");
+            None
+        }
+        handover::Dial::Failed(why) => {
+            // 다른 사용자 소유 폴더 등. 붙지 않고 헤드리스로 — 그래도 조회는 된다.
+            tracing::warn!(why, "not connecting to the app socket; serving headless");
+            None
+        }
+    }
+}
+
+/// [`connect_app`] 의 본체 — 로그를 남기지 않고 「앱이 없다」 와 「앱 자리에 붙지 못했다」 를 가른다. 넘겨 붙기(`handover`)는
+/// 이것으로 찾아 실패한 뒤 물러나고 그 경고를 한 번만 남긴다.
+#[cfg(unix)]
+pub async fn dial_app(
+    paths: &AppPaths,
+    key: &str,
+    request: &SessionRequest,
+) -> handover::Dial<tokio::net::UnixStream> {
     use pw_mcp::socket;
 
     let uid = socket::current_uid();
     let path = match socket::endpoint(key, &paths.state, &std::env::temp_dir(), uid) {
         Ok(path) => path,
-        Err(e) => {
-            tracing::warn!(%e, "no mcp socket path; serving headless");
-            return None;
-        }
+        Err(e) => return handover::Dial::Failed(format!("no mcp socket path: {e}")),
     };
     match socket::connect(&path, uid, request.clone()).await {
         Ok(stream) => {
             tracing::info!(socket = %path.display(), "connected to the running app");
-            Some(stream)
+            handover::Dial::Connected(stream)
         }
         Err(e)
             if matches!(
@@ -127,14 +146,10 @@ pub async fn connect_app(
                 std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
             ) =>
         {
-            tracing::info!(socket = %path.display(), "no running app; serving headless");
-            None
+            tracing::debug!(socket = %path.display(), "no running app");
+            handover::Dial::Absent
         }
-        Err(e) => {
-            // 다른 사용자 소유 폴더 등. 붙지 않고 헤드리스로 — 그래도 조회는 된다.
-            tracing::warn!(%e, socket = %path.display(), "not connecting to the app socket; serving headless");
-            None
-        }
+        Err(e) => handover::Dial::Failed(format!("{e} ({})", path.display())),
     }
 }
 
@@ -215,14 +230,15 @@ async fn headless(paths: AppPaths, key: &str, request: SessionRequest) -> i32 {
     let code = {
         use handover::End;
 
-        // 앱이 뜨면 넘겨 붙는다 — 시작할 때와 같은 길(`connect_app`)로 붙어 앱 쪽 세션도 같은 범위로 열린다.
+        // 앱이 뜨면 넘겨 붙는다 — 시작할 때와 같은 길(`dial_app` — `connect_app` 의 본체)로, 시작할 때와 같은 세션 요청(프로젝트 ·
+        // cwd)으로 붙는다. 앱 쪽 세션도 같은 범위 · 같은 세션 프로젝트로 열려 프로젝트의 `[mcp]` 좁히기가 그대로 걸린다.
         let (paths, request_ref) = (&paths, &request);
         let outcome = handover::serve_headless(
             Arc::clone(&headless.services),
             request.clone(),
             tokio::io::stdin(),
             tokio::io::stdout(),
-            move || connect_app(paths, key, request_ref),
+            move || dial_app(paths, key, request_ref),
         )
         .await;
         match (outcome.end, outcome.session) {

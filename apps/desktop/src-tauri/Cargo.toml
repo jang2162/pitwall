@@ -96,7 +96,7 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 # 창 열기 함수를 MockRuntime 위에서 시험한다(tauri::test::mock_app).
 tauri = { version = "2.12.3", features = ["test"] }
 # IPC 테스트에서 채널 메시지를 기다릴 시간 제한. 언어 변경을 따라가는 시험(src/i18n.rs)은 tokio 런타임에서 돈다.
-tokio = { workspace = true, features = ["time", "rt", "macros"] }
+tokio = { workspace = true, features = ["time", "rt", "macros", "test-util"] }
 # 설정 스토어를 임시 폴더에 열어 크래시 설정 · 설정 오류 로그를 시험한다.
 tempfile = "3.27.0"
 # MCP 툴 왕복 도우미(src/mcp_tests.rs): 진짜 MCP 클라이언트로 앱 Host 의 세션에 붙고 감사 로그 행을 읽는다. 버전 · 기능은 pw-mcp 의

@@ -18,7 +18,7 @@ use pw_mcp::{Catalog, HostKind, Services};
 use pw_rpc::{ConnectionScope, MethodInfo, RpcError};
 use rmcp::model::{GetMeta, JsonRpcMessage, ServerJsonRpcMessage, ServerNotification};
 use tokio::io::{AsyncReadExt, DuplexStream};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, mpsc};
 
 use super::*;
 
@@ -171,8 +171,8 @@ impl Fixture {
         }
     }
 
-    /// `pitwall mcp` 의 `connect_app` 자리: 앱이 떠 있으면 앱 세션에 붙은 연결.
-    fn dial(&self) -> impl FnMut() -> std::future::Ready<Option<DuplexStream>> + use<> {
+    /// `pitwall mcp` 의 `dial_app` 자리: 앱이 떠 있으면 앱 세션에 붙은 연결.
+    fn dial(&self) -> impl FnMut() -> std::future::Ready<Dial<DuplexStream>> + use<> {
         let (app, up, dials, cancel) = (
             self.app.clone(),
             self.app_up.clone(),
@@ -182,7 +182,7 @@ impl Fixture {
         move || {
             dials.fetch_add(1, Ordering::SeqCst);
             if !up.load(Ordering::SeqCst) {
-                return std::future::ready(None);
+                return std::future::ready(Dial::Absent);
             }
             let (ours, theirs) = tokio::io::duplex(64 * 1024);
             tokio::spawn(pw_mcp::serve(
@@ -191,7 +191,7 @@ impl Fixture {
                 tokio::io::split(theirs),
                 cancel.child_token(),
             ));
-            std::future::ready(Some(ours))
+            std::future::ready(Dial::Connected(ours))
         }
     }
 
@@ -383,6 +383,11 @@ async fn a_call_running_during_the_handover_keeps_its_answer() {
     assert!(
         before.iter().any(is_list_changed),
         "tools/list_changed 가 오지 않았다: {before:?}"
+    );
+    // 앱이 다시 받은 `initialize` 의 응답(id 0)은 클라이언트에 오지 않는다 — 같은 id 의 응답이 두 번이 된다.
+    assert!(
+        before.iter().all(|m| m.get("method").is_some()),
+        "넘기는 사이에 응답이 새었다: {before:?}"
     );
     let names = tool_names(&list);
     assert!(
@@ -603,7 +608,7 @@ async fn the_app_closing_after_the_handover_answers_its_pending_requests() {
     let mut app = Some(app_ours);
     let running = tokio::spawn(async move {
         run(stdin, &mut stdout, headless_ours, move || {
-            std::future::ready(app.take())
+            std::future::ready(app.take().map_or(Dial::Absent, Dial::Connected))
         })
         .await
     });
@@ -638,4 +643,375 @@ async fn the_app_closing_after_the_handover_answers_its_pending_requests() {
         running.await.unwrap().unwrap(),
         End::AppClosed { pending: 1 }
     );
+}
+
+/// 넘기기 전에 헤드리스에서 시작된 호출의 취소 알림은 넘긴 뒤에도 헤드리스로 간다 — 그 호출의 감사 행은 헤드리스 세션의
+/// `cancelled` 다(앱으로 가면 헤드리스의 호출은 풀릴 때까지 돌아 행이 생기지 않는다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cancel_for_a_headless_call_reaches_the_headless_session() {
+    let f = Fixture::new();
+    let (mut client, running) = f.start();
+    client.initialize().await;
+    client
+        .send(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": SLOW, "arguments": {}}}))
+        .await;
+    tokio::time::timeout(Duration::from_secs(10), f.started.notified())
+        .await
+        .expect("느린 툴이 시작하지 않았다");
+    f.app_up.store(true, Ordering::SeqCst);
+    let (list, _) = client
+        .until_after(
+            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+            2,
+        )
+        .await;
+    assert!(tool_names(&list).contains(&APP_ONLY.to_owned()));
+
+    client
+        .send(json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 1}}))
+        .await;
+    let file = f.paths.state.join("mcp").join("audit.db");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let (outcome, detail) = loop {
+        if let Ok(conn) =
+            rusqlite::Connection::open_with_flags(&file, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            && let Ok(row) = conn.query_row(
+                "SELECT outcome, detail FROM calls WHERE tool = ?1",
+                [SLOW],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+            )
+        {
+            break row;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "취소가 헤드리스에 닿지 않았다 — 헤드리스의 호출이 끝나지 않았다"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(
+        (outcome.as_str(), detail.as_deref()),
+        ("error", Some("cancelled"))
+    );
+    client.close();
+    let outcome = tokio::time::timeout(Duration::from_secs(15), running)
+        .await
+        .expect("pitwall mcp 가 끝나지 않았다")
+        .unwrap();
+    assert_eq!(outcome.end.unwrap(), End::ClientClosed);
+}
+
+// ---- 가짜 서버로 보는 갈래(시각을 멈춘 런타임 — 시한 · 물러남을 기다리지 않는다) ----
+
+/// 줄 단위 가짜 MCP 서버. 받은 줄마다 `answer` 가 준 줄을 쓰고, 돌려준 송신기로 아무 때나 줄을 끼워 넣는다.
+fn fake_server(
+    stream: DuplexStream,
+    answer: impl Fn(&Value) -> Vec<Value> + Send + 'static,
+) -> (Arc<Mutex<Vec<Value>>>, mpsc::UnboundedSender<Value>) {
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let (inject, mut injected) = mpsc::unbounded_channel::<Value>();
+    let seen = received.clone();
+    tokio::spawn(async move {
+        let (read, mut write) = tokio::io::split(stream);
+        let mut read = BufReader::new(read);
+        loop {
+            let mut line = String::new();
+            let out = tokio::select! {
+                n = read.read_line(&mut line) => match n {
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => {
+                        let value: Value = serde_json::from_str(&line).unwrap();
+                        seen.lock().unwrap().push(value.clone());
+                        answer(&value)
+                    }
+                },
+                Some(value) = injected.recv() => vec![value],
+            };
+            for value in out {
+                let mut bytes = serde_json::to_vec(&value).unwrap();
+                bytes.push(b'\n');
+                if write.write_all(&bytes).await.is_err() {
+                    return;
+                }
+            }
+        }
+    });
+    (received, inject)
+}
+
+/// 요청마다 `{"from": who}` 를 결과로 답한다.
+fn answer_from(who: &'static str) -> impl Fn(&Value) -> Vec<Value> + Clone + Send + 'static {
+    move |message| match message.get("id") {
+        Some(id) if message.get("method").is_some() => {
+            vec![json!({"jsonrpc": "2.0", "id": id, "result": {"from": who}})]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// 가짜 헤드리스 · 가짜 앱 사이에 [`run`] 을 띄운다. `app` 은 `dial` 이 부를 때마다 새 가짜 앱 연결의 답을 만든다.
+struct Fakes {
+    client: Client,
+    headless: mpsc::UnboundedSender<Value>,
+    headless_seen: Arc<Mutex<Vec<Value>>>,
+    dials: Arc<AtomicUsize>,
+    app_seen: Arc<Mutex<Vec<Value>>>,
+}
+
+impl Fakes {
+    fn start<G>(app: G) -> Self
+    where
+        G: Fn(&Value) -> Vec<Value> + Clone + Send + 'static,
+    {
+        Self::start_with(answer_from("headless"), app)
+    }
+
+    fn start_with<G>(
+        headless_answer: impl Fn(&Value) -> Vec<Value> + Send + 'static,
+        app: G,
+    ) -> Self
+    where
+        G: Fn(&Value) -> Vec<Value> + Clone + Send + 'static,
+    {
+        let (client_out, stdin) = tokio::io::duplex(64 * 1024);
+        let (mut stdout, client_in) = tokio::io::duplex(64 * 1024);
+        let (headless_ours, headless_theirs) = tokio::io::duplex(64 * 1024);
+        let (headless_seen, headless) = fake_server(headless_theirs, headless_answer);
+        let dials = Arc::new(AtomicUsize::new(0));
+        let app_seen = Arc::new(Mutex::new(Vec::new()));
+        let (counter, seen) = (dials.clone(), app_seen.clone());
+        let dial = move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let (ours, theirs) = tokio::io::duplex(64 * 1024);
+            let (app_received, _) = fake_server(theirs, app.clone());
+            // 이 연결이 받은 줄을 시험이 볼 수 있게 — 마지막 연결의 것.
+            let seen = seen.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    let lines = app_received.lock().unwrap().clone();
+                    *seen.lock().unwrap() = lines;
+                    if Arc::strong_count(&app_received) == 1 {
+                        return;
+                    }
+                }
+            });
+            std::future::ready(Dial::Connected(ours))
+        };
+        tokio::spawn(async move { run(stdin, &mut stdout, headless_ours, dial).await });
+        Self {
+            client: Client {
+                write: Some(client_out),
+                read: BufReader::new(client_in),
+            },
+            headless,
+            headless_seen,
+            dials,
+            app_seen,
+        }
+    }
+}
+
+fn refuse_initialize(message: &Value) -> Vec<Value> {
+    if message["method"] == json!("initialize") {
+        return vec![
+            json!({"jsonrpc": "2.0", "id": message["id"], "error": {"code": -32600, "message": "no"}}),
+        ];
+    }
+    answer_from("app")(message)
+}
+
+fn ignore_initialize(message: &Value) -> Vec<Value> {
+    if message["method"] == json!("initialize") {
+        return Vec::new();
+    }
+    answer_from("app")(message)
+}
+
+/// 앱이 다시 보낸 `initialize` 를 거절하면 넘기지 않는다: 넘기게 한 요청은 헤드리스가 답하고 `list_changed` 가 없다. 그 뒤
+/// [`RETRY_AFTER`] 동안은 다시 찾지 않고, 지나면 다음 tools 요청이 다시 찾는다.
+#[tokio::test(start_paused = true)]
+async fn a_refused_handover_stays_headless_and_backs_off() {
+    let mut fakes = Fakes::start(refuse_initialize);
+    let client = &mut fakes.client;
+    client.initialize().await;
+
+    client
+        .send(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+        .await;
+    let (answer, before) = client.until(1).await;
+    assert_eq!(answer["result"]["from"], json!("headless"), "{answer}");
+    assert!(before.is_empty(), "넘기지 않았는데 무언가 왔다: {before:?}");
+    assert_eq!(fakes.dials.load(Ordering::SeqCst), 1);
+
+    // 물러나는 동안은 찾지 않는다.
+    tokio::time::advance(RETRY_AFTER - Duration::from_secs(1)).await;
+    let (answer, _) = client
+        .until_after(
+            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+            2,
+        )
+        .await;
+    assert_eq!(answer["result"]["from"], json!("headless"), "{answer}");
+    assert_eq!(
+        fakes.dials.load(Ordering::SeqCst),
+        1,
+        "물러나는 동안 앱을 찾았다"
+    );
+
+    // 지나면 다시 찾는다(또 거절 — 헤드리스로 남는다).
+    tokio::time::advance(Duration::from_secs(2)).await;
+    let (answer, _) = client
+        .until_after(
+            json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}),
+            3,
+        )
+        .await;
+    assert_eq!(answer["result"]["from"], json!("headless"), "{answer}");
+    assert_eq!(fakes.dials.load(Ordering::SeqCst), 2);
+}
+
+/// 앱이 다시 보낸 `initialize` 에 [`HANDSHAKE_TIMEOUT`] 안에 답하지 않으면 넘기지 않는다 — 그 요청은 헤드리스가 답한다.
+#[tokio::test(start_paused = true)]
+async fn a_silent_app_times_out_and_stays_headless() {
+    let mut fakes = Fakes::start(ignore_initialize);
+    let client = &mut fakes.client;
+    client.initialize().await;
+    let started = tokio::time::Instant::now();
+    let (answer, before) = client
+        .until_after(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+            1,
+        )
+        .await;
+    assert_eq!(answer["result"]["from"], json!("headless"), "{answer}");
+    assert!(before.is_empty(), "{before:?}");
+    assert!(
+        started.elapsed() >= HANDSHAKE_TIMEOUT,
+        "시한을 기다리지 않았다"
+    );
+    let (_, _) = client
+        .until_after(
+            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "x"}}),
+            2,
+        )
+        .await;
+    assert_eq!(
+        fakes.dials.load(Ordering::SeqCst),
+        1,
+        "물러나는 동안 앱을 찾았다"
+    );
+}
+
+/// 넘길 때 앱의 `initialize` 응답(id 0)은 클라이언트에 가지 않는다. 클라이언트가 받는 것은 `list_changed` 와 넘기게 한 요청의 앱
+/// 응답뿐이다.
+#[tokio::test(start_paused = true)]
+async fn the_app_initialize_answer_does_not_reach_the_client() {
+    let mut fakes = Fakes::start(answer_from("app"));
+    let client = &mut fakes.client;
+    client.initialize().await;
+    let (answer, before) = client
+        .until_after(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+            1,
+        )
+        .await;
+    assert_eq!(answer["result"]["from"], json!("app"), "{answer}");
+    assert_eq!(before.len(), 1, "{before:?}");
+    assert!(is_list_changed(&before[0]), "{before:?}");
+    // 앱은 같은 initialize 를 받았다.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let app = fakes.app_seen.lock().unwrap().clone();
+    assert_eq!(app[0]["method"], json!("initialize"), "{app:?}");
+    assert_eq!(
+        app[0]["params"]["clientInfo"]["name"],
+        json!("handover-test")
+    );
+    // 클라이언트가 닫으면 남은 줄에도 id 0 응답이 없다.
+    client.close();
+    let mut rest = String::new();
+    client.read.read_to_string(&mut rest).await.unwrap();
+    assert!(!rest.contains("\"id\":0"), "{rest}");
+}
+
+/// 2026-07-28: 헤드리스가 구독을 수락하기 전에 넘기면 클라이언트는 앱의 수락을 정확히 한 번, 그 구독의 `list_changed` 보다 먼저
+/// 받는다(rmcp 클라이언트는 수락 전의 다른 알림을 받으면 구독을 실패로 끝낸다). 넘긴 뒤 늦게 온 헤드리스의 수락은 버린다.
+#[tokio::test(start_paused = true)]
+async fn a_subscription_moved_before_its_acknowledgment_is_acknowledged_first() {
+    // 헤드리스는 구독을 받기만 하고 수락하지 않는다(수락이 이 층을 지나기 전에 넘기는 꼴).
+    let acknowledge = |message: &Value| {
+        if message["method"] == json!("subscriptions/listen") {
+            return vec![json!({
+                "jsonrpc": "2.0", "method": "notifications/subscriptions/acknowledged",
+                "params": {"_meta": {"io.modelcontextprotocol/subscriptionId": message["id"]}, "notifications": {"toolsListChanged": true}},
+            })];
+        }
+        answer_from("app")(message)
+    };
+    let mut fakes = Fakes::start_with(|_: &Value| Vec::new(), acknowledge);
+    let meta = json!({
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": {"name": "handover-2026", "version": "2.0"},
+        "io.modelcontextprotocol/clientCapabilities": {},
+    });
+    // 헤드리스가 답하지 않는 ping 하나 — 헤드리스에 남은 요청이 있어 넘긴 뒤에도 헤드리스가 열려 있다(늦은 수락을 끼울 수 있게).
+    fakes
+        .client
+        .send(json!({"jsonrpc": "2.0", "id": "p", "method": "ping"}))
+        .await;
+    fakes
+        .client
+        .send(json!({
+            "jsonrpc": "2.0", "id": "listen-1", "method": "subscriptions/listen",
+            "params": {"_meta": meta, "notifications": {"toolsListChanged": true}},
+        }))
+        .await;
+    let (answer, before) = fakes
+        .client
+        .until_after(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {"_meta": meta}}),
+            1,
+        )
+        .await;
+    assert_eq!(answer["result"]["from"], json!("app"), "{answer}");
+    let methods: Vec<&str> = before
+        .iter()
+        .map(|m| m["method"].as_str().unwrap_or("<response>"))
+        .collect();
+    assert_eq!(
+        methods,
+        [
+            "notifications/subscriptions/acknowledged",
+            "notifications/tools/list_changed"
+        ],
+        "{before:?}"
+    );
+    for message in &before {
+        assert_eq!(
+            message["params"]["_meta"]["io.modelcontextprotocol/subscriptionId"],
+            json!("listen-1"),
+            "{message}"
+        );
+    }
+    assert!(
+        fakes.headless_seen.lock().unwrap()[1]["method"] == json!("subscriptions/listen"),
+        "구독은 처음에 헤드리스로 갔다"
+    );
+
+    // 헤드리스의 수락이 늦게 와도 클라이언트에 가지 않는다.
+    fakes
+        .headless
+        .send(json!({
+            "jsonrpc": "2.0", "method": "notifications/subscriptions/acknowledged",
+            "params": {"_meta": {"io.modelcontextprotocol/subscriptionId": "listen-1"}, "notifications": {"toolsListChanged": true}},
+        }))
+        .unwrap();
+    let (_, before) = fakes
+        .client
+        .until_after(
+            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {"_meta": meta}}),
+            2,
+        )
+        .await;
+    assert!(before.is_empty(), "늦은 헤드리스 수락이 갔다: {before:?}");
 }

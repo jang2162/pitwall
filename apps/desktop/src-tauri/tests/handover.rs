@@ -201,9 +201,14 @@ struct Mcp {
 
 impl Mcp {
     fn spawn(dir: &Path) -> Self {
+        Self::spawn_in(dir, dir)
+    }
+
+    /// `cwd` 에서 띄운다 — 프로젝트 안이면 그 프로젝트가 세션 프로젝트다.
+    fn spawn_in(dir: &Path, cwd: &Path) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_pitwall"))
             .arg("mcp")
-            .current_dir(dir)
+            .current_dir(cwd)
             .env("PITWALL_CONFIG_DIR", dir.join("config"))
             .env("PITWALL_DATA_DIR", dir.join("data"))
             .env("PITWALL_STATE_DIR", dir.join("state"))
@@ -480,5 +485,69 @@ fn a_call_finished_headless_keeps_its_audit_row_after_the_handover() {
         ["project_info"],
         "헤드리스에서 끝난 호출의 감사 행이 없다"
     );
+    drop(app);
+}
+
+/// 넘겨 붙은 앱 세션은 `pitwall mcp` 를 시작할 때와 같은 세션 요청(프로젝트 · cwd)으로 열린다 — 세션 프로젝트가 같고, 그 프로젝트의
+/// 커밋된 공유 설정(`.pitwall/project.toml` 의 `[mcp]`)이 끈 툴은 넘긴 뒤에도 보이지 않는다(결정 M5-D28). 빈 세션 요청으로 붙으면
+/// 세션 프로젝트가 없어 그 좁히기가 빠진다.
+#[test]
+fn the_app_session_keeps_the_session_project() {
+    let (_tmp, dir, paths) = workspace();
+    let alpha = dir.join("work").join("alpha");
+    std::fs::create_dir_all(alpha.join(".pitwall")).unwrap();
+    std::fs::write(
+        alpha.join(".pitwall").join("project.toml"),
+        "[mcp.tools]\nsettings_get = false\n",
+    )
+    .unwrap();
+    let alpha_id = Registry::new(paths.clone(), None, EventBus::new(16))
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|p| p.name == "alpha")
+        .unwrap()
+        .id;
+    let mut mcp = Mcp::spawn_in(&dir, &alpha);
+    mcp.initialize();
+    let (list, _) = mcp.request(1, "tools/list", json!({}));
+    assert_eq!(
+        tool_names(&list),
+        ["project_info", "project_list"],
+        "헤드리스 세션에 alpha 의 좁히기가 걸린다"
+    );
+
+    let app = TestApp::start(&paths);
+    let (list, before) = mcp.request(2, "tools/list", json!({}));
+    assert!(
+        before
+            .iter()
+            .any(|m| m["method"] == json!("notifications/tools/list_changed")),
+        "{before:?}"
+    );
+    let names = tool_names(&list);
+    assert!(
+        names.contains(&"handovertest_slow".to_owned()),
+        "앱의 목록이 아니다: {names:?}"
+    );
+    assert!(
+        !names.contains(&"settings_get".to_owned()),
+        "넘긴 뒤 프로젝트가 끈 툴이 보인다: {names:?}"
+    );
+    let projects: Vec<Option<String>> = app
+        .sessions
+        .list()
+        .into_iter()
+        .map(|s| s.project_id)
+        .collect();
+    assert_eq!(
+        projects,
+        [Some(alpha_id)],
+        "앱 세션의 세션 프로젝트가 alpha 다"
+    );
+
+    mcp.stdin = None;
+    let (code, stderr) = mcp.finish();
+    assert_eq!(code, Some(0), "stderr: {stderr}");
     drop(app);
 }
