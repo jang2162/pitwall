@@ -29,7 +29,7 @@
 //!
 //! [`db_grant_for_agent`] 는 `pw_core::registry::agent::agent_grant` 를 지난 호출(MCP 세션의 툴 메서드)에만 [`DbGrant`] 를 준다.
 //! 판정 순서: 연결 id 꼴 → 신뢰 게이트(`untrusted`) → 연결 설정 읽기(메인 체크아웃 · 그 워크트리 — 둘 다 표지를 기억에 더한다) →
-//! 표지(그 대상에서 이번 실행 중 본 가장 엄한 것 — 프로덕션이면 `[mcp.policy] production` 이 `block`(기본)일 때
+//! 표지(그 대상에서 본 가장 엄한 것, 앱 실행을 넘어 기억한다 — 프로덕션이면 `[mcp.policy] production` 이 `block`(기본)일 때
 //! `productionBlocked`) → 「사람이 연 연결」 또는 그 MCP 세션의 「승인받은 연결」(아니면 `notOpenedByUser`). 연 적 없는 연결에 「이
 //! 연결 열기」 승인을 청하는 증거는 `db_connection_test` 의 입구 [`db_grant_to_open`] 만 준다(16-m5-plan M5-17 ③, 결정 M5-D21 —
 //! 프로덕션 대상은 그 입구도 묻지 않고 거절한다). 프로덕션 대상을 `ask` 로 지난 증거는 **호출마다 승인을 청한다**
@@ -105,7 +105,7 @@ impl DbGrant {
         self.agent.as_deref().map(|a| a.connection_id.as_str())
     }
 
-    /// 에이전트에게 적용하는 표지(결정 M5-D37 — 그 대상에서 이번 실행 중 본 가장 엄한 것). 창의 증거면 `None` — 창은 연결 설정의
+    /// 에이전트에게 적용하는 표지(결정 M5-D37 — 그 대상에서 본 가장 엄한 것, 앱 실행을 넘어 기억한다). 창의 증거면 `None` — 창은 연결 설정의
     /// 표지를 따른다. 실행 파이프라인은 이 read-only 를 연결 설정의 것과 함께 본다(표지를 따로 읽어 판정하지 않는다).
     pub fn agent_marks(&self) -> Option<DbMarks> {
         self.agent.as_deref().map(|a| a.marks)

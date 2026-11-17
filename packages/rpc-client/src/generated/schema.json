@@ -12815,7 +12815,7 @@
                 "type": "boolean"
               },
               "readOnly": {
-                "description": "Read-only mark as applied to agents (the strictest one seen for this target during this app run).",
+                "description": "Read-only mark as applied to agents (the strictest one Pitwall has seen for this target, kept across app runs\nuntil the person forgets it in Pitwall).",
                 "type": "boolean"
               },
               "state": {

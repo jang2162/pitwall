@@ -113,7 +113,8 @@ pub struct DbToolConnection {
     pub database: Option<String>,
     /// SQLite file (as written in the settings — a relative path is relative to the project root).
     pub path: Option<String>,
-    /// Read-only mark as applied to agents (the strictest one seen for this target during this app run).
+    /// Read-only mark as applied to agents (the strictest one Pitwall has seen for this target, kept across app runs
+    /// until the person forgets it in Pitwall).
     pub read_only: bool,
     /// Production mark as applied to agents (same rule). When on, the DB tools do not use the connection — unless the
     /// person set `[mcp.policy] production = "ask"`, and then every call on it asks the person (`asksApproval`).

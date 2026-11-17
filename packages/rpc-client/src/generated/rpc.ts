@@ -3119,7 +3119,10 @@ export type DbToolConnection = {
 	database: string | null,
 	/**  SQLite file (as written in the settings — a relative path is relative to the project root). */
 	path: string | null,
-	/**  Read-only mark as applied to agents (the strictest one seen for this target during this app run). */
+	/**
+	 *  Read-only mark as applied to agents (the strictest one Pitwall has seen for this target, kept across app runs
+	 *  until the person forgets it in Pitwall).
+	 */
 	readOnly: boolean,
 	/**
 	 *  Production mark as applied to agents (same rule). When on, the DB tools do not use the connection — unless the

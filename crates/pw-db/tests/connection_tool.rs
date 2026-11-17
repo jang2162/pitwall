@@ -1326,3 +1326,76 @@ async fn agent_db_tools_fail_closed_when_the_state_database_is_read_only() {
         .await
         .unwrap();
 }
+
+/// read-only 표지도 앱 실행을 넘어 남는다(재리뷰 F2): 한 번 read-only 로 읽힌 대상의 파일에서 `read_only` 를 지우고 다시 켜도
+/// 목록이 `readOnly: true` 이고, 사람이 연 뒤의 `db_execute` 는 조회 밖을 `readOnlyConnection` 으로 거절하며, 같은 대상을 표지 없이
+/// 가리키는 새 연결 쓰기는 `lowersMarks` 다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_read_only_mark_survives_an_app_restart_after_the_file_drops_it() {
+    let mut e = env();
+    let ro = PROD.replace("production = true", "read_only = true");
+    e.f.write_db("prod.toml", &ro);
+    let mut agent = e.agent();
+    assert_eq!(listed(&e, &mut agent, "prod").await["readOnly"], true);
+    e.f.edit_db("prod.toml", "read_only = true\n", "");
+
+    e.restart();
+    let mut agent = e.agent();
+    let prod = listed(&e, &mut agent, "prod").await;
+    assert_eq!(prod["readOnly"], true, "{prod}");
+    e.human_opens("prod", None).await;
+    let write = e
+        .call(
+            &mut agent,
+            "db.tool.execute",
+            json!({ "connectionId": "prod", "sql": "DELETE FROM users WHERE id = 1" }),
+            None,
+        )
+        .await;
+    refused(&write, "readOnlyConnection");
+    let sneaky = json!({ "connectionId": "sneaky", "config": {
+        "name": "sneaky", "driver": "postgres", "host": "db.prod.example", "database": "app", "user": "app" } });
+    refused(&e.upsert(&mut agent, sneaky, None).await, "lowersMarks");
+}
+
+/// 상태 DB 의 기억을 읽지 못하면(에이전트가 sqlite 로 `db_marks` 표를 지움 — 스키마 판은 그대로라 마이그레이션이 다시 만들지
+/// 않는다) 에이전트의 DB 툴은 모두 `markMemoryUnavailable` 로 거절한다(재리뷰 F1 — 읽기 실패의 fail-closed). 모르는 판의 열쇠
+/// 행이 남아 있어도 같다(열쇠 글을 바꾸고 옛 행을 옮기지 않은 빌드). 사람의 창은 그대로 쓴다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_db_tools_fail_closed_when_the_mark_memory_cannot_be_read() {
+    for damage in [
+        "DROP TABLE db_marks",
+        "INSERT INTO db_marks (target, production, read_only, seen_at) VALUES ('v9:{}', 1, 0, 0)",
+    ] {
+        let mut e = env();
+        e.f.write_db("prod.toml", PROD);
+        let mut agent = e.agent();
+        listed(&e, &mut agent, "prod").await;
+        let file = e.f.app.data.join(pw_core::registry::store::FILE_NAME);
+        pw_core::registry::store::open(&file, Duration::from_secs(2))
+            .conn
+            .execute_batch(damage)
+            .unwrap();
+        e.f.edit_db("prod.toml", "production = true\n", "");
+        e.restart();
+        let mut agent = e.agent();
+        for result in [
+            e.call(&mut agent, "db.tool.connectionList", json!({}), None)
+                .await,
+            e.test(&mut agent, "prod", None, None).await,
+            e.schema(&mut agent, "dev", None).await,
+        ] {
+            let err = result.expect_err("refused");
+            assert_eq!(
+                (err.code, reason(&err)),
+                (rpc_code::STORAGE_UNAVAILABLE, Some("markMemoryUnavailable")),
+                "{damage}: {err:?}"
+            );
+        }
+        let mut w = e.f.window();
+        w.call("db.connection.list", json!({ "projectId": e.f.id }))
+            .await
+            .unwrap();
+        assert_eq!(e.connects(), 0);
+    }
+}

@@ -198,8 +198,11 @@ impl DbMarks {
 /// **fail-closed**: 상태 DB 를 쓸 수 없거나(`readOnly` · `memory`) 읽기 · 쓰기가 실패하면 [`MarkMemory::sync`] 가 거절한다 —
 /// 에이전트의 DB 툴이 모두 거절된다(사람의 창은 그대로 쓴다). 쓰지 못한 표지는 이번 실행의 메모리에 남고 다음 `sync` 가 다시 쓴다.
 ///
-/// 열쇠는 [`DbTarget::mark_key`] 의 JSON 글([`mark_store_key`]). 다른 프로세스(같은 상태 DB 를 쓰는 다른 앱 실행)가 지운 기억은
-/// 이 프로세스의 메모리에 남는다 — 더 엄한 쪽이다.
+/// 열쇠는 판 표지 `v1:` 와 [`DbTarget::mark_key`] 의 JSON 글([`mark_store_key`]). **열쇠 글이 바뀌면 앞 실행들의 기억이 소리 없이
+/// 고아가 된다(fail-open)** — 그래서 `gate::tests::mark_store_keys_are_golden` 이 드라이버마다 글 그대로를 지킨다. `DbTarget` 의
+/// 칸 · 이름 · 정규화(`normalize_host` 등)를 바꾸는 행은 그 시험이 깨진다 — [`MARK_KEY_VERSION`] 을 올리고 `state.db` 마이그레이션으로
+/// 옛 열쇠를 옮긴다. 모르는 판의 행이 남아 있으면 [`MarkMemory::sync`] 가 거절한다(옮기기를 빠뜨리면 조용히 풀리지 않고 막힌다).
+/// 다른 프로세스(같은 상태 DB 를 쓰는 다른 앱 실행)가 지운 기억은 이 프로세스의 메모리에 남는다 — 더 엄한 쪽이다.
 #[derive(Default)]
 pub(crate) struct MarkMemory {
     seen: Mutex<HashMap<String, DbMarks>>,
@@ -208,10 +211,15 @@ pub(crate) struct MarkMemory {
     store: std::sync::OnceLock<pw_core::registry::Registry>,
 }
 
-/// 표지 열쇠의 상태 DB 글. 직렬화가 실패하면(UTF-8 이 아닌 SQLite 경로) `Debug` 표기 — 둘 다 같은 대상에 늘 같은 글이다.
+/// 상태 DB 열쇠 글의 판. 열쇠 글의 꼴을 바꾸면 올리고 옛 행을 옮긴다([`MarkMemory`] 의 주석).
+pub(crate) const MARK_KEY_VERSION: &str = "v1";
+
+/// 표지 열쇠의 상태 DB 글: `v1:` + [`DbTarget::mark_key`] 의 JSON. 직렬화가 실패하면(UTF-8 이 아닌 SQLite 경로) JSON 대신 `Debug`
+/// 표기 — 둘 다 같은 대상에 늘 같은 글이다.
 pub(crate) fn mark_store_key(target: &DbTarget) -> String {
     let key = target.mark_key();
-    serde_json::to_string(&key).unwrap_or_else(|_| format!("{key:?}"))
+    let text = serde_json::to_string(&key).unwrap_or_else(|_| format!("{key:?}"));
+    format!("{MARK_KEY_VERSION}:{text}")
 }
 
 fn stored(marks: DbMarks) -> pw_core::registry::db_marks::StoredDbMarks {
@@ -297,9 +305,14 @@ impl MarkMemory {
                 .collect()
         };
         store.add_db_marks(&pending).map_err(|e| e.to_string())?;
+        // 쓰는 사이 다른 호출이 같은 열쇠를 더 조였으면(그 쓰기는 실패했을 수 있다) 남겨 둔다 — 다음 `sync` 가 그 값을 쓴다.
+        // 잠금 순서는 `unsaved` → `seen`(위와 같다).
         let mut unsaved = lock(&self.unsaved);
-        for (key, _) in &pending {
-            unsaved.remove(key);
+        let memory = lock(&self.seen);
+        for (key, written) in &pending {
+            if memory.get(key).copied().map(stored) == Some(*written) {
+                unsaved.remove(key);
+            }
         }
         Ok(())
     }
@@ -319,6 +332,14 @@ impl MarkMemory {
             tracing::warn!(target: "pw_db", %e, "cannot read the db mark memory; agent db tools are refused");
             mark_memory_unavailable(&e.to_string())
         })?;
+        let prefix = format!("{MARK_KEY_VERSION}:");
+        if let Some((key, _)) = rows.iter().find(|(key, _)| !key.starts_with(&prefix)) {
+            let version = key.split(':').next().unwrap_or_default();
+            tracing::warn!(target: "pw_db", version, "the db mark memory has keys of another version; agent db tools are refused");
+            return Err(mark_memory_unavailable(&format!(
+                "remembered marks with key version `{version}` this build does not read"
+            )));
+        }
         {
             let mut memory = lock(&self.seen);
             for (key, marks) in rows {
@@ -624,15 +645,15 @@ pub const LOWERS_MARKS: &str = "lowersMarks";
 /// `data.reason`: 에이전트의 연결 쓰기가 표지가 붙은 연결의 대상을 바꾼다(같은 판정).
 pub const MOVES_MARKED_TARGET: &str = "movesMarkedTarget";
 
-/// 에이전트의 연결 쓰기(`db_connection_upsert`)는 **표지를 조이기만 한다**(메인 판정 2026-11-17 — M5-17 리뷰 B1). 대상에 묶인 표지
-/// 기억(결정 M5-D37)은 이번 앱 실행 동안만이라, 에이전트가 파일에서 표지를 내리면 다음 실행에서 그 대상이 평범한 「이 연결 열기」
-/// 승인으로 열린다 — 그래서 쓰기 자리에서 막는다. 묻지 않고 거절한다:
+/// 에이전트의 연결 쓰기(`db_connection_upsert`)는 **표지를 조이기만 한다**(메인 판정 2026-11-17 — M5-17 리뷰 B1). 이 판정은 표지
+/// 기억(결정 M5-D37)이 이번 앱 실행 동안만이던 때 다음 실행으로 비껴가지 못하게 생겼고, 기억이 앱 실행을 넘어 영속한 뒤(M5-17b)에도
+/// 그대로 둔다 — 에이전트가 Pitwall 을 거쳐 파일과 기억이 다른 표지를 말하게 만들지 못하게. 묻지 않고 거절한다:
 ///
 /// 1. 그 연결 id 의 지금 표지(이 워크트리 · 메인 체크아웃 · 메인 저장소 프로젝트의 병합 설정, 그리고 **각 레이어 파일**(공유 ·
 ///    개인 `.local.toml` · 메인 체크아웃 폴백)에 적힌 `production` · `read_only`, 그 대상들의 기억)를 새 설정이 끄거나 지운다
 ///    (`lowersMarks`). 레이어로 비껴가지 못한다 — 개인 파일에 `production = false` 를 써 공유 파일을 덮는 것도 같다.
 /// 2. 표지가 붙은 연결의 푼 대상(호스트 · 포트 · DB · 사용자 · 터널 · 파일)을 바꾼다(`movesMarkedTarget`).
-/// 3. 새 설정의 푼 대상에 이번 실행에서 기억된 표지가 있는데 새 설정이 그 표지를 달지 않는다(`lowersMarks`). 열쇠는 표지 기억의
+/// 3. 새 설정의 푼 대상에 기억된 표지(앞 실행들의 것 포함)가 있는데 새 설정이 그 표지를 달지 않는다(`lowersMarks`). 열쇠는 표지 기억의
 ///    것 그대로다(`DbTarget::mark_key` — MySQL · MariaDB · Redis 는 서버 · 사용자 단위).
 ///
 /// 창의 `db.connection.upsert` 는 이 판정을 지나지 않는다 — 표지는 사람이 Pitwall 에서만 내린다. 블로킹이다.
@@ -719,7 +740,7 @@ pub(crate) fn check_agent_write(
             project_id,
             connection_id,
             LOWERS_MARKS,
-            "would point at a target marked production or read-only during this run without that mark; keep the mark \
+            "would point at a target marked production or read-only in Pitwall's memory without that mark; keep the mark \
              in the settings",
         ));
     }

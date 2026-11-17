@@ -588,3 +588,49 @@ fn redis_mark_keys_treat_the_default_user_spellings_as_one() {
     };
     assert_ne!(my(""), my("default"));
 }
+
+/// 표지 기억의 상태 DB 열쇠 글은 **고정이다**(M5-17b — 재리뷰 F3). 기억은 앱 실행을 넘어 `state.db` 에 이 글로 남으므로, 글이 바뀌면
+/// 앞 실행들의 기억이 소리 없이 고아가 된다(그 대상이 파일에서 표지를 잃었으면 다시 열린다). 이 시험이 깨지면 `DbTarget` 의 칸 ·
+/// 이름 · 정규화나 열쇠 함수가 바뀐 것이다 — 기대값을 고치지 말고 `agent::MARK_KEY_VERSION` 을 올리고 `state.db` 마이그레이션으로
+/// 옛 열쇠를 옮긴다(옮기지 않으면 모르는 판의 행이 남아 에이전트의 DB 툴이 거절된다).
+#[test]
+fn mark_store_keys_are_golden() {
+    let key = |value: serde_json::Value| {
+        agent::mark_store_key(&agent::DbTarget::of(
+            &crate::config::from_file_value(&value).unwrap(),
+            std::path::Path::new("/pitwall-golden-root"),
+        ))
+    };
+    let cases = [
+        (
+            json!({ "name": "pg", "driver": "postgres", "host": "DB.Prod.Example.", "database": "app", "user": "app" }),
+            r#"v1:{"driver":"postgres","host":"db.prod.example","port":5432,"database":"app","user":"app","tunnel":null,"file":null}"#,
+        ),
+        (
+            json!({ "name": "pg", "driver": "postgres", "host": "127.0.0.1", "port": 55432, "database": "app" }),
+            r#"v1:{"driver":"postgres","host":"localhost","port":55432,"database":"app","user":null,"tunnel":null,"file":null}"#,
+        ),
+        (
+            json!({ "name": "pg", "driver": "postgres", "host": "db.internal", "database": "app", "user": "app",
+                    "ssh_tunnel": { "host_ref": "bastion" } }),
+            r#"v1:{"driver":"postgres","host":"db.internal","port":5432,"database":"app","user":"app","tunnel":"bastion","file":null}"#,
+        ),
+        (
+            json!({ "name": "my", "driver": "mysql", "host": "db.prod.example", "database": "shop", "user": "app" }),
+            r#"v1:{"driver":"mysql","host":"db.prod.example","port":3306,"database":null,"user":"app","tunnel":null,"file":null}"#,
+        ),
+        (
+            json!({ "name": "r", "driver": "redis", "host": "cache.example", "database": "3", "user": "default" }),
+            r#"v1:{"driver":"redis","host":"cache.example","port":6379,"database":null,"user":null,"tunnel":null,"file":null}"#,
+        ),
+    ];
+    for (config, golden) in cases {
+        assert_eq!(key(config.clone()), golden, "{config}");
+    }
+    // SQLite 의 열쇠는 파일의 실제 경로다 — 경로 표기가 OS 마다 달라 unix 에서만 글을 고정한다.
+    #[cfg(unix)]
+    assert_eq!(
+        key(json!({ "name": "s", "driver": "sqlite", "path": "data/app.db" })),
+        r#"v1:{"driver":"sqlite","host":null,"port":null,"database":null,"user":null,"tunnel":null,"file":"/pitwall-golden-root/data/app.db"}"#
+    );
+}

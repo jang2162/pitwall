@@ -5,8 +5,8 @@
 //!   내용(diff)이고, 승인 뒤에는 계획 때 읽은 내용과 같을 때만 쓴다. **비밀은 인자로 받지 않는다** — 입력의 비밀번호 칸은 출처
 //!   (`keychain` — 사람이 Pitwall 에서 넣는다, `env` — 변수 이름)뿐이다. 저장이 확인(`crate::trust` 의 터널 목적지 · 인증서 · `env`
 //!   확인)을 대신하지 않는다 — 열 때 사람이 따로 확인한다(14-m3-plan.md M3-11). **표지는 조이기만 한다**(메인 판정 2026-11-17
-//!   — 리뷰 B1): 기존 연결의 프로덕션 · read-only 를 내리거나, 표지가 붙은 연결의 대상을 바꾸거나, 이번 실행에서 표지가 기억된
-//!   대상을 표지 없이 가리키는 쓰기는 묻지 않고 거절한다(`crate::gate::check_agent_write`).
+//!   — 리뷰 B1): 기존 연결의 프로덕션 · read-only 를 내리거나, 표지가 붙은 연결의 대상을 바꾸거나, 표지가 기억된(앱 실행을 넘어 —
+//!   M5-17b) 대상을 표지 없이 가리키는 쓰기는 묻지 않고 거절한다(`crate::gate::check_agent_write`).
 //! - `db_connection_test` ← `db.tool.connectionTest`(결정 M5-D21): 입력은 `{ projectId, worktree?, connectionId }` 뿐이다 — 밑의
 //!   RPC(`db.connection.test`)가 받는 `draft` · `secret` 은 없다(초안은 터널 목적지 · 인증서 확인을 묻지 않는 예외를 탄다). 관문은
 //!   [`db_grant_to_open`]: 사람이 연 연결(또는 이 세션이 승인받은 연결)이면 `write` 의 보통 규칙으로 묻고, 아니면 **「이 연결 열기」
