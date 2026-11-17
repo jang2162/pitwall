@@ -236,6 +236,8 @@ async function mount() {
   );
   await vi.waitFor(() => expect(row("db_query")).toBeTruthy());
   await vi.waitFor(() => expect(part("groups")).toBeTruthy());
+  // 첫 그림은 기본 언어(en)일 수 있다 — `i18n.get`(ko)이 적용될 때까지 기다린다. 기다리지 않으면 한국어 문구 단언이 가끔 실패했다.
+  await vi.waitFor(() => expect(part("groups").textContent).toContain(S.groups));
 }
 
 async function choose(select: HTMLSelectElement, value: string) {
