@@ -4,6 +4,8 @@
 //!   세션 · 툴 · 감사 로그는 앱 안에서 돈다.
 //! - 앱이 꺼져 있으면 **헤드리스**: 이 프로세스 안에 `LocalHost` 를 만들어 stdio 로 직접 서비스한다. 레지스트리는 읽기만 하고
 //!   ([`pw_core::LocalHostBuilder::read_only_registry`]) 앱을 띄우지 않는다. 헤드리스에는 코어 툴만 있고 승인 경로가 없어 그 가운데 `read` 툴만 성공한다.
+//! - 헤드리스로 시작한 뒤 앱이 뜨면 그 뒤의 요청을 앱으로 넘긴다([`handover`] — `tools/list` · `tools/call` 을 받을 때마다 소켓을
+//!   한 번 본다).
 //! - Windows 는 아직 소켓이 없어 언제나 헤드리스다.
 //!
 //! **stdout 에는 MCP 바이트만 쓴다.** 로그는 `$STATE/logs/mcp.<날짜>.log`, 경고 이상은 stderr 에도 쓴다(MCP 클라이언트는
@@ -21,6 +23,9 @@ use pw_mcp::sessions::Sessions;
 use pw_mcp::{Catalog, HostKind, Services, SessionRequest};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{Layer, fmt};
+
+#[cfg(unix)]
+pub mod handover;
 
 /// 로그 파일의 구성요소 이름(`mcp.<날짜>.log`). 앱의 `core` 와 나눈다 — 여러 `pitwall mcp` 가 앱과 함께 돌 수 있다.
 pub const LOG_COMPONENT: &str = "mcp";
@@ -86,9 +91,7 @@ pub fn run(args: &[OsString], identifier: impl FnOnce(&AppPaths) -> String) -> i
         if let Some(code) = proxy(&paths, &key, &request).await {
             return code;
         }
-        #[cfg(not(unix))]
-        let _ = &key;
-        headless(paths, request).await
+        headless(paths, &key, request).await
     });
     // 남은 블로킹 작업(감사 로그 쓰기)을 잠깐 기다린다. stdin 이 막힌 읽기는 기다리지 않는다.
     runtime.shutdown_timeout(std::time::Duration::from_secs(2));
@@ -200,7 +203,7 @@ impl Headless {
     }
 }
 
-async fn headless(paths: AppPaths, request: SessionRequest) -> i32 {
+async fn headless(paths: AppPaths, key: &str, request: SessionRequest) -> i32 {
     let headless = Headless::start(&paths, "stdio");
     if let Err(e) = headless
         .host
@@ -208,20 +211,56 @@ async fn headless(paths: AppPaths, request: SessionRequest) -> i32 {
     {
         tracing::warn!(%e, "config watch disabled; tools/list_changed will not follow settings");
     }
-    let cancel = tokio_util::sync::CancellationToken::new();
-    let code = match pw_mcp::serve(
-        Arc::clone(&headless.services),
-        request,
-        (tokio::io::stdin(), tokio::io::stdout()),
-        cancel,
-    )
-    .await
-    {
-        Ok(()) => 0,
-        Err(e) => {
-            tracing::error!(%e, "headless mcp session failed");
-            eprintln!("pitwall mcp: {e}");
-            1
+    #[cfg(unix)]
+    let code = {
+        use handover::End;
+
+        // 앱이 뜨면 넘겨 붙는다 — 시작할 때와 같은 길(`connect_app`)로 붙어 앱 쪽 세션도 같은 범위로 열린다.
+        let (paths, request_ref) = (&paths, &request);
+        let outcome = handover::serve_headless(
+            Arc::clone(&headless.services),
+            request.clone(),
+            tokio::io::stdin(),
+            tokio::io::stdout(),
+            move || connect_app(paths, key, request_ref),
+        )
+        .await;
+        match (outcome.end, outcome.session) {
+            (Ok(End::AppClosed { pending }), _) => {
+                tracing::warn!(pending, "the Pitwall app closed the MCP connection");
+                eprintln!("pitwall mcp: the Pitwall app closed the connection");
+                1
+            }
+            (Err(e), _) => {
+                tracing::error!(%e, "mcp handover failed");
+                eprintln!("pitwall mcp: {e}");
+                1
+            }
+            (Ok(End::ClientClosed | End::HeadlessClosed), Ok(())) => 0,
+            (Ok(End::ClientClosed | End::HeadlessClosed), Err(e)) => {
+                tracing::error!(%e, "headless mcp session failed");
+                eprintln!("pitwall mcp: {e}");
+                1
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let code = {
+        let _ = key;
+        match pw_mcp::serve(
+            Arc::clone(&headless.services),
+            request,
+            (tokio::io::stdin(), tokio::io::stdout()),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        {
+            Ok(()) => 0,
+            Err(e) => {
+                tracing::error!(%e, "headless mcp session failed");
+                eprintln!("pitwall mcp: {e}");
+                1
+            }
         }
     };
     headless.close();

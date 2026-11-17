@@ -75,7 +75,15 @@ tracing = "0.1.44"
 rmcp = { version = "3.9.0", default-features = false, features = ["client", "transport-async-rw"] }
 # `pitwall mcp` · `pitwall tool` 은 Tauri 를 띄우지 않으므로 자기 런타임을 만든다(io-std: stdio 를 MCP 로 쓴다). sync: 업데이트
 # 대화상자의 답을 기다린다. signal: `pitwall tool` 이 Ctrl+C 로 호출을 취소한다.
-tokio = { workspace = true, features = ["rt-multi-thread", "io-std", "time", "sync", "signal"] }
+tokio = { workspace = true, features = [
+  "rt-multi-thread",
+  "io-std",
+  "io-util",
+  "macros",
+  "time",
+  "sync",
+  "signal",
+] }
 tokio-util = { workspace = true }
 # `pitwall mcp` 의 로그(`$STATE/logs/mcp.<날짜>.log` + stderr 경고). 버전 · 기능은 pw-diag 와 같게 둔다.
 tracing-subscriber = { version = "0.3.23", default-features = false, features = [
