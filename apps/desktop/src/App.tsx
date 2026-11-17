@@ -21,6 +21,7 @@ import {
   fileWindowTitle,
 } from "./file-window/file-window";
 import { ProjectWindow } from "./layout/project-window";
+import { McpApprovals } from "./mcp/approvals-host";
 import { projectIdFromQuery } from "./project-open";
 import { HostProvider, useRpcQuery } from "./rpc/host";
 import { type SettingsNative, tauriSettingsNative } from "./settings/native";
@@ -147,6 +148,8 @@ export function App({
                 />
               )}
               {kind === "settings" && <SettingsWindow native={settingsNative} />}
+              {/* 프로젝트 없는 MCP 승인 요청(16-m5-plan M5-14) — 프로젝트 창은 layout/project-window.tsx 가 자기 프로젝트로 둔다. */}
+              {(kind === "welcome" || kind === "settings") && <McpApprovals projectId={null} />}
               {kind === "file" && (
                 <FileWindow
                   native={fileNative}

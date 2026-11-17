@@ -28,6 +28,10 @@ mcp-welcome-connections = MCP: 연결 { $count }
 
 mcp-activity-approvals-title = 승인 대기
 mcp-activity-approvals-empty = 기다리는 승인 요청이 없다
+# $count: 목록에 그리지 않은 대기 요청 수(앞 줄만 그린다)
+mcp-activity-approvals-more = 그리고 { $count }개 더
+# $agent: 요청 에이전트, $tool: 툴 이름 — 줄을 누르면 승인 다이얼로그를 다시 연다
+mcp-activity-approvals-open = { $agent }의 { $tool } 승인 다이얼로그 열기
 mcp-activity-log-title = 호출 로그
 # 감사 로그는 이 프로젝트의 행과 프로젝트 없는 행을 함께 보인다(설정 > MCP 의 툴별 「최근 호출 수」 는 이 프로젝트의 행만 센다)
 mcp-activity-log-scope = 이 프로젝트의 호출과 프로젝트 없는 호출
@@ -70,3 +74,50 @@ mcp-activity-clear-body = 이 프로젝트의 감사 로그 행을 모두 지운
 mcp-activity-clear-confirm = 지우기
 mcp-activity-clear-cancel = 취소
 mcp-activity-clear-failed = 호출 기록을 지우지 못했다
+
+## 승인 다이얼로그 · OS 알림(16-m5-plan M5-14)
+
+mcp-approval-title = 에이전트가 승인을 기다린다
+mcp-approval-not-this-project = 이 요청은 이 프로젝트의 것이 아니다 — 프로젝트 없는 쓰기라 가장 최근에 앞에 있던 창에 떴다
+mcp-approval-agent = 에이전트
+mcp-approval-unknown-agent = 이름을 알리지 않은 에이전트
+mcp-approval-cli = CLI(pitwall tool)로 온 호출
+mcp-approval-tool = 툴
+mcp-approval-tier = 등급
+mcp-approval-tier-read = 읽기
+mcp-approval-tier-write = 쓰기
+mcp-approval-tier-exec = 실행
+mcp-approval-tier-dangerous = 위험
+mcp-approval-summary = 요약
+mcp-approval-agent-text = 아래 칸의 글은 에이전트가 보낸 것이다. 보이지 않는 글자는 ⟨U+…⟩ 로 보인다
+# $count: 바뀔 것의 수
+mcp-approval-changes = 바뀔 것 { $count }개
+mcp-approval-no-changes = 보일 변경 목록이 없다 — 요약을 본다
+mcp-approval-file-added = 새 파일
+mcp-approval-file-deleted = 지우는 파일
+mcp-approval-file-modified = 고치는 파일
+mcp-approval-unchanged-lines = 바뀌지 않은 줄 $개
+# $count: 보이는 앞부분의 글자 수
+mcp-approval-text-cut = 글이 길어 앞 { $count }자만 보인다 — 승인은 전부에 닿는다
+mcp-approval-invisible = 보이지 않는 글자 포함
+mcp-approval-sql-connection = 연결
+mcp-approval-sql-file = 파일
+mcp-approval-sql-irreversible = 되돌릴 수 없다 — 트랜잭션 밖에서 커밋되는 문장이 있다
+# $count: 문장 수
+mcp-approval-sql-statements = 문장 { $count }개
+# $n: 문장 번호(1 기준), $line: 시작 줄
+mcp-approval-sql-statement = 문장 { $n } · { $line }줄
+# $count: 목록에 보이지 않은 문장 수
+mcp-approval-sql-more = 그리고 문장 { $count }개 더
+# $time: 남은 시간(분:초)
+mcp-approval-remaining = 남은 시간 { $time }
+# $index: 이 요청의 차례, $total: 이 창의 대기 수
+mcp-approval-position = { $total }개 중 { $index }
+mcp-approval-deny = 거절
+mcp-approval-once = 이번만 허용
+mcp-approval-session = 이 세션 동안 허용
+mcp-approval-window = 창이 열려 있는 동안 CLI 허용
+mcp-approval-notify-title = Pitwall 승인 요청
+# $agent: 요청 에이전트(이름을 알리지 않았으면 「에이전트」), $tool: 툴 이름
+mcp-approval-notify-body = { $agent }가 { $tool } 승인을 기다린다
+mcp-approval-notify-agent = 에이전트

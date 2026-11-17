@@ -7,7 +7,8 @@
 //   끝낼 뿐이고 조합 중의 Esc 는 조합만 취소한다(친 이름을 잃지 않게).
 // - 제목은 실제 등급을 말한다. 파괴 등급이라도 그것이 문장을 읽지 못해서(`unparsed` · `tooLarge` · `tooDeep`)라면 「되돌릴 수
 //   없다」 고 단정하지 않고 「분석하지 못해 파괴로 다룬다」 고 말한다.
-// - 파괴 등급 · 프로덕션 연결(`nameRequired`)은 연결 이름을 그대로 쳐야 [실행] 이 켜진다. **강제는 Host 가 한다**(M3-05 관문이
+// - 파괴 등급 · 프로덕션 연결(`nameRequired`)은 연결 이름을 그대로 쳐야 [실행] 이 켜진다(칸은 name-confirm.tsx — MCP 승인
+//   다이얼로그와 같은 부품). **강제는 Host 가 한다**(M3-05 관문이
 //   이름 · 해시 · 등급을 다시 본다) — 이 다이얼로그는 그 요청을 보여 주고 친 이름을 실어 보낼 뿐이다.
 // - `unparsed` 문장은 「분석하지 못한 문장」 으로 따로 표시한다(무엇을 하는지 모르는 문장 — fail-closed, 결정 M3-D5).
 // - 등급을 TS 에서 매기지 않는다(결정 M3-D5 — 분류기는 Host 하나). `confirmationFor` 는 Host 가 이미 매긴 분류(`db.sql.classify`)에
@@ -36,8 +37,9 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 import { BUTTON, SHEET } from "../../git/dialogs/git-dialogs";
 import { showInvisible } from "../grid/values";
 import { useKeymapPopup } from "../../keymap/keymap-provider";
-import { isComposingKey, keepOpenWhileComposing } from "../../ui/ime";
+import { keepOpenWhileComposing } from "../../ui/ime";
 import { ConnectionMark, type DbConnectionMarkInput } from "./connection-mark";
+import { ConnectionNameField } from "./name-confirm";
 import { type DbSafetyStrings, useDbSafetyStrings } from "./strings";
 
 /** 위험도 순서(crates/pw-db-sql 의 `RiskGrade` 의 `Ord`). */
@@ -382,27 +384,12 @@ export function RiskConfirmDialog({
             <KvCommandLine argv={kv!.kv.argv} T={T} />
           )}
           {request.nameRequired && (
-            <label className="flex flex-col gap-1">
-              <span>{T.confirm.namePrompt(connection.name)}</span>
-              <input
-                data-testid="db-confirm-name"
-                aria-label={T.confirm.name}
-                aria-invalid={typed !== "" && !nameOk}
-                value={typed}
-                spellCheck={false}
-                autoComplete="off"
-                onChange={(e) => setTyped(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key !== "Enter" || isComposingKey(e.nativeEvent)) return;
-                  e.preventDefault();
-                  run();
-                }}
-                className="rounded-sm border border-ui-border bg-transparent px-2 py-1 font-mono outline-none select-text focus:border-ui-accent"
-              />
-              {typed !== "" && !nameOk && (
-                <span className="text-[12px] text-ui-accent">{T.confirm.nameMismatch}</span>
-              )}
-            </label>
+            <ConnectionNameField
+              name={connection.name}
+              typed={typed}
+              onTyped={setTyped}
+              onSubmit={run}
+            />
           )}
           <div className="flex justify-end gap-2">
             <button

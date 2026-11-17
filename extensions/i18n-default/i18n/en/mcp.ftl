@@ -35,6 +35,14 @@ mcp-welcome-connections = MCP: { $count } connected
 
 mcp-activity-approvals-title = Pending approvals
 mcp-activity-approvals-empty = No approval requests are waiting
+# $count: pending requests not drawn in the list (only the first rows are drawn)
+mcp-activity-approvals-more =
+    { $count ->
+        [one] and 1 more
+       *[other] and { $count } more
+    }
+# $agent: requesting agent, $tool: tool name — clicking the row reopens the approval dialog
+mcp-activity-approvals-open = Open the approval dialog for { $tool } from { $agent }
 mcp-activity-log-title = Call log
 # The audit log shows this project's rows together with rows without a project (the per-tool recent call count in Settings > MCP counts this project's rows only)
 mcp-activity-log-scope = Calls on this project and calls without a project
@@ -77,3 +85,62 @@ mcp-activity-clear-body = Deletes every audit log row of this project. Rows of c
 mcp-activity-clear-confirm = Clear
 mcp-activity-clear-cancel = Cancel
 mcp-activity-clear-failed = Cannot clear the call log
+
+## Approval dialog and OS notification (16-m5-plan M5-14)
+
+mcp-approval-title = An agent is waiting for approval
+mcp-approval-not-this-project = This request is not for this project — it is a write without a project, so it opened in the most recently focused window
+mcp-approval-agent = Agent
+mcp-approval-unknown-agent = An agent that did not give its name
+mcp-approval-cli = Called from the CLI (pitwall tool)
+mcp-approval-tool = Tool
+mcp-approval-tier = Tier
+mcp-approval-tier-read = Read
+mcp-approval-tier-write = Write
+mcp-approval-tier-exec = Exec
+mcp-approval-tier-dangerous = Dangerous
+mcp-approval-summary = Summary
+mcp-approval-agent-text = The text in the boxes below was sent by the agent. Invisible characters are shown as ⟨U+…⟩
+# $count: number of changes
+mcp-approval-changes =
+    { $count ->
+        [one] 1 change
+       *[other] { $count } changes
+    }
+mcp-approval-no-changes = No list of changes — see the summary
+mcp-approval-file-added = New file
+mcp-approval-file-deleted = File to delete
+mcp-approval-file-modified = File to change
+mcp-approval-unchanged-lines = $ unchanged lines
+# $count: number of characters shown
+mcp-approval-text-cut = The text is long; only the first { $count } characters are shown — the approval covers all of it
+mcp-approval-invisible = Contains invisible characters
+mcp-approval-sql-connection = Connection
+mcp-approval-sql-file = File
+mcp-approval-sql-irreversible = Cannot be undone — some statements commit outside the transaction
+# $count: number of statements
+mcp-approval-sql-statements =
+    { $count ->
+        [one] 1 statement
+       *[other] { $count } statements
+    }
+# $n: statement number (from 1), $line: first line
+mcp-approval-sql-statement = Statement { $n } · line { $line }
+# $count: statements not shown in the list
+mcp-approval-sql-more =
+    { $count ->
+        [one] and 1 more statement
+       *[other] and { $count } more statements
+    }
+# $time: time left (minutes:seconds)
+mcp-approval-remaining = { $time } left
+# $index: this request's place, $total: requests waiting in this window
+mcp-approval-position = { $index } of { $total }
+mcp-approval-deny = Deny
+mcp-approval-once = Allow once
+mcp-approval-session = Allow for this session
+mcp-approval-window = Allow the CLI while this window is open
+mcp-approval-notify-title = Pitwall approval request
+# $agent: requesting agent ("An agent" if it gave no name), $tool: tool name
+mcp-approval-notify-body = { $agent } is waiting for approval of { $tool }
+mcp-approval-notify-agent = An agent

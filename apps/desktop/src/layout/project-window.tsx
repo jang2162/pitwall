@@ -109,6 +109,7 @@ import { createRecentFiles } from "../search-everywhere/recent-files";
 import { SearchResultsToolWindow } from "../search/search-results";
 import { StructureToolWindow } from "../structure/structure-tool-window";
 import { AgentActivityToolWindow } from "../mcp/agent-activity";
+import { McpApprovals } from "../mcp/approvals-host";
 import { McpStatus } from "../mcp/mcp-status";
 import { RuntimeStatus } from "../runtime/runtime-status";
 import {
@@ -903,6 +904,7 @@ function ProjectWindowBody({
             <GitBranchFeature projectId={projectId} state={projectState.store} />
           )}
           {projectId !== undefined && <GitPrompts projectId={projectId} workspace={workspace} />}
+          {projectId !== undefined && <McpApprovals projectId={projectId} />}
           {projectId !== undefined && <GitDocuments projectId={projectId} workspace={workspace} />}
           {projectId !== undefined && <GitGutter projectId={projectId} workspace={workspace} />}
           {projectId !== undefined && <GitMerge projectId={projectId} workspace={workspace} />}

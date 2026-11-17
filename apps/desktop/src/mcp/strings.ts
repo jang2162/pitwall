@@ -5,7 +5,7 @@
 import { useLocalization } from "@fluent/react";
 import { useMemo } from "react";
 
-import type { AuditApproval, AuditOutcome } from "@pitwall/rpc-client";
+import type { AuditApproval, AuditOutcome, Tier } from "@pitwall/rpc-client";
 
 import { type Translate, translator } from "../i18n/localization";
 
@@ -25,6 +25,9 @@ export function mcpStrings(t: Translate) {
     activity: {
       approvalsTitle: t("mcp-activity-approvals-title"),
       approvalsEmpty: t("mcp-activity-approvals-empty"),
+      approvalsMore: (count: number) => t("mcp-activity-approvals-more", { count }),
+      approvalsOpen: (agent: string, tool: string) =>
+        t("mcp-activity-approvals-open", { agent, tool }),
       logTitle: t("mcp-activity-log-title"),
       logScope: t("mcp-activity-log-scope"),
       column: {
@@ -72,6 +75,50 @@ export function mcpStrings(t: Translate) {
     },
     welcome: {
       connections: (count: number) => t("mcp-welcome-connections", { count }),
+    },
+    approval: {
+      title: t("mcp-approval-title"),
+      notThisProject: t("mcp-approval-not-this-project"),
+      agent: t("mcp-approval-agent"),
+      unknownAgent: t("mcp-approval-unknown-agent"),
+      cli: t("mcp-approval-cli"),
+      tool: t("mcp-approval-tool"),
+      tierLabel: t("mcp-approval-tier"),
+      tier: {
+        read: t("mcp-approval-tier-read"),
+        write: t("mcp-approval-tier-write"),
+        exec: t("mcp-approval-tier-exec"),
+        dangerous: t("mcp-approval-tier-dangerous"),
+      } satisfies Record<Tier, string>,
+      summary: t("mcp-approval-summary"),
+      agentText: t("mcp-approval-agent-text"),
+      changes: (count: number) => t("mcp-approval-changes", { count }),
+      noChanges: t("mcp-approval-no-changes"),
+      file: {
+        added: t("mcp-approval-file-added"),
+        deleted: t("mcp-approval-file-deleted"),
+        modified: t("mcp-approval-file-modified"),
+      },
+      unchangedLines: t("mcp-approval-unchanged-lines"),
+      textCut: (count: number) => t("mcp-approval-text-cut", { count }),
+      invisible: t("mcp-approval-invisible"),
+      sql: {
+        connection: t("mcp-approval-sql-connection"),
+        file: t("mcp-approval-sql-file"),
+        irreversible: t("mcp-approval-sql-irreversible"),
+        statements: (count: number) => t("mcp-approval-sql-statements", { count }),
+        statement: (n: number, line: number) => t("mcp-approval-sql-statement", { n, line }),
+        more: (count: number) => t("mcp-approval-sql-more", { count }),
+      },
+      remaining: (time: string) => t("mcp-approval-remaining", { time }),
+      position: (index: number, total: number) => t("mcp-approval-position", { index, total }),
+      deny: t("mcp-approval-deny"),
+      once: t("mcp-approval-once"),
+      session: t("mcp-approval-session"),
+      window: t("mcp-approval-window"),
+      notifyTitle: t("mcp-approval-notify-title"),
+      notifyBody: (agent: string, tool: string) => t("mcp-approval-notify-body", { agent, tool }),
+      notifyAgent: t("mcp-approval-notify-agent"),
     },
   };
 }
