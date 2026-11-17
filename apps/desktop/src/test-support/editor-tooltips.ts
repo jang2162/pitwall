@@ -40,7 +40,8 @@ export function showTestTooltip(view: EditorView): HTMLElement {
 
 /**
  * 툴팁 `tip` 이 툴팁 층의 그 뷰 호스트에 그려지고 뷰를 둔 패널(`panel`) 안에는 없다 — 패널 경계에 잘리지 않는다. 호스트를
- * 돌려준다.
+ * 돌려준다. 잘림을 그려진 사각형으로 재지 않고 자리(DOM 포함 관계)로 판정한다 — 층이 패널 밖이면 패널의 `overflow` 가 자를 수
+ * 없다. 그 밖의 잘림(창 경계 · 층 자신의 겹침)은 이 판정이 보지 않는다.
  */
 export function expectOnTooltipLayer(view: EditorView, tip: HTMLElement, panel: Element) {
   const host = tooltipHostOf(view);
@@ -68,6 +69,13 @@ export function testTab(visible = true) {
       isVisible = next;
       for (const l of listeners) l({ isVisible: next });
     },
-  } satisfies TooltipTabSource & { setVisible(next: boolean): void };
+    /** 아직 거두지 않은 보임 리스너 수 — 뷰가 내려간 뒤 0 이어야 한다. */
+    get listenerCount() {
+      return listeners.size;
+    },
+  } satisfies TooltipTabSource & {
+    setVisible(next: boolean): void;
+    readonly listenerCount: number;
+  };
   return tab;
 }

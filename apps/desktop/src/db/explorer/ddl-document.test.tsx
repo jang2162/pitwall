@@ -276,9 +276,16 @@ it("draws the DDL's tooltips over its panel in the tooltip layer and hides them 
   const view = editor()!;
   const tip = await act(async () => showTestTooltip(view));
   const host = expectOnTooltipLayer(view, tip, element);
+  // DB 문서는 키맵 문맥을 문서마다 자기 뿌리에 둔다 — DDL 은 감싸는 문맥이 없어 호스트에도 없다(뷰 안의 포커스와 같다).
+  expect(host.getAttribute("data-keymap-context")).toBeNull();
   expect(host.hidden).toBe(false);
   await act(async () => tab.setVisible(false));
   expect(host.hidden).toBe(true);
   await act(async () => tab.setVisible(true));
   expect(host.hidden).toBe(false);
+  // 뷰가 내려가면(탭이 닫힘) 탭의 보임 리스너도 거둔다.
+  expect(tab.listenerCount).toBe(1);
+  await act(async () => root!.unmount());
+  root = undefined;
+  expect(tab.listenerCount).toBe(0);
 });

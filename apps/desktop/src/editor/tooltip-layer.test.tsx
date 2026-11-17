@@ -13,9 +13,11 @@ import { afterEach, expect, it } from "vitest";
 import { contextLayers } from "../keymap/context";
 import { targetView } from "./editor-ops";
 import type { EditorWorkspace } from "./editor-workspace";
+import { testTab } from "../test-support/editor-tooltips";
 import {
   editorOfElement,
   editorTooltips,
+  followTab,
   OVERLAY_Z,
   setTooltipsShown,
   TOOLTIP_HOST_CLASS,
@@ -185,4 +187,25 @@ it("gives each configuration its own host and takes it away when the editor goes
   expect(layer.querySelectorAll(`.${TOOLTIP_HOST_CLASS}`)).toHaveLength(1);
   view.destroy();
   expect(layer.querySelectorAll(`.${TOOLTIP_HOST_CLASS}`)).toHaveLength(0);
+});
+
+it("hides a view's tooltips from the start when it follows a covered tab, and stops listening when told to", () => {
+  // 따로 만든 EditorView 가 든 탭의 보임을 따른다(16-m5-plan M5-21). 가려진 동안 만든 뷰(뒤에서 읽기를 마친 DDL 등)도 처음부터 숨는다.
+  const { view } = mountEditor();
+  const tab = testTab(false);
+  const unfollow = followTab(view, tab);
+  const host = tooltipHostOf(view)!;
+  expect(host.hidden).toBe(true);
+  expect(tab.listenerCount).toBe(1);
+  tab.setVisible(true);
+  expect(host.hidden).toBe(false);
+  unfollow();
+  expect(tab.listenerCount).toBe(0);
+  // 거둔 뒤의 탭 바뀜은 뷰에 닿지 않는다.
+  tab.setVisible(false);
+  expect(host.hidden).toBe(false);
+  // 탭 밖(대화상자 · 거터 팝업 안)이면 아무것도 하지 않는다.
+  followTab(view, undefined)();
+  expect(host.hidden).toBe(false);
+  view.destroy();
 });
