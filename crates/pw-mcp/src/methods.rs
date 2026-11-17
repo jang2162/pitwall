@@ -1,19 +1,24 @@
 //! 사람의 화면이 부르는 `mcp.*` RPC(16-m5-plan.md M5-10): 세션 목록 · 툴 목록과 노출 판정 · 감사 로그.
 //!
 //! - **에이전트에게 열지 않는다** — 선언에 `mcp` 를 달지 않는다(에이전트가 자기 감사 로그 · 노출 설정을 읽는 툴은 05 에 없다).
-//!   role 은 owner 만, 파일 범위 연결(단일 파일 창)도 부르지 못한다(`file_scope` 를 달지 않는다).
+//!   role 은 owner 만, 파일 범위 연결(단일 파일 창)도 부르지 못한다(`file_scope` 를 달지 않는다). 에이전트 범위 연결(MCP 세션이
+//!   Host 에 붙는 연결 — `ConnectionScope::Agent`)은 role 이 owner 라도 핸들러 앞의 문([`WindowsOnly`])이 거절한다 — 툴 목록에
+//!   없다는 것만으로 막지 않는다(`project.setTrust` 와 같은 꼴 · 같은 까닭 `agentSession`, 16-m5-plan.md 결정 M5-D18).
 //! - 문장(오류 글)은 사람이 보는 화면 쪽이지만 RPC 오류 글은 지금 저장소의 다른 RPC 처럼 영어다. 화면 글자는 웹뷰의 i18n 이다.
 //! - 이벤트: [`crate::sessions`] 의 `mcp.sessionsChanged` · `mcp.activity`. payload 는 수 · id 뿐이라 화면은 받으면 이 RPC 를
 //!   다시 부른다.
 //! - 다른 행이 더하는 메서드: `mcp.audit.clear`(M5-11), `mcp.approvals` · `mcp.approval.answer`(M5-12), `mcp.settings.set`(M5-15).
-//!   더할 때 [`register`] 에 붙이고, 필요한 것은 [`HostParts`] 에서 꺼낸다.
+//!   더할 때 [`register`] 안의 `router`(그 문을 지나는 [`WindowsOnly`])에 붙이고, 필요한 것은 [`HostParts`] 에서 꺼낸다.
 
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use pw_core::config::{AppPaths, ConfigStore};
 use pw_core::registry::Registry as Projects;
-use pw_rpc::{Router, RpcError, Tier, rpc_method};
+use pw_rpc::{
+    ConnectionScope, Ctx, Router, RpcError, StreamMethod, StreamSink, Tier, UnaryMethod, code,
+    rpc_method,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::audit::{self, AuditLog, AuditRow, Outcome};
@@ -245,8 +250,54 @@ impl Mcp {
     }
 }
 
-/// 핸들러를 붙인다.
+/// 에이전트 범위 연결(MCP 세션)이면 거절한다 — `mcp.*` 는 사람의 창이 부른다. 오류 꼴은 `project.setTrust` 의 거절과 같다
+/// (`PERMISSION_DENIED`, `data.reason = "agentSession"`).
+pub fn refuse_agent(ctx: &Ctx, method: &str) -> Result<(), RpcError> {
+    match ctx.scope() {
+        ConnectionScope::Agent => Err(RpcError::new(
+            code::PERMISSION_DENIED,
+            "an mcp session cannot call the mcp status rpcs",
+        )
+        .with_data(serde_json::json!({ "reason": "agentSession", "method": method }))),
+        ConnectionScope::Host | ConnectionScope::Project(_) | ConnectionScope::File(_) => Ok(()),
+    }
+}
+
+/// 이 모듈의 메서드를 붙이는 문: 모든 핸들러 앞에서 [`refuse_agent`] 를 지난다. [`register`] 가 `router` 를 이것으로 가리므로
+/// 거기 붙이는 메서드(M5-11 · 12 · 15 가 더할 것 포함)는 따로 쓰지 않아도 걸린다.
+pub struct WindowsOnly<'a>(&'a mut Router);
+
+impl WindowsOnly<'_> {
+    pub fn unary<M, F, Fut>(&mut self, method: M, handler: F) -> &mut Self
+    where
+        M: UnaryMethod,
+        F: Fn(Ctx, M::Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<M::Result, RpcError>> + Send + 'static,
+    {
+        self.0.unary(method, move |ctx, params| {
+            let gated = refuse_agent(&ctx, M::META.name).map(|()| handler(ctx, params));
+            async move { gated?.await }
+        });
+        self
+    }
+
+    pub fn stream<M, F, Fut>(&mut self, method: M, handler: F) -> &mut Self
+    where
+        M: StreamMethod,
+        F: Fn(Ctx, M::Params, StreamSink<M::Item>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<(), RpcError>> + Send + 'static,
+    {
+        self.0.stream(method, move |ctx, params, sink| {
+            let gated = refuse_agent(&ctx, M::META.name).map(|()| handler(ctx, params, sink));
+            async move { gated?.await }
+        });
+        self
+    }
+}
+
+/// 핸들러를 붙인다. 모두 [`WindowsOnly`] 를 지난다 — 이 함수 안에서 `Router` 를 직접 쓰지 않는다.
 pub fn register(router: &mut Router, mcp: Arc<Mcp>) {
+    let mut router = WindowsOnly(router);
     let sessions = mcp.sessions.clone();
     router.unary(McpSessions, move |_ctx, ()| {
         let sessions = sessions.clone();

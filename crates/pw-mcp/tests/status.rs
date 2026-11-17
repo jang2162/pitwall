@@ -610,3 +610,91 @@ async fn status_rpcs_are_not_tools_and_not_for_file_windows() {
         f.window().await.call(method, params).await.unwrap();
     }
 }
+
+/// 에이전트 범위 연결(MCP 세션이 Host 에 붙는 연결 — `Caller::agent`)은 role 이 owner 라도 거절된다. `project.setTrust` 와 같은 꼴
+/// (`PERMISSION_DENIED`, `reason: agentSession`). 거절은 `methods::register` 의 한 문(`WindowsOnly`)이 한다.
+async fn assert_refuses_agent(method: &str, params: Value) {
+    let f = Fixture::new();
+    let agent = f.window_as(Caller::agent(Role::Owner)).await;
+    match agent.call(method, params.clone()).await {
+        Err(CallError::Rpc { code, data, .. }) => {
+            assert_eq!(code, i64::from(pw_rpc::code::PERMISSION_DENIED), "{method}");
+            let data = data.unwrap();
+            assert_eq!(data["reason"], "agentSession", "{method}");
+            assert_eq!(data["method"], method);
+        }
+        other => panic!("{method}: 에이전트 범위 연결은 부르지 못한다: {other:?}"),
+    }
+    // 같은 role 의 창은 부른다 — 막는 것은 범위다.
+    f.window().await.call(method, params).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_sessions_refuses_agent_connections() {
+    assert_refuses_agent("mcp.sessions", Value::Null).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_tools_list_refuses_agent_connections() {
+    assert_refuses_agent("mcp.tools.list", json!({})).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_audit_list_refuses_agent_connections() {
+    assert_refuses_agent("mcp.audit.list", json!({})).await;
+}
+
+/// 행 수가 `limit` 의 정확한 배수면 마지막 쪽의 `nextCursor` 가 `null` 이다 — 빈 쪽이 하나 더 생기지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn audit_list_ends_without_an_empty_page_on_an_exact_multiple() {
+    let f = Fixture::new();
+    let log = AuditLog::under_state(&f.paths.state);
+    for _ in 0..1000 {
+        log.record(&f.entry("probe_on", None, Outcome::Ok)).unwrap();
+    }
+    let window = f.window().await;
+    let first = window
+        .call("mcp.audit.list", json!({"limit": 500}))
+        .await
+        .unwrap();
+    assert_eq!(first["entries"].as_array().unwrap().len(), 500);
+    let cursor = first["nextCursor"].clone();
+    assert!(!cursor.is_null());
+    let second = window
+        .call("mcp.audit.list", json!({"limit": 500, "cursor": cursor}))
+        .await
+        .unwrap();
+    assert_eq!(second["entries"].as_array().unwrap().len(), 500);
+    assert_eq!(second["nextCursor"], Value::Null, "마지막 쪽");
+}
+
+/// 「최근 호출 수」 는 30일(`methods::RECENT`) 안의 행만 센다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn recent_calls_count_only_the_last_thirty_days() {
+    let f = Fixture::new();
+    let log = AuditLog::under_state(&f.paths.state);
+    let old = log.record(&f.entry("probe_on", None, Outcome::Ok)).unwrap();
+    let edge = log.record(&f.entry("probe_on", None, Outcome::Ok)).unwrap();
+    log.record(&f.entry("probe_on", None, Outcome::Ok)).unwrap();
+    let day = 24 * 60 * 60 * 1000_i64;
+    let conn = rusqlite::Connection::open(f.paths.state.join("mcp/audit.db")).unwrap();
+    // 31일 전 행은 빠지고, 29일 전 행은 든다.
+    conn.execute(
+        "UPDATE calls SET at = at - ?1 WHERE id = ?2",
+        (31 * day, old),
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE calls SET at = at - ?1 WHERE id = ?2",
+        (29 * day, edge),
+    )
+    .unwrap();
+    drop(conn);
+    let list = f
+        .window()
+        .await
+        .call("mcp.tools.list", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(tool(list.as_array().unwrap(), "probe_on")["recentCalls"], 2);
+}

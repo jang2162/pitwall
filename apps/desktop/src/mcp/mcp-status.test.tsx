@@ -209,14 +209,27 @@ async function mount(kind: "project" | "welcome") {
 
 const item = () => document.querySelector<HTMLElement>("[data-testid=status-mcp]");
 
+/** 상태바 왼쪽 항목 id(화면 순서) — 가운데 빈칸(`span`) 앞까지. */
+function leftItems(): string[] {
+  const footer = item()!.closest("footer")!;
+  const ids: string[] = [];
+  for (const el of footer.children) {
+    const id = (el as HTMLElement).dataset.statusItem;
+    if (id === undefined) break;
+    ids.push(id);
+  }
+  return ids;
+}
+
 it("shows the number of sessions on this project, and nothing at zero", async () => {
   host.sessions = [session("a", "p1"), session("b", "p1"), session("c", "p2"), session("d", null)];
   await mount("project");
   expect(item()?.textContent).toBe(T.status.label(2));
   expect(item()?.textContent).toBe("MCP 2");
-  // 상태바의 `mcp` 자리 — 왼쪽, Host 항목 다음.
+  // 상태바의 `mcp` 자리(`STATUS_SLOTS.mcp`) — 왼쪽, Host 항목 다음 · 신뢰 항목 앞.
   const slot = item()!.closest<HTMLElement>("[data-status-item]");
   expect(slot?.dataset.statusItem).toBe("mcp");
+  expect(leftItems().join(" ")).toContain("host mcp trust");
 
   // 세션이 모두 닫히면 `mcp.sessionsChanged` 로 다시 읽고 항목이 사라진다.
   host.sessions = [session("c", "p2")];
@@ -225,6 +238,20 @@ it("shows the number of sessions on this project, and nothing at zero", async ()
   expect(item()).toBeNull();
   // 자리는 남고 비어 숨는다(`empty:hidden` — status-bar.tsx).
   expect(document.querySelector('[data-status-item="mcp"]')?.childElementCount).toBe(0);
+});
+
+// 팝업이 열린 채 마지막 세션이 닫히면 팝업은 빈 목록으로 남고, 상태바에 「MCP 0」 단추가 생기지 않는다.
+it("keeps the popup but shows no MCP 0 item when the last session closes while it is open", async () => {
+  host.sessions = [session("a", "p1")];
+  await mount("project");
+  await act(async () => item()!.click());
+  host.sessions = [];
+  await act(async () => host.emitHost("mcp.sessionsChanged", { total: 0 }));
+  await settle();
+  const popup = document.querySelector<HTMLElement>("[data-testid=mcp-sessions-popup]");
+  expect(popup?.textContent).toContain(T.sessions.empty);
+  expect(item()).toBeNull();
+  expect(document.body.textContent).not.toContain(T.status.label(0));
 });
 
 it("has no item when no session is on this project", async () => {
