@@ -78,10 +78,10 @@ pub struct FileHistoryRow {
     pub parents: Vec<String>,
     /// 제목(메시지의 첫 문단을 한 줄로).
     pub subject: String,
-    /// 작성자(mailmap 적용).
+    /// Author (with mailmap applied).
     pub author_name: String,
     pub author_email: String,
-    /// 작성 시각(유닉스 초).
+    /// Author time (Unix seconds).
     #[specta(type = pw_rpc::JsNumber)]
     pub author_time: i64,
     /// 이 커밋에서의 경로(저장소 꼭대기 기준, `/` 구분). 지운 커밋이면 지운 경로.

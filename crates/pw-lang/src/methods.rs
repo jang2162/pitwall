@@ -119,7 +119,7 @@ rpc_method! {
 #[derive(Clone)]
 pub struct HostParts {
     pub paths: AppPaths,
-    /// 전역 설정(`$CONFIG/settings.toml` · `settings.local.toml`).
+    /// Global settings (`$CONFIG/settings.toml` · `settings.local.toml`).
     pub global: ConfigStore,
     pub projects: Projects,
 }

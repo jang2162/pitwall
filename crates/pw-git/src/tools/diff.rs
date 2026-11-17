@@ -17,25 +17,28 @@ use crate::diff::methods::{DiffFile, DiffHunk, DiffSide, FileStatus, GitDiffPara
 #[serde(rename_all = "camelCase")]
 pub struct GitDiffToolParams {
     pub project_id: String,
-    /// 볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃.
+    /// Top of the worktree to read (absolute path). Empty means the session's worktree, or else the project's main
+    /// checkout.
     #[serde(default)]
     pub worktree: Option<String>,
-    /// 옛 쪽. 짝은 넷이다:
-    /// - `to` 가 커밋(`{"kind":"commit","rev":"…"}`): `from` 이 없으면 그 커밋의 첫 부모(`git show`), 있으면 그 커밋(두 커밋 비교).
-    /// - `to` 가 index(`{"kind":"index"}`): `from` 은 커밋, 없으면 HEAD — `git diff --cached`.
-    /// - `to` 가 작업 트리(`{"kind":"workTree"}`): `from` 은 index(없어도) — `git diff`.
+    /// The old side. There are four pairings:
+    /// - `to` is a commit (`{"kind":"commit","rev":"…"}`): without `from`, the commit's first parent (`git show`); with
+    ///   it, that commit (comparing two commits).
+    /// - `to` is the index (`{"kind":"index"}`): `from` is a commit, HEAD if missing — `git diff --cached`.
+    /// - `to` is the working tree (`{"kind":"workTree"}`): `from` is the index (or missing) — `git diff`.
     #[serde(default)]
     pub from: Option<DiffSide>,
-    /// 새 쪽. 비면 작업 트리(`git diff` — 스테이징하지 않은 변경).
+    /// The new side. Empty means the working tree (`git diff` — unstaged changes).
     #[serde(default)]
     pub to: Option<DiffSide>,
-    /// 이 경로(작업 트리 기준, `/` 구분, 파일이나 폴더)와 그 아래만 보고 hunk 를 싣는다.
+    /// Only this path (relative to the working tree, `/`-separated, a file or a folder) and what is under it, with
+    /// hunks included.
     #[serde(default)]
     pub path: Option<String>,
-    /// 모든 파일의 hunk 를 싣는다.
+    /// Include the hunks of every file.
     #[serde(default)]
     pub detail: bool,
-    /// 공백을 모두 무시한다(`git diff -w`).
+    /// Ignore all whitespace (`git diff -w`).
     #[serde(default)]
     pub ignore_whitespace: bool,
 }
@@ -45,17 +48,18 @@ pub struct GitDiffToolParams {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct GitDiffToolResult {
-    /// 파일 경로의 기준인 작업 트리 꼭대기(절대 경로).
+    /// Top of the working tree that file paths are relative to (absolute path).
     pub work_tree: String,
-    /// 옛 쪽 커밋의 해시. 빈 트리 · index 면 `null`.
+    /// Hash of the old side's commit. `null` for the empty tree · the index.
     pub old_commit: Option<String>,
-    /// 새 쪽 커밋의 해시. index · 작업 트리면 `null`.
+    /// Hash of the new side's commit. `null` for the index · the working tree.
     pub new_commit: Option<String>,
-    /// 바뀐 파일(경로순).
+    /// Changed files (sorted by path).
     pub files: Vec<GitDiffToolFile>,
-    /// 응답 크기 상한에 닿아 뒤쪽 파일의 `patch`(또는 파일 자체 — `omittedFiles`)를 싣지 못했다. `path` 로 좁혀 다시 부른다.
+    /// The response size limit was reached, so the `patch` of later files (or the files themselves — `omittedFiles`) is
+    /// not included. Narrow with `path` and call again.
     pub truncated: bool,
-    /// 상한에 닿아 목록에서 뺀 파일 수.
+    /// Number of files left out of the list because the limit was reached.
     pub omitted_files: u32,
 }
 
@@ -65,29 +69,30 @@ pub struct GitDiffToolResult {
 #[serde(rename_all = "camelCase")]
 pub struct GitDiffToolFile {
     pub status: FileStatus,
-    /// 새 경로(지워졌으면 옛 경로).
+    /// New path (the old path if deleted).
     pub path: String,
-    /// 이름이 바뀌었으면 옛 경로.
+    /// Old path, if renamed.
     pub old_path: Option<String>,
-    /// 더한 줄 · 뺀 줄 수(`git diff --numstat`).
+    /// Number of lines added · removed (`git diff --numstat`).
     pub added: u32,
     pub removed: u32,
-    /// 바이너리라 hunk 가 없다.
+    /// Binary, so no hunks.
     pub binary: bool,
-    /// 파일이 너무 커서 hunk 를 만들지 않았다.
+    /// The file is too large, so no hunks were made.
     pub too_large: bool,
-    /// 생성 파일이다(`linguist-generated` 등).
+    /// A generated file (`linguist-generated`, etc.).
     pub generated: bool,
-    /// hunk 의 unified diff(`@@ -a,b +c,d @@` 와 ` ` · `+` · `-` 줄). hunk 를 묻지 않았거나 없거나(바이너리 · 너무 큼 · 서브모듈)
-    /// 응답 크기 상한에 닿았으면 `null`.
+    /// Unified diff of the hunks (`@@ -a,b +c,d @@` and ` ` · `+` · `-` lines). `null` if hunks were not asked for,
+    /// there are none (binary · too large · submodule), or the response size limit was reached.
     pub patch: Option<String>,
-    /// 이 파일의 내용을 읽지 못한 까닭.
+    /// Why this file's content could not be read.
     pub error: Option<String>,
 }
 
 rpc_method! {
-    /// 두 쪽(커밋 · index · 작업 트리)의 diff. 기본은 바뀐 파일 목록(상태 · 경로 · 더한 · 뺀 줄 수), `detail` 이나 `path` 를
-    /// 주면 hunk 를 unified diff 로 싣는다. 응답 크기 상한에 닿으면 `truncated`. 저장소가 없으면 invalid params.
+    /// Diff of two sides (commit · index · working tree). By default the list of changed files (status · path · lines
+    /// added · removed); with `detail` or `path`, the hunks as a unified diff. `truncated` when the response size limit
+    /// is reached. invalid params if there is no repository.
     pub GitDiffTool: "git.tool.diff" {
         params: GitDiffToolParams,
         result: GitDiffToolResult,

@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 use tree_sitter::Node;
 
-/// 심볼 종류.
+/// Symbol kind.
 #[derive(
     Debug,
     Clone,
@@ -42,8 +42,9 @@ pub enum IndexSymbolKind {
     Constant,
     Variable,
     Macro,
-    /// 구현 블록(Rust 의 `impl`). 이름은 대상 타입이다. 그 안 메서드의 컨테이너가 되려고 잡는다 — 심볼 검색은 `kinds` 로 따로 고르지
-    /// 않으면 내지 않는다(같은 이름의 타입과 겹친다).
+    /// An implementation block (Rust's `impl`). Its name is the target type. Captured to be the container of the
+    /// methods inside it — symbol search does not return it unless chosen with `kinds` (it would overlap with the type
+    /// of the same name).
     Impl,
 }
 

@@ -55,16 +55,16 @@ mod cell_limit {
     }
 }
 
-/// 결과 열 하나.
+/// One result column.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(rename_all = "camelCase")]
 pub struct ColumnMeta {
     pub name: String,
-    /// DB 가 부르는 타입 이름(`int8` · `BIGINT UNSIGNED` · `TEXT` …).
+    /// The type name the DB uses (`int8` · `BIGINT UNSIGNED` · `TEXT` …).
     pub db_type: String,
-    /// 열이 NULL 을 받을 수 있는지. 드라이버가 모르면 `None`.
+    /// Whether the column accepts NULL. `None` if the driver does not know.
     pub nullable: Option<bool>,
 }
 

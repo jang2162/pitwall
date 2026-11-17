@@ -25,35 +25,39 @@ pub const MAX_BODY: usize = 16 * 1024;
 #[serde(rename_all = "camelCase")]
 pub struct GitLogToolParams {
     pub project_id: String,
-    /// 볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃.
+    /// Top of the worktree to read (absolute path). Empty means the session's worktree, or else the project's main
+    /// checkout.
     #[serde(default)]
     pub worktree: Option<String>,
-    /// 이 브랜치 · ref(`main` · `origin/main` · `v1.0` · `HEAD`)에서 닿는 커밋. 비면 HEAD(`git log` 와 같다).
+    /// Commits reachable from this branch · ref (`main` · `origin/main` · `v1.0` · `HEAD`). Empty means HEAD (as in
+    /// `git log`).
     #[serde(default)]
     pub branch: Option<String>,
-    /// 작성자 「이름 <메일>」 에 든 글자(대소문자를 가리지 않는다, 정규식이 아니다).
+    /// Text contained in the author's "name <email>" (case-insensitive, not a regular expression).
     #[serde(default)]
     pub author: Option<String>,
-    /// 메시지(제목 · 본문)의 한 줄에 든 글자(대소문자를 가리지 않는다, 정규식이 아니다).
+    /// Text contained in one line of the message (subject · body) (case-insensitive, not a regular expression).
     #[serde(default)]
     pub message: Option<String>,
-    /// 이 시각 이후 커밋(커미터 시각, git `--since` 와 같은 꼴 — `2026-01-31` · `2026-01-31T09:00:00+09:00` · `2 weeks ago` ·
-    /// 유닉스 초는 `@1700000000`).
+    /// Commits after this time (committer time, in the same forms as git's `--since` — `2026-01-31` ·
+    /// `2026-01-31T09:00:00+09:00` · `2 weeks ago` · `@1700000000` for Unix seconds).
     #[serde(default)]
     pub since: Option<String>,
-    /// 이 시각 이전 커밋(커미터 시각, `since` 와 같은 꼴).
+    /// Commits before this time (committer time, same forms as `since`).
     #[serde(default)]
     pub until: Option<String>,
-    /// 이 경로(작업 트리 기준, `/` 구분, 파일이나 폴더) 하나라도 바꾼 커밋만. 글롭은 받지 않는다.
+    /// Only commits that changed this path (relative to the working tree, `/`-separated, a file or a folder). Globs are
+    /// not accepted.
     #[serde(default)]
     pub paths: Option<Vec<String>>,
-    /// 커밋마다 메시지 본문(제목 다음 문단부터)도 싣는다.
+    /// Include each commit's message body too (from the paragraph after the subject).
     #[serde(default)]
     pub detail: bool,
-    /// 앞 쪽의 `nextCursor`. 비면 처음부터. 그 커밋이 로그에서 사라졌으면(force push 등) invalid params — 처음부터 다시 부른다.
+    /// `nextCursor` from the previous page. Empty means from the start. If that commit is gone from the log (a force
+    /// push, etc.), invalid params — call again from the start.
     #[serde(default)]
     pub cursor: Option<String>,
-    /// 한 쪽의 커밋 수, 1 ~ 500(기본 50).
+    /// Commits per page, 1 – 500 (default 50).
     #[serde(default)]
     pub limit: Option<u32>,
 }
@@ -63,9 +67,9 @@ pub struct GitLogToolParams {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct GitLogToolResult {
-    /// 자식이 부모보다 먼저(`git log --topo-order`).
+    /// Children before their parents (`git log --topo-order`).
     pub commits: Vec<GitLogCommit>,
-    /// 다음 쪽을 부를 `cursor`. 마지막 쪽이면 `null`.
+    /// The `cursor` for the next page. `null` on the last page.
     pub next_cursor: Option<String>,
 }
 
@@ -74,27 +78,28 @@ pub struct GitLogToolResult {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct GitLogCommit {
-    /// 전체 해시.
+    /// Full hash.
     pub hash: String,
-    /// 부모 해시(첫 부모가 앞). 머지 커밋이면 둘 이상.
+    /// Parent hashes (first parent first). Two or more for a merge commit.
     pub parents: Vec<String>,
-    /// 작성자(mailmap 적용).
+    /// Author (with mailmap applied).
     pub author_name: String,
     pub author_email: String,
-    /// 작성 시각(유닉스 초).
+    /// Author time (Unix seconds).
     #[specta(type = pw_rpc::JsNumber)]
     pub author_time: i64,
-    /// 제목(메시지 첫 문단을 한 줄로).
+    /// Subject (the message's first paragraph on one line).
     pub subject: String,
-    /// 이 커밋을 가리키는 브랜치 · 원격 브랜치 · 태그 이름(분리된 HEAD 는 `HEAD`).
+    /// Names of the branches · remote branches · tags pointing at this commit (`HEAD` for a detached HEAD).
     pub refs: Vec<String>,
-    /// 본문(제목 다음 문단부터, 없으면 빈 글자). `detail` 일 때만 있다.
+    /// Body (from the paragraph after the subject; empty text if none). Present only with `detail`.
     pub body: Option<String>,
 }
 
 rpc_method! {
-    /// 커밋 로그의 한 쪽: 커밋마다 해시 · 부모 · 작성자 · 작성 시각 · 제목 · 가리키는 ref(본문은 `detail`). 시작은 `branch`(없으면
-    /// HEAD), 필터는 작성자 · 메시지 · 기간 · 경로. 저장소가 없거나 HEAD 에 아직 커밋이 없으면 빈 쪽이다.
+    /// One page of the commit log: for each commit its hash · parents · author · author time · subject · refs pointing
+    /// at it (body with `detail`). Starts at `branch` (HEAD if missing); filters by author · message · time range ·
+    /// path. An empty page if there is no repository or HEAD has no commits yet.
     pub GitLogTool: "git.tool.log" {
         params: GitLogToolParams,
         result: GitLogToolResult,

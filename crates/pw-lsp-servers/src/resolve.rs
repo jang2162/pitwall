@@ -87,7 +87,7 @@ pub struct LspSkipped {
 )]
 pub enum LspResolution {
     Found {
-        /// 절대 경로.
+        /// Absolute path.
         #[specta(type = String)]
         path: PathBuf,
         step: LspResolveStep,

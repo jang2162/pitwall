@@ -101,7 +101,7 @@ pub struct GitContainedIn {
     pub refs: Vec<RefLabel>,
 }
 
-/// diff 의 한쪽.
+/// One side of a diff.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
@@ -111,11 +111,11 @@ pub struct GitContainedIn {
     rename_all_fields = "camelCase"
 )]
 pub enum DiffSide {
-    /// 커밋의 트리. `rev` 는 [`GitRevParams::rev`] 와 같은 리비전 문법이다.
+    /// A commit's tree. `rev` uses the same revision syntax as [`GitRevParams::rev`].
     Commit { rev: String },
-    /// index(스테이징 영역). 충돌 중인 경로(단계 1~3)는 빠진다.
+    /// The index (staging area). Paths in conflict (stages 1–3) are left out.
     Index,
-    /// 작업 트리. 추적하는 파일만 본다(`git diff` 와 같이 untracked 는 빠진다).
+    /// The working tree. Only tracked files (untracked files are left out, as in `git diff`).
     WorkTree,
 }
 
@@ -170,7 +170,7 @@ pub struct DiffFile {
     /// 새 경로(지워졌으면 옛 경로). 작업 트리 꼭대기([`GitDiff::work_tree`]) 기준 상대 경로, `/` 구분(git porcelain 과 같다 —
     /// Windows 에서도).
     pub path: String,
-    /// 이름이 바뀌었으면 옛 경로.
+    /// Old path, if renamed.
     pub old_path: Option<String>,
     /// git 의 8진 모드(`100644` · `100755` · `120000` 심링크 · `160000` 서브모듈). 그쪽에 없으면 `null`.
     pub old_mode: Option<String>,
@@ -193,7 +193,7 @@ pub struct DiffFile {
     pub generated: bool,
     /// 서브모듈 포인터가 바뀌었다(한쪽이라도 `160000`). hunk 가 없다.
     pub submodule: Option<SubmodulePointer>,
-    /// 더한 줄 · 뺀 줄 수(`git diff --numstat`).
+    /// Number of lines added · removed (`git diff --numstat`).
     pub added: u32,
     pub removed: u32,
     pub hunks: Vec<DiffHunk>,
@@ -209,11 +209,11 @@ pub struct DiffFile {
 pub enum FileStatus {
     Added,
     Deleted,
-    /// 내용이나 모드(실행 비트)가 바뀌었다.
+    /// The content or mode (executable bit) changed.
     Modified,
-    /// 이름이 바뀌었다(내용 50% 이상이 같다 — `git diff --find-renames`). 내용도 바뀌었을 수 있다.
+    /// Renamed (at least 50% of the content is the same — `git diff --find-renames`). The content may have changed too.
     Renamed,
-    /// 종류가 바뀌었다(파일 ↔ 심링크 ↔ 서브모듈). git 의 patch 는 지우기 + 더하기 둘로 보인다.
+    /// The type changed (file ↔ symlink ↔ submodule). git's patch shows it as a deletion plus an addition.
     TypeChanged,
 }
 

@@ -320,6 +320,92 @@ fn the_cli_flag_check_catches_reserved_fields() {
     );
 }
 
+/// 한글이 든 글자(음절 · 자모 · 호환 자모).
+fn has_hangul(text: &str) -> bool {
+    text.chars().any(|c| {
+        matches!(c, '\u{AC00}'..='\u{D7A3}' | '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}')
+    })
+}
+
+/// 툴이 에이전트에게 보이는 글(설명 · 입력 스키마 · 출력 스키마의 모든 글자열과 키) 가운데 한글이 든 것. 비면 영어로만 쓰였다
+/// (05-mcp.md 「툴 레지스트리」 — 에이전트가 읽는 글은 영어다, 16-m5-plan 결정 M5-D39).
+fn hangul_problems(tool: &pw_mcp::Tool) -> Vec<String> {
+    fn walk(at: &str, value: &Value, out: &mut Vec<String>) {
+        match value {
+            Value::String(s) if has_hangul(s) => out.push(format!("{at}: {s}")),
+            Value::Array(items) => {
+                for (i, item) in items.iter().enumerate() {
+                    walk(&format!("{at}[{i}]"), item, out);
+                }
+            }
+            Value::Object(map) => {
+                for (key, item) in map {
+                    if has_hangul(key) {
+                        out.push(format!("{at}: key {key}"));
+                    }
+                    walk(&format!("{at}.{key}"), item, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut problems = Vec::new();
+    if has_hangul(&tool.description) {
+        problems.push(format!("description: {}", tool.description));
+    }
+    walk(
+        "input",
+        &Value::Object(tool.input_schema_for(false)),
+        &mut problems,
+    );
+    if let Some(output) = &tool.output_schema {
+        walk(
+            "output",
+            &Value::Object(output.as_ref().clone()),
+            &mut problems,
+        );
+    }
+    problems
+}
+
+/// 툴 설명 · 입력 · 출력 스키마는 영어다(결정 M5-D39). 한글이 들면 어느 툴의 어느 자리인지 보인다 — 고칠 곳은 그 `rpc_method!`
+/// 선언의 문서 주석이나 입출력 타입 필드의 문서 주석이다(스키마의 `description` 이 거기서 온다).
+#[test]
+fn tool_descriptions_and_schemas_are_english() {
+    let host = ToolHost::app();
+    let problems: Vec<(String, Vec<String>)> = host
+        .services
+        .catalog
+        .tools()
+        .iter()
+        .map(|t| (t.name.clone(), hangul_problems(t)))
+        .filter(|(_, p)| !p.is_empty())
+        .collect();
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
+/// 한글 검사 자체를 가짜 툴로 본다 — 설명 · 입력 필드 설명 · 출력 필드 설명의 한글을 각각 잡는다.
+#[test]
+fn the_hangul_check_catches_korean_text() {
+    let catalog = pw_mcp::Catalog::from_methods(&[
+        pw_rpc::MethodInfo::unary::<fake::Good>(),
+        pw_rpc::MethodInfo::unary::<fake::Korean>(),
+    ])
+    .unwrap();
+    assert_eq!(
+        hangul_problems(catalog.get("good").unwrap()),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        hangul_problems(catalog.get("korean").unwrap()),
+        [
+            "description: 한글 설명",
+            "input.properties.query.description: 찾을 글",
+            "output.properties.found.description: 찾은 것",
+        ]
+    );
+}
+
 /// [`the_convention_check_catches_half_done_tools`] · [`the_cli_flag_check_catches_reserved_fields`] 의 가짜 선언. `rpc_method!` 로 만들면 레지스트리(`pw_rpc::methods`)에 들어가
 /// 툴 목록 시험에 섞이므로 손으로 만든다.
 #[allow(dead_code)] // 스키마만 본다 — 값을 읽지 않는다.
@@ -410,8 +496,24 @@ mod fake {
         pub next_cursor: Option<String>,
     }
 
+    // 한글 검사의 가짜 입력 · 결과.
+    #[derive(Deserialize, specta::Type, schemars::JsonSchema)]
+    pub struct KoreanQuery {
+        /// 찾을 글
+        pub query: String,
+    }
+
+    #[derive(Serialize, specta::Type, schemars::JsonSchema)]
+    pub struct KoreanFound {
+        /// 찾은 것
+        pub found: bool,
+    }
+
     macro_rules! fake {
         ($ty:ident, $name:literal, $params:ty, $result:ty) => {
+            fake!($ty, $name, $params, $result, "");
+        };
+        ($ty:ident, $name:literal, $params:ty, $result:ty, $doc:literal) => {
             #[derive(Debug, Clone, Copy)]
             pub struct $ty;
             impl Method for $ty {
@@ -423,7 +525,7 @@ mod fake {
                     roles: RoleSet::default_for(Tier::Read),
                     params: "",
                     output: "",
-                    doc: "",
+                    doc: $doc,
                     mcp: Some(McpTool {
                         group: Some("code"),
                         name: Some($name),
@@ -450,6 +552,7 @@ mod fake {
     fake!(HelpField, "help_field", WithHelp, ());
     fake!(TwoSpellings, "two_spellings", Spellings, ());
     fake!(List, "list", Plain, ());
+    fake!(Korean, "korean", KoreanQuery, KoreanFound, "한글 설명");
 }
 
 /// 도우미 자체: 진짜 세션에서 목록 · 그룹 · 등급 · 호출 · 감사 행이 보인다. 툴 행의 시험은 이 꼴을 따른다.

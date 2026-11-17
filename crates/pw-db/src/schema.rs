@@ -77,7 +77,7 @@ pub struct DbSchemaConnectionParams {
     #[serde(default)]
     pub worktree: Option<String>,
     pub connection_id: String,
-    /// 앞 쪽의 `nextCursor`. 처음 쪽은 비운다.
+    /// `nextCursor` from the previous page. Empty for the first page.
     #[serde(default)]
     pub cursor: Option<String>,
     /// 쪽 크기(1 ~ 500, 기본 500).
@@ -94,7 +94,7 @@ pub struct DbSchemaSchemasParams {
     #[serde(default)]
     pub worktree: Option<String>,
     pub connection_id: String,
-    /// 비우면 연결 설정의 DB.
+    /// Empty means the connection settings' database.
     #[serde(default)]
     pub database: Option<String>,
     #[serde(default)]

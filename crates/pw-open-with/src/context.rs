@@ -11,7 +11,7 @@ pub struct OpenContext {
     /// `{project_root}` 이자 작업 디렉터리. 활성 워크트리가 있으면 그 안의 프로젝트 루트(`ActiveWorktree::root`, F2-5), 없으면
     /// 등록된 주 루트. 절대 경로다.
     pub project_root: PathBuf,
-    /// 절대 경로.
+    /// Absolute path.
     pub file: Option<PathBuf>,
     pub line: Option<u32>,
     pub column: Option<u32>,

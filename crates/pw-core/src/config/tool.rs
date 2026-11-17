@@ -42,51 +42,55 @@ const PROJECT_FILE: &str = "project";
 )]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsGetToolParams {
-    /// 없으면(`null`) 전역 설정, 있으면 그 프로젝트의 병합된 설정(전역 위에 프로젝트 설정). 세션에 프로젝트가 있으면 키를 빼면
-    /// 세션 프로젝트다 — 전역만 보려면 `null` 을 준다.
+    /// Without it (`null`) the global settings; with it, that project's merged settings (project settings over the
+    /// global ones). When the session has a project, leaving the key out means the session's project — pass `null` to
+    /// see only the global settings.
     #[serde(default)]
     pub project_id: Option<String>,
-    /// 볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. 커밋된
-    /// `.pitwall/project.toml` 은 워크트리(브랜치)마다 다를 수 있다.
+    /// Top of the worktree to read (absolute path). Empty means the session's worktree, or else the project's main
+    /// checkout. The committed `.pitwall/project.toml` can differ per worktree (branch).
     #[serde(default)]
     pub worktree: Option<String>,
-    /// 이 키와 그 아래만. 표와 키를 점으로 잇는다(`mcp`, `mcp.tools`, `open_with.default`). 점 · 공백이 든 키 이름은 결과의 `key`
-    /// 처럼 큰따옴표로 감싼다.
+    /// Only this key and what is under it. Tables and keys are joined with dots (`mcp`, `mcp.tools`,
+    /// `open_with.default`). Quote a key name containing dots or spaces with double quotes, as the result's `key` does.
     #[serde(default)]
     pub key: Option<String>,
 }
 
-/// 값이 온 레이어. 아래(먼저 적용)부터 `builtin` → `global` → `shared` → `personal` 이다.
+/// The layer a value came from. From the bottom (applied first): `builtin` → `global` → `shared` → `personal`.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(rename_all = "camelCase")]
 pub enum SettingLayer {
-    /// 앱의 내장 기본값.
+    /// The app's built-in default.
     Builtin,
-    /// 전역 설정(`$CONFIG/settings.toml` · `settings.local.toml`).
+    /// Global settings (`$CONFIG/settings.toml` · `settings.local.toml`).
     Global,
-    /// 저장소에 커밋되는 프로젝트 설정(`.pitwall/project.toml`).
+    /// Project settings committed to the repository (`.pitwall/project.toml`).
     Shared,
-    /// 커밋되지 않는 개인 프로젝트 설정(`.pitwall/project.local.toml`, 개인 전용 프로젝트의 `$CONFIG/projects/<slug>/` 파일).
+    /// Personal project settings that are not committed (`.pitwall/project.local.toml`, or the files in
+    /// `$CONFIG/projects/<slug>/` for a personal-only project).
     Personal,
 }
 
-/// 값 하나(테이블이 아닌 것 — 배열은 통째로 한 값이다).
+/// One value (not a table — an array is one value as a whole).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingEntry {
-    /// 표와 키를 점으로 이은 것(`mcp.preset`). 점 · 공백 등이 든 키 이름은 큰따옴표로 감싼다(`mcp.tools."project_*"`).
+    /// Table and key joined with dots (`mcp.preset`). A key name containing dots, spaces and the like is quoted with
+    /// double quotes (`mcp.tools."project_*"`).
     pub key: String,
-    /// 이긴 레이어의 값. `redacted` 면 가린 값이다.
+    /// The value from the winning layer. When `redacted`, the value is hidden.
     #[specta(type = JsonValue)]
     pub value: Value,
     pub layer: SettingLayer,
-    /// 키 이름이 비밀을 가리켜(`token` · `password` · `apiKey` …) 값(또는 그 안의 비밀 키 값)을 가렸다.
+    /// The key name points at a secret (`token` · `password` · `apiKey` …), so the value (or the secret key values
+    /// inside it) is hidden.
     pub redacted: bool,
 }
 
-/// 읽은 설정 파일 하나.
+/// One settings file that was read.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
@@ -95,25 +99,27 @@ pub struct SettingsFileInfo {
     pub layer: SettingLayer,
     pub path: String,
     pub schema: u32,
-    /// 앱보다 새 스키마라 읽기만 한 파일(값은 그대로 싣는다).
+    /// A file with a newer schema than the app, so it was only read (its values are reported as they are).
     pub read_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsGetToolResult {
-    /// 프로젝트의 설정이면 그 id. 전역이면 `null`.
+    /// The project id if these are a project's settings; `null` for the global settings.
     pub project_id: Option<String>,
-    /// 키 이름순.
+    /// Sorted by key name.
     pub entries: Vec<SettingEntry>,
-    /// 값을 읽은 설정 파일(아래 레이어부터). 내장 기본값은 없다.
+    /// The settings files the values were read from (lowest layer first). Built-in defaults are not listed.
     pub files: Vec<SettingsFileInfo>,
 }
 
 rpc_method! {
-    /// 설정 키 조회 — 디스크에 쓰지 않고 읽는다. `projectId` 가 없으면(`null`) 전역 설정, 있으면 그 프로젝트의 병합된 설정(전역
-    /// 위에 프로젝트 설정). `key`(`표.키` 접두)로 좁힌다. 값마다 어느 레이어(builtin · global · shared · personal)에서 왔는지 싣는다.
-    /// 키 이름이 비밀을 가리키는 값은 가린다. 그 밖의 값은 설정 파일 그대로다 — 에이전트가 파일을 직접 읽는 것과 같은 범위.
+    /// Read settings keys without writing to disk. Without `projectId` (`null`) the global settings; with it, that
+    /// project's merged settings (project settings over the global ones). `key` (a `table.key` prefix) narrows the
+    /// result. Each value carries the layer it came from (builtin · global · shared · personal). Values whose key name
+    /// points at a secret are redacted. Other values are as in the settings files — the same reach as an agent reading
+    /// the files directly.
     pub ConfigToolGet: "config.tool.get" {
         params: SettingsGetToolParams,
         result: SettingsGetToolResult,

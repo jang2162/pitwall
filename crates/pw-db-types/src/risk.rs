@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// 등급. 순서가 위험도 순서다 — 여러 문장의 합산은 가장 높은 등급(`Ord::max`).
+/// Risk grade. The order is the order of risk — several statements combine to the highest grade (`Ord::max`).
 #[derive(
     Debug,
     Clone,
@@ -24,14 +24,16 @@ use serde::{Deserialize, Serialize};
 )]
 #[serde(rename_all = "camelCase")]
 pub enum RiskGrade {
-    /// 조회 — 데이터를 바꾸지 않는다.
+    /// A read — does not change data.
     Read,
-    /// 쓰기(키로 한정한 `UPDATE` · `INSERT` · 부작용 함수가 든 `SELECT` · 트랜잭션 제어 등).
+    /// A write (a key-scoped `UPDATE` · `INSERT`, a `SELECT` with a side-effecting function, transaction control,
+    /// etc.).
     Write,
-    /// 범위 없는 쓰기(WHERE 가 없거나 항진식인 `UPDATE` · `DELETE`).
+    /// An unscoped write (an `UPDATE` · `DELETE` with no WHERE or an always-true one).
     UnboundedWrite,
     Ddl,
-    /// 파괴(`DROP` · `TRUNCATE`). 파서가 읽지 못한 문장도 여기다(까닭 `unparsed`, fail-closed).
+    /// Destructive (`DROP` · `TRUNCATE`). A statement the parser could not read also lands here (reason `unparsed`,
+    /// fail-closed).
     Destructive,
 }
 

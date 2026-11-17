@@ -40,20 +40,21 @@ pub const RESPONSE_BUDGET: usize = 192 * 1024;
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsToolParams {
     pub project_id: String,
-    /// 볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. 그 프로젝트의 워크트리가
-    /// 아니면 invalid params.
+    /// Top of the worktree to read (absolute path). Empty means the session's worktree, or else the project's main
+    /// checkout. invalid params if it is not a worktree of the project.
     #[serde(default)]
     pub worktree: Option<String>,
-    /// 이 파일만. 절대 경로나 프로젝트 루트(워크트리면 그 안의 프로젝트 루트) 기준 상대 경로(`src/lib.rs`).
+    /// Only this file. An absolute path, or a path relative to the project root (inside the worktree, for a worktree)
+    /// (`src/lib.rs`).
     #[serde(default)]
     pub path: Option<String>,
-    /// 이 심각도와 그보다 심한 것만(`warning` 이면 오류 · 경고).
+    /// Only this severity and more severe ones (`warning` means errors · warnings).
     #[serde(default)]
     pub min_severity: Option<LspSeverity>,
-    /// 앞 쪽의 `nextCursor`. 비면 처음부터.
+    /// `nextCursor` from the previous page. Empty means from the start.
     #[serde(default)]
     pub cursor: Option<String>,
-    /// 한 쪽의 진단 수, 1 ~ 5000(기본 100).
+    /// Diagnostics per page, 1 – 5000 (default 100).
     #[serde(default)]
     pub limit: Option<u32>,
 }
@@ -61,32 +62,35 @@ pub struct DiagnosticsToolParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsToolResult {
-    /// 이 프로젝트(워크트리)의 언어 서버 인스턴스와 상태 — 빈 목록이 「오류 없음」 인지 「서버가 아직 없다 · 준비 중이다」 인지 가른다.
-    /// 비어 있으면 띄운 서버가 없다(Pitwall 창에서 그 언어의 파일을 열면 뜬다). `state.kind` 가 `ready` 가 아니면 답하지 않는 중이고,
-    /// `progress` 가 있으면 서버가 색인 · 검사 중이라 진단이 더 올 수 있다.
+    /// Language server instances of this project (worktree) and their state — tells "no errors" apart from "no server
+    /// yet · still starting" for an empty list. Empty means no server has been started (one starts when a file of that
+    /// language is opened in a Pitwall window). If `state.kind` is not `ready` the server is not answering; if
+    /// `progress` is present the server is indexing · checking, so more diagnostics may come.
     pub servers: Vec<LspInstanceStatus>,
-    /// 경로 차례로 파일들. 파일 안은 심각도(오류 먼저) · 위치 차례. 한 파일의 진단이 두 쪽에 걸칠 수 있다.
+    /// Files in path order. Within a file, by severity (errors first) and position. One file's diagnostics can span two
+    /// pages.
     pub files: Vec<DiagnosticsToolFile>,
-    /// 다음 쪽을 부를 `cursor`. 마지막 쪽이면 `null`.
+    /// The `cursor` for the next page. `null` on the last page.
     pub next_cursor: Option<String>,
-    /// 서버가 진단을 쏟아부어 상한(파일당 1000 · 프로젝트 10만)에서 잘렸다 — 심한 것부터 남겼다.
+    /// The server flooded diagnostics, so they were cut at the limit (1000 per file · 100,000 per project) — the most
+    /// severe were kept.
     pub truncated: bool,
-    /// 진단을 볼 수 없는 까닭(그러면 `files` 는 비어 있다).
+    /// Why diagnostics cannot be read (`files` is then empty).
     pub unavailable: Option<DiagnosticsUnavailable>,
 }
 
-/// 파일 하나의 진단.
+/// Diagnostics of one file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsToolFile {
-    /// 절대 경로.
+    /// Absolute path.
     pub path: String,
     pub diagnostics: Vec<DiagnosticsToolItem>,
-    /// 이 파일의 진단이 상한에 걸려 일부만 있다.
+    /// This file's diagnostics hit the limit, so only some are included.
     pub truncated: bool,
 }
 
-/// 진단 하나. 줄 · 열은 1 부터, 열은 UTF-16 코드 단위.
+/// One diagnostic. Lines and columns are from 1; columns are in UTF-16 code units.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsToolItem {
@@ -96,39 +100,39 @@ pub struct DiagnosticsToolItem {
     pub end_line: u32,
     pub end_column: u32,
     pub message: String,
-    /// 진단 코드(`E0308` 등).
+    /// Diagnostic code (`E0308`, etc.).
     pub code: Option<String>,
-    /// 진단을 낸 도구(`rustc` · `ts` 등 — 서버가 알린 것).
+    /// The tool that produced the diagnostic (`rustc` · `ts`, etc. — as reported by the server).
     pub source: Option<String>,
-    /// 낸 언어 서버 id(`servers[].server`).
+    /// Id of the language server that produced it (`servers[].server`).
     pub server: String,
-    /// 코드 설명 링크.
+    /// Link describing the code.
     pub code_href: Option<String>,
-    /// `unnecessary`(쓰이지 않는 코드) · `deprecated`.
+    /// `unnecessary` (unused code) · `deprecated`.
     pub tags: Vec<LspDiagnosticTag>,
-    /// 관련된 다른 자리.
+    /// Other related locations.
     pub related: Vec<DiagnosticsToolRelated>,
 }
 
-/// 진단의 관련 정보. 줄 · 열은 1 부터.
+/// Related information of a diagnostic. Lines and columns are from 1.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsToolRelated {
-    /// 파일이면 그 절대 경로.
+    /// Its absolute path, if it is a file.
     pub path: Option<String>,
-    /// 파일이 아니면(`path` 가 없으면) 서버가 준 URI.
+    /// The URI the server gave, if it is not a file (no `path`).
     pub uri: Option<String>,
     pub line: u32,
     pub column: u32,
     pub message: String,
 }
 
-/// 진단을 볼 수 없는 까닭.
+/// Why diagnostics cannot be read.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsUnavailable {
     pub reason: DiagnosticsUnavailableReason,
-    /// 사람이 할 일을 담은 한 줄(영어).
+    /// One line saying what the person should do (in English).
     pub message: String,
 }
 
@@ -137,7 +141,7 @@ pub struct DiagnosticsUnavailable {
 )]
 #[serde(rename_all = "camelCase")]
 pub enum DiagnosticsUnavailableReason {
-    /// 프로젝트를 신뢰하지 않아 언어 서버가 뜨지 않는다.
+    /// The project is not trusted, so language servers do not start.
     Untrusted,
 }
 

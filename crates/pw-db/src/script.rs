@@ -285,36 +285,37 @@ pub(crate) fn line_of(source: &str, range: SqlRange) -> u32 {
     line
 }
 
-/// 문장 하나의 결과.
+/// The result of one statement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DbScriptResult {
-    /// 나눈 문장 가운데 몇 번째인가(0 부터 — `db.sql.split` 의 순서).
+    /// Which of the split statements it is (from 0 — the order of `db.sql.split`).
     pub index: u32,
-    /// 문장이 시작하는 줄(1 부터 — `sql` 또는 파일 기준).
+    /// Line the statement starts on (from 1 — in `sql` or the file).
     pub line: u32,
     pub grade: RiskGrade,
-    /// 행을 돌려주는 문장의 열. 행이 없는 문장은 빈 목록이다.
+    /// Columns of a statement that returns rows. Empty for a statement without rows.
     pub columns: Vec<ColumnMeta>,
     pub rows: Vec<Row>,
-    /// 바뀐 행 수(행이 없는 문장 — 드라이버가 알려 주면).
+    /// Number of rows changed (for a statement without rows — if the driver reports it).
     #[specta(type = Option<JsNumber>)]
     pub rows_affected: Option<u64>,
-    /// 행 상한(`maxRows`)이나 응답 크기에서 끊었다 — 더 있었다. 다음 쪽은 없다(좁혀서 다시 부른다).
+    /// Cut at the row limit (`maxRows`) or the response size — there was more. There is no next page (narrow the query
+    /// and call again).
     pub truncated: bool,
     #[specta(type = JsNumber)]
     pub elapsed_ms: u64,
 }
 
-/// 실패한 문장. 그 뒤의 문장은 돌지 않았다.
+/// The statement that failed. The statements after it did not run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DbScriptError {
-    /// 몇 번째 문장인가(0 부터).
+    /// Which statement it is (from 0).
     pub index: u32,
-    /// 그 문장이 시작하는 줄(1 부터).
+    /// Line the statement starts on (from 1).
     pub line: u32,
-    /// 문장의 범위(`sql` 또는 파일 글 기준 UTF-16).
+    /// Range of the statement (UTF-16, in the `sql` or file text).
     pub range: SqlRange,
     pub error: DbError,
 }
@@ -327,28 +328,28 @@ pub(crate) struct Ran {
     pub not_run: Option<DbScriptNotRun>,
 }
 
-/// 응답 예산 때문에 돌리지 않은 문장들(머리 주석 ⑥): `index` 부터 끝까지 `count` 개.
+/// Statements not run because of the response budget (header comment ⑥): `count` statements from `index` to the end.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(rename_all = "camelCase")]
 pub struct DbScriptNotRun {
-    /// 돌리지 않은 첫 문장의 번호(0 부터).
+    /// Index of the first statement not run (from 0).
     pub index: u32,
-    /// 그 문장이 시작하는 줄(1 부터).
+    /// Line the statement starts on (from 1).
     pub line: u32,
-    /// 돌리지 않은 문장 수(`index` 부터 끝까지).
+    /// Number of statements not run (from `index` to the end).
     pub count: u32,
     pub reason: DbScriptNotRunReason,
 }
 
-/// 문장을 돌리지 않은 까닭.
+/// Why the statements were not run.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(rename_all = "camelCase")]
 pub enum DbScriptNotRunReason {
-    /// 앞 문장들의 행이 응답 예산([`RESPONSE_BUDGET`])을 다 썼다.
+    /// The rows of the earlier statements used up the response budget ([`RESPONSE_BUDGET`]).
     ResponseBudget,
 }
 
@@ -509,7 +510,7 @@ pub(crate) async fn run_read_only(
     Ok(ran)
 }
 
-/// 문장 하나의 결과.
+/// The result of one statement.
 struct StatementRows {
     columns: Vec<ColumnMeta>,
     rows: Vec<Row>,

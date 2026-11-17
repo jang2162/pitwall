@@ -27,7 +27,7 @@ pub struct FsReadBytesParams {
     /// 활성 워크트리의 꼭대기(`fs.read` 와 같다).
     #[serde(default)]
     pub worktree: Option<String>,
-    /// 절대 경로.
+    /// Absolute path.
     pub path: String,
     /// 시작 바이트.
     #[specta(type = pw_rpc::JsNumber)]

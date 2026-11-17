@@ -10,12 +10,13 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct DbError {
     pub kind: DbErrorKind,
-    /// 사람이 읽는 글(서버 메시지 그대로일 수 있다).
+    /// Human-readable text (may be the server's message as is).
     pub message: String,
-    /// 서버의 오류 코드(PG SQLSTATE `25006`, MySQL 오류 번호 `1792` 등).
+    /// The server's error code (PG SQLSTATE `25006`, MySQL error number `1792`, etc.).
     pub code: Option<String>,
-    /// 서버 · 드라이버가 트랜잭션 전체를 되돌렸을 때만 true — 파이프라인(M3-05)이 세션 상태를 idle 로 맞추고 사람에게 알린다
-    /// (SQLite 수동 트랜잭션 안의 쓰기를 취소했을 때 등). 없으면 false 로 받는다.
+    /// True only when the server or driver rolled back the whole transaction — the pipeline (M3-05) sets the session
+    /// state to idle and tells the person (e.g. a write inside a manual SQLite transaction was cancelled). Missing
+    /// means false.
     #[serde(default)]
     pub rolled_back: bool,
 }
@@ -25,27 +26,27 @@ pub struct DbError {
 )]
 #[serde(rename_all = "camelCase")]
 pub enum DbErrorKind {
-    /// 서버에 닿지 못했다(이름 풀기 · TCP · 터널).
+    /// Could not reach the server (name resolution · TCP · tunnel).
     Connect,
-    /// 인증 실패.
+    /// Authentication failed.
     Auth,
-    /// TLS 협상 · 인증서 검증 실패.
+    /// TLS negotiation or certificate verification failed.
     Tls,
-    /// 예산(연결 · 응답 · 비활동 타임아웃)을 넘었다.
+    /// A budget (connect · response · idle timeout) was exceeded.
     Timeout,
-    /// 취소됐다(SQLite 의 `interrupted` 포함).
+    /// Cancelled (including SQLite's `interrupted`).
     Cancelled,
-    /// 잠금을 기다리다 포기했다(SQLite `busy`).
+    /// Gave up waiting for a lock (SQLite `busy`).
     Busy,
-    /// 읽기 전용 트랜잭션 · 연결에서 쓰기가 거절됐다(PG 25006 · MySQL 1792 · SQLite `readonly`).
+    /// A write was refused on a read-only transaction or connection (PG 25006 · MySQL 1792 · SQLite `readonly`).
     ReadOnly,
-    /// 드라이버가 지원하지 않는 기능(지원 플래그가 꺼진 trait 메서드).
+    /// A feature the driver does not support (a trait method whose capability flag is off).
     Unsupported,
-    /// 서버가 문장을 거절했다(문법 · 제약 · 권한 등). `code` 에 서버 코드.
+    /// The server refused the statement (syntax · constraint · permission, etc.). `code` holds the server's code.
     Server,
-    /// 연결이 끊겼다. 다시 붙는 것은 사람이 누를 때다(결정 M3-D13).
+    /// The connection was lost. It reconnects only when the person asks for it (decision M3-D13).
     Disconnected,
-    /// 요청이 틀렸다(커서 없이 `fetch`, 알 수 없는 세이브포인트 등).
+    /// The request was wrong (`fetch` without a cursor, an unknown savepoint, etc.).
     Invalid,
 }
 

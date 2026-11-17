@@ -81,7 +81,7 @@ pub const LIST_LIMIT: u32 = 5_000;
 
 // ---- 형 ------------------------------------------------------------------------------------------------------------------------
 
-/// 심각도. 차례는 오류가 먼저다(작을수록 심하다 — LSP 의 수와 같은 차례).
+/// Severity. Errors come first (smaller is more severe — the same order as LSP's numbers).
 #[derive(
     Debug,
     Clone,
@@ -120,15 +120,15 @@ impl LspSeverity {
     }
 }
 
-/// 진단 꼬리표.
+/// Diagnostic tag.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(rename_all = "camelCase")]
 pub enum LspDiagnosticTag {
-    /// 쓰이지 않는 코드(흐리게).
+    /// Unused code (shown faded).
     Unnecessary,
-    /// 낡은 것(취소선).
+    /// Deprecated (shown struck through).
     Deprecated,
 }
 
@@ -182,7 +182,7 @@ pub struct LspDiagnostic {
     pub message: String,
     /// 서버 · 도구의 진단 코드(`E0308` 등).
     pub code: Option<String>,
-    /// 진단을 낸 도구(`rustc` · `ts` 등 — 서버가 알린 것).
+    /// The tool that produced the diagnostic (`rustc` · `ts`, etc. — as reported by the server).
     pub source: Option<String>,
     /// 코드 설명 링크(`http(s)` 만).
     pub code_href: Option<String>,
@@ -227,13 +227,13 @@ pub struct LspDiagnosticsListParams {
     pub limit: u32,
 }
 
-/// 파일 하나의 진단.
+/// Diagnostics of one file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LspDiagnosticsFile {
     pub path: String,
     pub diagnostics: Vec<LspDiagnostic>,
-    /// 이 파일의 진단이 상한에 걸려 일부만 있다.
+    /// This file's diagnostics hit the limit, so only some are included.
     pub truncated: bool,
 }
 

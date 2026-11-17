@@ -19,25 +19,26 @@ use crate::config::AppPaths;
 #[serde(rename_all = "camelCase")]
 pub struct ProjectInfo {
     pub project: Project,
-    /// 주 루트 폴더가 디스크에 있는가. 없으면(옮기거나 지운 폴더) 아래 목록은 비어 있다.
+    /// Whether the main root folder exists on disk. If not (moved or deleted), the lists below are empty.
     pub root_exists: bool,
-    /// 주 루트에 있는 빌드 파일 이름(루트 후보와 같은 목록 · 순서).
+    /// Build file names found in the main root (the same list and order as the root candidates).
     pub build_files: Vec<String>,
-    /// 빌드 파일에서 짐작한 언어(`rust`, `typescript` …). 먼저 나온 빌드 파일 순.
+    /// Languages guessed from the build files (`rust`, `typescript` …), in the order of the build files found.
     pub languages: Vec<String>,
     pub config: ConfigSummary,
 }
 
-/// 설정을 어디서 읽는가와 거기 있는 파일. 내용은 담지 않는다.
+/// Where the settings are read from and the files there. Contents are not included.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigSummary {
     pub mode: ConfigMode,
-    /// 저장소 모드면 `<root>/.pitwall`, 개인 전용이면 `$CONFIG/projects/<slug>`.
+    /// `<root>/.pitwall` in repository mode, `$CONFIG/projects/<slug>` for a personal-only project.
     pub dir: String,
-    /// 그 폴더의 설정 파일 id(`project`, `run/dev-server` …). `.local.toml` 은 같은 id 로 합친다. 이름순.
+    /// Settings file ids in that folder (`project`, `run/dev-server` …). A `.local.toml` file is merged into the same
+    /// id. Sorted by name.
     pub files: Vec<String>,
 }
 

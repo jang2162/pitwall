@@ -47,7 +47,7 @@ pub const TOPIC_CHANGED: &str = "project.changed";
 /// 지금 레지스트리가 다루는 Host. 원격 프로젝트(F9)는 이 값이 relay 의 id 가 된다.
 pub const LOCAL_HOST: &str = "local";
 
-/// 프로젝트 설정을 어디에 두는가(설계 D9).
+/// Where the project settings live (design D9).
 #[derive(
     Debug,
     Clone,
@@ -62,10 +62,10 @@ pub const LOCAL_HOST: &str = "local";
 )]
 #[serde(rename_all = "camelCase")]
 pub enum ConfigMode {
-    /// 저장소의 `<root>/.pitwall/`.
+    /// The repository's `<root>/.pitwall/`.
     #[default]
     Repository,
-    /// 개인 전용 `$CONFIG/projects/<slug>/`. 저장소의 `.pitwall/` 은 읽지 않는다.
+    /// Personal-only `$CONFIG/projects/<slug>/`. The repository's `.pitwall/` is not read.
     Personal,
 }
 
@@ -90,29 +90,29 @@ impl ConfigMode {
     }
 }
 
-/// 등록된 프로젝트. 경로는 [`path::normalize`] 로 정규화된 절대 경로다.
+/// A registered project. Paths are absolute paths normalized by [`path::normalize`].
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
-    /// `$DATA/projects/<id>/` 에도 쓰이는 id(16자리 16진수).
+    /// Id also used in `$DATA/projects/<id>/` (16 hex digits).
     pub id: String,
     pub name: String,
-    /// 프로젝트가 있는 Host. 지금은 언제나 `local`.
+    /// The Host the project lives on. Always `local` for now.
     pub host: String,
-    /// 첫 번째가 주 루트다. 지금은 하나뿐이고, 여럿은 멀티 루트(F1-6)가 연다.
+    /// The first one is the main root. There is only one for now; multi-root (F1-6) will allow several.
     pub roots: Vec<String>,
     pub favorite: bool,
-    /// 정렬 · 중복 제거된 태그.
+    /// Tags, sorted and deduplicated.
     pub tags: Vec<String>,
     pub config_mode: ConfigMode,
-    /// 개인 전용 설정 폴더 이름. 만들 때 정하고 바뀌지 않는다([`slug`]).
+    /// Name of the personal-only settings folder. Chosen at creation and never changed ([`slug`]).
     pub slug: String,
-    /// 만든 시각(유닉스 밀리초).
+    /// Creation time (Unix milliseconds).
     #[specta(type = pw_rpc::JsNumber)]
     pub created_at: i64,
-    /// 마지막으로 연 시각(유닉스 밀리초). 한 번도 안 열었으면 `null`.
+    /// Last time the project was opened (Unix milliseconds). `null` if it was never opened.
     #[specta(type = Option<pw_rpc::JsNumber>)]
     pub opened_at: Option<i64>,
 }

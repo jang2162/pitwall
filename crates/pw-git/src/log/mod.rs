@@ -140,7 +140,7 @@ pub struct LogRow {
     pub subject: String,
     pub author_name: String,
     pub author_email: String,
-    /// 작성 시각(유닉스 초).
+    /// Author time (Unix seconds).
     #[specta(type = pw_rpc::JsNumber)]
     pub author_time: i64,
     /// 이 커밋을 가리키는 ref(분리된 HEAD · 지금 브랜치가 앞, 다음은 브랜치 · 원격 · 태그의 이름순).

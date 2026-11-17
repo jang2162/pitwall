@@ -53,13 +53,14 @@ pub struct ProjectIdParams {
     pub id: String,
 }
 
-/// 기능 메서드의 프로젝트 지정(`docs/design/03-architecture.md` §4). MCP 서버는 세션의 프로젝트가 있으면 이 키를 채워 준다.
+/// The project a feature method works on (`docs/design/03-architecture.md` §4). The MCP server fills this key in when
+/// the session has a project.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectScopedParams {
-    /// 프로젝트 id(`project_list` 의 `id`).
+    /// Project id (`id` from `project_list`).
     pub project_id: String,
 }
 
@@ -140,7 +141,7 @@ pub struct SetTrustParams {
 }
 
 rpc_method! {
-    /// 등록된 프로젝트 전부, 이름순.
+    /// All registered projects, sorted by name.
     pub ProjectList: "project.list" {
         params: (),
         result: Vec<Project>,
@@ -148,7 +149,8 @@ rpc_method! {
         mcp: true,
     }
 
-    /// 프로젝트 요약: 루트, 빌드 파일, 빌드 파일에서 짐작한 언어, 설정 폴더와 그 안의 설정 파일 이름. 없는 id 면 invalid params 오류.
+    /// Project summary: roots, build files, languages guessed from the build files, the settings folder and the
+    /// settings file names in it. An unknown id is an invalid params error.
     pub ProjectInfoMethod: "project.info" {
         params: ProjectScopedParams,
         result: ProjectInfo,

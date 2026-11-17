@@ -41,29 +41,29 @@ pub struct GitStatusParams {
     pub paths: Option<Vec<String>>,
 }
 
-/// 경로 하나의 변경 종류(porcelain v2 의 `XY` 글자 하나).
+/// Kind of change for one path (one letter of porcelain v2's `XY`).
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(rename_all = "camelCase")]
 pub enum GitChange {
-    /// `A`. 작업 트리 쪽(`unstaged`)이면 `git add --intent-to-add` 한 파일.
+    /// `A`. On the working tree side (`unstaged`), a file added with `git add --intent-to-add`.
     Added,
-    /// `M`(서브모듈이면 가리키는 커밋이 바뀌었다).
+    /// `M` (for a submodule, the commit it points at changed).
     Modified,
     /// `D`.
     Deleted,
-    /// `R` — 스테이징한 쪽만, `origPath` 에서 옮겼다.
+    /// `R` — staged side only, moved from `origPath`.
     Renamed,
-    /// `C` — 스테이징한 쪽만, `origPath` 에서 복사했다.
+    /// `C` — staged side only, copied from `origPath`.
     Copied,
-    /// `T`(파일 ↔ 심링크 등).
+    /// `T` (file ↔ symlink, etc.).
     TypeChanged,
-    /// `?` — 작업 트리 쪽만.
+    /// `?` — working tree side only.
     Untracked,
 }
 
-/// 병합 충돌(porcelain v2 의 `u` 줄 `XY`).
+/// A merge conflict (`XY` of porcelain v2's `u` line).
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
@@ -85,19 +85,20 @@ pub enum GitConflict {
     BothModified,
 }
 
-/// 경로 하나의 상태. 충돌이면 `conflict` 만 있다.
+/// State of one path. A conflict has only `conflict`.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(rename_all = "camelCase")]
 pub struct GitStatusEntry {
-    /// 저장소 작업 트리 기준 경로(`/` 구분). untracked 중첩 저장소처럼 폴더 하나로 보이는 것은 `/` 로 끝난다.
+    /// Path relative to the repository's working tree (`/`-separated). Something shown as a single folder, such as an
+    /// untracked nested repository, ends with `/`.
     pub path: String,
-    /// 스테이징한 이름 바뀜 · 복사의 원래 경로.
+    /// Original path of a staged rename · copy.
     pub orig_path: Option<String>,
-    /// HEAD↔index(스테이징한 변경).
+    /// HEAD ↔ index (staged changes).
     pub staged: Option<GitChange>,
-    /// index↔작업 트리(스테이징하지 않은 변경). untracked 면 `untracked`.
+    /// Index ↔ working tree (unstaged changes). `untracked` for an untracked file.
     pub unstaged: Option<GitChange>,
     pub conflict: Option<GitConflict>,
 }
@@ -115,13 +116,13 @@ pub struct GitStatus {
     pub unsupported: Option<GitUnsupported>,
 }
 
-/// gix 로 읽지 못하는 저장소 형식. 화면은 git 기능을 「지원하지 않는 저장소」 로 보인다(오류가 아니다).
+/// A repository format gix cannot read. The UI shows git features as an "unsupported repository" (not an error).
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(rename_all = "camelCase")]
 pub enum GitUnsupported {
-    /// ref 를 reftable 로 둔 저장소(`extensions.refStorage = reftable`, `git init --ref-format=reftable`).
+    /// A repository that keeps refs in reftable (`extensions.refStorage = reftable`, `git init --ref-format=reftable`).
     Reftable,
 }
 
@@ -140,9 +141,9 @@ fn unsupported(repo: &gix::Repository) -> Option<GitUnsupported> {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct GitTrack {
-    /// 브랜치에만 있는 커밋 수(`↑`).
+    /// Commits only on the branch (`↑`).
     pub ahead: u32,
-    /// upstream 에만 있는 커밋 수(`↓`).
+    /// Commits only on the upstream (`↓`).
     pub behind: u32,
 }
 
@@ -151,11 +152,11 @@ pub struct GitTrack {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct GitUpstream {
-    /// 짧은 이름(`origin/main`, 원격이 `.` 이면 로컬 브랜치 이름).
+    /// Short name (`origin/main`; the local branch name when the remote is `.`).
     pub name: String,
-    /// 전체 이름(`refs/remotes/origin/main`).
+    /// Full name (`refs/remotes/origin/main`).
     pub ref_name: String,
-    /// `null` 이면 설정은 있는데 그 ref 가 없다(git 의 `[gone]`).
+    /// `null` means it is configured but the ref does not exist (git's `[gone]`).
     pub track: Option<GitTrack>,
 }
 
@@ -164,12 +165,12 @@ pub struct GitUpstream {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct GitBranch {
-    /// 짧은 이름(`main`, `feat/x`).
+    /// Short name (`main`, `feat/x`).
     pub name: String,
     /// `refs/heads/…`.
     pub ref_name: String,
     pub commit: String,
-    /// 이 작업 트리의 HEAD 가 이 브랜치에 있다.
+    /// This working tree's HEAD is on this branch.
     pub head: bool,
     pub upstream: Option<GitUpstream>,
 }
@@ -179,9 +180,9 @@ pub struct GitBranch {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct GitRemoteBranch {
-    /// 원격 이름(`origin`).
+    /// Remote name (`origin`).
     pub remote: String,
-    /// 짧은 이름(`origin/main`).
+    /// Short name (`origin/main`).
     pub name: String,
     /// `refs/remotes/…`.
     pub ref_name: String,
@@ -196,9 +197,9 @@ pub struct GitTag {
     pub name: String,
     /// `refs/tags/…`.
     pub ref_name: String,
-    /// ref 가 가리키는 객체(주석 태그면 태그 객체).
+    /// The object the ref points at (the tag object for an annotated tag).
     pub target: String,
-    /// 주석 태그면 태그를 벗긴 객체(보통 커밋). 가벼운 태그면 `null`.
+    /// For an annotated tag, the object with the tag peeled off (usually a commit). `null` for a lightweight tag.
     pub peeled: Option<String>,
 }
 

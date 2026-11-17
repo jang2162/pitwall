@@ -23,7 +23,7 @@ pub struct SchemaInfo {
     pub name: String,
 }
 
-/// 객체 종류.
+/// Object kind.
 #[derive(
     Debug,
     Clone,
@@ -47,7 +47,7 @@ pub enum ObjectKind {
     Trigger,
 }
 
-/// 객체를 가리키는 이름. 세션의 `USE` · `search_path` 에 기대지 않게 늘 한정한다(M3-12).
+/// Name of an object. Always qualified, so it does not depend on the session's `USE` · `search_path` (M3-12).
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
@@ -105,12 +105,13 @@ pub struct ColumnInfo {
     pub name: String,
     pub db_type: String,
     pub nullable: bool,
-    /// 기본값 식의 글.
+    /// Text of the default expression.
     pub default: Option<String>,
     pub comment: Option<String>,
 }
 
-/// 인덱스. 그리드 편집의 키 판정(M3-10 — PK 또는 NOT NULL 열만으로 된 유일 인덱스)이 `primary` · `unique` · `partial` 을 본다.
+/// An index. The key check for grid editing (M3-10 — a PK, or a unique index made only of NOT NULL columns) looks at
+/// `primary` · `unique` · `partial`.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
@@ -120,11 +121,11 @@ pub struct IndexInfo {
     pub columns: Vec<String>,
     pub primary: bool,
     pub unique: bool,
-    /// 조건이 붙은 인덱스(PG 부분 인덱스). 키로 쓰지 않는다.
+    /// An index with a condition (a PG partial index). Not used as a key.
     pub partial: bool,
 }
 
-/// 외래 키.
+/// A foreign key.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]

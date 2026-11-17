@@ -23,16 +23,17 @@ pub const MAX_LIMIT: u32 = 1000;
 #[serde(rename_all = "camelCase")]
 pub struct GitStatusToolParams {
     pub project_id: String,
-    /// 볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃.
+    /// Top of the worktree to read (absolute path). Empty means the session's worktree, or else the project's main
+    /// checkout.
     #[serde(default)]
     pub worktree: Option<String>,
-    /// 이 경로(작업 트리 기준, `/` 구분 — 폴더면 그 아래 전체)만 본다.
+    /// Only these paths (relative to the working tree, `/`-separated — a folder means everything under it).
     #[serde(default)]
     pub paths: Option<Vec<String>>,
-    /// 앞 쪽의 `nextCursor`. 비면 첫 파일부터.
+    /// `nextCursor` from the previous page. Empty means from the first file.
     #[serde(default)]
     pub cursor: Option<String>,
-    /// 한 쪽의 파일 수, 1 ~ 1000(기본 200).
+    /// Files per page, 1 – 1000 (default 200).
     #[serde(default)]
     pub limit: Option<u32>,
 }
@@ -42,14 +43,15 @@ pub struct GitStatusToolParams {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct GitStatusToolResult {
-    /// 파일 경로의 기준인 작업 트리 꼭대기(절대 경로). `null` 이면 프로젝트에 git 저장소가 없다.
+    /// Top of the working tree that file paths are relative to (absolute path). `null` means the project has no git
+    /// repository.
     pub work_tree: Option<String>,
     pub summary: GitStatusSummary,
-    /// 바뀐 파일의 한 쪽(경로순).
+    /// One page of changed files (sorted by path).
     pub files: Vec<GitStatusEntry>,
-    /// 다음 쪽을 부를 `cursor`. 마지막 쪽이면 `null`.
+    /// The `cursor` for the next page. `null` on the last page.
     pub next_cursor: Option<String>,
-    /// 읽지 못하는 저장소 형식이면 그 까닭(나머지는 빈다).
+    /// If the repository format cannot be read, the reason (the rest is empty).
     pub unsupported: Option<GitUnsupported>,
 }
 
@@ -58,24 +60,26 @@ pub struct GitStatusToolResult {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct GitStatusSummary {
-    /// HEAD 가 있는 브랜치 · 분리된 커밋 · 아직 커밋이 없는 브랜치.
+    /// The branch HEAD is on · a detached commit · a branch with no commits yet.
     pub head: Option<RepoHead>,
-    /// 지금 브랜치의 upstream 과 ahead/behind(그 ref 가 없어졌으면 `track: null`).
+    /// The current branch's upstream and ahead/behind (`track: null` if that ref is gone).
     pub upstream: Option<GitUpstream>,
-    /// 진행 중인 merge · rebase · cherry-pick · revert · bisect · am.
+    /// A merge · rebase · cherry-pick · revert · bisect · am in progress.
     pub operation: Option<RepoOperation>,
-    /// 스테이징한 변경이 있는 파일 수. 수는 모두 이 쪽만이 아니라 바뀐 파일 전체(`paths` 를 줬으면 그 안)의 것이다.
+    /// Number of files with staged changes. All counts cover every changed file (within `paths`, if given), not just
+    /// this page.
     pub staged: u32,
-    /// 스테이징하지 않은 변경이 있는 파일 수(untracked 는 빼고).
+    /// Number of files with unstaged changes (untracked files excluded).
     pub unstaged: u32,
     pub untracked: u32,
-    /// 충돌 중인 파일 수. 충돌 파일은 다른 수에 세지 않는다.
+    /// Number of files in conflict. Conflicted files are not counted in the other numbers.
     pub conflicted: u32,
 }
 
 rpc_method! {
-    /// 프로젝트 git 저장소의 작업 트리 상태: 요약(HEAD · upstream 과 ahead/behind · 진행 중 작업 · 스테이징 · 미스테이징 ·
-    /// untracked · 충돌 파일 수)과 바뀐 파일 목록의 한 쪽(경로 · 스테이징한 변경 · 스테이징하지 않은 변경 · 충돌).
+    /// Working tree state of the project's git repository: a summary (HEAD · upstream and ahead/behind · operation in
+    /// progress · counts of staged · unstaged · untracked · conflicted files) and one page of the changed files (path ·
+    /// staged change · unstaged change · conflict).
     pub GitStatusTool: "git.tool.status" {
         params: GitStatusToolParams,
         result: GitStatusToolResult,

@@ -58,15 +58,16 @@ pub struct RepoInfo {
     rename_all_fields = "camelCase"
 )]
 pub enum RepoHead {
-    /// 브랜치에 있다. `name` 은 짧은 이름(`main`, `feat/x`), `commit` 은 그 끝 커밋의 해시.
+    /// On a branch. `name` is the short name (`main`, `feat/x`), `commit` the hash of its tip commit.
     Branch { name: String, commit: String },
-    /// 아직 커밋이 없는 브랜치(새 저장소, `git checkout --orphan`).
+    /// A branch with no commits yet (a new repository, `git checkout --orphan`).
     Unborn { name: String },
-    /// 분리된 HEAD 가 가리키는 커밋(태그를 체크아웃해도 git 은 HEAD 에 커밋을 적는다).
+    /// The commit a detached HEAD points at (even after checking out a tag, git writes a commit into HEAD).
     Detached { commit: String },
 }
 
-/// 진행 중인 작업(git 의 `wt_status_get_state` 와 같은 판정). 순차 cherry-pick · revert 와 대화형 rebase 도 각각 같은 값이다.
+/// An operation in progress (the same judgment as git's `wt_status_get_state`). A sequential cherry-pick · revert and
+/// an interactive rebase each have the same value as the plain one.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
@@ -77,7 +78,7 @@ pub enum RepoOperation {
     CherryPick,
     Revert,
     Bisect,
-    /// `git am`(메일 패치 적용).
+    /// `git am` (applying mailed patches).
     Am,
 }
 

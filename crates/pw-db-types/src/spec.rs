@@ -11,10 +11,10 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// 내장 드라이버. 설정 파일의 `driver` 값이다.
+/// A built-in driver. The `driver` value in the settings file.
 ///
-/// 드라이버 등록부의 키는 이 enum 이 아니라 문자열 id 다([`DriverKind::id`]) — 프로세스 밖 드라이버(JDBC 브리지 F6-3b)가
-/// 이 enum 을 고치지 않고 들어올 자리다.
+/// The driver registry is keyed by string ids ([`DriverKind::id`]), not by this enum — that is where out-of-process
+/// drivers (the JDBC bridge, F6-3b) come in without changing this enum.
 #[derive(
     Debug,
     Clone,

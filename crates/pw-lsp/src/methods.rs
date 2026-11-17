@@ -107,46 +107,49 @@ pub struct LspStatus {
     pub instances: Vec<LspInstanceStatus>,
 }
 
-/// 서버 인스턴스 하나 — (프로젝트, 워크트리, 서버, 작업 공간 루트)마다 하나(결정 M4-D11).
+/// One server instance — one per (project, worktree, server, workspace root) (decision M4-D11).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LspInstanceStatus {
-    /// 서버 id(`[contributes.language_servers.<id>]`).
+    /// Server id (`[contributes.language_servers.<id>]`).
     pub server: String,
-    /// 작업 공간 루트(실제 경로 — 워크트리마다 다르다). `lsp.server.restart` · `stop` 은 이것과 그 창의 활성 워크트리로 고른다.
+    /// Workspace root (real path — differs per worktree). `lsp.server.restart` · `stop` choose by this and the window's
+    /// active worktree.
     pub root: String,
     pub state: LspInstanceState,
-    /// 서버가 알린 진행(`$/progress`) 중 가장 최근 것. 같은 진행이 `Task` 로도 나간다.
+    /// The latest progress the server reported (`$/progress`). The same progress also goes out as a `Task`.
     pub progress: Option<LspProgress>,
 }
 
-/// 인스턴스의 상태.
+/// State of the instance.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum LspInstanceState {
-    /// 띄우는 중(`initialize` 를 기다림 · 죽은 뒤 물러남 재기동을 기다림).
+    /// Starting (waiting for `initialize` · waiting for a backoff restart after a crash).
     Starting,
-    /// 답한다.
+    /// Answering.
     Ready,
-    /// 설정 · 정의가 바뀌었다 — 다시 시작해야 새 값이 든다. 서버는 그대로 답한다.
+    /// Settings or the definition changed — a restart is needed to pick up the new values. The server keeps answering.
     RestartNeeded,
-    /// 런타임 환경이 바뀌었다(`runtime.changed`) — 다시 시작을 권한다. 서버는 그대로 답한다(저절로 다시 띄우지 않는다).
+    /// The runtime environment changed (`runtime.changed`) — a restart is recommended. The server keeps answering (it
+    /// does not restart on its own).
     RestartSuggested,
-    /// 3분 안에 5번 죽어 멈췄다 — `lsp.server.restart` 로만 다시 띄운다.
+    /// Stopped after crashing 5 times within 3 minutes — only `lsp.server.restart` starts it again.
     Crashed,
-    /// 사람이 멈췄다(`lsp.server.stop`).
+    /// Stopped by the person (`lsp.server.stop`).
     Stopped,
-    /// 프로젝트를 신뢰하지 않아 띄우지 않는다(결정 M4-D8).
+    /// Not started because the project is not trusted (decision M4-D8).
     Untrusted,
-    /// 실행 파일을 찾지 못했다 — 설치를 제안한다(M4-17).
+    /// The executable was not found — offering to install it (M4-17).
     NotInstalled { mason: Option<String> },
-    /// 서버를 돌릴 런타임(`requires`)을 찾지 못했다(결정 M4-D6). `tool` 은 `node` · `python` · `java`, `needed` 는 판 범위.
+    /// The runtime the server needs (`requires`) was not found (decision M4-D6). `tool` is `node` · `python` · `java`,
+    /// `needed` is the version range.
     RuntimeMissing { tool: String, needed: String },
-    /// 설정에서 껐다(`[lsp.<id>] enabled = false`).
+    /// Turned off in the settings (`[lsp.<id>] enabled = false`).
     Disabled,
-    /// 띄우지 못했다(설정 경로가 틀림 · 실행 실패 등 — 까닭).
+    /// Could not start (a wrong path in the settings · a failed launch, etc. — with the reason).
     Failed { message: String },
 }
 
@@ -160,7 +163,7 @@ impl LspInstanceState {
     }
 }
 
-/// 서버의 진행 하나(`$/progress` 의 `WorkDoneProgress`).
+/// One progress of the server (`WorkDoneProgress` of `$/progress`).
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
@@ -168,7 +171,7 @@ impl LspInstanceState {
 pub struct LspProgress {
     pub title: String,
     pub message: Option<String>,
-    /// 0 ~ 100. 서버가 모르면 없다.
+    /// 0 – 100. Missing if the server does not know.
     pub percentage: Option<u32>,
 }
 

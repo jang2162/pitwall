@@ -162,7 +162,7 @@ pub fn default_ssl_mode(host: &str) -> SslMode {
 }
 
 impl DbConnectionConfig {
-    /// 쓰이는 포트(적지 않았으면 드라이버 기본).
+    /// Port in use (the driver's default if not set).
     pub fn effective_port(&self) -> Option<u16> {
         self.port.or_else(|| default_port(self.driver))
     }
@@ -499,7 +499,7 @@ pub fn write_document(doc: &mut toml_edit::DocumentMut, config: &DbConnectionCon
 pub enum DbConnectionState {
     /// 프로젝트를 신뢰하지 않았다 — 연결 · 비밀 읽기를 하지 않는다(결정 M3-D13).
     Untrusted,
-    /// 설정 파일이 틀렸다.
+    /// The settings file is wrong.
     Invalid { message: String },
     /// 키체인에 비밀이 없거나, 저장할 때의 대상(호스트 · TLS 등)과 지금 설정이 다르다 — 이전(`previous`) → 지금(`target`) 대상을
     /// 보이고 다시 물어 `db.secret.set` 한다.
@@ -537,7 +537,7 @@ pub struct DbConnectionEntry {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct DbConnectionList {
-    /// id 순.
+    /// Sorted by id.
     pub connections: Vec<DbConnectionEntry>,
     /// 프로젝트 설정을 읽지 못한 이유(그러면 목록이 비어 있다). 설정 계층은 파일 하나라도 깨지면 전체가 실패다(03 「데이터 저장」).
     pub problem: Option<String>,

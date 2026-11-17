@@ -43,7 +43,7 @@ use pw_db_types::SqlDialect;
 use pw_rpc::{Router, RpcError, rpc_method};
 use serde::{Deserialize, Serialize};
 
-/// 원문 안의 범위. UTF-16 단위, `to` 는 포함하지 않는다(CodeMirror 의 `from` · `to` 와 같다).
+/// Range in the source text, in UTF-16 units; `to` is exclusive (like CodeMirror's `from` · `to`).
 #[derive(
     Debug,
     Clone,

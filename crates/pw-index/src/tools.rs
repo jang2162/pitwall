@@ -35,20 +35,21 @@ const CURSOR_PREFIX: &str = "o:";
 #[serde(rename_all = "camelCase")]
 pub struct SymbolSearchToolParams {
     pub project_id: String,
-    /// 볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. 그 프로젝트의 워크트리가
-    /// 아니면 invalid params.
+    /// Top of the worktree to read (absolute path). Empty means the session's worktree, or else the project's main
+    /// checkout. invalid params if it is not a worktree of the project.
     #[serde(default)]
     pub worktree: Option<String>,
-    /// 찾을 것. 공백으로 가른 낱말이 모두 심볼 이름에 맞아야 한다(낱말마다 퍼지 — 글자가 그 차례로 들면 맞는다. 낱말에 대문자가
-    /// 있을 때만 대소문자를 가린다). 비면 경로 · 위치 차례로 모든 심볼. 256 자까지.
+    /// What to look for. Every whitespace-separated word must match the symbol name (each word fuzzily — it matches
+    /// when its letters appear in that order; case-sensitive only when the word has an uppercase letter). Empty means
+    /// every symbol in path · position order. Up to 256 characters.
     pub query: String,
-    /// 이 종류만. 없으면 `impl` 을 뺀 모든 종류.
+    /// Only these kinds. Without it, every kind except `impl`.
     #[serde(default)]
     pub kinds: Option<Vec<IndexSymbolKind>>,
-    /// 앞 쪽의 `nextCursor`. 비면 처음부터.
+    /// `nextCursor` from the previous page. Empty means from the start.
     #[serde(default)]
     pub cursor: Option<String>,
-    /// 한 쪽의 심볼 수, 1 ~ 1000(기본 50).
+    /// Symbols per page, 1 – 1000 (default 50).
     #[serde(default)]
     pub limit: Option<u32>,
 }
@@ -58,20 +59,21 @@ pub struct SymbolSearchToolParams {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct SymbolSearchToolResult {
-    /// 잘 맞는 차례(같으면 짧은 이름 · 경로 · 위치 차례).
+    /// Best match first (ties by shorter name · path · position).
     pub symbols: Vec<SymbolSearchToolMatch>,
-    /// 맞은 심볼 수(모든 쪽을 합친 것).
+    /// Number of matching symbols (across all pages).
     #[specta(type = pw_rpc::JsNumber)]
     pub matched: u64,
-    /// 다음 쪽을 부를 `cursor`. 마지막 쪽이면 `null`.
+    /// The `cursor` for the next page. `null` on the last page.
     pub next_cursor: Option<String>,
-    /// 색인이 없어 찾지 않은 루트(절대 경로). 비어 있지 않으면 결과가 모자랄 수 있다 — `hint`.
+    /// Roots not searched because they have no index (absolute paths). If not empty, results may be incomplete — see
+    /// `hint`.
     pub unindexed: Vec<String>,
-    /// `unindexed` 가 있을 때 할 일(영어 한 줄).
+    /// What to do when `unindexed` is not empty (one line of English).
     pub hint: Option<String>,
 }
 
-/// 맞는 심볼 하나. 줄 · 열은 1 부터, 열은 UTF-16 코드 단위.
+/// One matching symbol. Lines and columns are from 1; columns are in UTF-16 code units.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
@@ -79,18 +81,18 @@ pub struct SymbolSearchToolResult {
 pub struct SymbolSearchToolMatch {
     pub name: String,
     pub kind: IndexSymbolKind,
-    /// 바깥 심볼의 이름(클래스 안 메서드의 클래스 등).
+    /// Name of the enclosing symbol (the class of a method in a class, etc.).
     pub container: Option<String>,
-    /// 파일의 절대 경로.
+    /// Absolute path of the file.
     pub path: String,
-    /// 프로젝트 루트 기준 상대 경로(`/` 구분).
+    /// Path relative to the project root (`/`-separated).
     pub relative: String,
-    /// 언어 id(`rust` · `typescript` …).
+    /// Language id (`rust` · `typescript` …).
     pub language: String,
-    /// 이름이 있는 줄 · 열.
+    /// Line and column of the name.
     pub line: u32,
     pub column: u32,
-    /// 정의 전체의 첫 줄 · 끝 줄.
+    /// First and last line of the whole definition.
     pub start_line: u32,
     pub end_line: u32,
 }

@@ -47,9 +47,10 @@ const FLUSH_AFTER: Duration = Duration::from_millis(100);
 )]
 #[serde(rename_all = "camelCase")]
 pub enum BlameEngine {
-    /// `git blame --incremental` — 줄 수가 10만 줄([`MOVES_MAX_LINES`]) 이하면 `-M` 으로 파일 안에서 옮긴 줄을 원래 커밋으로 돌린다.
+    /// `git blame --incremental` — for files of at most 100,000 lines ([`MOVES_MAX_LINES`]), `-M` attributes lines
+    /// moved within the file to their original commit.
     Git,
-    /// gix blame — `git blame`(`-M` 없이)과 같다. 옮긴 줄은 옮긴 커밋의 것이다.
+    /// gix blame — the same as `git blame` (without `-M`). Moved lines belong to the commit that moved them.
     Gix,
 }
 
@@ -78,13 +79,13 @@ pub struct BlameFile {
 pub struct BlameCommit {
     /// 전체 해시(16진).
     pub hash: String,
-    /// 작성자(mailmap 적용).
+    /// Author (with mailmap applied).
     pub author_name: String,
     pub author_email: String,
-    /// 작성 시각(유닉스 초).
+    /// Author time (Unix seconds).
     #[specta(type = pw_rpc::JsNumber)]
     pub author_time: i64,
-    /// 제목(메시지 첫 문단을 한 줄로).
+    /// Subject (the message's first paragraph on one line).
     pub subject: String,
     /// 경계 커밋(git 의 `boundary`): 첫 커밋(`blame.showRoot` 를 켜지 않았으면 — git 의 기본)이거나 얕은 클론의 끝이라 그 앞을 볼
     /// 수 없는 커밋. 얕은 클론의 끝이면 이 커밋의 줄이 정말 이 커밋에서 생겼는지는 모른다.

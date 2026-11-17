@@ -41,13 +41,13 @@ pub struct GitPushCommitsParams {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct OutgoingCommit {
-    /// 전체 해시.
+    /// Full hash.
     pub hash: String,
     /// 메시지 첫 줄(git `%s`).
     pub subject: String,
     /// 작성자 이름(mailmap 적용).
     pub author: String,
-    /// 작성 시각(유닉스 초).
+    /// Author time (Unix seconds).
     #[specta(type = pw_rpc::JsNumber)]
     pub author_time: i64,
 }

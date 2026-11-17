@@ -78,7 +78,7 @@ pub fn account(project_id: &str, connection_id: &str, key: DbSecretKey) -> Strin
 pub struct DbSecretTarget {
     pub driver: DriverKind,
     pub host: Option<String>,
-    /// 쓰이는 포트(적지 않았으면 드라이버 기본).
+    /// Port in use (the driver's default if not set).
     pub port: Option<u16>,
     pub user: Option<String>,
     /// 터널 목적지(`ssh_tunnel.host_ref`).

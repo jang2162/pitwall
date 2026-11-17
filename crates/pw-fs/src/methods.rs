@@ -23,7 +23,7 @@ pub struct FsPathParams {
     /// 활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 그 워크트리 안의 프로젝트 루트도 접근 범위가 된다.
     #[serde(default)]
     pub worktree: Option<String>,
-    /// 절대 경로.
+    /// Absolute path.
     pub path: String,
 }
 
@@ -68,7 +68,7 @@ pub struct FsReadParams {
     pub project_id: String,
     #[serde(default)]
     pub worktree: Option<String>,
-    /// 절대 경로.
+    /// Absolute path.
     pub path: String,
     /// 범위 읽기의 시작 바이트. `offset` · `length` 가 모두 없으면 파일 전체를 읽는다(50 MiB 까지).
     #[serde(default)]

@@ -22,17 +22,19 @@ pub const MAX_LINES: u32 = 500;
 #[serde(rename_all = "camelCase")]
 pub struct GitBlameToolParams {
     pub project_id: String,
-    /// 볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃.
+    /// Top of the worktree to read (absolute path). Empty means the session's worktree, or else the project's main
+    /// checkout.
     #[serde(default)]
     pub worktree: Option<String>,
-    /// 작업 트리 기준 파일 경로(`/` 구분).
+    /// File path relative to the working tree (`/`-separated).
     pub path: String,
-    /// 리비전(해시 · 브랜치 · 태그 · `HEAD~1`). 비면 HEAD. 작업 트리의 커밋하지 않은 변경은 blame 하지 않는다.
+    /// Revision (hash · branch · tag · `HEAD~1`). Empty means HEAD. Uncommitted changes in the working tree are not
+    /// blamed.
     #[serde(default)]
     pub rev: Option<String>,
-    /// 첫 줄(1부터).
+    /// First line (from 1).
     pub start_line: u32,
-    /// 끝 줄(포함). `startLine` 부터 500줄까지.
+    /// Last line (inclusive). Up to 500 lines from `startLine`.
     pub end_line: u32,
 }
 
@@ -41,19 +43,21 @@ pub struct GitBlameToolParams {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct GitBlameToolResult {
-    /// blame 한 커밋(`rev` 를 푼 해시).
+    /// The commit blamed (the hash `rev` resolved to).
     pub commit: String,
-    /// 그 커밋에서의 파일 줄 수.
+    /// Number of lines of the file in that commit.
     pub lines: u32,
-    /// `git`(`git blame -M` — 파일 안에서 옮긴 줄을 원래 커밋으로 돌린다) 또는 `gix`(옮긴 줄은 옮긴 커밋의 것).
+    /// `git` (`git blame -M` — lines moved within the file are attributed to their original commit) or `gix` (moved
+    /// lines belong to the commit that moved them).
     pub engine: BlameEngine,
-    /// 파일 안에서 옮긴 줄을 원래 커밋으로 돌렸는가.
+    /// Whether lines moved within the file were attributed to their original commit.
     pub moves: bool,
-    /// 묻은 줄 범위를 덮는 범위들(줄 순서, 겹치지 않는다). `truncated` 면 앞쪽만.
+    /// Ranges covering the requested lines (in line order, not overlapping). Only the first ones when `truncated`.
     pub ranges: Vec<GitBlameToolRange>,
-    /// 응답 크기 상한에 닿아 `nextLine` 부터를 싣지 못했다 — `startLine` 을 그 줄로 다시 부른다.
+    /// The response size limit was reached, so lines from `nextLine` on are not included — call again with `startLine`
+    /// set to that line.
     pub truncated: bool,
-    /// `truncated` 일 때 싣지 못한 첫 줄. 아니면 `null`.
+    /// The first line not included when `truncated`; otherwise `null`.
     pub next_line: Option<u32>,
 }
 
@@ -63,25 +67,26 @@ pub struct GitBlameToolResult {
 #[serde(rename_all = "camelCase")]
 pub struct GitBlameToolRange {
     pub start_line: u32,
-    /// 끝 줄(포함).
+    /// Last line (inclusive).
     pub end_line: u32,
-    /// 이 줄들을 마지막으로 바꾼 커밋.
+    /// The commit that last changed these lines.
     pub commit: String,
-    /// 그 커밋에서의 경로(이름이 바뀌었으면 옛 이름).
+    /// Path in that commit (the old name if it was renamed).
     pub source_path: String,
-    /// 작성자(mailmap 적용).
+    /// Author (with mailmap applied).
     pub author_name: String,
     pub author_email: String,
-    /// 작성 시각(유닉스 초).
+    /// Author time (Unix seconds).
     #[specta(type = pw_rpc::JsNumber)]
     pub author_time: i64,
-    /// 커밋 제목.
+    /// Commit subject.
     pub subject: String,
 }
 
 rpc_method! {
-    /// 파일 한 리비전(없으면 HEAD)의 줄 범위(`startLine` ~ `endLine`, 한 번에 500줄까지)를 마지막으로 바꾼 커밋 · 작성자 · 시각 ·
-    /// 제목. 범위가 파일 밖이거나 그 리비전에 파일이 없으면 invalid params. 응답 크기 상한에 닿으면 `truncated` 와 `nextLine`.
+    /// The commit · author · time · subject that last changed a range of lines (`startLine` – `endLine`, up to 500
+    /// lines at a time) of a file at one revision (HEAD if not given). A range outside the file, or a file missing at
+    /// that revision, is invalid params. When the response size limit is reached, `truncated` and `nextLine`.
     pub GitBlameTool: "git.tool.blame" {
         params: GitBlameToolParams,
         result: GitBlameToolResult,

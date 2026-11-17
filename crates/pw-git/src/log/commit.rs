@@ -61,7 +61,7 @@ impl Mailmap {
 pub struct Text {
     pub author_name: String,
     pub author_email: String,
-    /// 작성 시각(유닉스 초).
+    /// Author time (Unix seconds).
     pub author_time: i64,
     /// 메시지 전체.
     pub message: String,

@@ -15,11 +15,11 @@ use crate::status::{GitBranch, GitRemoteBranch, GitTag, GitUnsupported, Status};
 #[serde(rename_all = "camelCase")]
 pub struct GitBranchListToolParams {
     pub project_id: String,
-    /// 볼 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. HEAD 여부가 워크트리마다
-    /// 다르다.
+    /// Top of the worktree to read (absolute path). Empty means the session's worktree, or else the project's main
+    /// checkout. Which branch is HEAD differs per worktree.
     #[serde(default)]
     pub worktree: Option<String>,
-    /// 태그도 싣는다.
+    /// Include tags too.
     #[serde(default)]
     pub include_tags: bool,
 }
@@ -29,23 +29,24 @@ pub struct GitBranchListToolParams {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct GitBranchListToolResult {
-    /// 저장소의 작업 트리 꼭대기. `null` 이면 프로젝트에 git 저장소가 없다.
+    /// Top of the repository's working tree. `null` means the project has no git repository.
     pub work_tree: Option<String>,
     pub head: Option<RepoHead>,
-    /// 로컬 브랜치(이름 · 해시 · HEAD 여부 · upstream 과 ahead/behind), ref 이름순.
+    /// Local branches (name · hash · whether HEAD · upstream and ahead/behind), sorted by ref name.
     pub branches: Vec<GitBranch>,
-    /// 원격 추적 브랜치, ref 이름순.
+    /// Remote-tracking branches, sorted by ref name.
     pub remote_branches: Vec<GitRemoteBranch>,
-    /// `includeTags` 일 때만 있다.
+    /// Present only with `includeTags`.
     pub tags: Option<Vec<GitTag>>,
-    /// 응답 크기 상한에 닿아 뒤쪽(원격 브랜치 · 태그부터)을 싣지 못했다.
+    /// The response size limit was reached, so the tail (from remote branches · tags on) is not included.
     pub truncated: bool,
-    /// 읽지 못하는 저장소 형식이면 그 까닭(나머지는 빈다).
+    /// If the repository format cannot be read, the reason (the rest is empty).
     pub unsupported: Option<GitUnsupported>,
 }
 
 rpc_method! {
-    /// 프로젝트 git 저장소의 로컬 · 원격 브랜치(이름 · 해시 · upstream 과 ahead/behind · HEAD 여부). 태그는 `includeTags`.
+    /// Local and remote branches of the project's git repository (name · hash · upstream and ahead/behind · whether
+    /// HEAD). Tags with `includeTags`.
     pub GitBranchListTool: "git.tool.branchList" {
         params: GitBranchListToolParams,
         result: GitBranchListToolResult,

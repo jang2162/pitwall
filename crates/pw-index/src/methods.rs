@@ -64,7 +64,7 @@ pub struct IndexSymbolSearchParams {
     /// 찾을 것. 공백으로 가른 낱말이 모두 심볼 이름에 맞아야 한다(낱말마다 퍼지, 대소문자는 대문자가 있을 때만 가린다). 비어 있으면
     /// 경로 · 위치 순 앞에서부터. 글자 수 상한 [`MAX_QUERY_CHARS`].
     pub query: String,
-    /// 이 종류만. 없으면 `impl` 을 뺀 모든 종류.
+    /// Only these kinds. Without it, every kind except `impl`.
     #[serde(default)]
     pub kinds: Option<Vec<IndexSymbolKind>>,
     /// 결과 수. 기본 [`DEFAULT_LIMIT`], 1 ~ [`MAX_LIMIT`].

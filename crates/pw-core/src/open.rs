@@ -39,32 +39,34 @@ pub const RATE_LIMIT: usize = 5;
 )]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectOpenToolParams {
+    /// Project id (`id` from `project_list`). When the session has a project, leaving it out means that project.
     pub project_id: String,
-    /// 열 워크트리의 꼭대기(절대 경로). 비면 세션의 워크트리, 그것도 없으면 프로젝트의 메인 체크아웃. 창은 이 워크트리를 활성
-    /// 워크트리로 연다.
+    /// Top of the worktree to open (absolute path). Empty means the session's worktree, or else the project's main
+    /// checkout. The window opens with this worktree as its active worktree.
     #[serde(default)]
     pub worktree: Option<String>,
-    /// 열 파일. 상대 경로면 프로젝트 루트(워크트리를 정했으면 그 워크트리 안의 프로젝트 루트) 기준이다. 루트 밖(심링크로 밖을
-    /// 가리키는 것 포함)은 거절한다. 폴더면 프로젝트만 연다. 없으면 프로젝트 창만.
+    /// File to open. A relative path is relative to the project root (inside the chosen worktree, if one is given).
+    /// Paths outside the root (including symlinks pointing outside) are refused. A folder opens only the project.
+    /// Without it, only the project window.
     #[serde(default)]
     pub path: Option<String>,
-    /// 커서를 둘 줄(1부터). `path` 가 있어야 한다.
+    /// Line to put the cursor on (from 1). Needs `path`.
     #[serde(default)]
     pub line: Option<u32>,
-    /// 커서를 둘 열(1부터). `line` 이 있어야 한다.
+    /// Column to put the cursor on (from 1). Needs `line`.
     #[serde(default)]
     pub column: Option<u32>,
 }
 
-/// 요청이 열린 자리.
+/// Where the request was opened.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(rename_all = "camelCase")]
 pub enum OpenedIn {
-    /// 이미 열린 그 프로젝트 창(앞으로 가져오지 않았다).
+    /// The project's window that was already open (not brought to the front).
     ExistingWindow,
-    /// 새로 만든 그 프로젝트 창(활성화하지 않았다).
+    /// A newly created window for the project (not activated).
     NewWindow,
 }
 
@@ -74,14 +76,15 @@ pub enum OpenedIn {
 #[serde(rename_all = "camelCase")]
 pub struct ProjectOpenToolResult {
     pub opened_in: OpenedIn,
-    /// 연 파일의 실제 경로(절대). 파일 없이 프로젝트만 열었으면 `null`.
+    /// Real path (absolute) of the opened file. `null` if only the project was opened.
     pub path: Option<String>,
 }
 
 rpc_method! {
-    /// Pitwall 앱에서 프로젝트 · 파일 · 줄을 연다. 창을 앞으로 가져오지 않는다 — 그 프로젝트 창이 열려 있으면 그 안에 탭만 열고,
-    /// 없으면 활성화하지 않고 창을 만든다. `path` 는 프로젝트 루트 안만(상대 경로는 루트 기준). 모든 에이전트
-    /// 호출을 합쳐 10초에 5번까지(넘으면 `rateLimited`). 앱이 실행 중이어야 한다.
+    /// Open a project, file or line in the Pitwall app. Does not bring a window to the front — if the project's window
+    /// is open, only a tab opens in it; otherwise a window is created without activating it. `path` must be inside the
+    /// project root (relative paths are relative to the root). At most 5 calls per 10 seconds across all agents (beyond
+    /// that `rateLimited`). The app must be running.
     pub ProjectOpenTool: "project.tool.open" {
         params: ProjectOpenToolParams,
         result: ProjectOpenToolResult,

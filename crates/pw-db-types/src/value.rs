@@ -28,43 +28,44 @@ impl Default for CellLimit {
     }
 }
 
-/// 셀 값.
+/// A cell value.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum DbValue {
     Null,
     Bool(bool),
-    /// 정수. ±(2^53−1) 안은 수, 밖은 문자열.
+    /// Integer. A number within ±(2^53−1), a string outside it.
     Int(DbInt),
-    /// 실수. 유한하면 수, `NaN` · `Infinity` · `-Infinity` 는 문자열(JSON 에 그 수가 없다).
+    /// Floating point. A number when finite; `NaN` · `Infinity` · `-Infinity` are strings (JSON has no such numbers).
     Float(DbFloat),
-    /// decimal · numeric · money. 정밀도를 잃지 않게 늘 문자열.
+    /// decimal · numeric · money. Always a string, so no precision is lost.
     Decimal(String),
     Text(String),
-    /// 바이트. 늘 `0x` hex, 셀 상한을 넘으면 앞부분만.
+    /// Bytes. Always `0x` hex; only the beginning past the cell limit.
     Bytes(DbBytes),
-    /// json · jsonb. 서버가 준 글 그대로(파싱하지 않는다).
+    /// json · jsonb. The text as the server sent it (not parsed).
     Json(String),
-    /// 날짜 · 시각 · 타임스탬프. 서버가 준 텍스트 그대로 — timestamptz 는 서버 세션 시간대의 텍스트다.
+    /// Date · time · timestamp. The text as the server sent it — timestamptz is text in the server session's time zone.
     Datetime(String),
     Uuid(String),
     Array(Vec<DbValue>),
-    /// 셀 상한을 넘은 텍스트 · json · 그 밖 값의 앞부분.
+    /// The beginning of a text · json · other value past the cell limit.
     Truncated(DbTruncated),
-    /// 위 어디에도 들지 않는 값: 서버의 텍스트 표현과 DB 타입 이름.
+    /// A value that fits none of the above: the server's text form and the DB type name.
     Other(DbOther),
 }
 
-/// 정수 값. 수인지 문자열인지는 값의 크기가 정한다 — [`DbValue::int`] 로 만든다.
+/// An integer value. Its size decides whether it is a number or a string — build it with [`DbValue::int`].
 ///
-/// 받을 때는 규칙대로 다시 고른다 — `{"int": 9007199254740993}` 은 문자열로, `{"int": "5"}` 는 수로 받는다(창이 보낸 바인드
-/// 값 · 프로세스 밖 드라이버가 규칙을 어겨도 같은 값이 같은 모양이 된다). 정수가 아닌 글은 거절한다.
+/// When received it is chosen again by the rule — `{"int": 9007199254740993}` is taken as a string and `{"int": "5"}`
+/// as a number (so the same value gets the same shape even when a bind value from the window or an out-of-process
+/// driver breaks the rule). Text that is not an integer is refused.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum DbInt {
-    /// |값| ≤ 2^53 − 1.
+    /// |value| ≤ 2^53 − 1.
     Number(#[specta(type = JsNumber)] i64),
-    /// 그 밖. 10진 문자열.
+    /// Anything else. A decimal string.
     Text(String),
 }
 
@@ -91,7 +92,8 @@ impl<'de> Deserialize<'de> for DbInt {
     }
 }
 
-/// 실수 값. 유한하지 않은 값은 그 이름의 문자열이다 — [`DbValue::float`] 로 만든다. 받을 때 그 셋 밖의 글은 거절한다.
+/// A floating-point value. Non-finite values are strings with their names — build it with [`DbValue::float`]. Any other
+/// text is refused when received.
 #[derive(Debug, Clone, PartialEq, Serialize, specta::Type, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum DbFloat {
@@ -120,34 +122,34 @@ impl<'de> Deserialize<'de> for DbFloat {
     }
 }
 
-/// 바이트 값.
+/// A bytes value.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(rename_all = "camelCase")]
 pub struct DbBytes {
-    /// `0x` 로 시작하는 소문자 hex. 잘렸으면 앞부분만.
+    /// Lowercase hex starting with `0x`. Only the beginning if truncated.
     pub hex: String,
-    /// 원래 크기(바이트).
+    /// Original size (bytes).
     #[specta(type = JsNumber)]
     pub size: u64,
     pub truncated: bool,
 }
 
-/// 셀 상한을 넘어 잘린 값.
+/// A value truncated at the cell limit.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(rename_all = "camelCase")]
 pub struct DbTruncated {
-    /// 원래 값의 종류.
+    /// Kind of the original value.
     pub of: TruncatedKind,
-    /// 앞부분(UTF-8 문자 경계에서 자른다).
+    /// The beginning (cut at a UTF-8 character boundary).
     pub prefix: String,
-    /// 원래 크기(UTF-8 바이트).
+    /// Original size (UTF-8 bytes).
     #[specta(type = JsNumber)]
     pub size: u64,
-    /// `of` 가 `other` 일 때의 DB 타입 이름.
+    /// The DB type name when `of` is `other`.
     pub type_name: Option<String>,
 }
 
@@ -161,14 +163,14 @@ pub enum TruncatedKind {
     Other,
 }
 
-/// 분류되지 않은 값.
+/// A value that fits no other kind.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(rename_all = "camelCase")]
 pub struct DbOther {
     pub text: String,
-    /// DB 가 부르는 타입 이름(PG `tsvector`, MySQL `GEOMETRY` 등).
+    /// The type name the DB uses (PG `tsvector`, MySQL `GEOMETRY`, etc.).
     pub type_name: String,
 }
 

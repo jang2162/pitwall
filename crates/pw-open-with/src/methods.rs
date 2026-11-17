@@ -17,17 +17,17 @@ use crate::OpenWith;
 pub struct ExternalToolInfo {
     pub id: String,
     pub label: String,
-    /// 기여한 확장의 id. 전역 설정에서만 정의한 도구면 `null`.
+    /// Id of the contributing extension. `null` for a tool defined only in the global settings.
     pub extension: Option<String>,
-    /// 전역 설정(`[open_with.tools.<id>]`)이 고쳤거나 더했는가.
+    /// Whether the global settings (`[open_with.tools.<id>]`) changed or added it.
     pub from_settings: bool,
-    /// 파일까지 여는 명령(`file_command`)이 있는가.
+    /// Whether it has a command that opens a file too (`file_command`).
     pub opens_files: bool,
-    /// 설정 형식 오류. 있으면 실행하지 않는다(실행하면 `invalidTool` 로 끝난다).
+    /// A settings format error. When present, the tool does not run (running it ends with `invalidTool`).
     pub problem: Option<String>,
 }
 
-/// 기본 도구.
+/// The default tool.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
@@ -40,9 +40,9 @@ pub enum DefaultToolInfo {
     Tool {
         id: String,
     },
-    /// 프로젝트 · 전역 설정 어디에도 `open_with.default` 가 없다.
+    /// Neither the project nor the global settings have `open_with.default`.
     Unset,
-    /// 고른 도구가 이 OS 의 목록에 없다.
+    /// The chosen tool is not in this OS's list.
     Unknown {
         id: String,
     },
@@ -53,10 +53,10 @@ pub enum DefaultToolInfo {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct OpenWithListParams {
-    /// 있으면 그 프로젝트의 설정(`[open_with] default`)까지 보고 기본 도구를 고른다.
+    /// When given, the default tool is chosen including that project's settings (`[open_with] default`).
     #[serde(default)]
     pub project_id: Option<String>,
-    /// 활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 그 워크트리의 `.local.toml` 을 읽는다.
+    /// Top of the active worktree (`ActiveWorktree.top`, absolute path). That worktree's `.local.toml` is read.
     #[serde(default)]
     pub worktree: Option<String>,
 }
@@ -66,7 +66,8 @@ pub struct OpenWithListParams {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct OpenWithList {
-    /// 이 OS 에서 쓸 수 있는 도구(`platforms` 로 거른 것). 확장 순서, 그 뒤에 설정에서만 정의한 도구.
+    /// Tools available on this OS (filtered by `platforms`). In extension order, followed by tools defined only in the
+    /// settings.
     pub tools: Vec<ExternalToolInfo>,
     pub default: DefaultToolInfo,
 }
@@ -152,9 +153,10 @@ pub enum OpenWithOutcome {
 }
 
 rpc_method! {
-    /// 이 OS 에서 쓸 수 있는 외부 도구(id · 이름 · 기여한 확장 · 파일까지 여는가 · 설정 형식 오류)와 기본 도구. `projectId` 를
-    /// 주면 그 프로젝트 설정의 `[open_with] default` 까지 보고 기본 도구를 고른다(세션에 프로젝트가 있으면 키를 빼면 세션 프로젝트다
-    /// — 전역 기본값만 보려면 `null`). 실행 명령은 싣지 않는다.
+    /// External tools available on this OS (id · name · contributing extension · whether it opens files too · settings
+    /// format errors) and the default tool. With `projectId`, the default tool is chosen including that project's
+    /// `[open_with] default` (when the session has a project, leaving the key out means the session's project — pass
+    /// `null` for the global default only). Launch commands are not included.
     pub OpenWithListMethod: "openWith.list" {
         params: OpenWithListParams,
         result: OpenWithList,

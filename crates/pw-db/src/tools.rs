@@ -46,72 +46,74 @@ use crate::session::{DbSessions, blocking, db_error};
 #[serde(rename_all = "camelCase")]
 pub struct DbToolConnectionListParams {
     pub project_id: String,
-    /// 워크트리 꼭대기(절대 경로). 연결 설정(`.pitwall/db/*.toml`)을 그 워크트리에서 읽는다. 비우면 세션의 워크트리, 없으면 메인
-    /// 체크아웃.
+    /// Top of the worktree (absolute path). Connection settings (`.pitwall/db/*.toml`) are read from that worktree.
+    /// Empty means the session's worktree, or else the main checkout.
     #[serde(default)]
     pub worktree: Option<String>,
 }
 
-/// 연결을 지금 열 수 있는가(창의 상태와 같다 — 비밀 · 확인이 필요하면 에이전트는 답할 수 없다).
+/// Whether the connection can be opened now (the same as the window's state — when a secret or a confirmation is
+/// needed, an agent cannot answer it).
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(rename_all = "camelCase")]
 pub enum DbToolConnectionState {
-    /// 프로젝트를 신뢰하지 않았다.
+    /// The project is not trusted.
     Untrusted,
-    /// 설정 파일이 틀렸다(`message`).
+    /// The settings file is wrong (`message`).
     Invalid,
-    /// 비밀번호가 필요하다 — 사람이 Pitwall 에서 넣는다.
+    /// A password is needed — the person enters it in Pitwall.
     SecretRequired,
-    /// 사람의 확인이 필요하다 — 사람이 Pitwall 에서 확인한다.
+    /// The person's confirmation is needed — the person confirms it in Pitwall.
     ApprovalRequired,
     Ready,
 }
 
-/// 에이전트가 이 연결을 지금 쓸 수 없는 까닭(DB 툴이 거절할 때의 `data.reason` 과 같다).
+/// Why the agent cannot use this connection now (the same as `data.reason` when a DB tool refuses).
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(rename_all = "camelCase")]
 pub enum DbToolUnusable {
-    /// 프로젝트를 신뢰하지 않았다.
+    /// The project is not trusted.
     Untrusted,
-    /// 설정 파일이 틀렸다.
+    /// The settings file is wrong.
     Invalid,
-    /// 프로덕션 표지가 있는 대상이다 — 에이전트 툴은 쓰지 않는다.
+    /// The target is marked production — agent tools do not use it.
     ProductionBlocked,
-    /// 사람이 이번 앱 실행에서 Pitwall 의 DB 탐색기로 이 연결(지금 대상)을 연 적이 없다 — 사람이 한 번 연 뒤 다시.
+    /// The person has not opened this connection (with its current target) in Pitwall's DB explorer during this app run
+    /// — try again after the person has opened it once.
     NotOpenedByUser,
 }
 
-/// 연결 하나(비밀 없음).
+/// One connection (no secrets).
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(rename_all = "camelCase")]
 pub struct DbToolConnection {
-    /// 연결 id(다른 DB 툴의 `connectionId`).
+    /// Connection id (`connectionId` for the other DB tools).
     pub id: String,
-    /// 설정이 틀렸으면 `null`.
+    /// `null` if the settings are wrong.
     pub name: Option<String>,
     pub driver: Option<DriverKind>,
     pub host: Option<String>,
-    /// 쓰이는 포트(적지 않았으면 드라이버 기본).
+    /// Port in use (the driver's default if not set).
     pub port: Option<u16>,
     pub database: Option<String>,
-    /// SQLite 파일(설정에 적힌 그대로 — 상대 경로면 프로젝트 루트 기준).
+    /// SQLite file (as written in the settings — a relative path is relative to the project root).
     pub path: Option<String>,
-    /// read-only 표지 — 에이전트에게 적용하는 것(이 대상에서 이번 앱 실행 중 본 가장 엄한 것).
+    /// Read-only mark as applied to agents (the strictest one seen for this target during this app run).
     pub read_only: bool,
-    /// 프로덕션 표지 — 에이전트에게 적용하는 것(같은 규칙). 켜져 있으면 DB 툴이 쓰지 않는다.
+    /// Production mark as applied to agents (same rule). When on, the DB tools do not use the connection.
     pub production: bool,
     pub state: DbToolConnectionState,
-    /// 에이전트의 DB 툴(`db_schema` 등)이 지금 이 연결을 쓸 수 있는가.
+    /// Whether the agent DB tools (`db_schema`, etc.) can use this connection now.
     pub usable: bool,
-    /// 쓸 수 없는 까닭(`usable` 이 참이면 `null`).
+    /// Why it cannot be used (`null` when `usable` is true).
     pub unusable_reason: Option<DbToolUnusable>,
-    /// 설정이 틀렸으면 그 안내 글(값을 싣지 않는다 — 까닭은 Pitwall 에서 본다).
+    /// If the settings are wrong, a short notice (the values are not included — see the reason in Pitwall).
     pub message: Option<String>,
 }
 
@@ -120,16 +122,16 @@ pub struct DbToolConnection {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct DbToolConnectionList {
-    /// id 순.
+    /// Sorted by id.
     pub connections: Vec<DbToolConnection>,
     pub trusted: bool,
-    /// 프로젝트 설정을 읽지 못했으면 그 안내 글(그러면 목록이 비어 있다. 값을 싣지 않는다).
+    /// If the project settings could not be read, a short notice (the list is then empty; no values are included).
     pub problem: Option<String>,
 }
 
 // --- db_schema ------------------------------------------------------------------------------------------------------
 
-/// 목록의 단계. `database` · `schema` 는 DB · 스키마 목록, 나머지는 그 종류의 객체 목록이다.
+/// What to list. `database` · `schema` list databases · schemas; the rest list objects of that kind.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
@@ -161,7 +163,7 @@ impl DbToolSchemaKind {
     }
 }
 
-/// `object` 를 줬을 때 무엇을 읽는가.
+/// What to read when `object` is given.
 #[derive(
     Debug,
     Clone,
@@ -176,10 +178,10 @@ impl DbToolSchemaKind {
 )]
 #[serde(rename_all = "camelCase")]
 pub enum DbToolSchemaDetail {
-    /// 열 · 인덱스 · FK.
+    /// Columns · indexes · foreign keys.
     #[default]
     Columns,
-    /// DDL 글.
+    /// DDL text.
     Ddl,
 }
 
@@ -189,39 +191,43 @@ pub enum DbToolSchemaDetail {
 #[serde(rename_all = "camelCase")]
 pub struct DbToolSchemaParams {
     pub project_id: String,
-    /// 워크트리 꼭대기(절대 경로). 연결 설정을 그 워크트리에서 읽는다. 비우면 세션의 워크트리, 없으면 메인 체크아웃.
+    /// Top of the worktree (absolute path). Connection settings are read from that worktree. Empty means the session's
+    /// worktree, or else the main checkout.
     #[serde(default)]
     pub worktree: Option<String>,
-    /// `db_connection_list` 의 연결 id.
+    /// Connection id from `db_connection_list`.
     pub connection_id: String,
-    /// 비우면 연결 설정의 DB.
+    /// Empty means the connection settings' database.
     #[serde(default)]
     pub database: Option<String>,
-    /// 비우면 연결의 기본 스키마(PG `current_schema()`). 스키마가 없는 드라이버(MySQL · SQLite)는 쓰지 않는다.
+    /// Empty means the connection's default schema (PG `current_schema()`). Not used by drivers without schemas (MySQL
+    /// · SQLite).
     #[serde(default)]
     pub schema: Option<String>,
-    /// 테이블 · 뷰 등의 이름. 주면 그 객체의 열 · 인덱스 · FK(또는 `detail: "ddl"` 이면 DDL). `schema.name` 꼴이면 점 앞을 스키마로
-    /// (스키마가 없는 드라이버는 DB 로) 읽는다 — `schema`(또는 `database`)를 따로 주면 점째 이름이다.
+    /// Name of a table, view, etc. When given, that object's columns · indexes · foreign keys (or its DDL with `detail:
+    /// "ddl"`). In the form `schema.name` the part before the dot is read as the schema (the database for drivers
+    /// without schemas) — when `schema` (or `database`) is given separately, the whole name including the dot is the
+    /// name.
     #[serde(default)]
     pub object: Option<String>,
-    /// `object` 가 없을 때 무엇의 목록인가. 기본 `table`.
+    /// What to list when `object` is not given. Defaults to `table`.
     #[serde(default)]
     pub kind: Option<DbToolSchemaKind>,
-    /// 객체 목록: 이름에 이 글이 든 것만(서버 쪽, 대소문자 무시).
+    /// Object lists: only names containing this text (server side, case-insensitive).
     #[serde(default)]
     pub filter: Option<String>,
-    /// 앞 쪽의 `nextCursor`. 처음 쪽은 비운다.
+    /// `nextCursor` from the previous page. Empty for the first page.
     #[serde(default)]
     pub cursor: Option<String>,
-    /// 쪽 크기(1 ~ 500, 기본 100).
+    /// Page size (1 – 500, default 100).
     #[serde(default)]
     pub limit: Option<u32>,
-    /// `object` 를 줬을 때: `columns`(기본 — 열 · 인덱스 · FK) 또는 `ddl`.
+    /// When `object` is given: `columns` (default — columns · indexes · foreign keys) or `ddl`.
     #[serde(default)]
     pub detail: Option<DbToolSchemaDetail>,
 }
 
-/// 결과가 무엇인가.
+/// What the result is.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
@@ -234,32 +240,32 @@ pub enum DbToolSchemaLevel {
     Ddl,
 }
 
-/// 목록의 한 항목.
+/// One item of a list.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(rename_all = "camelCase")]
 pub struct DbToolSchemaItem {
     pub name: String,
-    /// 객체 목록이면 그 종류.
+    /// The kind, for an object list.
     pub kind: Option<ObjectKind>,
     pub comment: Option<String>,
 }
 
-/// 열 하나.
+/// One column.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(rename_all = "camelCase")]
 pub struct DbToolColumn {
     pub name: String,
-    /// DB 의 타입 글.
+    /// The DB's type text.
     #[serde(rename = "type")]
     pub db_type: String,
     pub nullable: bool,
-    /// 기본값 식의 글.
+    /// Text of the default expression.
     pub default: Option<String>,
-    /// 기본 키에 든 열인가.
+    /// Whether the column is part of the primary key.
     pub primary_key: bool,
     pub comment: Option<String>,
 }
@@ -270,15 +276,15 @@ pub struct DbToolColumn {
 #[serde(rename_all = "camelCase")]
 pub struct DbToolSchema {
     pub level: DbToolSchemaLevel,
-    /// 목록이면 그 쪽(`object` 를 줬으면 빈 목록).
+    /// The page, for a list (empty when `object` was given).
     pub items: Vec<DbToolSchemaItem>,
-    /// `object` 를 줬으면 읽은 객체(한정한 이름).
+    /// The object read, when `object` was given (qualified name).
     pub object: Option<ObjectRef>,
     pub columns: Option<Vec<DbToolColumn>>,
     pub indexes: Option<Vec<IndexInfo>>,
     pub foreign_keys: Option<Vec<ForeignKeyInfo>>,
     pub ddl: Option<String>,
-    /// 다음 쪽의 커서(그대로 `cursor` 로 돌려준다). 없으면 마지막 쪽이다.
+    /// Cursor of the next page (pass it back as `cursor`). Missing means this is the last page.
     pub next_cursor: Option<String>,
 }
 
@@ -290,19 +296,20 @@ pub struct DbToolSchema {
 #[serde(rename_all = "camelCase")]
 pub struct DbToolQueryParams {
     pub project_id: String,
-    /// 워크트리 꼭대기(절대 경로). 연결 설정과 `file` 을 그 워크트리에서 읽는다. 비우면 세션의 워크트리, 없으면 메인 체크아웃.
+    /// Top of the worktree (absolute path). Connection settings and `file` are read from that worktree. Empty means the
+    /// session's worktree, or else the main checkout.
     #[serde(default)]
     pub worktree: Option<String>,
-    /// `db_connection_list` 의 연결 id.
+    /// Connection id from `db_connection_list`.
     pub connection_id: String,
-    /// 돌릴 SQL(문장 여럿 — 방언의 구분자로 나눈다). `file` 과 함께 줄 수 없다.
+    /// SQL to run (several statements — split by the dialect's delimiter). Cannot be given together with `file`.
     #[serde(default)]
     pub sql: Option<String>,
-    /// SQL 파일 — 프로젝트 루트(워크트리를 줬으면 그 워크트리 안의 프로젝트 루트) 기준 경로. 루트 안의 UTF-8 일반 파일, 5 MiB 까지.
-    /// `sql` 과 함께 줄 수 없다.
+    /// SQL file — a path relative to the project root (inside the chosen worktree, if one is given). A UTF-8 regular
+    /// file inside the root, up to 5 MiB. Cannot be given together with `sql`.
     #[serde(default)]
     pub file: Option<String>,
-    /// 문장마다 돌려줄 행의 상한(1 ~ 10000, 기본 100). 쪽 단위가 아니다 — 넘으면 그 문장의 `truncated`.
+    /// Maximum rows returned per statement (1 – 10000, default 100). Not paged — past it the statement is `truncated`.
     #[serde(default)]
     pub max_rows: Option<u32>,
 }
@@ -310,25 +317,28 @@ pub struct DbToolQueryParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DbToolQuery {
-    /// 나눈 문장 수.
+    /// Number of statements after splitting.
     pub statements: u32,
-    /// 돈 문장마다 결과 하나(차례대로). 실패한 문장과 그 뒤 문장은 없다.
+    /// One result per statement that ran (in order). The failed statement and the ones after it are not included.
     pub results: Vec<DbScriptResult>,
-    /// 문장이 실패했으면 그 문장과 오류. 그 뒤의 문장은 돌지 않았다.
+    /// If a statement failed, that statement and its error. The statements after it did not run.
     pub error: Option<DbScriptError>,
-    /// 응답 예산을 다 써서 돌리지 않은 문장들(`index` 부터 끝까지 `count` 개, `reason: "responseBudget"`). 그 앞 문장은 `truncated`
-    /// 다. 좁혀서(행 · 열을 줄여) 다시 부르거나 그 문장만 따로 부른다.
+    /// Statements not run because the response budget was used up (`count` statements from `index` to the end, `reason:
+    /// "responseBudget"`). The statement before them is `truncated`. Narrow the query (fewer rows · columns) and call
+    /// again, or call those statements on their own.
     pub not_run: Option<DbScriptNotRun>,
-    /// `file` 을 줬으면 읽은 파일(루트 기준 경로).
+    /// The file read, when `file` was given (path relative to the root).
     pub file: Option<String>,
-    /// 감사 로그에 남는 상세 — 문장 수 · 가장 높은 등급 · 문장 해시(`file` 이면 경로와 내용 해시). SQL 원문 · 값은 없다.
+    /// Details kept in the audit log — statement count · highest grade · statement hashes (for `file`, its path and
+    /// content hash). No SQL text or values.
     pub audit: String,
 }
 
 rpc_method! {
-    /// 이 프로젝트의 DB 연결 목록(비밀 없음): id · 이름 · 드라이버 · 대상(호스트 · 포트 · DB · SQLite 경로) · read-only · 프로덕션 ·
-    /// 상태, 그리고 에이전트의 DB 툴이 지금 쓸 수 있는가(`usable`)와 그 까닭. 에이전트의 DB 툴은 사람이 이번 앱 실행에서 Pitwall 의
-    /// DB 탐색기로 연 연결만 쓰고(`notOpenedByUser`), 프로덕션 표지가 있는 연결은 쓰지 않는다(`productionBlocked`). 연결을 열지 않는다.
+    /// This project's DB connections (no secrets): id · name · driver · target (host · port · database · SQLite path) ·
+    /// read-only · production · state, plus whether the agent DB tools can use it now (`usable`) and why not. The agent
+    /// DB tools use only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`)
+    /// and never use connections marked production (`productionBlocked`). Does not open any connection.
     pub DbToolConnectionListMethod: "db.tool.connectionList" {
         params: DbToolConnectionListParams,
         result: DbToolConnectionList,
@@ -337,11 +347,13 @@ rpc_method! {
         mcp: { group: "db", name: "db_connection_list" },
     }
 
-    /// DB 스키마 조회(SQL 드라이버만 — PG · MySQL/MariaDB · SQLite). `object` 가 없으면 한 단계의 목록 한 쪽(`kind`: `database` ·
-    /// `schema` · `table`(기본) · `view` 등 — 객체 목록은 `database` · `schema` 안에서, `filter` 로 거른다), 있으면 그 객체의 열(이름 ·
-    /// 타입 · null · 기본값 · 기본 키) · 인덱스 · FK, `detail: "ddl"` 이면 DDL 글. Pitwall 의 DB 탐색기와 같은 것을 본다. 사람이 이번
-    /// 앱 실행에서 Pitwall 의 DB 탐색기로 연 연결만 쓰고(아니면 `notOpenedByUser` — 사람이 한 번 연 뒤 다시), 프로덕션 표지가 있는
-    /// 연결은 쓰지 않는다. Redis 연결이면 `unsupported` — `db_kv_scan` 을 쓴다.
+    /// Read a DB schema (SQL drivers only — PG · MySQL/MariaDB · SQLite). Without `object`, one page of one level's
+    /// list (`kind`: `database` · `schema` · `table` (default) · `view`, etc. — object lists are within `database` ·
+    /// `schema` and filtered by `filter`); with it, that object's columns (name · type · null · default · primary key)
+    /// · indexes · foreign keys, or its DDL text with `detail: "ddl"`. Sees the same as Pitwall's DB explorer. Uses
+    /// only connections the person opened in Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` —
+    /// try again after the person has opened it once) and never uses connections marked production. For a Redis
+    /// connection, `unsupported` — use `db_kv_scan`.
     pub DbToolSchemaMethod: "db.tool.schema" {
         params: DbToolSchemaParams,
         result: DbToolSchema,
@@ -350,17 +362,21 @@ rpc_method! {
         mcp: { group: "db", name: "db_schema" },
     }
 
-    /// 조회 SQL 실행(SQL 드라이버만 — PG · MySQL/MariaDB · SQLite). 입력은 `sql`(글) 또는 `file`(프로젝트 루트 기준 SQL 파일 경로 —
-    /// Pitwall 이 실행하는 그때 읽는다) 가운데 하나. 문장을 방언대로 나눠 읽기 전용 트랜잭션 하나에서 차례로 돌리고, 문장마다 결과
-    /// 하나(열 · 행 · `truncated` · 소요)를 돌려준다. **조회만 돈다** — 조회가 아닌 문장(쓰기 · DDL · `SET` · 트랜잭션 제어 ·
-    /// `ATTACH` · 읽지 못하는 글)이 하나라도 있으면 아무것도 돌리지 않고 거절한다(`notAQuery` — 쓰기는 `db_execute`). 문장 하나가
-    /// 실패하면 거기서 멈추고 그때까지의 결과와 `error`(문장 번호 · 줄)를 준다. 행은 문장마다 `maxRows`(기본 100), 셀은 4 KiB 에서
-    /// 잘린다(`truncated` 값). 응답 전체는 약 192 KiB 까지 — 행을 읽다 그만큼 차면 그 문장은 `truncated` 이고 뒤 문장은 돌리지 않고
-    /// `notRun`(`index` 부터 `count` 개, `reason: "responseBudget"`)으로 알린다. **다음 쪽은 없다** — 잘렸으면 WHERE · LIMIT · 열을
-    /// 좁혀 다시 부른다(다시 부르면 다른 스냅숏이다).
-    /// 사람이 이번 앱 실행에서 Pitwall 의 DB 탐색기로 연 연결만 쓰고(`notOpenedByUser`), 프로덕션 표지가 있는 대상 — MySQL ·
-    /// MariaDB 는 같은 서버 · 사용자의 어느 DB 라도 — 은 쓰지 않는다(`productionBlocked`). 결과의 `audit` 은 감사 로그에 남는
-    /// 상세(문장 수 · 등급 · 해시)이고 에이전트에게도 보인다.
+    /// Run read-only SQL (SQL drivers only — PG · MySQL/MariaDB · SQLite). The input is either `sql` (text) or `file`
+    /// (an SQL file path relative to the project root — Pitwall reads it when it runs). The statements are split by the
+    /// dialect and run in order in one read-only transaction, with one result per statement (columns · rows ·
+    /// `truncated` · duration). **Only queries run** — if any statement is not a query (a write · DDL · `SET` ·
+    /// transaction control · `ATTACH` · text that cannot be parsed), nothing runs and the call is refused (`notAQuery`
+    /// — writes go through `db_execute`). If a statement fails, it stops there and returns the results so far with
+    /// `error` (statement index · line). Rows are limited to `maxRows` per statement (default 100), cells are cut at 4
+    /// KiB (`truncated` values). The whole response is limited to about 192 KiB — when the rows fill it, that statement
+    /// is `truncated` and the later statements do not run and are reported as `notRun` (`count` from `index`, `reason:
+    /// "responseBudget"`). **There is no next page** — if a result was cut, narrow the WHERE · LIMIT · columns and call
+    /// again (a new call sees a different snapshot).
+    /// Uses only connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`) and
+    /// never uses a target marked production — for MySQL · MariaDB, any database on the same server · user
+    /// (`productionBlocked`). The result's `audit` is the detail kept in the audit log (statement count · grade ·
+    /// hashes) and is shown to the agent too.
     pub DbToolQueryMethod: "db.tool.query" {
         params: DbToolQueryParams,
         result: DbToolQuery,
