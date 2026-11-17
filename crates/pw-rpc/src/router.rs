@@ -159,6 +159,7 @@ pub struct Ctx {
     /// 세션(연결)의 뿌리 토큰. 핸들러에는 자식만 준다([`Ctx::connection_closed`]) — 핸들러가 연결 전체를 취소하지 못하게.
     pub(crate) closed: CancellationToken,
     pub(crate) events: EventHub,
+    pub(crate) point: PointOfNoReturn,
 }
 
 impl Ctx {
@@ -189,7 +190,8 @@ impl Ctx {
     /// 이 호출의 취소 토큰.
     ///
     /// 핸들러의 future 는 취소되면 다음 `.await` 지점에서 버려진다. 그러므로 `.await` 없이 오래 도는 일
-    /// (`spawn_blocking` 안의 작업 등)만 이 토큰을 직접 확인하면 된다.
+    /// (`spawn_blocking` 안의 작업 등)만 이 토큰을 직접 확인하면 된다. 예외는 [`Ctx::point_of_no_return`] 을 세운 뒤다 —
+    /// 그 뒤에는 버려지지 않고, 이 토큰은 취소돼도 핸들러는 끝까지 돈다.
     pub fn cancellation(&self) -> &CancellationToken {
         &self.cancel
     }
@@ -203,6 +205,81 @@ impl Ctx {
     /// 닫는 데 쓴다.
     pub fn connection_closed(&self) -> CancellationToken {
         self.closed.child_token()
+    }
+
+    /// 이 호출의 「되돌릴 수 없는 지점」 표지([`PointOfNoReturn`]). 되돌릴 수 없는 효과(DB 커밋)를 내기 직전에 세운다.
+    pub fn point_of_no_return(&self) -> PointOfNoReturn {
+        self.point.clone()
+    }
+}
+
+/// 호출 하나의 「되돌릴 수 없는 지점」 표지 — 핸들러가 **되돌릴 수 없는 효과를 내기 직전**(`db_execute` 의 커밋)에
+/// [`Self::pass`] 로 세운다(16-m5-plan M5-18 이월 — 커밋 뒤 취소를 결과 · 감사에 남기기).
+///
+/// 세션은 취소(`request.cancel` · 세션 닫힘)가 오면 핸들러 future 를 그 자리에서 버린다. 표지가 선 뒤에는 버리지 않고 핸들러를
+/// 끝까지 기다려 그 결과로 답한다 — 효과가 났는데 「취소됨」 으로 답하지 않게. **취소를 무시하는 일반 수단이 아니다**: 효과를
+/// 정한 뒤 그 효과를 끝내고 답하는 데만 쓴다. 표지 뒤의 일은 짧아야 한다(취소한 쪽은 답을 시한까지만 기다린다 —
+/// `pw_mcp::client`). 표지를 세우지 않는 핸들러의 취소 동작은 그대로다.
+///
+/// 세움과 취소가 겹치면 한 잠금 안에서 가른다: 취소가 먼저면 [`Self::pass`] 가 `false` 를 돌려주고(핸들러는 효과를 내지 말고
+/// 되돌린다 — 세션이 곧 버린다), 표지가 먼저면 그 뒤의 취소는 핸들러를 버리지 않는다. 스트림 호출에서는 늘 `false` 다 — 스트림은
+/// 취소되면 그대로 버려진다.
+///
+/// 핸들러가 띄운 태스크로 옮겨 쓸 수 있다(`Clone` · `Send`). 표지가 선 뒤에도 [`Ctx::cancellation`] 의 토큰은 취소될 수 있다 —
+/// 표지 뒤의 일은 그 토큰을 보지 않는다.
+#[derive(Clone)]
+pub struct PointOfNoReturn {
+    state: Arc<Mutex<PointState>>,
+    cancel: CancellationToken,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PointState {
+    /// 아직 서지 않았다 — 취소되면 버려진다.
+    Open,
+    /// 섰다 — 취소돼도 끝까지 돈다.
+    Passed,
+    /// 취소로 버려졌다(버려진다). 스트림 호출은 처음부터 이것이다.
+    Abandoned,
+}
+
+impl PointOfNoReturn {
+    pub(crate) fn new(cancel: CancellationToken) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(PointState::Open)),
+            cancel,
+        }
+    }
+
+    /// 세울 수 없는 표지(스트림 호출).
+    pub(crate) fn unavailable(cancel: CancellationToken) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(PointState::Abandoned)),
+            cancel,
+        }
+    }
+
+    /// 표지를 세운다. `true` 면 섰다 — 이제 취소돼도 핸들러는 버려지지 않으니 효과를 내고 답한다. `false` 면 이미 취소됐다 —
+    /// 효과를 내지 말고 되돌린다. 두 번 불러도 같은 답이다.
+    pub fn pass(&self) -> bool {
+        let mut state = lock(&self.state);
+        if *state == PointState::Open {
+            *state = if self.cancel.is_cancelled() {
+                PointState::Abandoned
+            } else {
+                PointState::Passed
+            };
+        }
+        *state == PointState::Passed
+    }
+
+    /// 세션이 취소를 보고 부른다. 표지가 서지 않았으면 버림으로 정하고 `true`(핸들러를 버린다), 섰으면 `false`(끝까지 기다린다).
+    pub(crate) fn abandon(&self) -> bool {
+        let mut state = lock(&self.state);
+        if *state == PointState::Open {
+            *state = PointState::Abandoned;
+        }
+        *state == PointState::Abandoned
     }
 }
 

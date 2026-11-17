@@ -30,7 +30,8 @@ pub use method::{
     StreamMethod, Tier, UnaryMethod,
 };
 pub use router::{
-    Caller, ConnectionScope, Ctx, FILE_EVENT_SCOPE_PREFIX, FileScope, Router, SessionId, StreamSink,
+    Caller, ConnectionScope, Ctx, FILE_EVENT_SCOPE_PREFIX, FileScope, PointOfNoReturn, Router,
+    SessionId, StreamSink,
 };
 pub use session::Session;
 pub use typegen::{JsNumber, JsonValue, MethodInfo, TypeInfo, methods, types};

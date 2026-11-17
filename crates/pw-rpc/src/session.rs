@@ -22,7 +22,8 @@ use crate::protocol::{
     StreamOpened, StreamOutcome, SubscribeParams, Subscribed, SubscriptionId, UnsubscribeParams,
 };
 use crate::router::{
-    Caller, Ctx, Handler, RawSink, Router, SessionId, StreamFn, StreamState, UnaryFn,
+    Caller, Ctx, Handler, PointOfNoReturn, RawSink, Router, SessionId, StreamFn, StreamState,
+    UnaryFn,
 };
 
 /// 잠금 중 패닉해도 표는 삽입 · 삭제 단위로만 바뀌어 일관성이 깨지지 않는다. 그래서 오염을 무시한다.
@@ -139,13 +140,14 @@ impl Inner {
         let _ = self.out.send(Outbound::Response(Response { id, outcome }));
     }
 
-    fn ctx(&self, cancel: CancellationToken) -> Ctx {
+    fn ctx(&self, cancel: CancellationToken, point: PointOfNoReturn) -> Ctx {
         Ctx {
             session: self.id,
             caller: self.caller.clone(),
             cancel,
             closed: self.root.clone(),
             events: self.events.clone(),
+            point,
         }
     }
 
@@ -272,7 +274,8 @@ impl Inner {
                 }
             }
         }
-        let fut = match invoke(|| handler(self.ctx(token.clone()), params)) {
+        let point = PointOfNoReturn::new(token.clone());
+        let fut = match invoke(|| handler(self.ctx(token.clone(), point.clone()), params)) {
             Ok(fut) => fut,
             Err(e) => {
                 self.finish_request(id, Err(e));
@@ -284,12 +287,23 @@ impl Inner {
             id: Some(id),
         };
         tokio::spawn(async move {
+            let mut fut = fut;
             // biased: 취소를 먼저 본다. 취소된 뒤에는 핸들러를 한 번도 더 poll 하지 않고 버린다 —
             // 핸들러가 다음 await 에서 깨어날 준비가 돼 있어도 그 뒤의 코드는 실행되지 않는다.
-            let result = tokio::select! {
+            let finished = tokio::select! {
                 biased;
-                () = token.cancelled() => Err(RpcError::cancelled()),
-                result = fut => result,
+                () = token.cancelled() => None,
+                result = &mut fut => Some(result),
+            };
+            let result = match finished {
+                Some(result) => result,
+                // 되돌릴 수 없는 지점 전의 취소 — 버린 뒤에 답한다(핸들러의 Drop 이 답보다 먼저 돈다).
+                None if point.abandon() => {
+                    drop(fut);
+                    Err(RpcError::cancelled())
+                }
+                // 표지가 선 뒤의 취소 — 버리지 않고 끝까지 기다려 그 결과로 답한다(`PointOfNoReturn`).
+                None => fut.await,
             };
             guard.finish(result);
         });
@@ -311,7 +325,8 @@ impl Inner {
             state: Arc::clone(&state),
             out: self.out.clone(),
         };
-        let fut = match invoke(|| handler(self.ctx(token.clone()), params, sink)) {
+        let point = PointOfNoReturn::unavailable(token.clone());
+        let fut = match invoke(|| handler(self.ctx(token.clone(), point), params, sink)) {
             Ok(fut) => fut,
             Err(e) => {
                 self.reply(id, Err(e));

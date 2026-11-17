@@ -250,3 +250,130 @@ async fn the_connection_token_outlives_the_call_and_fires_when_the_session_close
             .expect("closing the session cancels the connection token");
     }
 }
+
+rpc_method! {
+    /// 띄운 태스크가 문 1 뒤에 「되돌릴 수 없는 지점」 을 세우고(세웠는가가 결과), 문 2 뒤에 끝난다.
+    Irreversible: "test.irreversible" { params: (), result: bool, tier: Read }
+
+    /// 스트림 호출에서 표지를 세워 본다(청크 하나 — 섰는가).
+    PointInStream: "test.pointInStream" { params: (), stream: bool, tier: Read }
+}
+
+/// [`Irreversible`] 의 관측 자리.
+#[derive(Default)]
+struct PointProbe {
+    started: Notify,
+    before: Notify,
+    decided: Notify,
+    after: Notify,
+    passed: std::sync::Mutex<Option<bool>>,
+    reached: AtomicBool,
+}
+
+fn point_router() -> (Router, Arc<PointProbe>) {
+    let probe = Arc::new(PointProbe::default());
+    let mut router = base_router();
+    let p = Arc::clone(&probe);
+    router.unary(Irreversible, move |ctx, ()| {
+        let p = Arc::clone(&p);
+        let point = ctx.point_of_no_return();
+        async move {
+            // 효과를 내는 쪽은 핸들러가 버려져도 도는 태스크다(`db_execute` 의 실행 태스크처럼).
+            let task = tokio::spawn(async move {
+                p.started.notify_one();
+                p.before.notified().await;
+                let passed = point.pass();
+                *p.passed.lock().unwrap() = Some(passed);
+                p.decided.notify_one();
+                p.after.notified().await;
+                p.reached.store(true, Ordering::SeqCst);
+                passed
+            });
+            Ok::<_, RpcError>(task.await.unwrap())
+        }
+    });
+    router.stream(PointInStream, move |ctx, (), sink| async move {
+        sink.send(ctx.point_of_no_return().pass()).await
+    });
+    (router, probe)
+}
+
+async fn notified(n: &Notify, what: &str) {
+    timeout(Duration::from_secs(1), n.notified())
+        .await
+        .unwrap_or_else(|_| panic!("{what} never happened"));
+}
+
+/// 「되돌릴 수 없는 지점」 을 세운 뒤의 취소는 핸들러를 버리지 않는다 — 끝까지 기다려 그 결과로 답한다(16-m5-plan M5-18 이월).
+#[tokio::test]
+async fn a_cancel_after_the_point_of_no_return_waits_for_the_handler_and_answers_its_result() {
+    let (router, probe) = point_router();
+    let mut h = Harness::new(router, Role::Owner);
+    h.request(1, "test.irreversible", Value::Null);
+    notified(&probe.started, "start").await;
+    probe.before.notify_one();
+    notified(&probe.decided, "the point").await;
+    assert_eq!(*probe.passed.lock().unwrap(), Some(true));
+
+    h.notify("request.cancel", json!({"id": 1}));
+    // 표지 뒤라 취소로 답하지 않는다 — 핸들러가 끝날 때까지 아무것도 나가지 않는다.
+    assert!(
+        timeout(Duration::from_millis(100), h.next()).await.is_err(),
+        "answered before the handler finished"
+    );
+    probe.after.notify_one();
+    let res = h.next_response().await;
+    assert_eq!(res.id, Id::Number(1));
+    assert_eq!(res.outcome, Ok(json!(true)));
+    assert!(probe.reached.load(Ordering::SeqCst));
+}
+
+/// 표지를 세우기 전에 온 취소는 지금처럼 핸들러를 버리고 `cancelled` 로 답한다. 그 뒤 표지를 세우려 하면 `false` — 효과를 내지
+/// 말고 되돌린다.
+#[tokio::test]
+async fn a_cancel_before_the_point_of_no_return_drops_the_handler_and_the_point_refuses() {
+    let (router, probe) = point_router();
+    let mut h = Harness::new(router, Role::Owner);
+    h.request(1, "test.irreversible", Value::Null);
+    notified(&probe.started, "start").await;
+    h.notify("request.cancel", json!({"id": 1}));
+    let res = h.next_response().await;
+    assert_eq!(err_code(&res), code::CANCELLED);
+
+    probe.before.notify_one();
+    notified(&probe.decided, "the point").await;
+    assert_eq!(*probe.passed.lock().unwrap(), Some(false));
+}
+
+/// 세션이 닫혀도 표지 뒤의 핸들러는 끝까지 돈다(그 효과는 이미 정해졌다).
+#[tokio::test]
+async fn closing_the_session_after_the_point_of_no_return_lets_the_handler_finish() {
+    let (router, probe) = point_router();
+    let mut h = Harness::new(router, Role::Owner);
+    h.request(1, "test.irreversible", Value::Null);
+    notified(&probe.started, "start").await;
+    probe.before.notify_one();
+    notified(&probe.decided, "the point").await;
+    h.session.close();
+    probe.after.notify_one();
+    let res = h.next_response().await;
+    assert_eq!(res.outcome, Ok(json!(true)));
+    assert!(probe.reached.load(Ordering::SeqCst));
+}
+
+/// 스트림 호출의 표지는 서지 않는다 — 스트림은 취소되면 그대로 버려진다.
+#[tokio::test]
+async fn the_point_of_no_return_never_passes_in_a_stream() {
+    let (router, _) = point_router();
+    let mut h = Harness::new(router, Role::Owner);
+    h.request(1, "test.pointInStream", Value::Null);
+    let id = h
+        .next_response()
+        .await
+        .result_as::<StreamOpened>()
+        .unwrap()
+        .stream_id;
+    h.notify("stream.credit", json!({"streamId": id, "credit": 1}));
+    let chunk: StreamChunk = h.next_notification(STREAM_CHUNK).await;
+    assert_eq!(chunk.data, json!(false));
+}
