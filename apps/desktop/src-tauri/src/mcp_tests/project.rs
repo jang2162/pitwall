@@ -256,6 +256,38 @@ async fn an_untrusted_projects_new_window_does_not_start_providers_or_servers() 
     assert_eq!(refused.data.unwrap()["reason"], "untrusted");
 }
 
+/// 세션에 프로젝트가 있으면(`pitwall tool` 의 cwd · `--project`) `project_open` 도 다른 프로젝트 툴처럼 `projectId` 가 필수가 아니고,
+/// 빠지면 서버가 세션 프로젝트로 채운다(05-mcp.md 「툴 레지스트리」 의 「프로젝트 지정」).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn project_open_takes_the_session_project_when_project_id_is_left_out() {
+    let w = WindowHost::new();
+    let id = w.tools.project("m5-09-session");
+    let root = w.tools.base.join("work/m5-09-session");
+    let session = w
+        .tools
+        .session(SessionRequest {
+            project: Some(root.clone()),
+            cwd: None,
+        })
+        .await;
+    let listed = session.list().await;
+    let schema = &listed
+        .iter()
+        .find(|t| t.name == "project_open")
+        .unwrap()
+        .input_schema;
+    let required = schema.get("required").and_then(|r| r.as_array());
+    assert!(
+        required.is_none_or(|r| !r.iter().any(|k| k == "projectId")),
+        "{schema:?}"
+    );
+    let opened = session.call("project_open", json!({})).await;
+    assert_ne!(opened.is_error, Some(true), "{opened:?}");
+    assert_eq!(structured(&opened)["openedIn"], "newWindow");
+    assert!(w.has_window(&id));
+    session.close().await;
+}
+
 /// 앱 전체로 10초에 5번 — 호출마다 새 MCP 세션이어도(`pitwall tool` 의 꼴) 여섯째는 거절이고 결과 표지가 `denied` ·
 /// `rate_limited`(CLI 종료 3), 감사 행은 `denied` 다(메인 판정 2026-11-14 — Host 전체 한도).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
