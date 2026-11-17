@@ -24,6 +24,13 @@
 //! 6. **스키마 캐시** — DDL 등급 이상의 문장이 돌았으면(실패 포함 — MySQL 은 실패한 DDL 도 암묵 커밋한다) 그 연결의 캐시를 버리고
 //!    `db.schemaChanged` 를 낸다(창의 탐색기가 새로 읽는다).
 //! 7. **감사** — 상세 칸에 문장 수 · 가장 높은 등급 · 문장 해시(`file` 이면 경로와 내용 해시). SQL 원문 · 값은 남지 않는다.
+//! 8. **취소**(메인 판정 2026-11-17) — 문장이 도는 중이면 인터럽트 · 롤백 · 닫기. 마지막 문장 뒤 **커밋하기로 정하기 전에** 관측된
+//!    취소는 롤백한다. 정한 뒤의 취소는 커밋을 끊지 않는다(인터럽트도 보내지 않는다) — 에이전트는 「취소」 를 받지만 DB 에는
+//!    커밋될 수 있고, Host 가 경고 로그를 남긴다(`crate::script::CancelOnDrop` 의 커밋 경계). 감사 · 결과에 `committed` 를 싣는 것은
+//!    이월(16-m5-plan M5-18 행 끝).
+//! 9. **연결 직전의 재확인** — 관문 · 승인 뒤 연결을 열 때 설정을 다시 풀어 대상과 표지를 판정한 것과 견준다(`DbGrant`
+//!    `check_agent_use`). 그사이 대상이 바뀌었으면 `notOpenedByUser`, 표지가 더해졌으면 `productionBlocked` · `readOnlyConnection` —
+//!    승인 해시는 판정 때의 값이라 이 틈(큰 SQL 의 분류 시간 등)을 덮지 못한다.
 //!
 //! **남는 한계**: 외부 표(postgres_fdw 등)를 거치는 쓰기는 원격 서버의 표지를 보지 않는다(결정 M5-D38 — `db_query` 와 같다). 부작용
 //! 함수 목록(`pw_db_sql::risk`)은 조회 판정용이다 — 이 툴에서는 모든 문장이 계획에 보이고 사람이 승인한다.
@@ -137,7 +144,9 @@ rpc_method! {
     /// how the server reads SQL text, and anything but queries on a read-only connection. Each statement's result is the
     /// number of rows changed, or its rows (`RETURNING`, queries — up to `maxRows`, cells cut at 4 KiB). Uses only
     /// connections the person opened in Pitwall's DB explorer during this app run (`notOpenedByUser`) and does not use a
-    /// target marked production (`productionBlocked`) unless the person set production targets to ask.
+    /// target marked production (`productionBlocked`) unless the person set production targets to ask. If you cancel a
+    /// call after its last statement ran, its commit may already have been sent: the call reports cancelled but the
+    /// change may be committed — check with `db_query` before calling again.
     pub DbToolExecuteMethod: "db.tool.execute" {
         params: Planned<DbToolExecuteParams>,
         result: DbToolExecute,
@@ -381,8 +390,15 @@ impl DbSessions {
         let cancel = QueryCancel::new(conn.interrupter(), Budget::PAGE.cancel_cleanup);
         // 실행은 연결을 쥔 태스크에서 돈다 — 호출이 버려져도(취소 · 세션 끊김) 태스크가 드라이버 호출을 버리고 롤백한 뒤 닫는다.
         let guard = CancelOnDrop::new(cancel.clone());
+        let point = guard.commit_point();
+        let (before_commit, after_commit_point) = self.test_hooks.take_commit_hooks();
         let run = {
             let (source, planned) = (source.clone(), planned.clone());
+            let (sessions, project, connection) = (
+                Arc::clone(self),
+                grant.project_id().to_owned(),
+                p.connection_id.clone(),
+            );
             tokio::spawn(async move {
                 let _tunnel = tunnel;
                 let ran = run_script(
@@ -398,7 +414,35 @@ impl DbSessions {
                 .await;
                 let ended = match &ran {
                     Ok(ran) if mode == ScriptMode::Write && ran.error.is_none() => {
-                        Some(within(Budget::PAGE.connect, "commit", conn.commit()).await)
+                        if let Some(hook) = before_commit {
+                            hook().await;
+                        }
+                        // 커밋 전에 호출이 버려졌으면(취소) 커밋하지 않는다. 정한 뒤의 취소는 커밋을 끊지 않는다.
+                        if point.begin_commit() {
+                            if let Some(hook) = after_commit_point {
+                                hook().await;
+                            }
+                            let committed =
+                                within(Budget::PAGE.connect, "commit", conn.commit()).await;
+                            if point.cancelled_after_commit() {
+                                tracing::warn!(
+                                    target: "pw_db",
+                                    project = %project,
+                                    connection = %connection,
+                                    committed = committed.is_ok(),
+                                    "db_execute was cancelled after its commit was sent; the agent was told it was \
+                                     cancelled, but the transaction {}",
+                                    if committed.is_ok() { "committed" } else { "did not commit" }
+                                );
+                            }
+                            Some(committed)
+                        } else {
+                            tracing::info!(target: "pw_db", project = %project, connection = %connection, "db_execute was cancelled before its commit; rolling back");
+                            let _ =
+                                within(Budget::PAGE.cancel_cleanup, "rollback", conn.rollback())
+                                    .await;
+                            None
+                        }
                     }
                     _ => {
                         let _ =
@@ -407,6 +451,21 @@ impl DbSessions {
                     }
                 };
                 let _ = within(Budget::PAGE.connect, "close", conn.close()).await;
+                // DDL 이상이 시작됐으면(실패 포함 — MySQL 은 실패한 DDL 도 암묵 커밋한다) 스키마 캐시를 버린다. 호출이 버려졌어도
+                // 한다 — 창의 탐색기가 새로 읽는다.
+                if let Ok(ran) = &ran {
+                    let reached = ran
+                        .error
+                        .as_ref()
+                        .map_or(planned.len(), |e| e.index as usize + 1);
+                    if planned
+                        .iter()
+                        .filter(|s| (s.index as usize) < reached)
+                        .any(|s| s.grade >= RiskGrade::Ddl)
+                    {
+                        sessions.schema_changed(&project, &connection);
+                    }
+                }
                 (ran, ended)
             })
         };
@@ -414,23 +473,6 @@ impl DbSessions {
             .await
             .map_err(|e| with_audit(RpcError::internal(e.to_string())))?;
         guard.disarm();
-        // DDL 이상이 시작됐으면(실패 포함) 스키마 캐시를 버린다 — 창의 탐색기가 새로 읽는다.
-        let touched = match &ran {
-            Ok(ran) => {
-                let reached = ran
-                    .error
-                    .as_ref()
-                    .map_or(planned.len(), |e| e.index as usize + 1);
-                planned
-                    .iter()
-                    .filter(|s| (s.index as usize) < reached)
-                    .any(|s| s.grade >= RiskGrade::Ddl)
-            }
-            Err(_) => false,
-        };
-        if touched {
-            self.schema_changed(grant.project_id(), &p.connection_id);
-        }
         let ran = ran.map_err(|e| with_audit(db_error(e)))?;
         if let Some(Err(e)) = committed {
             return Err(with_audit(db_error(e)));

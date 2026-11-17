@@ -35,6 +35,7 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use pw_core::registry::Registry;
@@ -451,23 +452,83 @@ fn result_overhead(columns: &[ColumnMeta], index: u32, grade: RiskGrade) -> usiz
 
 /// 핸들러 future 가 버려지면(호출 취소 · 세션 끊김) 실행을 멈춘다 — 그 연결의 인터럽트를 보낸다. 실행 태스크는 드라이버 호출을
 /// 버리고 롤백한 뒤 연결을 닫는다. 끝까지 기다린 호출은 [`CancelOnDrop::disarm`] 한다.
-pub(crate) struct CancelOnDrop(Option<QueryCancel>);
+///
+/// **커밋의 경계**(`db_execute` — 16-m5-plan M5-18, 메인 판정 2026-11-17): 실행 태스크는 커밋하기 전에 [`CommitPoint::begin_commit`]
+/// 을 지난다. 그 전에 버려졌으면(취소가 관측됐으면) 커밋하지 않고 롤백한다. 지난 뒤에 버려지면 인터럽트를 보내지 않는다 — 커밋을
+/// 취소로 끊지 않는다. 그때 에이전트는 「취소」 를 받지만 DB 에는 커밋된다(태스크가 경고 로그를 남긴다 — 05-mcp.md 의 한계).
+pub(crate) struct CancelOnDrop {
+    cancel: Option<QueryCancel>,
+    phase: Arc<Mutex<CallPhase>>,
+}
+
+/// 호출과 실행 태스크가 함께 보는 단계.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CallPhase {
+    Running,
+    /// 커밋을 정하기 전에 호출이 버려졌다.
+    Cancelled,
+    /// 커밋하기로 정했다(커밋을 보낸다).
+    Committing,
+    /// 커밋하기로 정한 뒤 호출이 버려졌다.
+    CancelledAfterCommit,
+}
+
+/// 실행 태스크 쪽의 커밋 경계.
+pub(crate) struct CommitPoint(Arc<Mutex<CallPhase>>);
+
+impl CommitPoint {
+    /// 커밋해도 되면 `true` — 그 뒤의 취소는 커밋을 끊지 않는다. 호출이 이미 버려졌으면 `false`(롤백한다).
+    pub fn begin_commit(&self) -> bool {
+        let mut phase = crate::session::lock(&self.0);
+        if *phase == CallPhase::Running {
+            *phase = CallPhase::Committing;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 커밋하기로 정한 뒤 호출이 버려졌다.
+    pub fn cancelled_after_commit(&self) -> bool {
+        *crate::session::lock(&self.0) == CallPhase::CancelledAfterCommit
+    }
+}
 
 impl CancelOnDrop {
     pub fn new(cancel: QueryCancel) -> Self {
-        Self(Some(cancel))
+        Self {
+            cancel: Some(cancel),
+            phase: Arc::new(Mutex::new(CallPhase::Running)),
+        }
+    }
+
+    /// 실행 태스크에 넘길 커밋 경계.
+    pub fn commit_point(&self) -> CommitPoint {
+        CommitPoint(Arc::clone(&self.phase))
     }
 
     pub fn disarm(mut self) {
-        self.0 = None;
+        self.cancel = None;
     }
 }
 
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {
-        let Some(cancel) = self.0.take() else {
+        let Some(cancel) = self.cancel.take() else {
             return;
         };
+        {
+            let mut phase = crate::session::lock(&self.phase);
+            match *phase {
+                CallPhase::Running => *phase = CallPhase::Cancelled,
+                CallPhase::Committing => {
+                    *phase = CallPhase::CancelledAfterCommit;
+                    tracing::info!(target: "pw_db", "agent db call dropped after its commit point; the commit goes on");
+                    return;
+                }
+                CallPhase::Cancelled | CallPhase::CancelledAfterCommit => return,
+            }
+        }
         tracing::info!(target: "pw_db", "agent db call dropped; interrupting its statement");
         match tokio::runtime::Handle::try_current() {
             Ok(runtime) => {

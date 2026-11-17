@@ -24,7 +24,7 @@ use pw_rpc::{Router, RpcError, rpc_method};
 use serde::{Deserialize, Serialize};
 
 use crate::config::DbConnectionConfig;
-use crate::gate::{DbGrant, DbTarget, db_grant};
+use crate::gate::{DbGrant, DbMarks, DbTarget, db_grant};
 use crate::session::{DbSessions, DbTunnelLease, blocking, db_error};
 use crate::trust::ResolvedConnection;
 
@@ -83,13 +83,17 @@ pub async fn connect_with(
         worktree.map(str::to_owned),
         connection_id.to_owned(),
     );
+    sessions.test_hooks.before_resolve().await;
     let resolved = blocking(move || {
         let trusted = c.trust_gate(&project, wt.as_deref())?;
         c.resolve(&trusted, &id)
     })
     .await?;
     let target = DbTarget::of_resolved(&resolved);
-    grant.check_agent_use(worktree, Some(connection_id), &target)?;
+    // 관문(과 승인) 뒤 · 여기 사이에 설정이 바뀌었으면 열지 않는다 — 다시 푼 대상과 표지를 판정한 것과 견준다(`resolve` 가 설정을
+    // 읽어 올리며 표지를 기억에 더했다).
+    let marks = DbMarks::of(&resolved.config).tighten(sessions.connections.marks.get(&target));
+    grant.check_agent_use(worktree, Some(connection_id), &target, marks)?;
     let config = resolved.config.clone();
     let (info, connection, server, tunnel) =
         open_resolved(sessions, grant, resolved, choice).await?;
@@ -252,8 +256,9 @@ impl DbSessions {
         })
         .await?;
         let target = DbTarget::of_resolved(&resolved);
+        let marks = DbMarks::of(&resolved.config).tighten(self.connections.marks.get(&target));
         // 에이전트의 증거는 저장한 연결(초안이 아닌 것)에만 쓰인다 — 초안이면 연결 id 가 없는 것으로 본다.
-        grant.check_agent_use(worktree.as_deref(), saved.as_deref(), &target)?;
+        grant.check_agent_use(worktree.as_deref(), saved.as_deref(), &target, marks)?;
         let (info, connection, server, tunnel) =
             open_resolved(self, grant, resolved, Choice::default()).await?;
         if let Some(id) = &saved {

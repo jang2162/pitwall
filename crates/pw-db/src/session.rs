@@ -889,7 +889,56 @@ pub struct DbSessions {
     pub(crate) edit_wait_ms: AtomicU64,
     /// 「사람이 연 연결」(결정 M5-D2 — `crate::gate` 의 「에이전트의 입구」). 메모리에만 있다 — 앱을 끄면 사라진다.
     pub(crate) opened: crate::gate::OpenedMemory,
+    /// 시험이 실행 길의 정해진 자리에 끼워 넣는 동작([`TestHooks`]). 앱에서는 늘 비어 있다.
+    #[doc(hidden)]
+    pub test_hooks: TestHooks,
     next_id: AtomicU64,
+}
+
+/// 끼워 넣는 동작 하나 — 그 자리에서 한 번 기다린다.
+pub type TestHook =
+    Box<dyn FnOnce() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
+
+/// 시험이 경쟁의 틈을 결정적으로 만들려고 실행 길의 정해진 자리에 끼워 넣는 동작(16-m5-plan M5-18 — 승인 뒤 · 연결 전의 설정
+/// 바꿔 끼우기, 커밋 앞뒤의 취소). 자리마다 한 번만 쓰이고 비워진다. 앱은 설정하지 않는다 — 비어 있으면 그 자리는 잠금 하나를
+/// 지날 뿐이다.
+#[doc(hidden)]
+#[derive(Default)]
+pub struct TestHooks {
+    before_resolve: Mutex<Option<TestHook>>,
+    before_commit: Mutex<Option<TestHook>>,
+    after_commit_point: Mutex<Option<TestHook>>,
+}
+
+impl TestHooks {
+    /// `crate::connection::connect_with` 가 저장한 연결의 설정을 다시 풀기 직전(관문 · 승인 뒤).
+    pub fn set_before_resolve(&self, hook: TestHook) {
+        *lock(&self.before_resolve) = Some(hook);
+    }
+
+    /// `db_execute` 의 실행 태스크가 모든 문장을 마치고 커밋할지 정하기 직전.
+    pub fn set_before_commit(&self, hook: TestHook) {
+        *lock(&self.before_commit) = Some(hook);
+    }
+
+    /// `db_execute` 의 실행 태스크가 커밋하기로 정한 뒤(그 뒤의 취소는 커밋을 끊지 않는다) 커밋을 보내기 직전.
+    pub fn set_after_commit_point(&self, hook: TestHook) {
+        *lock(&self.after_commit_point) = Some(hook);
+    }
+
+    pub(crate) async fn before_resolve(&self) {
+        let hook = lock(&self.before_resolve).take();
+        if let Some(hook) = hook {
+            hook().await;
+        }
+    }
+
+    pub(crate) fn take_commit_hooks(&self) -> (Option<TestHook>, Option<TestHook>) {
+        (
+            lock(&self.before_commit).take(),
+            lock(&self.after_commit_point).take(),
+        )
+    }
 }
 
 impl DbSessions {
@@ -907,6 +956,7 @@ impl DbSessions {
             schema: crate::schema::SchemaState::default(),
             edit_wait_ms: AtomicU64::new(0),
             opened: crate::gate::OpenedMemory::default(),
+            test_hooks: TestHooks::default(),
             next_id: AtomicU64::new(1),
         }
     }

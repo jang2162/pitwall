@@ -347,7 +347,12 @@ fn an_agent_grant_is_used_only_for_the_judged_connection() {
     };
     assert!(grant.is_agent());
     grant
-        .check_agent_use(Some("/wt"), Some("dev"), &target("localhost"))
+        .check_agent_use(
+            Some("/wt"),
+            Some("dev"),
+            &target("localhost"),
+            agent::DbMarks::default(),
+        )
         .unwrap();
     for (worktree, id, host) in [
         (Some("/wt"), Some("dev"), "elsewhere"),
@@ -356,14 +361,19 @@ fn an_agent_grant_is_used_only_for_the_judged_connection() {
         (Some("/wt"), None, "localhost"),
     ] {
         let e = grant
-            .check_agent_use(worktree, id, &target(host))
+            .check_agent_use(worktree, id, &target(host), agent::DbMarks::default())
             .unwrap_err();
         assert_eq!(e.data.unwrap()["reason"], "notOpenedByUser");
     }
     let window = db_grant(&ConnectionScope::Project("p".into()), "p").unwrap();
     assert!(!window.is_agent());
     window
-        .check_agent_use(None, Some("any"), &target("elsewhere"))
+        .check_agent_use(
+            None,
+            Some("any"),
+            &target("elsewhere"),
+            agent::DbMarks::default(),
+        )
         .unwrap();
 }
 
@@ -381,6 +391,10 @@ fn a_production_ask_grant_opens_nothing_until_the_call_is_approved() {
         tunnel: None,
         file: None,
     };
+    let prod_marks = agent::DbMarks {
+        production: true,
+        read_only: false,
+    };
     let mut grant = DbGrant {
         project_id: "p".into(),
         agent: Some(Box::new(agent::AgentBinding {
@@ -397,7 +411,7 @@ fn a_production_ask_grant_opens_nothing_until_the_call_is_approved() {
     };
     assert!(grant.needs_approval());
     let e = grant
-        .check_agent_use(None, Some("prod"), &target)
+        .check_agent_use(None, Some("prod"), &target, prod_marks)
         .unwrap_err();
     assert_eq!(e.code, pw_rpc::code::INTERNAL_ERROR, "{e:?}");
     let plan = ToolPlan::builder("db.tool.query", pw_rpc::Tier::Read, &json!({"x": 1})).build();
@@ -410,7 +424,52 @@ fn a_production_ask_grant_opens_nothing_until_the_call_is_approved() {
     .unwrap();
     grant.approve(&approved);
     assert!(!grant.needs_approval());
-    grant.check_agent_use(None, Some("prod"), &target).unwrap();
+    grant
+        .check_agent_use(None, Some("prod"), &target, prod_marks)
+        .unwrap();
+}
+
+/// 판정 뒤 그 대상에 표지가 더해졌으면(승인 뒤 · 연결 전에 설정을 바꿔 끼움) 연결을 여는 자리가 열지 않는다 — 프로덕션이면
+/// `productionBlocked`, read-only 면 `readOnlyConnection`. 판정 때와 같거나 느슨한 표지는 지난다(16-m5-plan M5-18).
+#[test]
+fn marks_added_after_the_gate_judged_refuse_the_open() {
+    let target = agent::DbTarget {
+        driver: pw_db_types::DriverKind::Postgres,
+        host: Some("db".into()),
+        port: Some(5432),
+        database: Some("app".into()),
+        user: None,
+        tunnel: None,
+        file: None,
+    };
+    let grant = DbGrant {
+        project_id: "p".into(),
+        agent: Some(Box::new(agent::AgentBinding {
+            connection_id: "dev".into(),
+            name: "Dev".into(),
+            worktree: None,
+            target: target.clone(),
+            marks: agent::DbMarks::default(),
+            approval: agent::AgentApproval::NotNeeded,
+        })),
+    };
+    let marks = |production, read_only| agent::DbMarks {
+        production,
+        read_only,
+    };
+    grant
+        .check_agent_use(None, Some("dev"), &target, marks(false, false))
+        .unwrap();
+    for (m, why) in [
+        (marks(true, false), "productionBlocked"),
+        (marks(false, true), "readOnlyConnection"),
+        (marks(true, true), "productionBlocked"),
+    ] {
+        let e = grant
+            .check_agent_use(None, Some("dev"), &target, m)
+            .unwrap_err();
+        assert_eq!(e.data.unwrap()["reason"], why, "{m:?}");
+    }
 }
 
 /// 대상의 호스트는 소문자로, 포트는 드라이버 기본으로 맞춘다 — 표지를 대소문자 · 적지 않은 포트로 비껴가지 못한다. TLS 설정은

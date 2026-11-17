@@ -1027,7 +1027,8 @@ impl DbSessions {
         })
         .await?;
         // 에이전트의 증거는 관문이 판정한 연결 · 대상에만 — 캐시에 든 것도 그 밖에는 내주지 않는다.
-        grant.check_agent_use(worktree, Some(connection_id), &target)?;
+        let marks = crate::gate::DbMarks::of(&config).tighten(self.connections.marks.get(&target));
+        grant.check_agent_use(worktree, Some(connection_id), &target, marks)?;
         let driver = self.drivers.get(config.driver.id()).ok_or_else(|| {
             db_error(DbError::new(
                 DbErrorKind::Unsupported,

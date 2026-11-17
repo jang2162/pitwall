@@ -276,6 +276,21 @@ pub fn production_blocked(project_id: &str, connection_id: &str) -> RpcError {
     }))
 }
 
+/// `PERMISSION_DENIED`(`data.reason = "readOnlyConnection"`): 판정 뒤 그 대상에 read-only 표지가 더해졌다.
+fn marked_read_only(project_id: &str, connection_id: &str) -> RpcError {
+    RpcError::new(
+        rpc_code::PERMISSION_DENIED,
+        format!(
+            "db connection `{connection_id}` was marked read-only after this call was checked; nothing ran — call again"
+        ),
+    )
+    .with_data(json!({
+        "reason": "readOnlyConnection",
+        "projectId": project_id,
+        "connectionId": connection_id,
+    }))
+}
+
 /// 에이전트의 DB 툴 호출이 읽는 연결 설정: **그 저장소의 메인 체크아웃**의 것(표지를 더하려고 — 결정 M5-D37)과 호출의 워크트리의
 /// 것. 메인 체크아웃은 그 프로젝트의 주 루트이고, 연결 워크트리를 따로 등록한 프로젝트면 신뢰가 따르는 메인 저장소 프로젝트
 /// (`Registry::main_repository_of`)의 주 루트도 읽는다. 돌려주는 것은 호출의 워크트리의 것이다. 메인 체크아웃의 설정을 읽지 못하면
@@ -439,12 +454,16 @@ impl DbGrant {
     }
 
     /// 연결을 여는 자리 · 캐시를 보는 자리에서: 에이전트의 증거면 그 연결 id · 워크트리 · 지금 설정의 대상이 판정한 것과 같아야 한다.
-    /// 아니면 `notOpenedByUser`(그사이 설정이 바뀌었다). 창의 증거는 늘 지난다.
+    /// 아니면 `notOpenedByUser`(그사이 설정이 바뀌었다). `marks` 는 그 자리에서 다시 읽은 설정의 표지에 그 대상의 기억을 조인 것이다 —
+    /// 판정(과 승인 계획) 뒤에 표지가 더해졌으면 열지 않는다(프로덕션이면 `productionBlocked`, read-only 면 `readOnlyConnection`).
+    /// 승인 뒤 · 연결 전에 설정을 바꿔 끼우는 것을 막는 자리다(16-m5-plan M5-18 — 승인 해시는 판정 때의 값이라 이 틈을 덮지 못한다).
+    /// 창의 증거는 늘 지난다.
     pub(crate) fn check_agent_use(
         &self,
         worktree: Option<&str>,
         connection_id: Option<&str>,
         target: &DbTarget,
+        marks: DbMarks,
     ) -> Result<(), RpcError> {
         let Some(binding) = self.agent.as_deref() else {
             return Ok(());
@@ -463,6 +482,14 @@ impl DbGrant {
         {
             tracing::info!(target: "pw_db", project = %self.project_id, connection = id, "agent db access refused: the connection is not the one the gate judged");
             return Err(not_opened_by_user(&self.project_id, id));
+        }
+        if marks.production && !binding.marks.production {
+            tracing::info!(target: "pw_db", project = %self.project_id, connection = id, "agent db access refused: marked production after the gate judged it");
+            return Err(production_blocked(&self.project_id, id));
+        }
+        if marks.read_only && !binding.marks.read_only {
+            tracing::info!(target: "pw_db", project = %self.project_id, connection = id, "agent db access refused: marked read-only after the gate judged it");
+            return Err(marked_read_only(&self.project_id, id));
         }
         Ok(())
     }

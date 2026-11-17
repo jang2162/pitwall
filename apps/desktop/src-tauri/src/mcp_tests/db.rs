@@ -472,3 +472,81 @@ async fn db_execute_asks_every_time_and_runs_one_transaction() {
     );
     session.close().await;
 }
+
+/// `db_execute` 의 커밋이 실패하면(16-m5-plan M5-18 리뷰 4) 에이전트가 받는 결과도 감사 행도 오류다 — `committed` 로 나가지 않는다.
+/// 실 SQLite: 다른 연결이 읽기 트랜잭션으로 공유 잠금을 쥐고 있으면 쓰기는 되지만 `COMMIT` 이 배타 잠금을 얻지 못해 `busy`
+/// (드라이버의 잠금 기다림 5 s 뒤)로 끝난다. 그 쓰기는 남지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_db_execute_whose_commit_fails_is_an_error_in_the_result_and_the_audit_log() {
+    use pw_mcp::approval::{Connection, McpApprovalAnswer};
+    let host = ToolHost::app();
+    let alpha = host.project("alpha");
+    host.host
+        .registry()
+        .unwrap()
+        .set_trust(&alpha, true)
+        .unwrap();
+    let root = host.base.join("work").join("alpha");
+    let file = root.join("app.db");
+    {
+        let setup = rusqlite::Connection::open(&file).unwrap();
+        setup
+            .execute_batch("CREATE TABLE t (v text); INSERT INTO t VALUES ('a');")
+            .unwrap();
+    }
+    std::fs::create_dir_all(root.join(".pitwall/db")).unwrap();
+    std::fs::write(
+        root.join(".pitwall/db/lite.toml"),
+        "schema = 1\nname = \"lite\"\ndriver = \"sqlite\"\npath = \"app.db\"\n",
+    )
+    .unwrap();
+    host.global_settings("[mcp.tools]\ndb_execute = true\n");
+    host.window_call(
+        &alpha,
+        "db.schema.objects",
+        serde_json::json!({ "projectId": alpha, "connectionId": "lite", "kind": "table", "limit": 10 }),
+    )
+    .await
+    .unwrap();
+    let session = host.session(SessionRequest::default()).await;
+    let mut window =
+        host.services
+            .sessions
+            .approvals()
+            .listen(Some(&alpha), None, Connection::named("window"));
+    // 공유 잠금을 쥔 읽기 트랜잭션(이 시험이 끝날 때까지).
+    let reader = rusqlite::Connection::open(&file).unwrap();
+    reader.execute_batch("BEGIN").unwrap();
+    let _: i64 = reader
+        .query_row("SELECT count(*) FROM t", [], |r| r.get(0))
+        .unwrap();
+    let (ran, _) = tokio::join!(
+        session.call(
+            "db_execute",
+            serde_json::json!({ "projectId": alpha, "connectionId": "lite", "sql": "INSERT INTO t VALUES ('b')" }),
+        ),
+        window_answers(&host, &mut window, &alpha, McpApprovalAnswer::Once)
+    );
+    assert_eq!(ran.is_error, Some(true), "{ran:?}");
+    assert!(
+        !text(&ran).contains("committed"),
+        "a failed commit is not reported as committed: {}",
+        text(&ran)
+    );
+    reader.execute_batch("COMMIT").unwrap();
+    let count: i64 = reader
+        .query_row("SELECT count(*) FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1, "the write did not stay");
+    let rows = host.audit_rows(1);
+    let row = rows.iter().find(|r| r.tool == "db_execute").unwrap();
+    assert_eq!(row.outcome, "error", "{row:?}");
+    assert!(
+        row.detail
+            .as_deref()
+            .unwrap_or_default()
+            .contains("statements=1 grade=write"),
+        "{row:?}"
+    );
+    session.close().await;
+}

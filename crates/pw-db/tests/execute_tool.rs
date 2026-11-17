@@ -75,6 +75,8 @@ struct Env {
     my: FakeDriver,
     kv: FakeKvDriver,
     hook: Hook,
+    /// 시험이 실행 길에 끼워 넣는 자리(`DbSessions::test_hooks`).
+    sessions: Arc<DbSessions>,
 }
 
 const DEV: &str =
@@ -106,11 +108,11 @@ fn env() -> Env {
     drivers
         .register(Arc::new(pw_db_driver_sqlite::SqliteDriver::new()))
         .unwrap();
+    let mut held = None;
     let f = Fixture::build(true, |router, connections| {
-        pw_db::register(
-            router,
-            Arc::new(DbSessions::new(Arc::clone(connections), drivers)),
-        );
+        let sessions = Arc::new(DbSessions::new(Arc::clone(connections), drivers));
+        held = Some(Arc::clone(&sessions));
+        pw_db::register(router, sessions);
     });
     f.write_db("dev.toml", DEV);
     Env {
@@ -119,7 +121,33 @@ fn env() -> Env {
         my,
         kv,
         hook,
+        sessions: held.unwrap(),
     }
+}
+
+/// 끼워 넣는 자리에서 「닿았다」 를 알리고 「가라」 를 기다리는 동작.
+fn gate_hook() -> (
+    pw_db::session::TestHook,
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Sender<()>,
+) {
+    let (reached_tx, reached_rx) = tokio::sync::oneshot::channel();
+    let (go_tx, go_rx) = tokio::sync::oneshot::channel::<()>();
+    let hook: pw_db::session::TestHook = Box::new(move || {
+        Box::pin(async move {
+            let _ = reached_tx.send(());
+            let _ = go_rx.await;
+        })
+    });
+    (hook, reached_rx, go_tx)
+}
+
+/// 시험의 동작 하나를 그 자리에서 돌리는 끼워 넣기.
+fn run_hook(f: impl FnOnce() + Send + 'static) -> pw_db::session::TestHook {
+    Box::new(move || {
+        f();
+        Box::pin(async {})
+    })
 }
 
 fn reason(e: &RpcError) -> Option<&str> {
@@ -1097,4 +1125,289 @@ async fn sqlite_inserts_and_rolls_back_for_real() {
         json!({ "int": 2 }),
         "{count}"
     );
+}
+
+// --- 리뷰 회차(M5-18 리뷰 1 ~ 5) -----------------------------------------------------------------------------------------
+
+/// 승인 뒤 · 연결 전에 연결 설정의 대상을 바꿔 끼우면 돌지 않는다 — 연결을 여는 자리가 다시 푼 대상을 판정한 것과 견준다(그 틈은
+/// 승인 해시가 덮지 못한다: 해시는 판정 때의 값이다). 에이전트는 큰 SQL(분류 · 계획에 시간이 드는 글)로 그 틈을 늘리고 그동안
+/// 자기 워크트리의 연결 설정을 고칠 수 있다 — 시험은 그 틈을 끼워 넣는 자리로 결정적으로 만든다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_target_swapped_between_approval_and_connect_does_not_run() {
+    let e = env();
+    e.human_opens("dev").await;
+    let mut agent = e.agent();
+    let big: String = (0..2_000)
+        .map(|i| format!("UPDATE users SET a = {i} WHERE id = {i};\n"))
+        .collect();
+    let input = json!({ "sql": big });
+    let required = asked(&e.execute(&mut agent, "dev", input.clone()).await);
+    let connects = e.connects();
+    let db = e.f.db_file("dev.toml");
+    e.sessions.test_hooks.set_before_resolve(run_hook(move || {
+        let text = std::fs::read_to_string(&db).unwrap();
+        std::fs::write(&db, text.replace("localhost", "evil.example")).unwrap();
+    }));
+    refused(
+        &e.approved(
+            &mut agent,
+            "db.tool.execute",
+            "dev",
+            input,
+            &required.plan.hash,
+        )
+        .await,
+        "notOpenedByUser",
+    );
+    assert_eq!(e.connects(), connects, "no connection at all");
+    assert!(e.executed().is_empty(), "{:?}", e.executed());
+    assert!(
+        e.pg.connect_specs()
+            .iter()
+            .all(|s| !format!("{:?}", s.target).contains("evil")),
+        "nothing went to the swapped-in target"
+    );
+}
+
+/// 승인 뒤 · 연결 전에 표지를 더해도 돌지 않는다 — 프로덕션(기본 `block`)이면 `productionBlocked`, read-only 면
+/// `readOnlyConnection`. 표지를 더하는 쪽은 곧바로 따른다(결정 M5-D37).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn marks_added_between_approval_and_connect_stop_the_call() {
+    for (mark, why) in [
+        ("production = true", "productionBlocked"),
+        ("read_only = true", "readOnlyConnection"),
+    ] {
+        let e = env();
+        e.human_opens("dev").await;
+        let mut agent = e.agent();
+        let input = json!({ "sql": "UPDATE users SET a = 1 WHERE id = 1" });
+        let required = asked(&e.execute(&mut agent, "dev", input.clone()).await);
+        let connects = e.connects();
+        let db = e.f.db_file("dev.toml");
+        let line = format!("{mark}\n");
+        e.sessions.test_hooks.set_before_resolve(run_hook(move || {
+            let text = std::fs::read_to_string(&db).unwrap();
+            std::fs::write(&db, format!("{text}{line}")).unwrap();
+        }));
+        refused(
+            &e.approved(
+                &mut agent,
+                "db.tool.execute",
+                "dev",
+                input,
+                &required.plan.hash,
+            )
+            .await,
+            why,
+        );
+        assert_eq!(e.connects(), connects, "{mark}");
+        assert!(e.executed().is_empty(), "{mark}: {:?}", e.executed());
+    }
+}
+
+/// 분류기가 못 읽은 읽기(MySQL — 뒤의 읽기에서만 보이는 `INTO @변수`)가 든 글은 묻지 않고 거절한다 — 그 문장은 계획에 보일 등급과
+/// 서버가 하는 일이 갈린다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_statement_with_an_unread_reading_is_refused_without_asking() {
+    let e = env();
+    e.f.write_db("my.toml", MY);
+    e.human_opens("my").await;
+    let connects = e.my.count(&FakeCall::Connect);
+    let mut agent = e.agent();
+    let err = refused(
+        &e.execute(
+            &mut agent,
+            "my",
+            json!({ "sql": r"UPDATE t SET a = 'x\' INTO @v -- ' WHERE id = 1" }),
+        )
+        .await,
+        "unclassifiedStatement",
+    );
+    assert_eq!(err.data.unwrap()["statements"][0]["index"], 0);
+    assert_eq!(e.my.count(&FakeCall::Connect), connects);
+}
+
+/// 중첩이 분류기의 깊이 상한을 넘는 문장(`tooDeep`)은 묻지 않고 거절한다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_statement_nested_too_deep_is_refused_without_asking() {
+    let e = env();
+    e.human_opens("dev").await;
+    let connects = e.connects();
+    let mut agent = e.agent();
+    let deep = format!(
+        "UPDATE users SET a = 1 WHERE id = 1;\nSELECT {}1",
+        "NOT ".repeat(1_000)
+    );
+    let err = refused(
+        &e.execute(&mut agent, "dev", json!({ "sql": deep })).await,
+        "unclassifiedStatement",
+    );
+    let data = err.data.unwrap();
+    assert_eq!(data["statements"][0]["index"], 1);
+    assert_eq!(data["statements"][0]["reasons"], json!(["tooDeep"]));
+    assert_eq!(e.connects(), connects);
+}
+
+/// 세션의 글 읽기를 바꾸는 문장(MySQL `sql_mode` 의 `ANSI_QUOTES`)이 있으면 묻지 않고 거절한다 — 그 뒤 문장을 분류기와 서버가
+/// 다르게 읽어, 계획에 보인 등급과 도는 것이 갈린다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_statement_that_changes_how_sql_is_read_is_refused_without_asking() {
+    let e = env();
+    e.f.write_db("my.toml", MY);
+    e.human_opens("my").await;
+    let connects = e.my.count(&FakeCall::Connect);
+    let mut agent = e.agent();
+    let err = refused(
+        &e.execute(
+            &mut agent,
+            "my",
+            json!({ "sql": "SET sql_mode = 'ANSI_QUOTES';\nUPDATE t SET a = 1 WHERE id = 1" }),
+        )
+        .await,
+        "changesSqlReading",
+    );
+    assert_eq!(err.data.unwrap()["statements"][0]["index"], 0);
+    assert_eq!(e.my.count(&FakeCall::Connect), connects);
+}
+
+/// MySQL 의 `CALL`(프로시저 안에서 커밋할 수 있다 — `may_end`)도 계획에 「되돌릴 수 없다」 를 보이고, 그 문장이 트랜잭션을 끝내면
+/// 뒤 문장을 위해 다시 연다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_call_that_may_commit_is_irreversible_and_the_rest_runs_in_a_new_transaction() {
+    let e = env();
+    e.f.write_db("my.toml", MY);
+    e.my.respond(
+        "CALL p",
+        FakeResponse::write(0).ending(FakeEnding::ImplicitCommit),
+    );
+    e.my.respond("INSERT INTO t", FakeResponse::write(1));
+    e.human_opens("my").await;
+    let tool = e.my.count(&FakeCall::Connect) as u32;
+    let mut agent = e.agent();
+    let sql = "INSERT INTO t VALUES (1);\nCALL p();\nINSERT INTO t VALUES (2)";
+    let (required, ran) = e
+        .ask_and_run(&mut agent, "db.tool.execute", "my", json!({ "sql": sql }))
+        .await;
+    assert!(sql_of(&required).3, "irreversible");
+    let out = ran.unwrap();
+    assert_eq!(out["irreversible"], true);
+    assert_eq!(out["transaction"], "committed");
+    let begins =
+        e.my.calls_of(tool)
+            .into_iter()
+            .filter(|c| matches!(c, FakeCall::Begin { read_only: false }))
+            .count();
+    assert_eq!(begins, 2);
+}
+
+/// 커밋이 실패하면 결과는 오류다(`committed` 가 아니다) — DB 오류 그대로와 감사 상세를 싣는다. 쓰기는 남지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_commit_is_an_error_not_a_commit() {
+    let e = env();
+    e.pg.fail_commit(Some(
+        DbError::new(
+            DbErrorKind::Server,
+            "insert or update violates a deferred foreign key constraint",
+        )
+        .with_code("23503"),
+    ));
+    e.human_opens("dev").await;
+    let mut agent = e.agent();
+    let (_, ran) = e
+        .ask_and_run(
+            &mut agent,
+            "db.tool.execute",
+            "dev",
+            json!({ "sql": "INSERT INTO child VALUES (1, 99)" }),
+        )
+        .await;
+    let err = ran.expect_err("a failed commit is an error");
+    assert_eq!(err.code, pw_db::gate::code::DB_ERROR, "{err:?}");
+    let data = err.data.unwrap();
+    assert_eq!(data["error"]["code"], "23503", "{data}");
+    assert!(
+        data["audit"]
+            .as_str()
+            .unwrap()
+            .starts_with("statements=1 grade=write"),
+        "{data}"
+    );
+    assert_eq!(e.pg.committed(), Vec::<String>::new());
+}
+
+/// 끼워 넣는 자리에서 호출을 취소하고 그 응답(취소)을 받은 뒤 실행 태스크를 보낸다. 태스크가 연결을 닫을 때까지 기다린다.
+async fn cancel_at(
+    e: &Env,
+    agent: &mut Conn,
+    input: Value,
+    hash: &str,
+    at_commit_point: bool,
+    tool: u32,
+) {
+    let (hook, reached, go) = gate_hook();
+    if at_commit_point {
+        e.sessions.test_hooks.set_after_commit_point(hook);
+    } else {
+        e.sessions.test_hooks.set_before_commit(hook);
+    }
+    let mut params = json!({ "projectId": e.f.id, "connectionId": "dev" });
+    params
+        .as_object_mut()
+        .unwrap()
+        .extend(input.as_object().unwrap().clone());
+    params[APPROVAL_KEY] = json!({ "hash": hash });
+    agent.session.handle_value(json!({
+        "jsonrpc": "2.0", "id": 900, "method": "db.tool.execute", "params": params,
+    }));
+    tokio::time::timeout(Duration::from_secs(10), reached)
+        .await
+        .expect("the run reached the hook")
+        .unwrap();
+    agent.session.handle_value(json!({
+        "jsonrpc": "2.0", "method": "request.cancel", "params": { "id": 900 },
+    }));
+    // 취소 응답은 Host 가 핸들러를 버린 뒤에 온다.
+    let answer = agent.response(900).await;
+    assert_eq!(answer.expect_err("cancelled").code, pw_rpc::code::CANCELLED);
+    go.send(()).unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !e.pg.calls_of(tool).contains(&FakeCall::Close) {
+        assert!(tokio::time::Instant::now() < deadline, "{:?}", e.pg.calls());
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// 마지막 문장 뒤 · 커밋 전에 관측된 취소는 롤백한다 — 에이전트가 「취소」 를 받은 호출의 쓰기는 남지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancel_seen_before_the_commit_rolls_back() {
+    let e = env();
+    e.pg.respond("UPDATE users", FakeResponse::write(1));
+    e.human_opens("dev").await;
+    let mut agent = e.agent();
+    let input = json!({ "sql": "UPDATE users SET a = 1 WHERE id = 1" });
+    let required = asked(&e.execute(&mut agent, "dev", input.clone()).await);
+    let tool = e.connects() as u32;
+    cancel_at(&e, &mut agent, input, &required.plan.hash, false, tool).await;
+    let calls = e.pg.calls_of(tool);
+    assert!(calls.contains(&FakeCall::Rollback), "{calls:?}");
+    assert!(!calls.contains(&FakeCall::Commit), "{calls:?}");
+    assert_eq!(e.pg.committed(), Vec::<String>::new());
+}
+
+/// 커밋하기로 정한 뒤의 취소는 커밋을 끊지 않는다 — 인터럽트도 보내지 않는다. 에이전트는 「취소」 를 받지만 DB 에는 커밋된다
+/// (05-mcp.md 의 한계 — 다시 부르기 전에 `db_query` 로 확인한다. Host 는 경고 로그를 남긴다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancel_after_the_commit_point_does_not_stop_the_commit() {
+    let e = env();
+    e.pg.respond("UPDATE users", FakeResponse::write(1));
+    e.human_opens("dev").await;
+    let mut agent = e.agent();
+    let input = json!({ "sql": "UPDATE users SET a = 1 WHERE id = 1" });
+    let required = asked(&e.execute(&mut agent, "dev", input.clone()).await);
+    let tool = e.connects() as u32;
+    cancel_at(&e, &mut agent, input, &required.plan.hash, true, tool).await;
+    let calls = e.pg.calls_of(tool);
+    assert!(calls.contains(&FakeCall::Commit), "{calls:?}");
+    assert!(!calls.contains(&FakeCall::Interrupt), "{calls:?}");
+    assert_eq!(e.pg.committed(), ["UPDATE users SET a = 1 WHERE id = 1"]);
 }
