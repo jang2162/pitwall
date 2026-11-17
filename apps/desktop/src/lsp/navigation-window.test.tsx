@@ -827,8 +827,15 @@ it("does not ask git for the history of an outside source tab (review L6)", asyn
   const before = host.calls.length;
   await act(async () => void registry.run("git.showFileHistory"));
   await settle();
-  // 파일이 아니다 — 「히스토리를 볼 파일이 없다」 로 끝나고 가짜 경로(`lsp:outside:…`)로 git 에 묻지 않는다.
-  expect(host.calls.slice(before).map((c) => c.method)).toEqual([]);
+  // 파일이 아니다 — 「히스토리를 볼 파일이 없다」 로 끝나고 가짜 경로(`lsp:outside:…`)로 git 에 묻지 않는다. git 의 물음만 본다 —
+  // 메인 탭의 구문 동기화는 이 가짜 Host 에 없는 `syntax.open` 을 물러섰다 다시 열어(editor/doc-sync.ts), 부하로 시간이 늘면
+  // 그 재시도가 이 사이에 들어온다.
+  expect(
+    host.calls
+      .slice(before)
+      .map((c) => c.method)
+      .filter((m) => m.startsWith("git.")),
+  ).toEqual([]);
 });
 
 it("does not open an outside tab when the token cannot be read", async () => {
