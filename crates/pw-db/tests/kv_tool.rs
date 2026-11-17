@@ -252,8 +252,7 @@ async fn a_redis_connection_the_user_never_opened_is_refused() {
     assert_eq!(
         e.kv.calls()
             .iter()
-            .filter(|c| matches!(c, FakeKvCall::Connect { .. }))
-            .last(),
+            .rfind(|c| matches!(c, FakeKvCall::Connect { .. })),
         Some(&FakeKvCall::Connect { db: 5 })
     );
 

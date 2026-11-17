@@ -13455,7 +13455,7 @@
           },
           "limit": {
             "default": null,
-            "description": "About how many keys per page (1 – 500, default 100). A page can hold fewer — even none — while `nextCursor` is\nset, and a few more when one Redis `SCAN` step returns them together.",
+            "description": "Keys per page (1 – 500, default 100) — at most this many, unless one Redis `SCAN` step returns more by itself. A\npage can hold fewer, even none, while `nextCursor` is set.",
             "format": "uint32",
             "minimum": 0,
             "type": [

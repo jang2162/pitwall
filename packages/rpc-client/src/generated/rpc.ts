@@ -3042,8 +3042,8 @@ export type DbToolKvScanParams = {
 	/**  `nextCursor` from the previous page. Empty for the first page. */
 	cursor?: string | null,
 	/**
-	 *  About how many keys per page (1 – 500, default 100). A page can hold fewer — even none — while `nextCursor` is
-	 *  set, and a few more when one Redis `SCAN` step returns them together.
+	 *  Keys per page (1 – 500, default 100) — at most this many, unless one Redis `SCAN` step returns more by itself. A
+	 *  page can hold fewer, even none, while `nextCursor` is set.
 	 */
 	limit?: number | null,
 };
