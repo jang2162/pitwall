@@ -956,6 +956,9 @@ describe("the agent mark memory (decision M5-D37 — M5-17b)", () => {
     // 취소하면 부르지 않는다. 확인 다이얼로그의 처음 포커스는 [취소] 다.
     await click(testid("db-conn-marks-forget"));
     expect(testid("db-conn-marks-confirm")?.textContent).toContain(T.marks.confirmTitle("prod"));
+    // 기억은 모든 프로젝트에 걸쳐 있다는 것을 말한다(재리뷰 P3).
+    expect(testid("db-conn-marks-confirm")?.textContent).toContain(T.marks.confirmBody);
+    expect(T.marks.confirmBody).toContain("모든 프로젝트");
     expect(document.activeElement).toBe(testid("db-conn-marks-cancel"));
     await click(testid("db-conn-marks-cancel"));
     expect(testid("db-conn-marks-confirm")).toBeNull();
