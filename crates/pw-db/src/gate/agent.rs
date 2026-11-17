@@ -409,6 +409,140 @@ pub(crate) fn agent_view(
     connections.load(project_id, worktree)
 }
 
+/// `data.reason`: 에이전트의 연결 쓰기가 표지(프로덕션 · read-only)를 내린다(메인 판정 2026-11-17 — M5-17 리뷰 B1).
+pub const LOWERS_MARKS: &str = "lowersMarks";
+/// `data.reason`: 에이전트의 연결 쓰기가 표지가 붙은 연결의 대상을 바꾼다(같은 판정).
+pub const MOVES_MARKED_TARGET: &str = "movesMarkedTarget";
+
+/// 에이전트의 연결 쓰기(`db_connection_upsert`)는 **표지를 조이기만 한다**(메인 판정 2026-11-17 — M5-17 리뷰 B1). 대상에 묶인 표지
+/// 기억(결정 M5-D37)은 이번 앱 실행 동안만이라, 에이전트가 파일에서 표지를 내리면 다음 실행에서 그 대상이 평범한 「이 연결 열기」
+/// 승인으로 열린다 — 그래서 쓰기 자리에서 막는다. 묻지 않고 거절한다:
+///
+/// 1. 그 연결 id 의 지금 표지(이 워크트리 · 메인 체크아웃 · 메인 저장소 프로젝트의 병합 설정, 그리고 **각 레이어 파일**(공유 ·
+///    개인 `.local.toml` · 메인 체크아웃 폴백)에 적힌 `production` · `read_only`, 그 대상들의 기억)를 새 설정이 끄거나 지운다
+///    (`lowersMarks`). 레이어로 비껴가지 못한다 — 개인 파일에 `production = false` 를 써 공유 파일을 덮는 것도 같다.
+/// 2. 표지가 붙은 연결의 푼 대상(호스트 · 포트 · DB · 사용자 · 터널 · 파일)을 바꾼다(`movesMarkedTarget`).
+/// 3. 새 설정의 푼 대상에 이번 실행에서 기억된 표지가 있는데 새 설정이 그 표지를 달지 않는다(`lowersMarks`). 열쇠는 표지 기억의
+///    것 그대로다(`DbTarget::mark_key` — MySQL · MariaDB · Redis 는 서버 · 사용자 단위).
+///
+/// 창의 `db.connection.upsert` 는 이 판정을 지나지 않는다 — 표지는 사람이 Pitwall 에서만 내린다. 블로킹이다.
+pub(crate) fn check_agent_write(
+    sessions: &DbSessions,
+    project_id: &str,
+    worktree: Option<&str>,
+    connection_id: &str,
+    new: &DbConnectionConfig,
+) -> Result<(), RpcError> {
+    let connections = &sessions.connections;
+    // 이 워크트리의 설정(그리고 `agent_view` 가 메인 체크아웃 · 메인 저장소 프로젝트를 읽어 기억에 더한다).
+    let loaded = agent_view(sessions, project_id, worktree)?;
+    let new_target = DbTarget::of(new, &loaded.root);
+    let main_repository = connections
+        .host()?
+        .projects
+        .main_repository_of(project_id)
+        .ok()
+        .flatten()
+        .map(|p| p.id);
+    let mut views = vec![(project_id.to_owned(), worktree.map(str::to_owned))];
+    if worktree.is_some() {
+        views.push((project_id.to_owned(), None));
+    }
+    views.extend(main_repository.into_iter().map(|p| (p, None)));
+    let mut existing = DbMarks::default();
+    let mut targets: Vec<DbTarget> = Vec::new();
+    let mut files: Vec<PathBuf> = Vec::new();
+    for (project, wt) in &views {
+        let view = if project == project_id && wt.as_deref() == worktree {
+            None
+        } else {
+            connections.load(project, wt.as_deref()).ok()
+        };
+        let view = view.as_ref().unwrap_or(&loaded);
+        if let Some(config) = view.get(connection_id).and_then(|c| c.config.as_ref().ok()) {
+            let target = DbTarget::of(config, &view.root);
+            existing = existing
+                .tighten(DbMarks::of(config))
+                .tighten(connections.marks.get(&target));
+            targets.push(target);
+        }
+        files.extend(connections.connection_files(project, wt.as_deref(), connection_id)?);
+    }
+    files.push(crate::config::config_file(
+        &loaded.local_dir,
+        connection_id,
+        crate::config::DbConfigLocation::Local,
+    ));
+    files.sort();
+    files.dedup();
+    for file in &files {
+        existing = existing.tighten(layer_marks(file)?);
+    }
+    let lowers = |floor: DbMarks| {
+        (floor.production && !new.production) || (floor.read_only && !new.read_only)
+    };
+    if lowers(existing) {
+        tracing::info!(target: "pw_db", project = project_id, connection = connection_id, "agent db connection write refused: it lowers the connection's marks");
+        return Err(write_refused(
+            project_id,
+            connection_id,
+            LOWERS_MARKS,
+            "would turn off its production or read-only mark; only the person can lower a mark, in Pitwall",
+        ));
+    }
+    if existing != DbMarks::default() && !targets.iter().any(|t| *t == new_target) {
+        tracing::info!(target: "pw_db", project = project_id, connection = connection_id, "agent db connection write refused: it moves a marked connection");
+        return Err(write_refused(
+            project_id,
+            connection_id,
+            MOVES_MARKED_TARGET,
+            "is marked production or read-only, and this write changes its target (host, port, database, user, SSH tunnel \
+             or file); only the person can change it, in Pitwall",
+        ));
+    }
+    if lowers(connections.marks.get(&new_target)) {
+        tracing::info!(target: "pw_db", project = project_id, connection = connection_id, "agent db connection write refused: its target is marked");
+        return Err(write_refused(
+            project_id,
+            connection_id,
+            LOWERS_MARKS,
+            "would point at a target marked production or read-only during this run without that mark; keep the mark \
+             in the settings",
+        ));
+    }
+    Ok(())
+}
+
+/// 레이어 파일 하나에 적힌 표지(없는 파일은 표지 없음). 읽지 못하면 거절한다 — 표지를 모르는 채로 쓰지 않는다.
+fn layer_marks(file: &Path) -> Result<DbMarks, RpcError> {
+    let text = match std::fs::read_to_string(file) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(DbMarks::default()),
+        Err(_) => return Err(RpcError::internal(UNREADABLE_SETTINGS)),
+    };
+    let doc = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|_| RpcError::internal(UNREADABLE_SETTINGS))?;
+    let flag = |key: &str| doc.get(key).and_then(toml_edit::Item::as_bool) == Some(true);
+    Ok(DbMarks {
+        production: flag("production"),
+        read_only: flag("read_only"),
+    })
+}
+
+/// `PERMISSION_DENIED` — 에이전트의 연결 쓰기를 묻지 않고 거절한다.
+fn write_refused(project_id: &str, connection_id: &str, reason: &str, why: &str) -> RpcError {
+    RpcError::new(
+        rpc_code::PERMISSION_DENIED,
+        format!("db connection `{connection_id}` was not saved: this write {why}"),
+    )
+    .with_data(json!({
+        "reason": reason,
+        "projectId": project_id,
+        "connectionId": connection_id,
+    }))
+}
+
 /// 틀린 연결 설정의 까닭(serde 오류 글)은 툴 응답 · 감사 로그로 내보내지 않는다 — 사람이 실수로 적은 비밀 값이 그 글에 실린다.
 pub(crate) fn invalid_settings(connection_id: &str) -> String {
     format!("db connection `{connection_id}` has invalid settings; open it in Pitwall to see why")

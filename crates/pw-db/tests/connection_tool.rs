@@ -83,6 +83,20 @@ fn text_of(required: &ApprovalRequired) -> String {
 }
 
 impl Env {
+    /// 앱을 다시 켠 흉내(같은 파일 · 키체인, 빈 메모리).
+    fn restart(&mut self) {
+        let pg = self.pg.clone();
+        let mut slot = None;
+        self.f.restart(|router, connections| {
+            let mut drivers = pw_db::DriverRegistry::new();
+            drivers.register(Arc::new(pg)).unwrap();
+            let sessions = Arc::new(DbSessions::new(Arc::clone(connections), drivers));
+            pw_db::register(router, Arc::clone(&sessions));
+            slot = Some(sessions);
+        });
+        self.sessions = slot.unwrap();
+    }
+
     fn agent(&self) -> Conn {
         self.f.connect(ConnectionScope::Agent)
     }
@@ -675,13 +689,14 @@ async fn removing_production_in_a_worktree_does_not_open_it_by_approval() {
         &e.test(&mut agent, "prod", Some(&wt), None).await,
         "productionBlocked",
     );
-    // 에이전트가 `db_connection_upsert` 로 메인의 표지를 지워도 같다.
+    // 에이전트는 `db_connection_upsert` 로 메인의 표지를 지우지 못한다(묻지 않고 거절 — 표지는 조이기만 한다).
     let change = json!({ "connectionId": "prod", "config": {
         "name": "prod", "driver": "postgres", "host": "db.prod.example", "database": "app", "user": "app" } });
-    let required = asked(&e.upsert(&mut agent, change.clone(), None).await);
-    e.upsert(&mut agent, change, Some(&required.plan.hash))
-        .await
-        .unwrap();
+    refused(&e.upsert(&mut agent, change, None).await, "lowersMarks");
+    assert_eq!(
+        std::fs::read_to_string(e.f.db_file("prod.toml")).unwrap(),
+        PROD
+    );
     refused(
         &e.test(&mut agent, "prod", None, None).await,
         "productionBlocked",
@@ -706,16 +721,11 @@ async fn a_new_unmarked_id_on_a_production_target_is_not_opened_by_approval() {
         &e.test(&mut agent, "sneaky", Some(&wt), None).await,
         "productionBlocked",
     );
+    // 표지 없는 새 연결을 그 대상에 만드는 쓰기는 묻지 않고 거절한다(표지를 달면 보통대로 묻는다).
     let fresh = json!({ "connectionId": "fresh", "config": {
         "name": "fresh", "driver": "postgres", "host": "db.prod.example", "database": "app", "user": "app" } });
-    let required = asked(&e.upsert(&mut agent, fresh.clone(), None).await);
-    e.upsert(&mut agent, fresh, Some(&required.plan.hash))
-        .await
-        .unwrap();
-    refused(
-        &e.test(&mut agent, "fresh", None, None).await,
-        "productionBlocked",
-    );
+    refused(&e.upsert(&mut agent, fresh, None).await, "lowersMarks");
+    assert!(!e.f.db_file("fresh.toml").exists());
     assert_eq!(e.connects(), 1, "only the person's open");
 }
 
@@ -758,4 +768,189 @@ async fn an_approved_connection_marked_production_later_is_refused() {
     );
     e.production_policy("ask");
     refused(&e.schema(&mut agent, "dev", None).await, "notOpenedByUser");
+}
+
+// --- 에이전트의 연결 쓰기는 표지를 조이기만 한다(메인 판정 2026-11-17 — 리뷰 B1) ----------------------------------------
+
+/// 리뷰 B1 의 재현: 메인의 `prod.toml` 이 프로덕션(또는 read-only)일 때 에이전트가 같은 대상 · 표지 없는 설정을 개인 파일
+/// (`location: "local"`)이나 공유 파일에 쓰려 하면 묻지 않고 거절하고(6001 이 아니다) 파일이 그대로다. 앱을 다시 켜도(기억이 빈
+/// 새 실행) 그 대상은 여전히 표지가 있다 — 「이 연결 열기」 승인으로 열리지 않고, 목록이 표지를 보인다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agent_cannot_lower_marks_even_across_app_runs() {
+    for (mark, location) in [
+        ("production", "local"),
+        ("production", "shared"),
+        ("read_only", "local"),
+        ("read_only", "shared"),
+    ] {
+        let mut e = env();
+        let marked = format!(
+            "schema = 1\nname = \"prod\"\ndriver = \"postgres\"\nhost = \"db.prod.example\"\ndatabase = \"app\"\nuser = \"app\"\n{mark} = true\n"
+        );
+        e.f.write_db("prod.toml", &marked);
+        let mut agent = e.agent();
+        let field = if mark == "production" {
+            "production"
+        } else {
+            "readOnly"
+        };
+        let lowered = json!({ "connectionId": "prod", "location": location, "config": {
+            "name": "prod", "driver": "postgres", "host": "db.prod.example", "database": "app", "user": "app",
+            field: false } });
+        let err = refused(&e.upsert(&mut agent, lowered, None).await, "lowersMarks");
+        assert!(
+            err.message.contains("only the person can lower a mark"),
+            "{err:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(e.f.db_file("prod.toml")).unwrap(),
+            marked
+        );
+        assert!(
+            !e.f.db_file("prod.local.toml").exists(),
+            "{mark} {location}"
+        );
+
+        e.restart();
+        let mut agent = e.agent();
+        let list = e
+            .call(&mut agent, "db.tool.connectionList", json!({}), None)
+            .await
+            .unwrap();
+        let prod = list["connections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == "prod")
+            .unwrap();
+        assert_eq!(prod[field], true, "{mark} {location}: {list}");
+        if mark == "production" {
+            refused(
+                &e.test(&mut agent, "prod", None, None).await,
+                "productionBlocked",
+            );
+        }
+        assert_eq!(e.connects(), 0);
+    }
+}
+
+/// 레이어 · 체크아웃으로 비껴가지 못한다: 공유 파일은 표지가 없고 개인 파일(`.local.toml`)만 `production = true` 여도, 메인
+/// 체크아웃만 표지가 있고 워크트리의 같은 id 는 표지가 없어도, 표지를 지우는 쓰기는 거절한다. 표지를 조이는 쓰기(read-only 를
+/// 더함)는 보통대로 묻는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn marks_in_any_layer_or_checkout_hold() {
+    let e = env();
+    let mut agent = e.agent();
+    // 조이는 쓰기는 묻는다(표지를 기억하기 전에 — 아래에서 dev 의 대상이 프로덕션으로 기억된다).
+    let tighter = json!({ "connectionId": "dev", "config": {
+        "name": "dev", "driver": "postgres", "host": "localhost", "database": "app", "readOnly": true } });
+    asked(&e.upsert(&mut agent, tighter, None).await);
+    // 개인 파일에만 표지.
+    e.f.write_db("dev.local.toml", "schema = 1\nproduction = true\n");
+    let plain = json!({ "connectionId": "dev", "config": {
+        "name": "dev", "driver": "postgres", "host": "localhost", "database": "app" } });
+    refused(&e.upsert(&mut agent, plain, None).await, "lowersMarks");
+    std::fs::remove_file(e.f.db_file("dev.local.toml")).unwrap();
+
+    // 공유 파일은 표지가 있고 사람의 개인 파일이 그것을 덮어 병합 값은 표지가 없다 — 그래도 공유 레이어의 표지가 바닥이다.
+    e.f.write_db(
+        "prod2.toml",
+        &PROD.replace("db.prod.example", "db2.prod.example"),
+    );
+    e.f.write_db("prod2.local.toml", "schema = 1\nproduction = false\n");
+    let list = e
+        .call(&mut agent, "db.tool.connectionList", json!({}), None)
+        .await
+        .unwrap();
+    assert!(list.to_string().contains("\"id\":\"prod2\""), "{list}");
+    let lowered = json!({ "connectionId": "prod2", "location": "local", "config": {
+        "name": "prod", "driver": "postgres", "host": "db2.prod.example", "database": "app", "user": "app" } });
+    refused(&e.upsert(&mut agent, lowered, None).await, "lowersMarks");
+
+    // 메인 체크아웃만 표지, 워크트리의 같은 id 는 표지 없음.
+    e.f.write_db("prod.toml", PROD);
+    let unmarked = PROD.replace("production = true\n", "");
+    let wt = e.worktree(&[("prod.toml", &unmarked)]);
+    let in_wt = json!({ "connectionId": "prod", "worktree": wt, "config": {
+        "name": "prod", "driver": "postgres", "host": "db.prod.example", "database": "app", "user": "app",
+        "readOnly": true } });
+    refused(&e.upsert(&mut agent, in_wt, None).await, "lowersMarks");
+}
+
+/// 표지가 붙은 연결의 대상(호스트 · DB · 사용자 · 포트 등)을 바꾸는 쓰기는 표지를 그대로 달아도 거절한다. 표지 없는 연결은 대상을
+/// 바꿀 수 있다(보통대로 묻는다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agent_cannot_move_a_marked_connection() {
+    let e = env();
+    e.f.write_db("prod.toml", PROD);
+    let mut agent = e.agent();
+    for (field, value) in [
+        ("host", json!("elsewhere.example")),
+        ("database", json!("other")),
+        ("user", json!("admin")),
+        ("port", json!(6543)),
+    ] {
+        let mut config = json!({ "name": "prod", "driver": "postgres", "host": "db.prod.example",
+            "database": "app", "user": "app", "production": true });
+        config[field] = value;
+        let moved = json!({ "connectionId": "prod", "config": config });
+        let err = refused(
+            &e.upsert(&mut agent, moved, None).await,
+            "movesMarkedTarget",
+        );
+        assert!(
+            err.message.contains("changes its target"),
+            "{field}: {err:?}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(e.f.db_file("prod.toml")).unwrap(),
+        PROD
+    );
+    let same = json!({ "connectionId": "prod", "config": { "name": "prod (renamed)", "driver": "postgres",
+        "host": "db.prod.example", "database": "app", "user": "app", "production": true } });
+    asked(&e.upsert(&mut agent, same, None).await);
+    let moved_dev = json!({ "connectionId": "dev", "config": {
+        "name": "dev", "driver": "postgres", "host": "other.example", "database": "app" } });
+    asked(&e.upsert(&mut agent, moved_dev, None).await);
+}
+
+/// 이번 실행에서 표지가 기억된 대상을 표지 없이 가리키는 쓰기 — 새 연결이든 표지 없는 연결의 대상을 그리로 옮기든 — 는 거절한다.
+/// 열쇠는 표지 기억의 것이다: MySQL · MariaDB 는 같은 서버 · 사용자의 다른 DB 도 그 대상이다. 표지를 달면 보통대로 묻는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_write_onto_a_remembered_target_must_carry_its_marks() {
+    let e = env();
+    e.f.write_db(
+        "myprod.toml",
+        "schema = 1\nname = \"myprod\"\ndriver = \"mysql\"\nhost = \"my.example\"\ndatabase = \"sales\"\nuser = \"app\"\nproduction = true\n",
+    );
+    e.f.write_db("prod.toml", PROD);
+    let mut agent = e.agent();
+    // 목록이 설정을 읽어 표지를 기억한다. 그 뒤 메인의 파일이 사라져도 이번 실행의 기억은 남는다.
+    e.call(&mut agent, "db.tool.connectionList", json!({}), None)
+        .await
+        .unwrap();
+    std::fs::remove_file(e.f.db_file("prod.toml")).unwrap();
+    let onto_prod = |id: &str, production: bool| {
+        json!({ "connectionId": id, "config": { "name": id, "driver": "postgres", "host": "DB.prod.example",
+            "database": "app", "user": "app", "production": production } })
+    };
+    refused(
+        &e.upsert(&mut agent, onto_prod("fresh", false), None).await,
+        "lowersMarks",
+    );
+    // 표지 없는 기존 연결을 그 대상으로 옮기기.
+    refused(
+        &e.upsert(&mut agent, onto_prod("dev", false), None).await,
+        "lowersMarks",
+    );
+    asked(&e.upsert(&mut agent, onto_prod("fresh", true), None).await);
+    // MySQL: 같은 서버 · 사용자의 다른 DB.
+    let other_db = json!({ "connectionId": "mydev", "config": { "name": "mydev", "driver": "mysql",
+        "host": "my.example", "database": "scratch", "user": "app" } });
+    refused(&e.upsert(&mut agent, other_db, None).await, "lowersMarks");
+    let other_user = json!({ "connectionId": "mydev", "config": { "name": "mydev", "driver": "mysql",
+        "host": "my.example", "database": "scratch", "user": "reader" } });
+    asked(&e.upsert(&mut agent, other_user, None).await);
+    assert!(!e.f.db_file("fresh.toml").exists());
 }

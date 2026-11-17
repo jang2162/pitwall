@@ -480,12 +480,13 @@ pub(crate) fn refuse_untranslatable(statements: &[Planned]) -> Result<(), RpcErr
 mod agent;
 
 pub use agent::{
-    AgentBinding, DbMarks, DbPlanTarget, DbTarget, NOT_OPENED_BY_USER, PRODUCTION_BLOCKED,
-    db_grant_for_agent, db_grant_to_open, not_opened_by_user, production_blocked,
+    AgentBinding, DbMarks, DbPlanTarget, DbTarget, LOWERS_MARKS, MOVES_MARKED_TARGET,
+    NOT_OPENED_BY_USER, PRODUCTION_BLOCKED, db_grant_for_agent, db_grant_to_open,
+    not_opened_by_user, production_blocked,
 };
 pub(crate) use agent::{
     ApprovedMemory, Asker, MarkMemory, OpenedMemory, UNREADABLE_SETTINGS, agent_view,
-    invalid_settings, judge_for_agent, production_policy,
+    check_agent_write, invalid_settings, judge_for_agent, production_policy,
 };
 
 #[cfg(test)]

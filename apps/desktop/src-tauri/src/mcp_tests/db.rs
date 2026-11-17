@@ -713,19 +713,37 @@ fn finished_row(host: &ToolHost, nth: usize) -> super::AuditRow {
 }
 
 /// 감사 행의 (툴, 결과, 승인 방식).
-fn approvals_of(host: &ToolHost) -> Vec<(String, String, Option<String>)> {
-    let conn = rusqlite::Connection::open_with_flags(
-        host.services.audit.file(),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .unwrap();
-    let mut stmt = conn
-        .prepare("SELECT tool, outcome, approval FROM calls ORDER BY id")
-        .unwrap();
-    stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-        .unwrap()
-        .map(Result::unwrap)
-        .collect()
+/// 감사 행의 (툴, 결과, 승인 방식) — `count` 개가 생기고 모두 끝 기록(`started` 가 아님)을 받을 때까지 기다린다. 끝 기록은 툴 결과
+/// 뒤에 큐로 쓰여 늦을 수 있다(리뷰 F2).
+async fn approvals_of(host: &ToolHost, count: usize) -> Vec<(String, String, Option<String>)> {
+    let read = || -> Vec<(String, String, Option<String>)> {
+        let Ok(conn) = rusqlite::Connection::open_with_flags(
+            host.services.audit.file(),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        ) else {
+            return Vec::new();
+        };
+        let Ok(mut stmt) = conn.prepare("SELECT tool, outcome, approval FROM calls ORDER BY id")
+        else {
+            return Vec::new();
+        };
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let rows = read();
+        if rows.len() >= count && rows.iter().all(|(_, outcome, _)| outcome != "started") {
+            return rows;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "audit rows not finished: {rows:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
 }
 
 /// `db_connection_test` · `db_connection_upsert`(16-m5-plan M5-17)를 진짜 세션으로: 둘 다 그룹 `db` · 등급 `write` 이고, 입력
@@ -839,7 +857,8 @@ async fn db_connection_test_asks_to_open_even_with_auto_approve() {
     assert_ne!(again.is_error, Some(true), "{again:?}");
     assert_eq!(structured(&again)["approvedForSession"], false);
 
-    let rows: Vec<_> = approvals_of(&host)
+    let rows: Vec<_> = approvals_of(&host, 4)
+        .await
         .into_iter()
         .filter(|(tool, ..)| tool != "db_connection_list")
         .collect();
@@ -861,5 +880,89 @@ async fn db_connection_test_asks_to_open_even_with_auto_approve() {
         ]
     );
     other.close().await;
+    session.close().await;
+}
+
+/// 「이 세션 동안 허용」 의 열쇠는 연결 id 와 **푼 대상**이다(리뷰 F1): [이 세션 동안 허용] 으로 답한 뒤 같은 id 의 대상(SQLite
+/// 파일)을 바꾸면 다음 `db_connection_test` 는 그 허용으로 지나지 않고 창에 다시 묻는다 — 요청이 새 대상을 보이고, 거절하면 돌지
+/// 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_session_allowance_to_open_is_bound_to_the_target() {
+    use pw_mcp::approval::{Connection, McpApprovalAnswer};
+    let host = ToolHost::app();
+    let alpha = host.project("alpha");
+    host.host
+        .registry()
+        .unwrap()
+        .set_trust(&alpha, true)
+        .unwrap();
+    let root = host.base.join("work").join("alpha");
+    std::fs::write(root.join("app.db"), "").unwrap();
+    std::fs::write(root.join("other.db"), "").unwrap();
+    std::fs::create_dir_all(root.join(".pitwall/db")).unwrap();
+    let file = root.join(".pitwall/db/lite.toml");
+    std::fs::write(
+        &file,
+        "schema = 1\nname = \"lite\"\ndriver = \"sqlite\"\npath = \"app.db\"\n",
+    )
+    .unwrap();
+    let session = host.session(SessionRequest::default()).await;
+    let mut window =
+        host.services
+            .sessions
+            .approvals()
+            .listen(Some(&alpha), None, Connection::named("window"));
+    let args = serde_json::json!({ "projectId": alpha, "connectionId": "lite" });
+    let (ran, first) = tokio::join!(
+        session.call("db_connection_test", args.clone()),
+        window_answers(&host, &mut window, &alpha, McpApprovalAnswer::Session)
+    );
+    assert_ne!(ran.is_error, Some(true), "{ran:?}");
+    assert!(first.answers.contains(&McpApprovalAnswer::Session));
+
+    std::fs::write(
+        &file,
+        "schema = 1\nname = \"lite\"\ndriver = \"sqlite\"\npath = \"other.db\"\n",
+    )
+    .unwrap();
+    let (denied, again) = tokio::join!(
+        session.call("db_connection_test", args),
+        window_answers(&host, &mut window, &alpha, McpApprovalAnswer::Deny)
+    );
+    assert!(
+        again
+            .plan
+            .summary
+            .starts_with("Open this DB connection for this agent session"),
+        "{}",
+        again.plan.summary
+    );
+    let change = serde_json::to_value(&again.plan.changes[0]).unwrap();
+    assert!(
+        change["text"].as_str().unwrap().contains("other.db"),
+        "{change}"
+    );
+    assert_eq!(
+        denied
+            .meta
+            .as_ref()
+            .and_then(|m| pw_mcp::marker::Mark::read(m)),
+        Some(pw_mcp::marker::Mark::denied(
+            pw_mcp::marker::Reason::ApprovalDenied
+        )),
+        "{denied:?}"
+    );
+    let rows = approvals_of(&host, 2).await;
+    assert_eq!(
+        rows,
+        [
+            (
+                "db_connection_test".into(),
+                "ok".into(),
+                Some("session".into())
+            ),
+            ("db_connection_test".into(), "denied".into(), None),
+        ]
+    );
     session.close().await;
 }
