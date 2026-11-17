@@ -10,8 +10,10 @@
 //! - [`methods`]: 읽기 전용 RPC(`config.paths`, `config.get`).
 //! - [`tool`]: 설정 조회 MCP 툴 메서드(`settings_get` — 디스크에 쓰지 않고 읽는다).
 //! - [`write`]: 전역 `settings.toml` 의 한 키 쓰기(언어 설정 · 설정 창의 DB 페이지).
+//! - [`mcp_policy`]: MCP 승인 정책(`[mcp] auto_approve` · `[mcp.policy]` — 사람의 설정에서만)의 읽기. MCP 세션과 DB 툴의 관문이 함께 쓴다.
 
 pub mod gitdir;
+pub mod mcp_policy;
 pub mod merge;
 pub mod methods;
 pub mod migrate;

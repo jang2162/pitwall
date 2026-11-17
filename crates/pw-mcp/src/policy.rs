@@ -11,29 +11,27 @@
 //! (`.pitwall/project.toml`)은 넓히지 못한다** — 공유 레이어까지 읽은 값과 공유 레이어를 뺀 값에 둘 다 있는 등급만 자동이다
 //! (`Exposure::narrowed_by` 와 같은 원리). `[mcp.policy]` 표는 **사람의 설정(전역 · `.pitwall/*.local.toml` · 개인 전용
 //! `project.toml`)에서만** 읽는다 — 공유 설정의 그 표는 효과가 없고 경고를 남긴다. 키는 지금 `approval_timeout_secs`(기본 300)
-//! 하나이고 `production` 은 16-m5-plan M5-18 이 더한다. 판정은 **대상 프로젝트**의 것이다(프로젝트 없는 호출은 전역만). 설정은
-//! 호출마다 디스크에서 쓰지 않고 읽는다(`ConfigSource::without_writes`).
+//! 와 `production`(`block` 기본 · `ask` — 프로덕션 표지가 있는 DB 대상, 16-m5-plan M5-18) 둘이다. 판정은 **대상 프로젝트**의
+//! 것이다(프로젝트 없는 호출은 전역만). 설정은 호출마다 디스크에서 쓰지 않고 읽는다(`ConfigSource::without_writes`).
+//!
+//! **읽는 함수는 [`pw_core::config::mcp_policy`] 하나다**(메인 판정 2026-11-17 — M5-18): DB 툴의 관문(`pw_db::gate` 의 프로덕션
+//! `ask` 갈래)도 같은 함수를 부른다. 이 모듈은 그것을 다시 내보내고, 경고를 로그에 남기는 꼴([`of_project`] · [`of_global`])과
+//! 등급 판정([`decide`])을 둔다. `production` 의 판정(막기 · 매번 묻기)은 DB 툴이 하고, 이 세션은 툴이 낸 계획의 규칙
+//! (`auto_approve` 없음 · 기억 없음)대로 묻는다.
 //!
 //! 헤드리스에는 승인 경로가 없다 — 승인을 건너뛰는 플래그(`--approve-mode`)는 두지 않는다(결정 M5-D32).
 
-use std::time::Duration;
-
-use pw_core::config::{AppPaths, ConfigSource, ConfigStore, LayerOrigin};
-use pw_core::registry::{ConfigMode, Project};
+use pw_core::config::{AppPaths, ConfigStore};
+use pw_core::registry::Project;
 use pw_rpc::Tier;
-use serde_json::{Map, Value};
+
+pub use pw_core::config::mcp_policy::{
+    AUTO_APPROVE, DEFAULT_APPROVAL_TIMEOUT, POLICY_TABLE, Policy, Production, read, read_project,
+};
 
 use crate::approval::Approvals;
-use crate::exposure::KEY;
 use crate::server::HostKind;
 use crate::sessions::Sessions;
-
-/// 승인 시한의 기본값(05 「감사 로그」 의 「승인 요청 라우팅」 — 5분).
-pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
-/// `[mcp.policy]` 표의 이름(`[mcp]` 아래).
-pub const POLICY_TABLE: &str = "policy";
-/// `[mcp]` 의 자동 승인 키.
-pub const AUTO_APPROVE: &str = "auto_approve";
 
 /// 승인을 받을 길이 있는가.
 #[derive(Clone)]
@@ -88,130 +86,7 @@ pub fn decide(tier: Tier, approval: &Approval) -> Decision {
 }
 
 pub(crate) fn tier_name(tier: Tier) -> &'static str {
-    match tier {
-        Tier::Read => "read",
-        Tier::Write => "write",
-        Tier::Exec => "exec",
-        Tier::Dangerous => "dangerous",
-    }
-}
-
-fn parse_tier(s: &str) -> Option<Tier> {
-    [Tier::Read, Tier::Write, Tier::Exec, Tier::Dangerous]
-        .into_iter()
-        .find(|t| tier_name(*t) == s)
-}
-
-/// 한 판정 대상(프로젝트 또는 전역)의 승인 정책.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Policy {
-    /// 묻지 않고 허용하는 등급. `dangerous` 는 들어가지 않는다.
-    pub auto_approve: Vec<Tier>,
-    /// 사람의 답을 기다리는 시간(`[mcp.policy] approval_timeout_secs`).
-    pub approval_timeout: Duration,
-}
-
-impl Default for Policy {
-    fn default() -> Self {
-        Self {
-            auto_approve: Vec::new(),
-            approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
-        }
-    }
-}
-
-impl Policy {
-    pub fn auto_approves(&self, tier: Tier) -> bool {
-        tier != Tier::Dangerous && self.auto_approve.contains(&tier)
-    }
-}
-
-/// 레이어별 `[mcp]` 값에서 정책을 읽는다. 경고는 사람이 읽을 문장이다.
-///
-/// - `global`: 전역 `[mcp]`.
-/// - `project`: 대상 프로젝트의 `[mcp]` — 공유 레이어까지 병합한 것.
-/// - `human`: 같은 프로젝트의 `[mcp]` 에서 **공유 레이어를 뺀 것**(전역 · `.local.toml` · 개인 전용 `project.toml`). 개인 전용
-///   프로젝트면 `project` 와 같다.
-/// - `shared_policy`: 커밋되는 공유 `project.toml` 에 `[mcp.policy]` 가 있다(효과 없음 — 경고).
-pub fn read(
-    global: Option<&Value>,
-    project: Option<&Value>,
-    human: Option<&Value>,
-    shared_policy: bool,
-) -> (Policy, Vec<String>) {
-    let mut warnings = Vec::new();
-    let full = merged(global, project);
-    let narrow = merged(global, human);
-    let wide = auto_approve(full.get(AUTO_APPROVE), &mut warnings);
-    // 공유 레이어를 뺀 값의 경고는 위와 겹치므로 버린다.
-    let ceiling = auto_approve(narrow.get(AUTO_APPROVE), &mut Vec::new());
-    let auto_approve = wide.into_iter().filter(|t| ceiling.contains(t)).collect();
-    if shared_policy {
-        warnings.push(
-            "mcp.policy in the shared .pitwall/project.toml has no effect; set it in the global settings \
-             or in .pitwall/project.local.toml"
-                .to_owned(),
-        );
-    }
-    let mut approval_timeout = DEFAULT_APPROVAL_TIMEOUT;
-    match narrow.get(POLICY_TABLE) {
-        None => {}
-        Some(Value::Object(table)) => {
-            if let Some(value) = table.get("approval_timeout_secs") {
-                match value.as_u64() {
-                    Some(secs) if secs > 0 => approval_timeout = Duration::from_secs(secs),
-                    _ => warnings.push(format!(
-                        "mcp.policy.approval_timeout_secs must be a positive integer, found {value}; using {}",
-                        DEFAULT_APPROVAL_TIMEOUT.as_secs()
-                    )),
-                }
-            }
-        }
-        Some(other) => warnings.push(format!("mcp.policy must be a table, found {other}")),
-    }
-    (
-        Policy {
-            auto_approve,
-            approval_timeout,
-        },
-        warnings,
-    )
-}
-
-fn merged(global: Option<&Value>, project: Option<&Value>) -> Map<String, Value> {
-    let mut out = Map::new();
-    for layer in [global, project].into_iter().flatten() {
-        if let Value::Object(table) = layer {
-            pw_core::config::merge::merge(&mut out, table.clone());
-        }
-    }
-    out
-}
-
-fn auto_approve(value: Option<&Value>, warnings: &mut Vec<String>) -> Vec<Tier> {
-    let Some(value) = value else {
-        return Vec::new();
-    };
-    let Value::Array(items) = value else {
-        warnings.push(format!(
-            "mcp.auto_approve must be a list of tiers, found {value}; ignored"
-        ));
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for item in items {
-        match item.as_str().and_then(parse_tier) {
-            Some(Tier::Dangerous) => warnings.push(
-                "mcp.auto_approve cannot hold `dangerous`; dangerous tools always ask".to_owned(),
-            ),
-            Some(tier) if !out.contains(&tier) => out.push(tier),
-            Some(_) => {}
-            None => warnings.push(format!(
-                "mcp.auto_approve: `{item}` is not read, write or exec; ignored"
-            )),
-        }
-    }
-    out
+    pw_core::config::mcp_policy::tier_name(tier)
 }
 
 /// 등록된 프로젝트 하나의 정책: 전역 위에 그 프로젝트 설정(프로젝트 루트)을 [`read`] 로. **디스크에 쓰지 않고** 읽는다.
@@ -220,60 +95,9 @@ pub fn of_project(paths: &AppPaths, global: &ConfigStore, project: &Project) -> 
     logged(read_project(paths, global, project))
 }
 
-/// [`of_project`] 의 경고를 돌려주는 꼴.
-pub fn read_project(
-    paths: &AppPaths,
-    global: &ConfigStore,
-    project: &Project,
-) -> (Policy, Vec<String>) {
-    let global = global.snapshot();
-    let global_mcp = global.get("settings", KEY);
-    let unreadable = |e: &dyn std::fmt::Display| {
-        let (policy, mut warnings) = read(global_mcp, None, None, false);
-        warnings.push(format!(
-            "cannot read the config of project `{}` for the mcp policy ({e}); using the global settings",
-            project.id
-        ));
-        (policy, warnings)
-    };
-    let source = match project.config_source(paths, project.root()) {
-        Ok(source) => source.without_writes(),
-        Err(e) => return unreadable(&e),
-    };
-    let layered = match source.load_layered() {
-        Ok(layered) => layered,
-        Err(e) => return unreadable(&e),
-    };
-    let full = layered.snapshot.get("project", KEY).cloned();
-    if project.config_mode != ConfigMode::Repository {
-        // 개인 전용 project.toml 은 사람의 설정이다.
-        return read(global_mcp, full.as_ref(), full.as_ref(), false);
-    }
-    let shared_policy = layered.layers.get("project").is_some_and(|layers| {
-        layers.iter().any(|l| {
-            l.origin == LayerOrigin::Shared
-                && l.value.get(KEY).and_then(|m| m.get(POLICY_TABLE)).is_some()
-        })
-    });
-    let (human, broken) = match ConfigSource::without_shared(source).load() {
-        Ok(snapshot) => (snapshot.get("project", KEY).cloned(), None),
-        // 로컬 파일이 깨졌다 — 공유 레이어만 남기면 넓어지므로 전역만을 사람의 설정으로 둔다.
-        Err(e) => (None, Some(e.to_string())),
-    };
-    let (policy, mut warnings) = read(global_mcp, full.as_ref(), human.as_ref(), shared_policy);
-    if let Some(e) = broken {
-        warnings.push(format!(
-            "cannot read the local config of project `{}` for the mcp policy ({e}); using the global settings",
-            project.id
-        ));
-    }
-    (policy, warnings)
-}
-
 /// 프로젝트 없는 호출의 정책: 전역 설정만.
 pub fn of_global(global: &ConfigStore) -> Policy {
-    let global = global.snapshot();
-    logged(read(global.get("settings", KEY), None, None, false))
+    logged(pw_core::config::mcp_policy::read_global(global))
 }
 
 fn logged((policy, warnings): (Policy, Vec<String>)) -> Policy {
@@ -285,6 +109,8 @@ fn logged((policy, warnings): (Policy, Vec<String>)) -> Policy {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use serde_json::json;
 
     use super::*;
