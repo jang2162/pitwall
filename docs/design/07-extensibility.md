@@ -118,7 +118,7 @@ dir = "i18n/ko"                             # 그 언어의 Fluent 리소스(.ft
 - 메시지 형식: **Fluent**(`.ftl`) — 복수형/성별/어순 대응이 ICU보다 단순, Rust(`fluent-rs`)와 TS(`@fluent/bundle`) 양쪽에 구현 존재
 - 코어(알림, 에러, MCP 메시지)와 UI가 같은 번역 리소스를 공유
 - 기본 내장: 한국어, 영어. 그 외 언어는 L1 "언어 팩" 확장으로
-- 날짜/숫자 포맷은 `Intl`, 단축키 표기는 OS별(⌘ vs Ctrl)
+- 날짜/숫자 포맷은 `Intl`, 단축키 표기는 OS별(⌘ vs Ctrl). 포맷의 로캘은 고른 UI 언어(웹뷰는 `useI18n().locales[0]`)다 — 시스템 로캘(`undefined` · 인자 없음)을 넘기지 않는다. 넘기면 영어 UI 에 시스템의 한국어 「오전 07:20」 이 섞인다(M5-13b). `apps/desktop/src/i18n/locale-format.test.ts` 가 로캘 없이 포맷하는 호출을 찾는다 — 변수로 넘긴 로캘이 `undefined` 인 것과 정렬(`Intl.Collator` · `localeCompare`)은 보지 않는다
 - 커밋 메시지 · 로그 등 사용자 콘텐츠는 번역 대상 아님
 
 구현(`crates/pw-i18n`, 웹뷰 `apps/desktop/src/i18n`):

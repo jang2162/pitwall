@@ -97,6 +97,7 @@ Vitest 는 CSS 를 처리하지 않는다 — `?raw` 로 CSS 를 불러도 오�
 
 창 시험을 쓸 때:
 
+- 웹뷰 시험의 React 루트는 시험 셋업(`apps/desktop/src/test-support/strict-mode.ts`, `apps/desktop/vite.config.ts` 의 `test.setupFiles`)이 앱(`main.tsx`)처럼 `<StrictMode>` 로 감싼다 — 시험에서 끄지 않는다. dev 의 effect 정리 · 다시 걸기에서만 나는 결함(정리 effect 만 건 모델이 멈춘 채 남음 — M5-13b 의 호출 로그 · Search Everywhere · git 로그)은 StrictMode 없이 잡히지 않는다. 그래서 effect 가 여는 읽기 · 구독 · 스트림은 걷힌 쪽 몫이 한 번 더 나간다 — 호출 수는 살아 있는 것(끊기지 않은 스트림, 같은 인자는 하나로)이나 「앞보다 한 번 더」 로 센다. 코드 쪽: `useState` · `useMemo` 로 한 번 만든 객체를 effect 정리에서 멈추면 같은 effect 에서 다시 시작하게(`start` · `dispose` 짝) 하고, 정리에서 취소한 핸들(rAF · 타이머)은 비운다.
 - Vitest 는 타입을 보지 않는다(esbuild) — 창 시험을 새로 썼으면 커밋 전에 `pnpm --filter @pitwall/desktop run typecheck` 를 돌린다. CodeMirror 의 내부 API(`view.observer` 등)는 시험이 돌아도 여기서 걸린다.
 - 편집 가능한 CodeMirror 칸을 가진 탭은 편집 뒤 `editor.togglePin`(dockview `updateParameters`)을 불러 내용이 남는지 본다 — 렌더마다 새로 만든 객체를 뷰를 만드는 effect 의 의존성으로 넘기면 뷰가 다시 만들어져 편집이 사라지는데, 부모를 다시 그리지 않는 시험은 이것을 못 잡는다.
 - IME 조합 시험은 단계마다 `view.domAtPos` 로 지금 글자 노드를 다시 찾아 고친다 — 장식이 바뀌어 줄이 다시 그려지면 잡아 둔 글자 노드가 끊긴다(`apps/desktop/src/git/merge/merge-window.test.tsx`).
