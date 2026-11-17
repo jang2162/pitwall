@@ -154,6 +154,7 @@ async fn a_group_turned_off_drops_all_of_its_tools() {
             "project_info",
             "project_list",
             "project_open",
+            "project_register",
             "settings_get"
         ]
     );
@@ -179,6 +180,7 @@ async fn an_exact_key_and_a_glob_beat_the_group() {
             "project_info",
             "project_list",
             "project_open",
+            "project_register",
             "settings_get",
             "sql_explain"
         ]
@@ -210,6 +212,7 @@ async fn shared_project_settings_cannot_turn_a_group_on() {
             "project_info",
             "project_list",
             "project_open",
+            "project_register",
             "settings_get"
         ]
     );

@@ -380,6 +380,7 @@ fn the_catalog_follows_the_mcp_flag() {
             "project_info",
             "project_list",
             "project_open",
+            "project_register",
             "settings_get"
         ]
     );
@@ -425,6 +426,7 @@ async fn lists_and_calls_project_tools() {
             "mcptest_write",
             "project_info",
             "project_list",
+            "project_register",
             "settings_get"
         ]
     );
@@ -612,7 +614,12 @@ async fn a_stateless_client_gets_client_info_audited_and_list_changes_by_subscri
     );
     assert_eq!(
         tool_names(&client).await,
-        ["mcptest_write", "project_info", "settings_get"]
+        [
+            "mcptest_write",
+            "project_info",
+            "project_register",
+            "settings_get"
+        ]
     );
     client.cancel().await.unwrap();
     cancel.cancel();
@@ -685,7 +692,12 @@ async fn a_session_never_writes_the_project_folder() {
         .await;
     assert_eq!(
         tool_names(&client).await,
-        ["mcptest_write", "project_list", "settings_get"]
+        [
+            "mcptest_write",
+            "project_list",
+            "project_register",
+            "settings_get"
+        ]
     );
     call(&client, "project_list", json!({})).await;
     client.cancel().await.unwrap();
@@ -796,7 +808,7 @@ async fn a_stateless_client_without_a_subscription_gets_no_list_changed() {
         )
         .await
         .unwrap();
-    assert_eq!(tool_names(&client).await.len(), 4);
+    assert_eq!(tool_names(&client).await.len(), 5);
     std::fs::create_dir_all(&f.paths.config).unwrap();
     std::fs::write(
         f.paths.config.join("settings.toml"),
@@ -805,7 +817,7 @@ async fn a_stateless_client_without_a_subscription_gets_no_list_changed() {
     .unwrap();
     // 변경이 서버에 닿았음을 목록으로 확인한 뒤, 알림이 오지 않았는지 본다.
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while tool_names(&client).await.len() != 3 {
+    while tool_names(&client).await.len() != 4 {
         assert!(
             std::time::Instant::now() < deadline,
             "설정 변경이 반영되지 않았다"
@@ -842,6 +854,7 @@ fn the_catalog_keeps_only_methods_the_host_routes() {
             "mcptest_write",
             "project_info",
             "project_list",
+            "project_register",
             "settings_get"
         ]
     );
