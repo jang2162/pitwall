@@ -453,9 +453,10 @@ it("sends the planned branch even when HEAD moved to another branch after the pl
 });
 
 it("shows the plan again when the target changed after it was shown (-32004)", async () => {
-  let n = 0;
+  // 푸시를 보낸 뒤의 계획만 보낼 곳이 바뀌어 있다. 몇 번째 계획인지로 가르지 않는다 — 시험은 앱처럼 StrictMode 로 그려 열 때
+  // 계획을 한 번 더 읽는다(걷힌 쪽 답은 버린다).
   host.answers.set("git.push.plan", () =>
-    ++n === 1
+    calls("git.push").length === 0
       ? plan()
       : plan({ remoteRef: "refs/heads/trunk", refspec: "refs/heads/main:refs/heads/trunk" }),
   );
@@ -468,8 +469,9 @@ it("shows the plan again when the target changed after it was shown (-32004)", a
   });
   await mount();
   const dialog = await openPush();
+  const shown = calls("git.push.plan").length;
   await click(button(dialog, "푸시")!);
-  await vi.waitFor(() => expect(calls("git.push.plan")).toHaveLength(2));
+  await vi.waitFor(() => expect(calls("git.push.plan")).toHaveLength(shown + 1));
   await vi.waitFor(() =>
     expect(byTestId("git-push-target")!.textContent).toBe("main → origin : refs/heads/trunk"),
   );

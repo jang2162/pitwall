@@ -37,8 +37,9 @@ vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: () => ({
     onDragDropEvent: async (handler: typeof host.drop) => {
       host.drop = handler;
+      // Tauri 의 떼기처럼 자기 리스너만 뗀다 — StrictMode 가 먼저 건 구독이 늦게 떼질 때 다시 건 구독을 지우지 않게.
       return () => {
-        host.drop = undefined;
+        if (host.drop === handler) host.drop = undefined;
       };
     },
   }),

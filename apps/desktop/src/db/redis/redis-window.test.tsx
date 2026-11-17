@@ -400,6 +400,14 @@ async function mountApp(strict = false) {
 const $ = <T extends Element = HTMLElement>(selector: string) =>
   document.querySelector<T>(selector);
 const calls = (method: string): Call[] => host.calls.filter((c) => c.method === method);
+/**
+ * 같은 인자의 호출을 하나로 — 시험은 앱처럼 StrictMode 로 그려 effect 를 걷었다 다시 건다. 걷힌 쪽의 읽기(그 답은 버린다)가 같은
+ * 인자로 한 번 더 나간다.
+ */
+const distinct = (cs: Call[]): Call[] =>
+  cs.filter(
+    (c, i) => cs.findIndex((d) => JSON.stringify(d.params) === JSON.stringify(c.params)) === i,
+  );
 
 async function click(el: Element | null) {
   expect(el).not.toBeNull();
@@ -470,7 +478,7 @@ describe("the Redis key document", () => {
     } satisfies KvValuePage);
     await openConnected();
     await openKey("big");
-    expect(calls("db.kv.get")).toEqual([
+    expect(distinct(calls("db.kv.get"))).toEqual([
       expect.objectContaining({
         params: expect.objectContaining({
           sessionId: "s1",
@@ -518,7 +526,7 @@ describe("the Redis key document", () => {
       ),
     );
     await settle();
-    expect(calls("db.kv.get").map((c) => c.params.key)).toEqual(["b"]);
+    expect(distinct(calls("db.kv.get")).map((c) => c.params.key)).toEqual(["b"]);
     expect($("[data-testid=redis-value]")?.dataset.key).toBe("b");
   });
 
@@ -753,6 +761,6 @@ describe("the Redis key document", () => {
         .filter((m) => m !== "db.session.unattendedRollbacks"),
     ).toEqual([]);
     // 연결 설정은 읽는다(표지 — 연결을 열지 않는다).
-    expect(calls("db.connection.get")).toHaveLength(1);
+    expect(distinct(calls("db.connection.get"))).toHaveLength(1);
   });
 });

@@ -2,7 +2,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 
 // 개발 서버 포트는 scripts/dev.mjs 가 워크트리마다 다르게 정해 넘긴다(docs/guideline/base/08-shared-resources.md).
 // 기본값을 두지 않는다 — 고정 포트로 뜨면 다른 워크트리의 개발 서버와 부딪힌다.
@@ -24,6 +24,10 @@ export default defineConfig(({ command, mode }) => {
           new URL("./src/db/grid/glide-stubs/react-responsive-carousel.ts", import.meta.url),
         ),
       },
+    },
+    test: {
+      // 모든 루트를 앱처럼 StrictMode 로 그린다(src/test-support/strict-mode.ts).
+      setupFiles: ["./src/test-support/strict-mode.ts"],
     },
     clearScreen: false,
     server: {

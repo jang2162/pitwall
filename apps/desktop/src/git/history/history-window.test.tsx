@@ -473,7 +473,9 @@ async function openHistoryFromTree(count = FIXTURE.rows.length) {
 it("⌃⌥H in the project tree opens the file's history: the commits of git log --follow, newest first, with the rename points", async () => {
   await openHistoryFromTree();
   expect(tabHeader("c.txt 히스토리")).toBeDefined();
-  expect(fileHistoryCalls()).toHaveLength(1);
+  // 시험은 앱처럼 StrictMode 로 그려 걷힌 쪽의 읽기가 하나 더 있을 수 있다(그 스트림은 끊는다) — 모두 같은 요청이다.
+  expect(fileHistoryCalls().length).toBeGreaterThan(0);
+  for (const call of fileHistoryCalls()) expect(call.params).toEqual(fileHistoryCalls()[0]!.params);
   expect(fileHistoryCalls()[0]!.params).toMatchObject({
     projectId: "p1",
     worktree: null,
@@ -652,14 +654,15 @@ it("reloads when HEAD moves and keeps the chosen commit", async () => {
   await openHistoryFromTree();
   const row = FIXTURE.rows[2]!;
   await mouse(historyRow(row.hash), "click");
+  const opened = fileHistoryCalls().length;
   await act(async () => host.emit("git.refsChanged", { worktree: null }));
-  await vi.waitFor(() => expect(fileHistoryCalls()).toHaveLength(2));
+  await vi.waitFor(() => expect(fileHistoryCalls()).toHaveLength(opened + 1));
   await settle();
   expect(historyRow(row.hash).getAttribute("aria-selected")).toBe("true");
   // 다른 워크트리의 바뀜은 무시한다.
   await act(async () => host.emit("git.refsChanged", { worktree: "/elsewhere" }));
   await settle();
-  expect(fileHistoryCalls()).toHaveLength(2);
+  expect(fileHistoryCalls()).toHaveLength(opened + 1);
 });
 
 it("does not open for a path outside the repository and says so", async () => {

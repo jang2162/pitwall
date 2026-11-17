@@ -633,9 +633,11 @@ describe("[Test Connection]", () => {
       secret: SECRET,
       draft: { name: "draft", host: "db.internal", sslmode: "verify-full" },
     });
-    expect(calls.map((c) => c.method).sort()).toEqual(
+    // 부른 메서드의 종류만 본다 — 시험은 앱처럼 StrictMode 로 그려 목록 읽기가 한 번 더 나간다. `db.connection.test` 는 한 번이다.
+    expect([...new Set(calls.map((c) => c.method))].sort()).toEqual(
       ["db.connection.list", "db.connection.test", "db.driver.list", "db.ssh.hosts"].sort(),
     );
+    expect(calls.filter((c) => c.method === "db.connection.test")).toHaveLength(1);
     const result = testid("db-conn-test-result")!;
     expect(result.dataset.result).toBe("ok");
     expect(result.textContent).toContain(T.test.ok("17.6"));

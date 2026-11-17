@@ -58,6 +58,14 @@ function visibility(initial: DocumentVisibilityState) {
   };
 }
 
+/**
+ * 지금 걸린 프레임을 모두 돌린다(애니메이션 프레임 하나). 시험은 앱처럼 StrictMode 로 그린다 — effect 를 걷었다 다시 건 쪽의
+ * 프레임도 줄에 있어(그 쪽은 표시를 보내지 않는다) 하나씩 꺼내면 엉뚱한 콜백을 돌린다.
+ */
+function tick(frames: (() => void)[]) {
+  for (const f of frames.splice(0)) f();
+}
+
 it("marks once, on the second frame after the first commit", () => {
   const frames: (() => void)[] = [];
   const onFrame = vi.fn();
@@ -66,11 +74,11 @@ it("marks once, on the second frame after the first commit", () => {
   const doc = visibility("visible");
   act(() => root!.render(<FirstFrameMark onFrame={onFrame} frame={frame} doc={doc} />));
 
-  expect(frames).toHaveLength(1);
-  frames.shift()!();
+  expect(frames.length).toBeGreaterThan(0);
+  tick(frames);
   expect(onFrame).not.toHaveBeenCalled();
-  expect(frames).toHaveLength(1);
-  frames.shift()!();
+  expect(frames.length).toBeGreaterThan(0);
+  tick(frames);
   expect(onFrame).toHaveBeenCalledTimes(1);
   expect(onFrame).toHaveBeenCalledWith({ hidden: false });
   expect(frames).toHaveLength(0);
@@ -91,8 +99,8 @@ it("keeps reporting each time the window is hidden after its first frame", () =>
       />,
     ),
   );
-  frames.shift()!();
-  frames.shift()!();
+  tick(frames);
+  tick(frames);
   doc.set("hidden");
   doc.set("visible");
   doc.set("hidden");
@@ -114,8 +122,8 @@ it("reports a window that was hidden before its first frame", () => {
   );
   doc.set("hidden");
   doc.set("visible");
-  frames.shift()!();
-  frames.shift()!();
+  tick(frames);
+  tick(frames);
   expect(onFrame).toHaveBeenCalledWith({ hidden: true });
 });
 

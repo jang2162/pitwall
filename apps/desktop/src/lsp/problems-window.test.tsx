@@ -485,7 +485,10 @@ it("draws only the visible rows of 10,000 diagnostics in 2,000 files, reading th
   const pages = host.diagnosticCalls.filter(
     ([m, p]) => m === "lsp.diagnostics.list" && !(p as { path?: string }).path,
   );
-  expect(pages.map(([, p]) => (p as { cursor: string | null }).cursor)).toEqual([null, "5000"]);
+  const cursors = pages.map(([, p]) => (p as { cursor: string | null }).cursor);
+  // 시험은 앱처럼 StrictMode 로 그린다 — effect 를 걷었다 다시 걸어 첫 쪽을 한 번 더 읽고, 걷힌 쪽은 첫 쪽에서 멈춘다.
+  expect(cursors.slice(-2)).toEqual([null, "5000"]);
+  expect(cursors.slice(0, -2).every((c) => c === null)).toBe(true);
   // 심각도 거르기의 수가 읽은 것 전부다.
   expect(document.querySelector('[data-problems-filter="error"]')?.getAttribute("aria-label")).toBe(
     "오류 6000",

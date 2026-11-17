@@ -111,7 +111,9 @@ const editor = () => {
 it("reads a tab opened here at once and shows it read-only", async () => {
   const load = vi.fn(async () => "CREATE TABLE invoice (\r\n  id bigint\r\n);");
   await mount(true, load);
-  expect(load).toHaveBeenCalledTimes(1);
+  // 곧바로 읽었다. 시험은 앱처럼 StrictMode 로 그려 걷힌 쪽의 읽기가 하나 더 있을 수 있다(그 답은 `token` 으로 버린다).
+  const opened = load.mock.calls.length;
+  expect(opened).toBeGreaterThan(0);
   const view = editor()!;
   expect(view.state.doc.toString()).toBe("CREATE TABLE invoice (\n  id bigint\n);");
   expect(view.state.readOnly).toBe(true);
@@ -119,7 +121,7 @@ it("reads a tab opened here at once and shows it read-only", async () => {
     document.querySelector<HTMLElement>("[data-testid=db-ddl-reload]")!.click(),
   );
   await settle();
-  expect(load).toHaveBeenCalledTimes(2);
+  expect(load).toHaveBeenCalledTimes(opened + 1);
 });
 
 it("does not read a restored tab until the person asks", async () => {

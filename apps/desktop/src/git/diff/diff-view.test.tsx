@@ -251,7 +251,9 @@ describe("DiffView", () => {
         return marker;
       },
     });
-    expect(seen).toEqual(["a:3", "b:3"]);
+    // 뷰를 만들 때마다 쪽마다 한 번 — 시험은 앱처럼 StrictMode 로 그려 effect 를 걷었다 다시 걸어 뷰를 다시 만든다.
+    expect(seen.slice(-2)).toEqual(["a:3", "b:3"]);
+    expect(seen.length % 2).toBe(0);
     for (const v of state.controller!.views()) expect(v.state.field(marker, false)).toBe("slot");
   });
 

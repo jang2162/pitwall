@@ -14,7 +14,7 @@ import type {
   Project,
   ProjectTrust,
 } from "@pitwall/rpc-client";
-import { act, StrictMode } from "react";
+import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -250,14 +250,11 @@ async function mount() {
   });
   root = createRoot(element);
   await act(async () =>
+    // StrictMode 로 감싸는 것은 시험 셋업이 한다(src/test-support/strict-mode.ts).
     root!.render(
-      // 앱(main.tsx)처럼 StrictMode 로 렌더한다 — effect 를 한 번 정리했다 다시 거는 dev 동작에서만 나는 결함이 있었다(M5-13b:
-      // 정리만 건 로그가 멈춘 채 남아 「불러오는 중」 에 멈췄다).
-      <StrictMode>
-        <ThemeStoreProvider store={store}>
-          <App kind="project" native={keymapNative} />
-        </ThemeStoreProvider>
-      </StrictMode>,
+      <ThemeStoreProvider store={store}>
+        <App kind="project" native={keymapNative} />
+      </ThemeStoreProvider>,
     ),
   );
   await settle();

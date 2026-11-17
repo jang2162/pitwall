@@ -67,9 +67,11 @@ function fakeHost() {
   let wake: (() => void) | undefined;
   const answers: { id: number; answer: McpApprovalAnswer }[] = [];
   const streams: { method: string; params: unknown }[] = [];
+  const signals: AbortSignal[] = [];
   const client = {
     stream(method: string, params: unknown, options: { signal: AbortSignal }) {
       streams.push({ method, params });
+      signals.push(options.signal);
       options.signal.addEventListener("abort", () => wake?.());
       return (async function* () {
         while (!options.signal.aborted) {
@@ -89,6 +91,8 @@ function fakeHost() {
     client: client as unknown as RpcClient,
     answers,
     streams,
+    /** 끊기지 않은 스트림. 시험은 앱처럼 StrictMode 로 그려 effect 를 걷었다 다시 건다 — 걷힌 쪽의 스트림은 끊긴다. */
+    live: () => streams.filter((_, i) => !signals[i]!.aborted),
     async push(...events: McpApprovalEvent[]) {
       queue.push(...events);
       // 마이크로태스크만 흘린다 — 가짜 시계(setTimeout)를 쓰는 시험에서도 돈다.
@@ -199,7 +203,7 @@ function type(input: HTMLInputElement, value: string) {
 
 it("a request opens the dialog with the agent, tool and tier; the first focus is Deny", async () => {
   const f = await mount();
-  expect(f.streams).toEqual([{ method: "mcp.approvals", params: { projectId: "p1" } }]);
+  expect(f.live()).toEqual([{ method: "mcp.approvals", params: { projectId: "p1" } }]);
   expect(dialog()).toBeNull();
   await f.push(open(request()));
   expect(dialog()).not.toBeNull();
@@ -280,7 +284,7 @@ it("a request without a project says it is not this project's", async () => {
 
 it("a window without a project listens without one", async () => {
   const f = await mount(null);
-  expect(f.streams).toEqual([{ method: "mcp.approvals", params: {} }]);
+  expect(f.live()).toEqual([{ method: "mcp.approvals", params: {} }]);
 });
 
 it("two pending requests are shown one after the other", async () => {

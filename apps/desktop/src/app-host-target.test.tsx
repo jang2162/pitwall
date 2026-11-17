@@ -19,6 +19,8 @@ declare global {
 }
 
 const targets = vi.hoisted(() => [] as HostTarget[]);
+/** 닫힌 연결 수. */
+const closed = vi.hoisted(() => ({ count: 0 }));
 
 // 답하지 않는 Host. 창이 어디로 연결하는지만 본다.
 vi.mock("./tauri-transport", async () => {
@@ -27,7 +29,12 @@ vi.mock("./tauri-transport", async () => {
     connectHost: async (target: HostTarget) => {
       targets.push(target);
       const [client] = pair();
-      return { transport: client, close: async () => {} };
+      return {
+        transport: client,
+        close: async () => {
+          closed.count += 1;
+        },
+      };
     },
   };
 });
@@ -45,6 +52,7 @@ beforeEach(() => {
   // 답하지 않는 Host 를 닫을 때 진행 중이던 호출이 경고를 남긴다.
   vi.spyOn(console, "warn").mockImplementation(() => {});
   targets.length = 0;
+  closed.count = 0;
 });
 
 afterEach(() => {
@@ -84,5 +92,8 @@ it("opens the project window's connection to its project", async () => {
   );
   await act(async () => new Promise((r) => setTimeout(r, 20)));
   act(() => root.unmount());
-  expect(targets).toEqual([{ projectId: "p1" }]);
+  // 시험은 앱처럼 StrictMode 로 그린다 — effect 를 걷었다 다시 걸어 연결이 한 번 더 열리고, 걷힌 쪽의 것은 닫힌다.
+  expect(targets.length).toBeGreaterThan(0);
+  expect(targets.every((t) => "projectId" in t && t.projectId === "p1")).toBe(true);
+  expect(closed.count).toBe(targets.length);
 });

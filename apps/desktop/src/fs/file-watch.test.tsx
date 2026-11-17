@@ -46,7 +46,13 @@ function fakeHost(mode: WatchMode = "recursive") {
       cancelled.push((message.params as { streamId: number }).streamId);
     }
   });
-  return { client: new RpcClient(clientSide), opened, cancelled };
+  return {
+    client: new RpcClient(clientSide),
+    opened,
+    cancelled,
+    /** 취소되지 않은 스트림. 시험은 앱처럼 StrictMode 로 그려 effect 를 걷었다 다시 건다 — 걷힌 쪽의 스트림은 취소된다. */
+    live: () => opened.filter((o) => !cancelled.includes(o.streamId)),
+  };
 }
 
 let root: Root | undefined;
@@ -86,21 +92,22 @@ it("re-attaches to the new worktree when the active worktree changes, and lets g
   document.body.append(element);
   root = createRoot(element);
   await act(async () => root!.render(<Watcher client={host.client} projectId="p1" />));
-  await vi.waitFor(() => expect(host.opened).toHaveLength(1));
-  expect(host.opened[0]!.params).toEqual({ projectId: "p1", worktree: null });
+  await vi.waitFor(() => expect(host.live()).toHaveLength(1));
+  expect(host.live()[0]!.params).toEqual({ projectId: "p1", worktree: null });
 
   await act(async () => rememberActiveWorktree({ worktree: "/wt" }));
-  await vi.waitFor(() => expect(host.opened).toHaveLength(2));
-  expect(host.opened[1]!.params).toEqual({ projectId: "p1", worktree: "/wt" });
-  await vi.waitFor(() => expect(host.cancelled).toEqual([1]));
+  await vi.waitFor(() =>
+    expect(host.live().map((o) => o.params)).toEqual([{ projectId: "p1", worktree: "/wt" }]),
+  );
 
   // 같은 워크트리를 다시 받으면 다시 열지 않는다.
+  const opened = host.opened.length;
   await act(async () => rememberActiveWorktree({ worktree: "/wt", file: "/wt/a.txt" }));
-  expect(host.opened).toHaveLength(2);
+  expect(host.opened).toHaveLength(opened);
 
   act(() => root!.unmount());
   root = undefined;
-  await vi.waitFor(() => expect(host.cancelled).toEqual([1, 2]));
+  await vi.waitFor(() => expect(host.live()).toEqual([]));
 });
 
 function StatusItem() {
@@ -139,7 +146,7 @@ it("shows a status bar item while a root is watched by polling, and drops it wit
   // 폴링이 아니면 항목이 없다.
   const folders = fakeHost("folders");
   await act(async () => render(folders.client, true));
-  await vi.waitFor(() => expect(folders.opened).toHaveLength(1));
+  await vi.waitFor(() => expect(folders.live()).toHaveLength(1));
   await act(async () => new Promise((r) => setTimeout(r, 20)));
   expect(document.querySelector("[data-status-item=fileWatch]")).not.toBeNull();
   expect(statusItem()).toBeNull();
