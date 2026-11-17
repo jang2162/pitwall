@@ -645,6 +645,7 @@ pub struct Connections {
     pub settings: crate::settings::DbSettings,
     /// 대상에 묶어 기억하는 프로덕션 · read-only 표지(결정 M5-D37 — `crate::gate` 의 「에이전트의 입구」). 연결 설정을 읽어 올리는
     /// 자리([`Connections::load`] · [`Connections::refresh`])가 모두 여기에 더한다 — 연결 설정의 내용을 읽는 길은 그 둘뿐이다.
+    /// 앱 실행을 넘어 영속한다(Host 의 상태 DB — M5-17b, [`Connections::attach`] 가 레지스트리를 붙인다).
     pub(crate) marks: crate::gate::MarkMemory,
 }
 
@@ -788,6 +789,7 @@ impl Connections {
 
     /// 두 번째부터는 무시한다.
     pub fn attach(&self, parts: HostParts) {
+        self.marks.attach(parts.projects.clone());
         let _ = self.host.set(parts);
     }
 
@@ -1310,15 +1312,17 @@ pub async fn follow_files(mut events: Subscription, connections: Arc<Connections
     }
 }
 
+/// 블로킹 스레드에서 돌린다.
+pub(crate) async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, RpcError> + Send + 'static,
+) -> Result<T, RpcError> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| RpcError::internal(e.to_string()))?
+}
+
 /// 핸들러를 붙인다. 설정 · 키체인 읽기는 블로킹 스레드에서 한다.
 pub fn register(router: &mut Router, connections: Arc<Connections>) {
-    async fn blocking<T: Send + 'static>(
-        f: impl FnOnce() -> Result<T, RpcError> + Send + 'static,
-    ) -> Result<T, RpcError> {
-        tokio::task::spawn_blocking(f)
-            .await
-            .map_err(|e| RpcError::internal(e.to_string()))?
-    }
     let (list, get, upsert, delete) = (
         Arc::clone(&connections),
         Arc::clone(&connections),
@@ -1353,5 +1357,6 @@ pub fn register(router: &mut Router, connections: Arc<Connections>) {
         );
     crate::secret::register(router, Arc::clone(&connections));
     crate::settings::register(router, Arc::clone(&connections));
+    crate::mark_memory::register(router, Arc::clone(&connections));
     crate::trust::register(router, connections);
 }

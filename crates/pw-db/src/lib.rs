@@ -11,6 +11,7 @@
 //! - [`edit`]: 그리드 편집 적용 RPC(M3-12).
 //! - [`kv`]: Redis RPC(M3-22).
 //! - [`kv_tool`]: Redis 의 MCP 툴 메서드(`db_kv_scan` · `db_kv_get` — 16-m5-plan.md M5-19). 관문은 [`gate::db_grant_for_agent`].
+//! - [`mark_memory`]: 표지 기억(앱 실행을 넘어 영속 — M5-17b)을 사람이 그 프로젝트 창에서 보고 푸는 RPC.
 //! - [`ssh_hosts`]: 연결 편집 다이얼로그의 `~/.ssh/config` 호스트 이름 목록(M3-14).
 //! - [`settings`]: 전역 설정의 `[db]` 읽기와 설정 창 「DB」 페이지 RPC(M3-20).
 //! - [`tools`]: MCP 툴 메서드(`db_connection_list` · `db_schema` — 16-m5-plan.md M5-06, `db_query` — M5-07). 관문은
@@ -33,6 +34,7 @@ pub mod execute_tool;
 pub mod gate;
 pub mod kv;
 pub mod kv_tool;
+pub mod mark_memory;
 pub mod registry;
 pub mod schema;
 pub mod script;

@@ -1051,7 +1051,7 @@ fn projects_from_a_v1_registry_are_untrusted_after_migration() {
         .unwrap()
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, store::supported_version());
     let trust = f.registry.trust("0123456789abcdef").unwrap();
     assert_eq!(trust.state, TrustState::Unknown);
     assert!(!f.registry.is_trusted("0123456789abcdef"));
@@ -1352,4 +1352,85 @@ fn a_relative_paths_worktree_still_follows_the_main_repository() {
     f.registry.set_trust(&project.id, true).unwrap();
     assert_eq!(f.registry.trust(&own.id).unwrap().owner_id, project.id);
     assert!(f.registry.is_trusted(&own.id));
+}
+
+// --- DB 표지 기억(M5-17b) ---
+
+fn marks(production: bool, read_only: bool) -> db_marks::StoredDbMarks {
+    db_marks::StoredDbMarks {
+        production,
+        read_only,
+    }
+}
+
+/// 표지는 조여지기만 한다(더하기가 켜진 표지를 끄지 않는다). 지우기는 그 대상 하나만 지우고 지운 것을 돌려준다. 다시 연 레지스트리
+/// (앱을 다시 켬)도 같은 것을 읽는다.
+#[test]
+fn db_marks_only_tighten_and_survive_reopening() {
+    let f = Fixture::new();
+    f.registry
+        .add_db_marks(&[
+            ("a".into(), marks(true, false)),
+            ("b".into(), marks(false, true)),
+            ("empty".into(), marks(false, false)),
+        ])
+        .unwrap();
+    f.registry
+        .add_db_marks(&[("a".into(), marks(false, true))])
+        .unwrap();
+    let reopened = Registry::new(f.paths.clone(), None, f.bus.clone());
+    assert_eq!(
+        reopened.db_marks().unwrap(),
+        [
+            ("a".to_owned(), marks(true, true)),
+            ("b".to_owned(), marks(false, true))
+        ]
+    );
+    assert_eq!(reopened.forget_db_marks("a").unwrap(), marks(true, true));
+    assert_eq!(reopened.forget_db_marks("a").unwrap(), marks(false, false));
+    assert_eq!(
+        f.registry.db_marks().unwrap(),
+        [("b".to_owned(), marks(false, true))]
+    );
+}
+
+/// v2 파일(표지 기억이 없던 빌드)은 v3 로 올라오며 빈 기억이다 — 기존 행은 그대로.
+#[test]
+fn a_v2_registry_migrates_to_an_empty_mark_memory() {
+    let f = Fixture::new();
+    let file = f.paths.data.join(store::FILE_NAME);
+    {
+        let v2 = store::open_with(&file, store::BUSY_TIMEOUT, &store::MIGRATIONS[..2]);
+        assert!(matches!(v2.status, StorageStatus::Ok { .. }));
+        assert!(v2.conn.prepare("SELECT target FROM db_marks").is_err());
+    }
+    assert!(f.registry.db_marks().unwrap().is_empty());
+    f.registry
+        .add_db_marks(&[("a".into(), marks(true, false))])
+        .unwrap();
+    assert_eq!(f.registry.db_marks().unwrap().len(), 1);
+}
+
+/// 쓰지 못하는 저장소(앱보다 새 스키마 — 읽기 전용)면 더하기 · 지우기가 `Unavailable` 이다(부른 쪽이 fail-closed 로 다룬다).
+#[test]
+fn db_marks_are_unavailable_when_the_registry_cannot_write() {
+    let f = Fixture::new();
+    f.registry
+        .add_db_marks(&[("a".into(), marks(true, false))])
+        .unwrap();
+    let file = f.paths.data.join(store::FILE_NAME);
+    Connection::open(&file)
+        .unwrap()
+        .pragma_update(None, "user_version", store::supported_version() + 1)
+        .unwrap();
+    let newer = Registry::new(f.paths.clone(), None, f.bus.clone());
+    assert!(matches!(
+        newer.add_db_marks(&[("b".into(), marks(true, false))]),
+        Err(RegistryError::Unavailable(_))
+    ));
+    assert!(matches!(
+        newer.forget_db_marks("a"),
+        Err(RegistryError::Unavailable(_))
+    ));
+    assert_eq!(newer.db_marks().unwrap().len(), 1);
 }

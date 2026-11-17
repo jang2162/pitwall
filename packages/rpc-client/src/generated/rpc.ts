@@ -36,6 +36,11 @@ export type UnaryMethods = {
 	 */
 	"db.connection.delete": { params: DbConnectionParams; result: null };
 	/**
+	 * 연결 하나의 푼 대상에 기억된 표지를 지운다. 그 프로젝트 창의 연결만 — MCP 세션은 permission denied. 상태 DB 를 쓸 수
+	 * 없으면 storage unavailable(지우지 않는다).
+	 */
+	"db.connection.forgetMarks": { params: DbConnectionParams; result: DbConnectionMarkMemory };
+	/**
 	 * 연결 하나. 없으면 not found 오류.
 	 */
 	"db.connection.get": { params: DbConnectionParams; result: DbConnectionEntry };
@@ -43,6 +48,10 @@ export type UnaryMethods = {
 	 * 프로젝트의 DB 연결 목록(비밀 없이). 연결마다 신뢰 · 사용 가능 상태를 단다. 신뢰 전에도 돌려준다(상태는 모두 `untrusted`).
 	 */
 	"db.connection.list": { params: DbProjectParams; result: DbConnectionList };
+	/**
+	 * 연결 하나의 푼 대상에 기억된 프로덕션 · read-only 표지(에이전트에게 적용하는 것 — 결정 M5-D37). 그 프로젝트 창의 연결만.
+	 */
+	"db.connection.marks": { params: DbConnectionParams; result: DbConnectionMarkMemory };
 	/**
 	 * 연결 테스트: 붙어 보고 서버 판본 · TLS 상태를 돌려준 뒤 닫는다. `connectionId`(저장한 연결) 또는 `draft`(저장 전 초안)를 준다.
 	 * 초안의 비밀(`secret`)은 저장하지 않는다. 그 프로젝트 창의 연결 + 신뢰한 프로젝트만. 비밀 · 확인이 필요하면 3101 · 3102,
@@ -1297,8 +1306,10 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"config.tool.get": {"name":"config.tool.get","kind":"unary","tier":"read","roles":["owner"],"params":"SettingsGetToolParams","output":"SettingsGetToolResult","doc":" Read settings keys without writing to disk. Without `projectId` (`null`) the global settings; with it, that\n project's merged settings (project settings over the global ones). `key` (a `table.key` prefix) narrows the\n result. Each value carries the layer it came from (builtin · global · shared · personal). Values whose key name\n points at a secret are redacted. Other values are as in the settings files — the same reach as an agent reading\n the files directly.\n","mcp":{"group":"project","name":"settings_get"},"fileScope":false},
 	"db.connection.approve": {"name":"db.connection.approve","kind":"unary","tier":"write","roles":["owner"],"params":"DbConnectionApproveParams","output":"()","doc":" 사람이 확인한 것을 기록한다 — `env` 참조의 (변수, 대상), 루트 밖 SQLite 의 실제 경로, SSH 터널 목적지 · 인증서 파일의\n (값, 대상). 지금 설정에서 나오는 것과 같을 때만\n 기록하고 다르면 conflict 오류(그 사이 설정이 바뀌었다). 확인 기록이 깨져 있으면 덮지 않고 storage unavailable. 그 프로젝트 창의\n 연결 + 신뢰한 프로젝트만.\n","mcp":null,"fileScope":false},
 	"db.connection.delete": {"name":"db.connection.delete","kind":"unary","tier":"write","roles":["owner"],"params":"DbConnectionParams","output":"()","doc":" 연결 설정 파일(공유 · 개인 둘 다)과 그 연결의 비밀 · 확인 기록을 지운다. 그 프로젝트 창의 연결만.\n","mcp":null,"fileScope":false},
+	"db.connection.forgetMarks": {"name":"db.connection.forgetMarks","kind":"unary","tier":"write","roles":["owner"],"params":"DbConnectionParams","output":"DbConnectionMarkMemory","doc":" 연결 하나의 푼 대상에 기억된 표지를 지운다. 그 프로젝트 창의 연결만 — MCP 세션은 permission denied. 상태 DB 를 쓸 수\n 없으면 storage unavailable(지우지 않는다).\n","mcp":null,"fileScope":false},
 	"db.connection.get": {"name":"db.connection.get","kind":"unary","tier":"read","roles":["owner"],"params":"DbConnectionParams","output":"DbConnectionEntry","doc":" 연결 하나. 없으면 not found 오류.\n","mcp":null,"fileScope":false},
 	"db.connection.list": {"name":"db.connection.list","kind":"unary","tier":"read","roles":["owner"],"params":"DbProjectParams","output":"DbConnectionList","doc":" 프로젝트의 DB 연결 목록(비밀 없이). 연결마다 신뢰 · 사용 가능 상태를 단다. 신뢰 전에도 돌려준다(상태는 모두 `untrusted`).\n","mcp":null,"fileScope":false},
+	"db.connection.marks": {"name":"db.connection.marks","kind":"unary","tier":"read","roles":["owner"],"params":"DbConnectionParams","output":"DbConnectionMarkMemory","doc":" 연결 하나의 푼 대상에 기억된 프로덕션 · read-only 표지(에이전트에게 적용하는 것 — 결정 M5-D37). 그 프로젝트 창의 연결만.\n","mcp":null,"fileScope":false},
 	"db.connection.test": {"name":"db.connection.test","kind":"unary","tier":"exec","roles":["owner"],"params":"DbConnectionTestParams","output":"ServerInfo","doc":" 연결 테스트: 붙어 보고 서버 판본 · TLS 상태를 돌려준 뒤 닫는다. `connectionId`(저장한 연결) 또는 `draft`(저장 전 초안)를 준다.\n 초안의 비밀(`secret`)은 저장하지 않는다. 그 프로젝트 창의 연결 + 신뢰한 프로젝트만. 비밀 · 확인이 필요하면 3101 · 3102,\n 드라이버가 실패하면 3003(`data.error`).\n","mcp":null,"fileScope":false},
 	"db.connection.upsert": {"name":"db.connection.upsert","kind":"unary","tier":"write","roles":["owner"],"params":"DbConnectionUpsertParams","output":"DbConnectionEntry","doc":" 연결 설정 파일을 만들거나 고친다(`location` 의 파일 하나에 연결 전부를 쓴다 — 개인 파일에 쓰면 공유 파일에만 있는 키는\n 그대로 남는다, 설정 계층에는 키를 지우는 문법이 없다). 그 프로젝트 창의 연결만 — 아니면 permission denied.\n","mcp":null,"fileScope":false},
 	"db.driver.list": {"name":"db.driver.list","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"Vec<DbDriverEntry>","doc":" 등록된 드라이버와 지원 플래그(id 순). 연결 없이 읽는 정적 정보다 — 연결 편집 다이얼로그(M3-14)는 드라이버가 받는\n `sslmode`(`capabilities.sslModes`)로 나머지를 고를 수 없게 하고, DB 탐색기(M3-13)는 플래그로 트리 단계 · 기능을 정한다.\n 비밀 · 프로젝트와 상관없어 범위를 묻지 않는다. MCP 에 내지 않는다.\n","mcp":null,"fileScope":false},
@@ -2137,6 +2148,14 @@ export type DbConnectionList = {
 	trusted: boolean,
 };
 
+/**  연결 하나의 대상에 대한 표지 기억. */
+export type DbConnectionMarkMemory = {
+	/**  `db.connection.marks`: 그 대상에 기억된 표지(앞 실행들의 것 포함). `db.connection.forgetMarks`: 지운 표지. */
+	remembered: DbMarks,
+	/**  지금 연결 설정(병합 값과 각 레이어 파일)이 다는 표지. 기억을 풀어도 곧바로 다시 기억된다. */
+	configured: DbMarks,
+};
+
 export type DbConnectionParams = {
 	projectId: string,
 	/**  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 공유 설정(`.pitwall/db/*.toml`)을 그 워크트리에서 읽고 쓴다. */
@@ -2503,6 +2522,12 @@ export type DbKvSetTtlParams = {
 	/**  새 수명(밀리초, 1 이상). 지우려면 `db.kv.delete`, 만료를 없애려면 `db.kv.persist`. */
 	ttlMs: number,
 	confirmed?: DbConfirmed | null,
+};
+
+/**  에이전트에게 적용하는 표지(결정 M5-D37). 조여지기만 한다([`DbMarks::tighten`]). */
+export type DbMarks = {
+	production: boolean,
+	readOnly: boolean,
 };
 
 /**  열린 트랜잭션(설정이 바뀐 세션에서 그대로 남은 것). */

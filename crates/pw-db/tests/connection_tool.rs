@@ -83,11 +83,18 @@ fn text_of(required: &ApprovalRequired) -> String {
 }
 
 impl Env {
-    /// 앱을 다시 켠 흉내(같은 파일 · 키체인, 빈 메모리).
+    /// 앱을 다시 켠 흉내(같은 파일 · 키체인 · 상태 DB 파일, 빈 메모리 — 레지스트리도 새로 연다).
     fn restart(&mut self) {
+        let projects =
+            pw_core::registry::Registry::new(self.f.app.clone(), None, self.f.bus.clone());
+        self.restart_with(projects);
+    }
+
+    /// [`Env::restart`] 인데 새 실행의 레지스트리를 준다.
+    fn restart_with(&mut self, projects: pw_core::registry::Registry) {
         let pg = self.pg.clone();
         let mut slot = None;
-        self.f.restart(|router, connections| {
+        self.f.restart_with(projects, |router, connections| {
             let mut drivers = pw_db::DriverRegistry::new();
             drivers.register(Arc::new(pg)).unwrap();
             let sessions = Arc::new(DbSessions::new(Arc::clone(connections), drivers));
@@ -1085,4 +1092,240 @@ async fn a_read_only_connection_cannot_be_moved() {
         &e.upsert(&mut agent, moved, None).await,
         "movesMarkedTarget",
     );
+}
+
+// --- 표지 기억은 앱 실행을 넘어 영속한다(사용자 결정 2026-11-18 — M5-17 재리뷰 G2, M5-17b) ----------------------------------
+
+/// 에이전트의 세 DB 툴(`db_connection_test` · `db_schema` · `db_query`)이 모두 그 연결을 `why` 로 거절한다.
+async fn all_refused(e: &Env, agent: &mut Conn, connection: &str, why: &str) {
+    refused(&e.test(agent, connection, None, None).await, why);
+    refused(&e.schema(agent, connection, None).await, why);
+    let query = e
+        .call(
+            agent,
+            "db.tool.query",
+            json!({ "connectionId": connection, "sql": "SELECT 1" }),
+            None,
+        )
+        .await;
+    refused(&query, why);
+}
+
+/// `db.tool.connectionList` 의 그 연결.
+async fn listed(e: &Env, agent: &mut Conn, connection: &str) -> Value {
+    let list = e
+        .call(agent, "db.tool.connectionList", json!({}), None)
+        .await
+        .unwrap();
+    list["connections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == connection)
+        .unwrap_or_else(|| panic!("{connection} not in {list}"))
+        .clone()
+}
+
+/// 리뷰 G2 의 재현: 프로덕션으로 기억된 뒤 에이전트가 자기 파일 툴로 설정의 `production` 을 지우고(공유 파일에서 줄을 지우기 ·
+/// 개인 파일로 덮기 둘 다) 앱(Host · 상태 DB 를 새로 연 레지스트리)이 다시 켜져도, 세 툴이 프로덕션으로 거절하고(「이 연결
+/// 열기」 승인을 청하지 않는다) 목록이 표지를 보인다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_production_mark_survives_an_app_restart_after_the_file_drops_it() {
+    for how in ["delete the line", "override in the local file"] {
+        let mut e = env();
+        e.f.write_db("prod.toml", PROD);
+        let mut agent = e.agent();
+        assert_eq!(listed(&e, &mut agent, "prod").await["production"], true);
+        match how {
+            "delete the line" => e.f.edit_db("prod.toml", "production = true\n", ""),
+            _ => {
+                e.f.write_db("prod.local.toml", "schema = 1\nproduction = false\n")
+            }
+        }
+
+        e.restart();
+        let mut agent = e.agent();
+        let prod = listed(&e, &mut agent, "prod").await;
+        assert_eq!(prod["production"], true, "{how}: {prod}");
+        all_refused(&e, &mut agent, "prod", "productionBlocked").await;
+        // 같은 대상을 가리키는 표지 없는 새 연결도 프로덕션이다.
+        e.f.write_db("sneaky.toml", SNEAKY);
+        refused(
+            &e.test(&mut agent, "sneaky", None, None).await,
+            "productionBlocked",
+        );
+        assert_eq!(e.connects(), 0, "{how}");
+    }
+}
+
+/// 기억을 푸는 것은 사람만: 에이전트 범위 · 파일 범위 · 다른 프로젝트 창 · 웰컴의 `db.connection.forgetMarks` 는 거절이고 기억이
+/// 그대로다. 그 프로젝트 창이 풀면 다음 실행부터(파일에 표지가 없으면) 평범한 대상이다(「이 연결 열기」 승인을 청한다). 파일에
+/// 표지가 남아 있으면 결과가 그것을 말하고 곧바로 다시 기억된다 — 그 뒤 파일에서 지우고 다시 켜도 프로덕션이다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_the_project_window_forgets_a_remembered_mark() {
+    let mut e = env();
+    e.f.write_db("prod.toml", PROD);
+    let mut agent = e.agent();
+    listed(&e, &mut agent, "prod").await;
+    e.f.edit_db("prod.toml", "production = true\n", "");
+    e.restart();
+
+    let params = json!({ "projectId": e.f.id, "connectionId": "prod" });
+    let file = e.f.root.join("a.txt");
+    std::fs::write(&file, "").unwrap();
+    for scope in [
+        ConnectionScope::Agent,
+        pw_rpc::Caller::file(pw_rpc::Role::Owner, file.clone()).scope,
+        ConnectionScope::Project(e.f.other.clone()),
+        ConnectionScope::Host,
+    ] {
+        let mut other = e.f.connect(scope.clone());
+        for method in ["db.connection.forgetMarks", "db.connection.marks"] {
+            let err = other
+                .call(method, params.clone())
+                .await
+                .expect_err("refused");
+            assert_eq!(
+                err.code,
+                rpc_code::PERMISSION_DENIED,
+                "{scope:?} {method}: {err:?}"
+            );
+        }
+    }
+    let mut agent = e.agent();
+    all_refused(&e, &mut agent, "prod", "productionBlocked").await;
+
+    let mut w = e.f.window();
+    let before = w.call("db.connection.marks", params.clone()).await.unwrap();
+    assert_eq!(
+        before,
+        json!({ "remembered": { "production": true, "readOnly": false },
+                "configured": { "production": false, "readOnly": false } })
+    );
+    let forgot = w
+        .call("db.connection.forgetMarks", params.clone())
+        .await
+        .unwrap();
+    assert_eq!(forgot, before);
+    assert_eq!(
+        w.call("db.connection.marks", params.clone()).await.unwrap()["remembered"],
+        json!({ "production": false, "readOnly": false })
+    );
+
+    e.restart();
+    let mut agent = e.agent();
+    assert_eq!(listed(&e, &mut agent, "prod").await["production"], false);
+    asked(&e.test(&mut agent, "prod", None, None).await);
+
+    // 파일이 아직 표지를 달고 있으면 풀어도 다시 기억된다 — 결과의 `configured` 가 그것을 말한다.
+    e.f.write_db("prod.toml", PROD);
+    let mut w = e.f.window();
+    let forgot = w
+        .call("db.connection.forgetMarks", params.clone())
+        .await
+        .unwrap();
+    assert_eq!(forgot["configured"]["production"], true, "{forgot}");
+    assert_eq!(
+        w.call("db.connection.marks", params.clone()).await.unwrap()["remembered"]["production"],
+        true
+    );
+    e.f.edit_db("prod.toml", "production = true\n", "");
+    e.restart();
+    let mut agent = e.agent();
+    refused(
+        &e.test(&mut agent, "prod", None, None).await,
+        "productionBlocked",
+    );
+}
+
+/// 상태 DB 에 표지 기억을 쓰지 못하면(다른 연결이 쓰기 잠금을 쥠) 에이전트의 DB 툴은 모두 `markMemoryUnavailable` 로 거절한다
+/// (fail-closed). 사람의 창은 그대로 쓴다. 잠금이 풀리면 쓰지 못한 표지를 쓰고 툴이 다시 돈다 — 그 표지는 다음 실행에도 남는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_db_tools_fail_closed_when_the_mark_memory_cannot_be_saved() {
+    let mut e = env();
+    let file = e.f.app.data.join(pw_core::registry::store::FILE_NAME);
+    let holder = pw_core::registry::store::open(&file, Duration::from_secs(2));
+    let short = pw_core::registry::Timings {
+        busy: Duration::from_millis(50),
+        retry_interval: Duration::from_millis(50),
+        retry_busy: Duration::from_millis(50),
+    };
+    let registry = |f: &common::Fixture| {
+        pw_core::registry::Registry::with_timings(f.app.clone(), None, f.bus.clone(), short)
+    };
+    let projects = registry(&e.f);
+    e.restart_with(projects);
+    e.f.write_db("prod.toml", PROD);
+    holder.conn.execute_batch("BEGIN EXCLUSIVE").unwrap();
+
+    let mut agent = e.agent();
+    let unavailable = |result: &Result<Value, RpcError>| {
+        let err = result.clone().expect_err("refused");
+        assert_eq!(
+            (err.code, reason(&err)),
+            (rpc_code::STORAGE_UNAVAILABLE, Some("markMemoryUnavailable")),
+            "{err:?}"
+        );
+    };
+    unavailable(
+        &e.call(&mut agent, "db.tool.connectionList", json!({}), None)
+            .await,
+    );
+    unavailable(&e.test(&mut agent, "dev", None, None).await);
+    unavailable(&e.schema(&mut agent, "dev", None).await);
+    let lowered = json!({ "connectionId": "dev", "config": {
+        "name": "dev", "driver": "postgres", "host": "localhost", "database": "app", "readOnly": true } });
+    unavailable(&e.upsert(&mut agent, lowered, None).await);
+    // 사람의 창은 쓴다.
+    let mut w = e.f.window();
+    w.call("db.connection.list", json!({ "projectId": e.f.id }))
+        .await
+        .unwrap();
+
+    holder.conn.execute_batch("COMMIT").unwrap();
+    assert_eq!(listed(&e, &mut agent, "prod").await["production"], true);
+    e.f.edit_db("prod.toml", "production = true\n", "");
+    e.restart();
+    let mut agent = e.agent();
+    refused(
+        &e.test(&mut agent, "prod", None, None).await,
+        "productionBlocked",
+    );
+    assert_eq!(e.connects(), 0);
+}
+
+/// 상태 DB 를 읽기만 할 수 있으면(앱보다 새 스키마 — 앱을 내린 경우) 에이전트의 DB 툴은 모두 거절한다(fail-closed). 사람의 창은
+/// 그대로 쓴다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_db_tools_fail_closed_when_the_state_database_is_read_only() {
+    let mut e = env();
+    let file = e.f.app.data.join(pw_core::registry::store::FILE_NAME);
+    pw_core::registry::store::open(&file, Duration::from_secs(2))
+        .conn
+        .pragma_update(
+            None,
+            "user_version",
+            pw_core::registry::store::supported_version() + 1,
+        )
+        .unwrap();
+    e.restart();
+    assert!(e.f.projects.status().unwritable_reason().is_some());
+    let mut agent = e.agent();
+    for result in [
+        e.call(&mut agent, "db.tool.connectionList", json!({}), None)
+            .await,
+        e.test(&mut agent, "dev", None, None).await,
+        e.schema(&mut agent, "dev", None).await,
+    ] {
+        let err = result.expect_err("refused");
+        assert_eq!(
+            (err.code, reason(&err)),
+            (rpc_code::STORAGE_UNAVAILABLE, Some("markMemoryUnavailable")),
+            "{err:?}"
+        );
+    }
+    let mut w = e.f.window();
+    w.call("db.connection.list", json!({ "projectId": e.f.id }))
+        .await
+        .unwrap();
 }

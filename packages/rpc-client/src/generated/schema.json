@@ -1067,6 +1067,75 @@
       ],
       "tier": "write"
     },
+    "db.connection.forgetMarks": {
+      "description": "연결 하나의 푼 대상에 기억된 표지를 지운다. 그 프로젝트 창의 연결만 — MCP 세션은 permission denied. 상태 DB 를 쓸 수\n없으면 storage unavailable(지우지 않는다).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "connectionId": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 공유 설정(`.pitwall/db/*.toml`)을 그 워크트리에서 읽고 쓴다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "connectionId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DbMarks": {
+            "description": "에이전트에게 적용하는 표지(결정 M5-D37). 조여지기만 한다([`DbMarks::tighten`]).",
+            "properties": {
+              "production": {
+                "type": "boolean"
+              },
+              "readOnly": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "production",
+              "readOnly"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "연결 하나의 대상에 대한 표지 기억.",
+        "properties": {
+          "configured": {
+            "$ref": "#/$defs/DbMarks",
+            "description": "지금 연결 설정(병합 값과 각 레이어 파일)이 다는 표지. 기억을 풀어도 곧바로 다시 기억된다."
+          },
+          "remembered": {
+            "$ref": "#/$defs/DbMarks",
+            "description": "`db.connection.marks`: 그 대상에 기억된 표지(앞 실행들의 것 포함). `db.connection.forgetMarks`: 지운 표지."
+          }
+        },
+        "required": [
+          "remembered",
+          "configured"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "db.connection.get": {
       "description": "연결 하나. 없으면 not found 오류.",
       "kind": "unary",
@@ -2542,6 +2611,75 @@
           "problem",
           "stateProblem",
           "trusted"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "db.connection.marks": {
+      "description": "연결 하나의 푼 대상에 기억된 프로덕션 · read-only 표지(에이전트에게 적용하는 것 — 결정 M5-D37). 그 프로젝트 창의 연결만.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "connectionId": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 공유 설정(`.pitwall/db/*.toml`)을 그 워크트리에서 읽고 쓴다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "connectionId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DbMarks": {
+            "description": "에이전트에게 적용하는 표지(결정 M5-D37). 조여지기만 한다([`DbMarks::tighten`]).",
+            "properties": {
+              "production": {
+                "type": "boolean"
+              },
+              "readOnly": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "production",
+              "readOnly"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "연결 하나의 대상에 대한 표지 기억.",
+        "properties": {
+          "configured": {
+            "$ref": "#/$defs/DbMarks",
+            "description": "지금 연결 설정(병합 값과 각 레이어 파일)이 다는 표지. 기억을 풀어도 곧바로 다시 기억된다."
+          },
+          "remembered": {
+            "$ref": "#/$defs/DbMarks",
+            "description": "`db.connection.marks`: 그 대상에 기억된 표지(앞 실행들의 것 포함). `db.connection.forgetMarks`: 지운 표지."
+          }
+        },
+        "required": [
+          "remembered",
+          "configured"
         ],
         "type": "object"
       },

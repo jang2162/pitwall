@@ -36,7 +36,7 @@ thread_local! {
 }
 
 /// 버전 `i` → `i + 1`. 길이가 곧 이 앱이 아는 최신 버전이다.
-pub const MIGRATIONS: &[Migration] = &[v0_to_v1, v1_to_v2];
+pub const MIGRATIONS: &[Migration] = &[v0_to_v1, v1_to_v2, v2_to_v3];
 
 /// 레지스트리가 읽는 질의. 읽기 전용으로 연 새 스키마 파일을 이 질의로 읽을 수 있는지 열 때 미리 본다(`prepare` 가 열 이름을 검사한다).
 pub const SELECT_PROJECTS: &str =
@@ -89,6 +89,20 @@ fn v1_to_v2(tx: &Transaction<'_>) -> rusqlite::Result<()> {
              project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
              trusted    INTEGER NOT NULL CHECK (trusted IN (0, 1)),
              decided_at INTEGER NOT NULL
+         );",
+    )
+}
+
+/// v3: DB 표지 기억(16-m5-plan 결정 M5-D37 — 사용자 결정 2026-11-18, M5-17b, [`super::db_marks`]). 한 번 프로덕션 · read-only
+/// 였던 접속 대상은 앱을 다시 켜도 기억한다. 열쇠는 pw-db 가 정하는 표지 열쇠의 글이고, 프로젝트에 묶지 않는다(같은 대상은
+/// 같은 데이터다). 행은 조여지기만 하고 사람이 앱에서 풀 때만 지운다.
+fn v2_to_v3(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    tx.execute_batch(
+        "CREATE TABLE db_marks (
+             target     TEXT PRIMARY KEY,
+             production INTEGER NOT NULL CHECK (production IN (0, 1)),
+             read_only  INTEGER NOT NULL CHECK (read_only IN (0, 1)),
+             seen_at    INTEGER NOT NULL
          );",
     )
 }

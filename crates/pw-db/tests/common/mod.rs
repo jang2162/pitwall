@@ -129,9 +129,21 @@ impl Fixture {
         }
     }
 
-    /// 앱을 다시 켠 흉내: 같은 앱 폴더 · 레지스트리 · 키체인 · 설정 파일 위에, 메모리(표지 기억 · 「사람이 연 연결」 등)가 빈 연결
-    /// 관리자와 라우터를 새로 만든다. `extra` 는 [`Fixture::build`] 와 같다. 앞서 연 [`Conn`] 은 옛 라우터에 붙어 있다.
+    /// 앱을 다시 켠 흉내: 같은 앱 폴더 · 상태 DB 파일 · 키체인 · 설정 파일 위에, 레지스트리(상태 DB 를 새로 연다)와 메모리(표지
+    /// 기억의 메모리 · 「사람이 연 연결」 등)가 빈 연결 관리자 · 라우터를 새로 만든다. `extra` 는 [`Fixture::build`] 와 같다. 앞서 연
+    /// [`Conn`] 은 옛 라우터에 붙어 있다.
     pub fn restart(&mut self, extra: impl FnOnce(&mut Router, &Arc<Connections>)) {
+        let projects = Registry::new(self.app.clone(), None, self.bus.clone());
+        self.restart_with(projects, extra);
+    }
+
+    /// [`Fixture::restart`] 인데 새 실행의 레지스트리를 준다(상태 DB 를 다른 시간 · 상태로 연 것).
+    pub fn restart_with(
+        &mut self,
+        projects: Registry,
+        extra: impl FnOnce(&mut Router, &Arc<Connections>),
+    ) {
+        self.projects = projects;
         let connections = Arc::new(Connections::new(self.store.clone(), self.env.clone()));
         connections.attach(HostParts {
             paths: self.app.clone(),

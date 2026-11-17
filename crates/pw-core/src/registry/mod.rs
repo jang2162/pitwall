@@ -17,6 +17,7 @@
 pub mod agent;
 pub mod candidates;
 pub mod consoles;
+pub mod db_marks;
 pub mod exec;
 pub mod info;
 pub mod methods;

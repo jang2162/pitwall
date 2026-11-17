@@ -148,7 +148,18 @@ const LOOPBACK: &str = "localhost";
 const REDIS_DEFAULT_USER: &str = "default";
 
 /// 에이전트에게 적용하는 표지(결정 M5-D37). 조여지기만 한다([`DbMarks::tighten`]).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    specta::Type,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "camelCase")]
 pub struct DbMarks {
     pub production: bool,
@@ -178,19 +189,65 @@ impl DbMarks {
     }
 }
 
-/// 대상 → 이번 실행 중 본 가장 엄한 표지. `Connections` 가 하나 갖는다.
-#[derive(Debug, Default)]
-pub(crate) struct MarkMemory(Mutex<HashMap<DbTarget, DbMarks>>);
+/// 대상 → 본 가장 엄한 표지. `Connections` 가 하나 갖는다. **앱 실행을 넘어 영속한다**(결정 M5-D37 — 사용자 결정 2026-11-18,
+/// M5-17b): 더한 표지는 Host 의 상태 DB(`$DATA/state.db` 의 `db_marks` — `pw_core::registry::db_marks`)에도 쓰고, 에이전트의 DB
+/// 툴 호출마다([`agent_view`] → [`MarkMemory::sync`]) 그 표를 다시 읽어 더한다. 그래서 에이전트가 자기 파일 툴로 설정의
+/// `production` 을 지우고 앱이 다시 켜져도 그 대상은 프로덕션이다. 기억은 조여지기만 하고, 지우는 길은 사람이 그 프로젝트 창에서
+/// 부르는 [`MarkMemory::forget`](`db.connection.forgetMarks`) 하나다.
+///
+/// **fail-closed**: 상태 DB 를 쓸 수 없거나(`readOnly` · `memory`) 읽기 · 쓰기가 실패하면 [`MarkMemory::sync`] 가 거절한다 —
+/// 에이전트의 DB 툴이 모두 거절된다(사람의 창은 그대로 쓴다). 쓰지 못한 표지는 이번 실행의 메모리에 남고 다음 `sync` 가 다시 쓴다.
+///
+/// 열쇠는 [`DbTarget::mark_key`] 의 JSON 글([`mark_store_key`]). 다른 프로세스(같은 상태 DB 를 쓰는 다른 앱 실행)가 지운 기억은
+/// 이 프로세스의 메모리에 남는다 — 더 엄한 쪽이다.
+#[derive(Default)]
+pub(crate) struct MarkMemory {
+    seen: Mutex<HashMap<String, DbMarks>>,
+    /// 상태 DB 에 아직 쓰지 못한 열쇠(쓰기 실패). 비어 있지 않으면 [`MarkMemory::sync`] 가 다시 쓰고, 못 쓰면 거절한다.
+    unsaved: Mutex<HashSet<String>>,
+    store: std::sync::OnceLock<pw_core::registry::Registry>,
+}
+
+/// 표지 열쇠의 상태 DB 글. 직렬화가 실패하면(UTF-8 이 아닌 SQLite 경로) `Debug` 표기 — 둘 다 같은 대상에 늘 같은 글이다.
+pub(crate) fn mark_store_key(target: &DbTarget) -> String {
+    let key = target.mark_key();
+    serde_json::to_string(&key).unwrap_or_else(|_| format!("{key:?}"))
+}
+
+fn stored(marks: DbMarks) -> pw_core::registry::db_marks::StoredDbMarks {
+    pw_core::registry::db_marks::StoredDbMarks {
+        production: marks.production,
+        read_only: marks.read_only,
+    }
+}
+
+/// `data.reason`: 표지 기억을 상태 DB 에 쓰거나 읽지 못한다 — 에이전트의 DB 툴을 거절한다(fail-closed).
+pub const MARK_MEMORY_UNAVAILABLE: &str = "markMemoryUnavailable";
+
+fn mark_memory_unavailable(why: &str) -> RpcError {
+    RpcError::new(
+        rpc_code::STORAGE_UNAVAILABLE,
+        "Pitwall cannot keep its memory of production and read-only DB targets (its state database is unavailable), \
+         so agent DB tools are off until it can; open Pitwall to see why",
+    )
+    .with_data(json!({ "reason": MARK_MEMORY_UNAVAILABLE, "detail": why }))
+}
 
 impl MarkMemory {
-    /// 읽어 올린 연결 설정들의 표지를 더한다(`Connections::load` · `refresh`). 틀린 설정은 대상을 풀 수 없어 건너뛴다.
+    /// 상태 DB(Host 의 레지스트리)를 붙인다. 두 번째부터는 무시한다.
+    pub fn attach(&self, store: pw_core::registry::Registry) {
+        let _ = self.store.set(store);
+    }
+
+    /// 읽어 올린 연결 설정들의 표지를 더한다(`Connections::load` · `refresh`). 틀린 설정은 대상을 풀 수 없어 건너뛴다. 메모리를
+    /// 조인 열쇠는 상태 DB 에도 쓴다 — 쓰지 못하면 [`Self::sync`] 가 다시 쓴다.
     pub fn see(&self, root: &Path, list: &[LoadedConnection]) {
-        let seen: Vec<(DbTarget, DbMarks)> = list
+        let seen: Vec<(String, DbMarks)> = list
             .iter()
             .filter_map(|c| c.config.as_ref().ok().map(|config| (c, config)))
             .map(|(c, config)| {
                 (
-                    DbTarget::of(config, root).mark_key(),
+                    mark_store_key(&DbTarget::of(config, root)),
                     DbMarks::of_loaded(c, config),
                 )
             })
@@ -199,19 +256,130 @@ impl MarkMemory {
         if seen.is_empty() {
             return;
         }
-        let mut memory = lock(&self.0);
-        for (target, marks) in seen {
-            let entry = memory.entry(target).or_default();
-            *entry = entry.tighten(marks);
+        let tightened: Vec<String> = {
+            let mut memory = lock(&self.seen);
+            seen.into_iter()
+                .filter_map(|(key, marks)| {
+                    let entry = memory.entry(key.clone()).or_default();
+                    let after = entry.tighten(marks);
+                    (after != *entry).then(|| {
+                        *entry = after;
+                        key
+                    })
+                })
+                .collect()
+        };
+        if !tightened.is_empty() {
+            lock(&self.unsaved).extend(tightened);
+            if let Err(e) = self.flush() {
+                tracing::warn!(target: "pw_db", %e, "cannot save the db mark memory; agent db tools are refused until it can");
+            }
         }
     }
 
-    /// 그 대상에서 본 가장 엄한 표지(본 적 없으면 표지 없음).
+    /// 쓰지 못한 열쇠를 상태 DB 에 쓴다.
+    fn flush(&self) -> Result<(), String> {
+        let store = self.store.get().ok_or("no state database is attached")?;
+        let pending: Vec<(String, pw_core::registry::db_marks::StoredDbMarks)> = {
+            let unsaved = lock(&self.unsaved);
+            if unsaved.is_empty() {
+                return Ok(());
+            }
+            let memory = lock(&self.seen);
+            unsaved
+                .iter()
+                .map(|key| {
+                    (
+                        key.clone(),
+                        stored(memory.get(key).copied().unwrap_or_default()),
+                    )
+                })
+                .collect()
+        };
+        store.add_db_marks(&pending).map_err(|e| e.to_string())?;
+        let mut unsaved = lock(&self.unsaved);
+        for (key, _) in &pending {
+            unsaved.remove(key);
+        }
+        Ok(())
+    }
+
+    /// 에이전트의 DB 호출 앞(블로킹): 상태 DB 의 기억을 읽어 메모리에 더하고(다른 실행이 남긴 것), 쓰지 못한 표지를 다시 쓴다.
+    /// 상태 DB 를 쓸 수 없거나 읽기 · 쓰기가 실패하면 `markMemoryUnavailable`(fail-closed).
+    pub fn sync(&self) -> Result<(), RpcError> {
+        let store = self
+            .store
+            .get()
+            .ok_or_else(|| mark_memory_unavailable("no state database is attached"))?;
+        if let Some(reason) = store.status().unwritable_reason() {
+            tracing::warn!(target: "pw_db", reason, "the state database is not writable; agent db tools are refused");
+            return Err(mark_memory_unavailable(reason));
+        }
+        let rows = store.db_marks().map_err(|e| {
+            tracing::warn!(target: "pw_db", %e, "cannot read the db mark memory; agent db tools are refused");
+            mark_memory_unavailable(&e.to_string())
+        })?;
+        {
+            let mut memory = lock(&self.seen);
+            for (key, marks) in rows {
+                let entry = memory.entry(key).or_default();
+                *entry = entry.tighten(DbMarks {
+                    production: marks.production,
+                    read_only: marks.read_only,
+                });
+            }
+        }
+        self.flush().map_err(|e| {
+            tracing::warn!(target: "pw_db", %e, "cannot save the db mark memory; agent db tools are refused");
+            mark_memory_unavailable(&e)
+        })
+    }
+
+    /// 그 대상에서 본 가장 엄한 표지(본 적 없으면 표지 없음). 메모리만 본다 — 상태 DB 의 것은 [`Self::sync`] 가 더해 둔다.
     pub fn get(&self, target: &DbTarget) -> DbMarks {
-        lock(&self.0)
-            .get(&target.mark_key())
+        lock(&self.seen)
+            .get(&mark_store_key(target))
             .copied()
             .unwrap_or_default()
+    }
+
+    /// 그 대상에 기억된 표지 — 메모리와 상태 DB 의 것(사람의 창이 본다, `db.connection.marks`). 상태 DB 를 읽지 못하면 오류.
+    /// 블로킹이다.
+    pub fn remembered(&self, target: &DbTarget) -> Result<DbMarks, RpcError> {
+        let key = mark_store_key(target);
+        let store = self
+            .store
+            .get()
+            .ok_or_else(|| RpcError::internal("db connections are not attached to a host"))?;
+        let rows = store.db_marks().map_err(crate::config::registry_error)?;
+        Ok(rows
+            .into_iter()
+            .filter(|(k, _)| *k == key)
+            .fold(self.get(target), |marks, (_, m)| {
+                marks.tighten(DbMarks {
+                    production: m.production,
+                    read_only: m.read_only,
+                })
+            }))
+    }
+
+    /// 그 대상의 기억을 지운다 — 사람이 그 프로젝트 창에서만(`db.connection.forgetMarks`). 상태 DB 와 메모리 둘 다. 지운 표지를
+    /// 돌려준다. 상태 DB 를 쓰지 못하면 지우지 않는다(메모리도 그대로). 블로킹이다.
+    pub fn forget(&self, target: &DbTarget) -> Result<DbMarks, RpcError> {
+        let key = mark_store_key(target);
+        let store = self
+            .store
+            .get()
+            .ok_or_else(|| RpcError::internal("db connections are not attached to a host"))?;
+        let before = store
+            .forget_db_marks(&key)
+            .map_err(crate::config::registry_error)?;
+        let in_memory = lock(&self.seen).remove(&key).unwrap_or_default();
+        lock(&self.unsaved).remove(&key);
+        Ok(in_memory.tighten(DbMarks {
+            production: before.production,
+            read_only: before.read_only,
+        }))
     }
 }
 
@@ -420,7 +588,8 @@ fn marked_read_only(project_id: &str, connection_id: &str) -> RpcError {
 /// 에이전트의 DB 툴 호출이 읽는 연결 설정: **그 저장소의 메인 체크아웃**의 것(표지를 더하려고 — 결정 M5-D37)과 호출의 워크트리의
 /// 것. 메인 체크아웃은 그 프로젝트의 주 루트이고, 연결 워크트리를 따로 등록한 프로젝트면 신뢰가 따르는 메인 저장소 프로젝트
 /// (`Registry::main_repository_of`)의 주 루트도 읽는다. 돌려주는 것은 호출의 워크트리의 것이다. 메인 체크아웃의 설정을 읽지 못하면
-/// (깨진 파일 등) 그 표지는 더하지 못하고 넘어간다 — 앞서 이번 실행에서 읽힌 표지는 기억에 남아 있다. 블로킹이다.
+/// (깨진 파일 등) 그 표지는 더하지 못하고 넘어간다 — 앞서 읽힌 표지는 기억(상태 DB)에 남아 있다. 끝에 표지 기억을 상태 DB 와
+/// 맞춘다([`MarkMemory::sync`]) — 맞추지 못하면 `markMemoryUnavailable` 로 거절한다(fail-closed). 블로킹이다.
 pub(crate) fn agent_view(
     sessions: &DbSessions,
     project_id: &str,
@@ -444,7 +613,10 @@ pub(crate) fn agent_view(
             tracing::info!(target: "pw_db", project = %main, %e, "cannot read the main checkout's db connections for agent marks");
         }
     }
-    connections.load(project_id, worktree)
+    let loaded = connections.load(project_id, worktree)?;
+    // 앞 실행들이 남긴 표지(상태 DB)를 더하고 이번 읽기의 표지를 쓴다 — 쓰지 못하면 거절(fail-closed, M5-17b).
+    connections.marks.sync()?;
+    Ok(loaded)
 }
 
 /// `data.reason`: 에이전트의 연결 쓰기가 표지(프로덕션 · read-only)를 내린다(메인 판정 2026-11-17 — M5-17 리뷰 B1).
