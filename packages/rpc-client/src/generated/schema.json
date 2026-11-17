@@ -36659,6 +36659,488 @@
       ],
       "tier": "read"
     },
+    "mcp.settings.get": {
+      "description": "설정 창 「MCP」 쪽의 값: 전역 `[mcp]` 의 프리셋 · 자동 승인 · 그룹 키 · 감사 보관 일수(Host 가 판정에 쓰는 값)와 전역\n설정 파일 경로. `projectId` 를 주면 그 프로젝트의 설정 파일들 · 그 파일들이 덮은 `[mcp]` 키 · 그 프로젝트의 자동 승인도\n싣는다(읽기만). 툴 하나하나의 판정은 `mcp.tools.list` 다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "default": null,
+            "description": "그 프로젝트가 덮은 값도 싣는다(읽기만 — 결정 M5-D36). 없으면 전역만.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "McpGroupSetting": {
+            "properties": {
+              "enabled": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "group": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "group",
+              "enabled"
+            ],
+            "type": "object"
+          },
+          "McpProjectSettings": {
+            "description": "프로젝트가 덮은 `[mcp]`(읽기만).",
+            "properties": {
+              "autoApprove": {
+                "description": "그 프로젝트에서 자동 승인되는 등급(공유 설정은 넓히지 못한다 — `policy::read_project`).",
+                "items": {
+                  "$ref": "#/$defs/Tier"
+                },
+                "type": "array"
+              },
+              "files": {
+                "description": "그 프로젝트의 설정 파일(「파일로 열기」 가 여는 경로 — 화면은 경로를 조립하지 않는다).",
+                "items": {
+                  "$ref": "#/$defs/McpSettingsFile"
+                },
+                "type": "array"
+              },
+              "overrides": {
+                "description": "그 프로젝트 파일들이 `[mcp]` 아래에 적은 키(`preset` · `auto_approve` · `groups.db` · `tools.db_query` …)와 값, 적은 파일.\n공유 파일의 값은 좁히기만 한다 — 툴의 실제 켜짐은 `mcp.tools.list { projectId }` 의 판정이다.",
+                "items": {
+                  "$ref": "#/$defs/McpSettingOverride"
+                },
+                "type": "array"
+              },
+              "projectId": {
+                "type": "string"
+              },
+              "warnings": {
+                "description": "그 프로젝트의 `[mcp]` 를 읽다 버린 값 · 효과 없는 표의 경고(Host 의 영어 문장 그대로).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "projectId",
+              "files",
+              "overrides",
+              "autoApprove",
+              "warnings"
+            ],
+            "type": "object"
+          },
+          "McpSettingOverride": {
+            "properties": {
+              "file": {
+                "$ref": "#/$defs/McpSettingsFileKind"
+              },
+              "key": {
+                "description": "`[mcp]` 아래의 점으로 이은 키(`groups.db`).",
+                "type": "string"
+              },
+              "value": true
+            },
+            "required": [
+              "key",
+              "value",
+              "file"
+            ],
+            "type": "object"
+          },
+          "McpSettingsFile": {
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "kind": {
+                "$ref": "#/$defs/McpSettingsFileKind"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "path",
+              "exists"
+            ],
+            "type": "object"
+          },
+          "McpSettingsFileKind": {
+            "oneOf": [
+              {
+                "const": "shared",
+                "description": "커밋되는 `.pitwall/project.toml`(좁히기만 한다).",
+                "type": "string"
+              },
+              {
+                "const": "local",
+                "description": "개인 덮어쓰기 `.pitwall/project.local.toml`.",
+                "type": "string"
+              },
+              {
+                "const": "personal",
+                "description": "개인 전용 프로젝트의 `$CONFIG/projects/<slug>/project.toml`.",
+                "type": "string"
+              }
+            ]
+          },
+          "Tier": {
+            "description": "권한 등급. 값과 순서는 `docs/design/05-mcp.md` §3 「권한 모델」 표를 따른다.\n\n디스패처는 이 값을 강제하지 않는다 — 승인 정책(자동 허용 · UI 승인)은 이 값을 읽는 MCP 계층이 정한다.\n호출 가능 여부는 [`RoleSet`] 이 정한다.\n\n메서드가 도달할 수 있는 **가장 높은** 등급으로 선언한다. `roles` 를 생략하면 등급에서 role 이 정해지므로\n(`read` 는 readonly 까지 연다), 낮게 선언하면 그 위의 조작이 조용히 열린다.\n입력에 따라 등급이 오르는 메서드는 조회용과 쓰기용으로 나눈다 — `db_query`(read) · `db_execute`(dangerous),\n결정 M5-D4(`docs/design/16-m5-plan.md`). 그래서 MCP 툴의 등급도 이 규칙에 예외가 없다 — 툴의 등급은 그 선언의 `tier` 다.",
+            "enum": [
+              "read",
+              "write",
+              "exec",
+              "dangerous"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "전역 `[mcp]` 의 지금 값(Host 가 판정에 쓰는 값)과, 고른 프로젝트가 덮은 것.",
+        "properties": {
+          "autoApprove": {
+            "description": "묻지 않고 허용하는 등급(`dangerous` 는 들지 않는다).",
+            "items": {
+              "$ref": "#/$defs/Tier"
+            },
+            "type": "array"
+          },
+          "defaultRetentionDays": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "file": {
+            "description": "전역 설정 파일(`$CONFIG/settings.toml`) — 「파일로 열기」 가 여는 경로. 아직 없을 수 있다.",
+            "type": "string"
+          },
+          "groups": {
+            "description": "[`GROUPS`] 차례. `enabled` 가 `null` 이면 그 그룹 키가 없다(툴마다 프리셋을 따른다).",
+            "items": {
+              "$ref": "#/$defs/McpGroupSetting"
+            },
+            "type": "array"
+          },
+          "preset": {
+            "description": "지금 프리셋(`read-only` · `standard` · `full`). 파일 값이 잘못됐으면 Host 가 쓰는 `read-only` 다.",
+            "type": "string"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/McpProjectSettings"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`projectId` 를 줬을 때만."
+          },
+          "retentionDays": {
+            "description": "감사 로그 보관 일수(0 은 지우지 않음).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "warnings": {
+            "description": "전역 `[mcp]` 를 읽다 버린 값의 경고(Host 의 영어 문장 그대로).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "file",
+          "preset",
+          "autoApprove",
+          "groups",
+          "retentionDays",
+          "defaultRetentionDays",
+          "warnings",
+          "project"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "mcp.settings.set": {
+      "description": "전역 `settings.toml` 의 `[mcp]` 키 하나를 쓴다(`value: null` 이면 지운다). 프로젝트 설정은 쓰지 않는다. 값은 Host 가\n판정한다 — 모르는 프리셋 · 그룹 · 툴, `auto_approve` 의 `dangerous`, 0 이상 정수가 아닌 보관 일수는 쓰지 않고\n`INVALID_PARAMS`(`data` 는 `McpSettingRefused`). 쓴 뒤 설정을 다시 읽어 열린 MCP 세션의 툴 목록이 바뀌고\n(`tools/list_changed`), 새 전역 값을 돌려준다.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "McpSettingKey": {
+            "description": "`mcp.settings.set` 이 쓰는 키.",
+            "oneOf": [
+              {
+                "const": "preset",
+                "description": "`[mcp] preset` — 값은 `read-only` · `standard` · `full`.",
+                "type": "string"
+              },
+              {
+                "const": "autoApprove",
+                "description": "`[mcp] auto_approve` — 값은 등급 이름 목록(`read` · `write` · `exec`).",
+                "type": "string"
+              },
+              {
+                "const": "group",
+                "description": "`[mcp.groups] <name>` — 값은 bool.",
+                "type": "string"
+              },
+              {
+                "const": "tool",
+                "description": "`[mcp.tools] <name>` — 값은 bool. `name` 은 이 Host 의 툴 이름(glob 은 받지 않는다).",
+                "type": "string"
+              },
+              {
+                "const": "retentionDays",
+                "description": "`[mcp.audit] retention_days` — 값은 0 이상 정수(0 은 지우지 않음).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "key": {
+            "$ref": "#/$defs/McpSettingKey"
+          },
+          "name": {
+            "default": null,
+            "description": "`group` · `tool` 의 그룹 · 툴 이름. 다른 키는 비운다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {
+            "default": null,
+            "description": "새 값. `null` 이면 파일에서 그 키를 지운다(기본값으로)."
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "McpGroupSetting": {
+            "properties": {
+              "enabled": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "group": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "group",
+              "enabled"
+            ],
+            "type": "object"
+          },
+          "McpProjectSettings": {
+            "description": "프로젝트가 덮은 `[mcp]`(읽기만).",
+            "properties": {
+              "autoApprove": {
+                "description": "그 프로젝트에서 자동 승인되는 등급(공유 설정은 넓히지 못한다 — `policy::read_project`).",
+                "items": {
+                  "$ref": "#/$defs/Tier"
+                },
+                "type": "array"
+              },
+              "files": {
+                "description": "그 프로젝트의 설정 파일(「파일로 열기」 가 여는 경로 — 화면은 경로를 조립하지 않는다).",
+                "items": {
+                  "$ref": "#/$defs/McpSettingsFile"
+                },
+                "type": "array"
+              },
+              "overrides": {
+                "description": "그 프로젝트 파일들이 `[mcp]` 아래에 적은 키(`preset` · `auto_approve` · `groups.db` · `tools.db_query` …)와 값, 적은 파일.\n공유 파일의 값은 좁히기만 한다 — 툴의 실제 켜짐은 `mcp.tools.list { projectId }` 의 판정이다.",
+                "items": {
+                  "$ref": "#/$defs/McpSettingOverride"
+                },
+                "type": "array"
+              },
+              "projectId": {
+                "type": "string"
+              },
+              "warnings": {
+                "description": "그 프로젝트의 `[mcp]` 를 읽다 버린 값 · 효과 없는 표의 경고(Host 의 영어 문장 그대로).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "projectId",
+              "files",
+              "overrides",
+              "autoApprove",
+              "warnings"
+            ],
+            "type": "object"
+          },
+          "McpSettingOverride": {
+            "properties": {
+              "file": {
+                "$ref": "#/$defs/McpSettingsFileKind"
+              },
+              "key": {
+                "description": "`[mcp]` 아래의 점으로 이은 키(`groups.db`).",
+                "type": "string"
+              },
+              "value": true
+            },
+            "required": [
+              "key",
+              "value",
+              "file"
+            ],
+            "type": "object"
+          },
+          "McpSettingsFile": {
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "kind": {
+                "$ref": "#/$defs/McpSettingsFileKind"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "path",
+              "exists"
+            ],
+            "type": "object"
+          },
+          "McpSettingsFileKind": {
+            "oneOf": [
+              {
+                "const": "shared",
+                "description": "커밋되는 `.pitwall/project.toml`(좁히기만 한다).",
+                "type": "string"
+              },
+              {
+                "const": "local",
+                "description": "개인 덮어쓰기 `.pitwall/project.local.toml`.",
+                "type": "string"
+              },
+              {
+                "const": "personal",
+                "description": "개인 전용 프로젝트의 `$CONFIG/projects/<slug>/project.toml`.",
+                "type": "string"
+              }
+            ]
+          },
+          "Tier": {
+            "description": "권한 등급. 값과 순서는 `docs/design/05-mcp.md` §3 「권한 모델」 표를 따른다.\n\n디스패처는 이 값을 강제하지 않는다 — 승인 정책(자동 허용 · UI 승인)은 이 값을 읽는 MCP 계층이 정한다.\n호출 가능 여부는 [`RoleSet`] 이 정한다.\n\n메서드가 도달할 수 있는 **가장 높은** 등급으로 선언한다. `roles` 를 생략하면 등급에서 role 이 정해지므로\n(`read` 는 readonly 까지 연다), 낮게 선언하면 그 위의 조작이 조용히 열린다.\n입력에 따라 등급이 오르는 메서드는 조회용과 쓰기용으로 나눈다 — `db_query`(read) · `db_execute`(dangerous),\n결정 M5-D4(`docs/design/16-m5-plan.md`). 그래서 MCP 툴의 등급도 이 규칙에 예외가 없다 — 툴의 등급은 그 선언의 `tier` 다.",
+            "enum": [
+              "read",
+              "write",
+              "exec",
+              "dangerous"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "전역 `[mcp]` 의 지금 값(Host 가 판정에 쓰는 값)과, 고른 프로젝트가 덮은 것.",
+        "properties": {
+          "autoApprove": {
+            "description": "묻지 않고 허용하는 등급(`dangerous` 는 들지 않는다).",
+            "items": {
+              "$ref": "#/$defs/Tier"
+            },
+            "type": "array"
+          },
+          "defaultRetentionDays": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "file": {
+            "description": "전역 설정 파일(`$CONFIG/settings.toml`) — 「파일로 열기」 가 여는 경로. 아직 없을 수 있다.",
+            "type": "string"
+          },
+          "groups": {
+            "description": "[`GROUPS`] 차례. `enabled` 가 `null` 이면 그 그룹 키가 없다(툴마다 프리셋을 따른다).",
+            "items": {
+              "$ref": "#/$defs/McpGroupSetting"
+            },
+            "type": "array"
+          },
+          "preset": {
+            "description": "지금 프리셋(`read-only` · `standard` · `full`). 파일 값이 잘못됐으면 Host 가 쓰는 `read-only` 다.",
+            "type": "string"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/McpProjectSettings"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`projectId` 를 줬을 때만."
+          },
+          "retentionDays": {
+            "description": "감사 로그 보관 일수(0 은 지우지 않음).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "warnings": {
+            "description": "전역 `[mcp]` 를 읽다 버린 값의 경고(Host 의 영어 문장 그대로).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "file",
+          "preset",
+          "autoApprove",
+          "groups",
+          "retentionDays",
+          "defaultRetentionDays",
+          "warnings",
+          "project"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "mcp.tools.list": {
       "description": "MCP 툴 카탈로그 전부와 지금 노출 판정(켜졌는지 · 그 규칙), 최근 호출 수. 이 앱의 Host 가 처리하는 툴만이다.",
       "kind": "unary",

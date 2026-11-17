@@ -918,6 +918,19 @@ export type UnaryMethods = {
 	 */
 	"mcp.sessions": { params: null; result: McpSessionInfo[] };
 	/**
+	 * 설정 창 「MCP」 쪽의 값: 전역 `[mcp]` 의 프리셋 · 자동 승인 · 그룹 키 · 감사 보관 일수(Host 가 판정에 쓰는 값)와 전역
+	 * 설정 파일 경로. `projectId` 를 주면 그 프로젝트의 설정 파일들 · 그 파일들이 덮은 `[mcp]` 키 · 그 프로젝트의 자동 승인도
+	 * 싣는다(읽기만). 툴 하나하나의 판정은 `mcp.tools.list` 다.
+	 */
+	"mcp.settings.get": { params: McpSettingsGetParams; result: McpSettingsView };
+	/**
+	 * 전역 `settings.toml` 의 `[mcp]` 키 하나를 쓴다(`value: null` 이면 지운다). 프로젝트 설정은 쓰지 않는다. 값은 Host 가
+	 * 판정한다 — 모르는 프리셋 · 그룹 · 툴, `auto_approve` 의 `dangerous`, 0 이상 정수가 아닌 보관 일수는 쓰지 않고
+	 * `INVALID_PARAMS`(`data` 는 `McpSettingRefused`). 쓴 뒤 설정을 다시 읽어 열린 MCP 세션의 툴 목록이 바뀌고
+	 * (`tools/list_changed`), 새 전역 값을 돌려준다.
+	 */
+	"mcp.settings.set": { params: McpSettingsSetParams; result: McpSettingsView };
+	/**
 	 * MCP 툴 카탈로그 전부와 지금 노출 판정(켜졌는지 · 그 규칙), 최근 호출 수. 이 앱의 Host 가 처리하는 툴만이다.
 	 */
 	"mcp.tools.list": { params: McpToolsListParams; result: McpToolInfo[] };
@@ -1437,6 +1450,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"mcp.audit.clear": {"name":"mcp.audit.clear","kind":"unary","tier":"write","roles":["owner"],"params":"McpAuditClearParams","output":"McpAuditCleared","doc":" 그 프로젝트의 감사 행을 모두 지운다(「에이전트 활동」 패널의 「기록 지우기」 — 화면이 확인을 받은 뒤 부른다). 그 프로젝트\n 창의 연결만 부른다(`project.state.set` 과 같은 판정). 지운 id 는 다시 쓰이지 않는다 — 앞서 받은 커서는 그 뒤의 행을 가리키지\n 않는다.\n","mcp":null,"fileScope":false},
 	"mcp.audit.list": {"name":"mcp.audit.list","kind":"unary","tier":"read","roles":["owner"],"params":"McpAuditListParams","output":"McpAuditPage","doc":" 감사 로그를 최신부터 쪽 단위로 읽는다. 다른 프로세스(헤드리스 `pitwall mcp` · `pitwall tool`)가 쓴 행도 있다 —\n 그 행은 `mcp.activity` 가 나가지 않으므로 화면이 열릴 때 · 창이 앞으로 올 때 다시 읽는다.\n","mcp":null,"fileScope":false},
 	"mcp.sessions": {"name":"mcp.sessions","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"Vec<McpSessionInfo>","doc":" 이 앱에 열린 MCP 세션(시작 순서): id · 클라이언트 · 세션 프로젝트 · 전송 · 시작 시각 · 호출 수. 열고 닫히면\n `mcp.sessionsChanged`(Host 범위)가 나간다. 앱 없이 뜬 `pitwall mcp` 의 헤드리스 세션은 보이지 않는다.\n","mcp":null,"fileScope":false},
+	"mcp.settings.get": {"name":"mcp.settings.get","kind":"unary","tier":"read","roles":["owner"],"params":"McpSettingsGetParams","output":"McpSettingsView","doc":" 설정 창 「MCP」 쪽의 값: 전역 `[mcp]` 의 프리셋 · 자동 승인 · 그룹 키 · 감사 보관 일수(Host 가 판정에 쓰는 값)와 전역\n 설정 파일 경로. `projectId` 를 주면 그 프로젝트의 설정 파일들 · 그 파일들이 덮은 `[mcp]` 키 · 그 프로젝트의 자동 승인도\n 싣는다(읽기만). 툴 하나하나의 판정은 `mcp.tools.list` 다.\n","mcp":null,"fileScope":false},
+	"mcp.settings.set": {"name":"mcp.settings.set","kind":"unary","tier":"write","roles":["owner"],"params":"McpSettingsSetParams","output":"McpSettingsView","doc":" 전역 `settings.toml` 의 `[mcp]` 키 하나를 쓴다(`value: null` 이면 지운다). 프로젝트 설정은 쓰지 않는다. 값은 Host 가\n 판정한다 — 모르는 프리셋 · 그룹 · 툴, `auto_approve` 의 `dangerous`, 0 이상 정수가 아닌 보관 일수는 쓰지 않고\n `INVALID_PARAMS`(`data` 는 `McpSettingRefused`). 쓴 뒤 설정을 다시 읽어 열린 MCP 세션의 툴 목록이 바뀌고\n (`tools/list_changed`), 새 전역 값을 돌려준다.\n","mcp":null,"fileScope":false},
 	"mcp.tools.list": {"name":"mcp.tools.list","kind":"unary","tier":"read","roles":["owner"],"params":"McpToolsListParams","output":"Vec<McpToolInfo>","doc":" MCP 툴 카탈로그 전부와 지금 노출 판정(켜졌는지 · 그 규칙), 최근 호출 수. 이 앱의 Host 가 처리하는 툴만이다.\n","mcp":null,"fileScope":false},
 	"openWith.list": {"name":"openWith.list","kind":"unary","tier":"read","roles":["owner"],"params":"OpenWithListParams","output":"OpenWithList","doc":" External tools available on this OS (id · name · contributing extension · whether it opens files too · settings\n format errors) and the default tool. With `projectId`, the default tool is chosen including that project's\n `[open_with] default` (when the session has a project, leaving the key out means the session's project — pass\n `null` for the global default only). Launch commands are not included.\n","mcp":{"group":null,"name":null},"fileScope":false},
 	"openWith.run": {"name":"openWith.run","kind":"unary","tier":"exec","roles":["owner"],"params":"OpenWithRunParams","output":"OpenWithOutcome","doc":" 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n 그 프로젝트의 창이 아니면 permission denied 오류다 — 웰컴 창(Host 연결)만 예외로, 목록에 있는 도구(또는 기본 도구)로\n 프로젝트 루트를 여는 것(`worktree` · `file` · `line` · `column` 없이)은 된다.\n","mcp":null,"fileScope":false},
@@ -7130,6 +7145,27 @@ export type McpAuditPage = {
 	nextCursor: string | null,
 };
 
+export type McpGroupSetting = {
+	group: string,
+	enabled: boolean | null,
+};
+
+/**  프로젝트가 덮은 `[mcp]`(읽기만). */
+export type McpProjectSettings = {
+	projectId: string,
+	/**  그 프로젝트의 설정 파일(「파일로 열기」 가 여는 경로 — 화면은 경로를 조립하지 않는다). */
+	files: McpSettingsFile[],
+	/**
+	 *  그 프로젝트 파일들이 `[mcp]` 아래에 적은 키(`preset` · `auto_approve` · `groups.db` · `tools.db_query` …)와 값, 적은 파일.
+	 *  공유 파일의 값은 좁히기만 한다 — 툴의 실제 켜짐은 `mcp.tools.list { projectId }` 의 판정이다.
+	 */
+	overrides: McpSettingOverride[],
+	/**  그 프로젝트에서 자동 승인되는 등급(공유 설정은 넓히지 못한다 — `policy::read_project`). */
+	autoApprove: Tier[],
+	/**  그 프로젝트의 `[mcp]` 를 읽다 버린 값 · 효과 없는 표의 경고(Host 의 영어 문장 그대로). */
+	warnings: string[],
+};
+
 /**  열린 세션 하나(`mcp.sessions` 의 원소). M5-11 이후 행이 칸을 더할 자리다 — 칸은 기본값을 가진 뒤에 더한다. */
 export type McpSessionInfo = {
 	/**  감사 행의 `session` 과 같은 id. */
@@ -7150,6 +7186,72 @@ export type McpSessionInfo = {
 export type McpSessionsChanged = {
 	/**  지금 열린 세션 수. */
 	total: number,
+};
+
+/**  `mcp.settings.set` 이 쓰는 키. */
+export type McpSettingKey = 
+/**  `[mcp] preset` — 값은 `read-only` · `standard` · `full`. */
+"preset" | 
+/**  `[mcp] auto_approve` — 값은 등급 이름 목록(`read` · `write` · `exec`). */
+"autoApprove" | 
+/**  `[mcp.groups] <name>` — 값은 bool. */
+"group" | 
+/**  `[mcp.tools] <name>` — 값은 bool. `name` 은 이 Host 의 툴 이름(glob 은 받지 않는다). */
+"tool" | 
+/**  `[mcp.audit] retention_days` — 값은 0 이상 정수(0 은 지우지 않음). */
+"retentionDays";
+
+export type McpSettingOverride = {
+	/**  `[mcp]` 아래의 점으로 이은 키(`groups.db`). */
+	key: string,
+	value: JsonValue,
+	file: McpSettingsFileKind,
+};
+
+export type McpSettingsFile = {
+	kind: McpSettingsFileKind,
+	path: string,
+	exists: boolean,
+};
+
+export type McpSettingsFileKind = 
+/**  커밋되는 `.pitwall/project.toml`(좁히기만 한다). */
+"shared" | 
+/**  개인 덮어쓰기 `.pitwall/project.local.toml`. */
+"local" | 
+/**  개인 전용 프로젝트의 `$CONFIG/projects/<slug>/project.toml`. */
+"personal";
+
+export type McpSettingsGetParams = {
+	/**  그 프로젝트가 덮은 값도 싣는다(읽기만 — 결정 M5-D36). 없으면 전역만. */
+	projectId?: string | null,
+};
+
+export type McpSettingsSetParams = {
+	key: McpSettingKey,
+	/**  `group` · `tool` 의 그룹 · 툴 이름. 다른 키는 비운다. */
+	name?: string | null,
+	/**  새 값. `null` 이면 파일에서 그 키를 지운다(기본값으로). */
+	value?: JsonValue | null,
+};
+
+/**  전역 `[mcp]` 의 지금 값(Host 가 판정에 쓰는 값)과, 고른 프로젝트가 덮은 것. */
+export type McpSettingsView = {
+	/**  전역 설정 파일(`$CONFIG/settings.toml`) — 「파일로 열기」 가 여는 경로. 아직 없을 수 있다. */
+	file: string,
+	/**  지금 프리셋(`read-only` · `standard` · `full`). 파일 값이 잘못됐으면 Host 가 쓰는 `read-only` 다. */
+	preset: string,
+	/**  묻지 않고 허용하는 등급(`dangerous` 는 들지 않는다). */
+	autoApprove: Tier[],
+	/**  [`GROUPS`] 차례. `enabled` 가 `null` 이면 그 그룹 키가 없다(툴마다 프리셋을 따른다). */
+	groups: McpGroupSetting[],
+	/**  감사 로그 보관 일수(0 은 지우지 않음). */
+	retentionDays: number,
+	defaultRetentionDays: number,
+	/**  전역 `[mcp]` 를 읽다 버린 값의 경고(Host 의 영어 문장 그대로). */
+	warnings: string[],
+	/**  `projectId` 를 줬을 때만. */
+	project: McpProjectSettings | null,
 };
 
 /**

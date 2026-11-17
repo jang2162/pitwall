@@ -66,6 +66,7 @@ pub mod policy;
 pub mod proxy;
 pub mod server;
 pub mod sessions;
+pub mod settings;
 #[cfg(unix)]
 pub mod socket;
 

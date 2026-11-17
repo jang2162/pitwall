@@ -9,8 +9,9 @@
 //!   다시 부른다.
 //! - 승인(M5-12): 창이 떠 있는 동안 여는 스트림 `mcp.approvals { projectId? }` 와 그 답 `mcp.approval.answer { id, answer }`
 //!   ([`crate::approval`]). 프로젝트 창은 자기 프로젝트로 열고, 웰컴 · 설정 창은 프로젝트 없이 연다(프로젝트 없는 요청만 받는다).
-//! - 다른 행이 더하는 메서드: `mcp.settings.set`(M5-15).
-//!   더할 때 [`register`] 안의 `router`(그 문을 지나는 [`WindowsOnly`])에 붙이고, 필요한 것은 [`HostParts`] 에서 꺼낸다.
+//! - 설정 창 「MCP」 쪽(M5-15): `mcp.settings.get { projectId? }`(읽기) · `mcp.settings.set`(전역 `[mcp]` 한 키 쓰기 — 결정
+//!   M5-D36). 본체는 [`crate::settings`].
+//!   메서드를 더할 때 [`register`] 안의 `router`(그 문을 지나는 [`WindowsOnly`])에 붙이고, 필요한 것은 [`HostParts`] 에서 꺼낸다.
 
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -28,6 +29,7 @@ use crate::audit::{self, AuditLog, AuditRow, Outcome};
 use crate::catalog::Catalog;
 use crate::exposure::{self, Exposure, ExposureRule};
 use crate::sessions::{McpSessionInfo, Sessions};
+use crate::settings::{McpSettingsGet, McpSettingsGetParams, McpSettingsSet, McpSettingsSetParams};
 
 /// `mcp.audit.list` 의 `limit` 상한.
 pub const MAX_AUDIT_LIMIT: u32 = 500;
@@ -235,7 +237,7 @@ impl Mcp {
         let _ = self.parts.set(parts);
     }
 
-    fn parts(&self) -> Result<&HostParts, RpcError> {
+    pub(crate) fn parts(&self) -> Result<&HostParts, RpcError> {
         self.parts
             .get()
             .ok_or_else(|| RpcError::internal("the mcp status is not attached to the host yet"))
@@ -455,6 +457,17 @@ pub fn register(router: &mut Router, mcp: Arc<Mcp>) {
     router.unary(McpToolsList, move |_ctx, params: McpToolsListParams| {
         let mcp = Arc::clone(&tools);
         async move { blocking(move || mcp.tools(&params)).await }
+    });
+    let settings = Arc::clone(&mcp);
+    router.unary(McpSettingsGet, move |_ctx, params: McpSettingsGetParams| {
+        let mcp = Arc::clone(&settings);
+        async move { blocking(move || mcp.settings(&params)).await }
+    });
+    // 전역 `[mcp]` 만 쓴다 — 어느 창의 연결이든 같다(설정 창은 Host 범위). 에이전트 범위는 문이 거절한다.
+    let settings = Arc::clone(&mcp);
+    router.unary(McpSettingsSet, move |_ctx, params: McpSettingsSetParams| {
+        let mcp = Arc::clone(&settings);
+        async move { blocking(move || mcp.set_setting(&params)).await }
     });
     let list = Arc::clone(&mcp);
     router.unary(McpAuditList, move |_ctx, params: McpAuditListParams| {

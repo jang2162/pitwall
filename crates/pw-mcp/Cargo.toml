@@ -30,6 +30,8 @@ tokio = { workspace = true, features = [
 ] }
 tokio-util = { workspace = true }
 tracing = "0.1.44"
+# 설정 창 「MCP」 쪽의 쓰기(settings.rs)가 `pw_core::config::write::write_key` 에 넘기는 값. 판은 pw-core 와 같게 둔다.
+toml_edit = "0.25.17"
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.190"
