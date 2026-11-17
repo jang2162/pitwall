@@ -911,6 +911,15 @@ export type UnaryMethods = {
 	 */
 	"openWith.run": { params: OpenWithRunParams; result: OpenWithOutcome };
 	/**
+	 * Add an external tool for "Open with", or change one, in the global settings (`[open_with.tools.<id>]` in
+	 * `settings.toml`). The tool's settings entry is replaced as a whole by the fields given; for a tool contributed
+	 * by an extension, fields left out keep the extension's values (giving `command` drops the extension's
+	 * `file_command` unless it is given too). Commands are argv arrays run without a shell, and the first element
+	 * cannot use variables; a malformed command or a new tool without `label` and `command` is refused before asking.
+	 * Always needs approval in Pitwall, every call: the request shows the settings file before and after.
+	 */
+	"openWith.tool.upsert": { params: OpenWithUpsertParams; result: OpenWithUpsertResult };
+	/**
 	 * 경로의 루트 후보: 워크트리의 메인 저장소, 가장 가까운 `.git`, 빌드 파일이 있는 상위 폴더(가까운 것부터).
 	 * 홈 디렉터리와 그 위, 파일 시스템 루트는 넣지 않는다.
 	 */
@@ -1003,6 +1012,15 @@ export type UnaryMethods = {
 	 * that `rateLimited`). The app must be running.
 	 */
 	"project.tool.open": { params: ProjectOpenToolParams; result: ProjectOpenToolResult };
+	/**
+	 * Register a folder as a Pitwall project and return what was detected in it (build files, languages, the settings
+	 * folder). Needs approval in Pitwall: the request shows the real path that will be registered (symbolic links and
+	 * `..` resolved), the name and where the settings live. Refused before asking: a relative path, a folder that does
+	 * not exist, the file system root, the home folder or a folder above it, and a folder that is already a project
+	 * root or lies inside a registered project, including a git worktree of one (use `project_open` for those). The
+	 * new project is not trusted: only a person can trust it in Pitwall.
+	 */
+	"project.tool.register": { params: ProjectRegisterToolParams; result: ProjectRegisterToolResult };
 	/**
 	 * 프로젝트의 신뢰. 워크트리 프로젝트는 메인 저장소 프로젝트의 신뢰를 따른다(`ownerId`). 없는 id 면 invalid params 오류.
 	 */
@@ -1396,6 +1414,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"mcp.tools.list": {"name":"mcp.tools.list","kind":"unary","tier":"read","roles":["owner"],"params":"McpToolsListParams","output":"Vec<McpToolInfo>","doc":" MCP 툴 카탈로그 전부와 지금 노출 판정(켜졌는지 · 그 규칙), 최근 호출 수. 이 앱의 Host 가 처리하는 툴만이다.\n","mcp":null,"fileScope":false},
 	"openWith.list": {"name":"openWith.list","kind":"unary","tier":"read","roles":["owner"],"params":"OpenWithListParams","output":"OpenWithList","doc":" External tools available on this OS (id · name · contributing extension · whether it opens files too · settings\n format errors) and the default tool. With `projectId`, the default tool is chosen including that project's\n `[open_with] default` (when the session has a project, leaving the key out means the session's project — pass\n `null` for the global default only). Launch commands are not included.\n","mcp":{"group":null,"name":null},"fileScope":false},
 	"openWith.run": {"name":"openWith.run","kind":"unary","tier":"exec","roles":["owner"],"params":"OpenWithRunParams","output":"OpenWithOutcome","doc":" 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n 그 프로젝트의 창이 아니면 permission denied 오류다 — 웰컴 창(Host 연결)만 예외로, 목록에 있는 도구(또는 기본 도구)로\n 프로젝트 루트를 여는 것(`worktree` · `file` · `line` · `column` 없이)은 된다.\n","mcp":null,"fileScope":false},
+	"openWith.tool.upsert": {"name":"openWith.tool.upsert","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<OpenWithUpsertParams>","output":"OpenWithUpsertResult","doc":" Add an external tool for \"Open with\", or change one, in the global settings (`[open_with.tools.<id>]` in\n `settings.toml`). The tool's settings entry is replaced as a whole by the fields given; for a tool contributed\n by an extension, fields left out keep the extension's values (giving `command` drops the extension's\n `file_command` unless it is given too). Commands are argv arrays run without a shell, and the first element\n cannot use variables; a malformed command or a new tool without `label` and `command` is refused before asking.\n Always needs approval in Pitwall, every call: the request shows the settings file before and after.\n","mcp":{"group":"open_with","name":"open_with_upsert"},"fileScope":false},
 	"project.candidates": {"name":"project.candidates","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Vec<RootCandidate>","doc":" 경로의 루트 후보: 워크트리의 메인 저장소, 가장 가까운 `.git`, 빌드 파일이 있는 상위 폴더(가까운 것부터).\n 홈 디렉터리와 그 위, 파일 시스템 루트는 넣지 않는다.\n","mcp":null,"fileScope":false},
 	"project.claimTrustPrompt": {"name":"project.claimTrustPrompt","kind":"unary","tier":"write","roles":["owner"],"params":"ProjectIdParams","output":"bool","doc":" 신뢰 확인 다이얼로그를 띄울 차례인가. 아직 묻지 않은 프로젝트면 미신뢰로 기록하고 `true` — 같은 프로젝트의 창이 여럿이어도\n 처음 부른 하나만 `true` 를 받는다. 이미 물었으면 `false`.\n","mcp":null,"fileScope":false},
 	"project.console.delete": {"name":"project.console.delete","kind":"unary","tier":"write","roles":["owner"],"params":"ConsoleParams","output":"()","doc":" SQL 콘솔 하나를 지운다(없으면 아무것도 하지 않는다). 그 프로젝트 창만.\n","mcp":null,"fileScope":false},
@@ -1415,6 +1434,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"project.state.set": {"name":"project.state.set","kind":"unary","tier":"write","roles":["owner"],"params":"SetProjectStateParams","output":"()","doc":" 프로젝트 창의 상태를 통째로 바꾼다. 원자적으로 쓰고, JSON 객체가 아니거나 1 MiB 를 넘으면 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"project.storage": {"name":"project.storage","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"StorageStatus","doc":" 레지스트리 파일(`$DATA/state.db`)의 상태. `readOnly` · `memory` 면 쓰기 메서드가 오류로 거절된다 — 웰컴 화면은 정상이 아니면\n `reason` 을 배너로 보여 준다.\n","mcp":null,"fileScope":false},
 	"project.tool.open": {"name":"project.tool.open","kind":"unary","tier":"read","roles":["owner"],"params":"ProjectOpenToolParams","output":"ProjectOpenToolResult","doc":" Open a project, file or line in the Pitwall app. Does not bring a window to the front — if the project's window\n is open, only a tab opens in it; otherwise a window is created without activating it. `path` must be inside the\n project root (relative paths are relative to the root). At most 5 calls per 10 seconds across all agents (beyond\n that `rateLimited`). The app must be running.\n","mcp":{"group":"project","name":"project_open"},"fileScope":false},
+	"project.tool.register": {"name":"project.tool.register","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<ProjectRegisterToolParams>","output":"ProjectRegisterToolResult","doc":" Register a folder as a Pitwall project and return what was detected in it (build files, languages, the settings\n folder). Needs approval in Pitwall: the request shows the real path that will be registered (symbolic links and\n `..` resolved), the name and where the settings live. Refused before asking: a relative path, a folder that does\n not exist, the file system root, the home folder or a folder above it, and a folder that is already a project\n root or lies inside a registered project, including a git worktree of one (use `project_open` for those). The\n new project is not trusted: only a person can trust it in Pitwall.\n","mcp":{"group":"project","name":"project_register"},"fileScope":false},
 	"project.trust": {"name":"project.trust","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ProjectIdParams","output":"ProjectTrust","doc":" 프로젝트의 신뢰. 워크트리 프로젝트는 메인 저장소 프로젝트의 신뢰를 따른다(`ownerId`). 없는 id 면 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"project.update": {"name":"project.update","kind":"unary","tier":"write","roles":["owner"],"params":"UpdateProjectParams","output":"Project","doc":" 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.\n","mcp":null,"fileScope":false},
 	"runtime.get": {"name":"runtime.get","kind":"unary","tier":"read","roles":["owner"],"params":"RuntimeGetParams","output":"RuntimeInfo","doc":" 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.\n","mcp":null,"fileScope":false},
@@ -7173,6 +7193,9 @@ argv: string[]; problem: LaunchProblem } |
 /**  도구를 고르지 않았고 기본 도구도 없다. `configured` 는 설정이 고른, 이 OS 에 없는 도구. */
 { kind: "noDefault"; configured: string | null };
 
+/**  The OS a tool is offered on. */
+export type OpenWithPlatform = "macos" | "linux" | "windows";
+
 export type OpenWithRunParams = {
 	projectId: string,
 	/**  없으면 기본 도구. 기본 도구가 없으면 `noDefault` 로 끝난다(창은 「다음에서 열기」 팝업을 연다). */
@@ -7183,6 +7206,38 @@ export type OpenWithRunParams = {
 	file?: string | null,
 	line?: number | null,
 	column?: number | null,
+};
+
+export type OpenWithUpsertParams = {
+	/**
+	 *  Tool id. An id from `open_with_list` changes that tool; a new id adds a tool. Lowercase letters, digits, `-`
+	 *  and `_`, starting with a letter or digit, up to 64.
+	 */
+	id: string,
+	/**  Name shown in the "Open with" menu. Required for a new tool. */
+	label?: string | null,
+	/**
+	 *  Command that opens the project, as an argv array run without a shell: the first element is the program (no
+	 *  variables in it), the others may use `{project_root}` and `{branch}`. Example: `["zed", "{project_root}"]`.
+	 *  Required for a new tool.
+	 */
+	command?: string[] | null,
+	/**
+	 *  Command that opens a file, as an argv array like `command`; it must use `{file}` and may use `{line}`,
+	 *  `{column}`, `{project_root}` and `{branch}`. Example: `["zed", "{file}:{line}:{column}"]`.
+	 */
+	fileCommand?: string[] | null,
+	/**  The OSes the tool is offered on. Without it, the contributing extension's list, or every OS for a new tool. */
+	platforms?: OpenWithPlatform[] | null,
+};
+
+export type OpenWithUpsertResult = {
+	/**  The global settings file that was written. */
+	file: string,
+	/**  The tool as `open_with_list` now shows it. `null` when it is not offered on this OS. */
+	tool: ExternalToolInfo | null,
+	/**  `settings.local.toml` also sets this tool, and its keys win over the ones written. */
+	overriddenLocally: boolean,
 };
 
 /**  Where the request was opened. */
@@ -7349,6 +7404,28 @@ export type ProjectPatch = {
 	/**  통째로 바꾼다. */
 	tags?: string[] | null,
 	configMode?: ConfigMode | null,
+};
+
+export type ProjectRegisterToolParams = {
+	/**
+	 *  Absolute path of an existing folder. Symbolic links and `..` are resolved: the real path is what gets
+	 *  registered.
+	 */
+	root: string,
+	/**  Display name. Without it, the folder name. */
+	name?: string | null,
+	/**  Where the project settings live. Without it, `repository`. */
+	configMode?: ConfigMode | null,
+};
+
+export type ProjectRegisterToolResult = {
+	/**  The new project and what was detected in its root (the same summary as `project_info`). */
+	info: ProjectInfo,
+	/**
+	 *  Whether the project is trusted. Registering never trusts a project — only a person trusts it in Pitwall, and
+	 *  until then project code (runtime providers, language servers) does not run for it.
+	 */
+	trusted: boolean,
 };
 
 /**

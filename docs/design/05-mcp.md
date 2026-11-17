@@ -54,10 +54,11 @@
 | `settings_get` | 설정 키 조회(전역 · 프로젝트 — 디스크에 쓰지 않고 읽는다) | read |
 | `settings_set` | 설정 키 변경 — M5 에 없다. 설정 UI(04 F11-6)가 설정 키 표를 만들 때 함께 온다(06-roadmap.md 결정 D59) | write |
 
-**지금 구현**(16-m5-plan M5-09):
+**지금 구현**(16-m5-plan M5-09 · M5-16):
 
 - `settings_get`(← 툴 메서드 `config.tool.get`, `crates/pw-core/src/config/tool.rs`, 코어 툴 — 헤드리스에도 있다): `{ projectId?, worktree?, key? }`. 부를 때마다 파일을 디스크에 쓰지 않고 새로 읽는다(`ConfigSource::without_writes` — 구버전 파일을 마이그레이션해 쓰거나 `.backup/` 을 만들지 않는다). `projectId` 가 없으면(`null`) 전역 설정, 있으면 전역 위에 그 프로젝트 설정(`project.toml` · `project.local.toml`)을 얹은 값이다 — 세션에 프로젝트가 있으면 키를 빼면 세션 프로젝트이므로 전역만 보려면 `null` 을 준다. 결과는 값 하나(테이블이 아닌 것)마다 점 키(`mcp.preset`, 점 · 공백이 든 키 이름은 큰따옴표) · 값 · 이긴 레이어(`builtin` · `global` · `shared` · `personal` — 개인 전용 프로젝트의 `project.toml` 은 `personal`) · 가렸는가와, 읽은 파일 목록이다. `key` 는 점 키 단위 접두로 좁힌다. 키 이름이 비밀을 가리키는 값은 `[redacted]` 로 가린다(`pw_core::secret` — 감사 로그 인자 요약과 같은 한 벌, 배열 안 테이블의 키까지). 그 밖의 값(실행 파일을 정하는 `[git] path` · `[open_with.tools]` · `[lsp.<id>]` 의 명령 포함)은 파일 그대로다 — 에이전트가 파일을 직접 읽는 것과 같은 범위(메인 판정 2026-11-14). 파일을 읽지 못하면 그 파일 경로만 알리고 파서의 오류 글(문제 줄의 값을 인용한다)은 싣지 않는다
 - `project_open`(← 툴 메서드 `project.tool.open`, `crates/pw-core/src/open.rs`, 앱 Host 만 — Host 를 만들 때 「열기 요청」 자리 `pw_core::open::OpenRequests` 를 받은 Host 에만 붙는다): `{ projectId, worktree?, path?, line?, column? }`. Host 가 관문(`agent_grant`) · 경로(프로젝트 루트 안 — 상대 경로는 루트 기준, 판정은 `fs.*` 와 같은 정규화로 심링크를 푼 실제 경로, 밖이면 invalid params) · 빈도를 보고, 데스크톱(`apps/desktop/src-tauri/src/agent_open.rs`)이 `pitwall <path>` 와 같은 길(창별 보류 큐 · `project://open`)로 연다 — 다른 점은 창을 앞으로 가져오지 않는 것이다. 새 창은 Tauri 의 `focused(false)` 로 만든다(macOS 는 tao 가 `makeKeyAndOrderFront` 대신 `orderFront` 만 부르고 앱을 활성화하지 않는다 — 키보드 포커스는 사람이 쓰던 앱에 남고, 창은 그 위에 보일 수 있다). 결과는 `openedIn`(`existingWindow` · `newWindow`)과 연 파일의 실제 경로. **빈도**: Host 전체에 한 벌 — 그 Host 의 에이전트 호출(MCP 세션 · `pitwall tool` 전부)을 합쳐 10초에 5번(`pw_core::open::RATE_LIMIT` · `RATE_WINDOW` — 출발값), 넘으면 `PERMISSION_DENIED`(`data.reason = "rateLimited"`, `retryAfterMs`) — 결과 표지 `rate_limited`. 메인 판정 2026-11-14: Host 전체 한도, `pitwall tool` 이 호출마다 새 세션이라서(세션마다 세면 셸 반복 한 줄로 풀린다) — 세션별 한도는 따로 두지 않는다. 세는 것은 여는 데까지 간 호출이다(입력이 틀렸거나 앱이 아직 창을 열 수 없어 거절한 호출은 세지 않는다). 사람의 열기와 같이 최근 연 순서(레지스트리의 `opened_at`)를 갱신한다. 헤드리스에는 없어 CLI 는 `needs_app`(종료 3)으로 가른다
+- `project_register`(← 툴 메서드 `project.tool.register`, `crates/pw-core/src/registry/tool.rs`, 코어 툴 — 헤드리스 목록에도 있지만 헤드리스 세션은 `headless_write` 로 거절한다 · 16-m5-plan M5-16): `{ root, name?, configMode? }`, 프로젝트가 없는 쓰기라 가장 최근에 앞에 있던 창에 묻는다(「권한 모델」 의 「승인 요청 라우팅」). 계획은 등록될 루트(심볼릭 링크 · `..` 를 푼 실제 경로) · 이름(없으면 그 폴더 이름) · 설정 저장 방식이고, 계획 단계는 레지스트리 · 폴더에 아무것도 쓰지 않는다. 승인 뒤에는 계획 때 푼 루트로만 등록한다 — 그 사이 그 경로가 다른 폴더로 풀리게 되면 등록하지 않는다(`plan_changed`). 승인을 묻기 전에 거절하는 루트: 상대 경로 · 없는 폴더 · 파일, **넓은 경로**(파일 시스템 루트 · 홈 폴더와 그 위 — 루트 후보 추천이 빼는 것과 같은 규칙), **이미 등록된 프로젝트에 드는 경로**(그 루트 · 그 안쪽 · 그 프로젝트의 git 워크트리와 그 안쪽 — 경로 해석이 이미 그 프로젝트로 여는 곳이고, 워크트리를 따로 등록하면 메인 저장소 프로젝트의 신뢰를 따르게 된다). 등록된 프로젝트를 품는 위 폴더는 받는다. 결과는 `project_info` 와 같은 요약과 `trusted`(늘 `false`). **신뢰는 주지 않는다** — 새 프로젝트는 「아직 묻지 않음」 이고, 신뢰를 바꾸는 RPC 는 툴이 아니며 에이전트 범위로 불러도 거절된다(결정 M5-D18)
 
 ### 실행 구성 (M6 — 실행 기능과 함께 제공)
 | 툴 | 설명 | 권한 |
@@ -165,7 +166,7 @@
 
 `*` UI에 영향을 주지만 비파괴 → 승인 불필요. 창을 앞으로 가져오지 않는다 — 그 프로젝트 창이 열려 있으면 탭만 열고, 없으면 활성화하지 않고 만든다. Host 전체로 호출 빈도를 묶는다(16-m5-plan 결정 M5-D24 · 메인 판정 2026-11-14 — `pitwall tool` 이 호출마다 새 세션이라 세션마다 세지 않는다)
 
-**지금 구현**(16-m5-plan M5-09): `open_with_list`(← `openWith.list` 에 `mcp: true` — 이름 · 등급 · 입력 꼴이 이 표와 같다): 도구 id · 이름 · 기여한 확장 · 파일까지 여는가 · 설정 형식 오류와 기본 도구. 실행 명령은 싣지 않는다. 앱 Host 만(그룹 `open_with`). MCP 세션이 부르면 로그인 셸 환경을 미리 가져오지 않는다(창의 팝업만 곧 실행한다). `open_with_upsert` 는 아직 없다
+**지금 구현**(16-m5-plan M5-09 · M5-16): `open_with_list`(← `openWith.list` 에 `mcp: true` — 이름 · 등급 · 입력 꼴이 이 표와 같다): 도구 id · 이름 · 기여한 확장 · 파일까지 여는가 · 설정 형식 오류와 기본 도구. 실행 명령은 싣지 않는다. 앱 Host 만(그룹 `open_with`). MCP 세션이 부르면 로그인 셸 환경을 미리 가져오지 않는다(창의 팝업만 곧 실행한다). `open_with_upsert`(← 툴 메서드 `openWith.tool.upsert`, `crates/pw-open-with/src/upsert.rs`, 16-m5-plan M5-16): `{ id, label?, command?, fileCommand?, platforms? }` 로 전역 `settings.toml` 의 `[open_with.tools.<id>]` 표를 **통째로** 바꾼다(있던 그 표의 다른 키는 남지 않는다 — 확장이 기여한 도구면 적지 않은 키는 확장의 값). 명령 형식 검사는 목록이 설정을 읽는 것과 같은 한 벌(argv 배열 · 첫 요소에 변수 금지 · `command` 에 파일 변수 금지 · `file_command` 는 `{file}`)이고, 확장에 없는 새 도구는 `label` · `command` 가 있어야 한다 — 틀리면 승인을 묻기 전에 거절한다. 계획은 `settings.toml` 의 앞뒤 내용(이미 있던 도구를 덮으면 옛 값이 앞쪽에 보인다)이고 계획 단계는 파일을 쓰지 않는다. 프로젝트가 없는 쓰기라 가장 최근에 앞에 있던 창에 묻고, **`auto_approve` 도 「이 세션 동안 허용」 도 없이 매번 묻는다**(결정 M5-D31 — 계획 규칙이 끈다). 승인 뒤에는 계획 때 만든 내용 그대로 쓰고, 쓰기 직전에 파일이 계획 때 읽은 것인지 비교해 다르면 쓰지 않는다(`plan_changed` — `pw_core::config::write::apply_planned`). `settings.local.toml` 이 같은 도구를 적었으면 그 키가 이긴다는 것을 계획 요약과 결과(`overriddenLocally`)에 싣는다
 
 ### 체크아웃 (M7 — 원격과 함께 제공)
 
@@ -205,7 +206,7 @@
   | `approval_denied` | `denied` | 승인 창에서 거절됐다 | 승인 경로(M5-12) |
   | `approval_timeout` | `denied` | 승인 창이 시간(`[mcp.policy] approval_timeout_secs`, 기본 300초) 안에 답을 받지 못했다 | 승인 경로(M5-12) |
   | `approval_backlog` | `denied` | 그 세션의 승인 대기가 이미 상한(8개 — `pw_mcp::approval::MAX_PENDING_PER_SESSION`)이다 — 창에 묻지 않았다. 앞의 요청이 끝난 뒤 다시 부른다 | 승인 경로(16-m5-plan M5-14) |
-  | `plan_changed` | `denied` | 승인 뒤 툴이 다시 만든 계획의 해시가 승인한 것과 다르다(파일 내용 · 서버가 채운 `worktree` · 대상이 바뀜) — 돌리지 않았고 다시 묻지 않았다. 다시 부르면 새 계획으로 묻는다 | 승인 경로(M5-12) |
+  | `plan_changed` | `denied` | 승인 뒤 툴이 다시 만든 계획의 해시가 승인한 것과 다르다(파일 내용 · 서버가 채운 `worktree` · 대상이 바뀜) — 돌리지 않았고 다시 묻지 않았다. 다시 부르면 새 계획으로 묻는다. 해시를 확인한 뒤 · 부작용 직전에 툴이 계획 때 읽은 값과 다른 것을 보고 멈춘 경우도 이것이다(`data.reason = "planChanged"`) | 승인 경로(M5-12), `project_register` · `open_with_upsert`(M5-16) |
   | `needs_app` | `denied` | 앱이 있어야 하는 툴을 헤드리스에서 불렀다(결정 M5-D3) | CLI(`pitwall tool`)가 부르지 않고 가른다 — 실행 파일에 링크된 카탈로그에는 있고 헤드리스 Host 의 카탈로그에는 없는 이름이면 종료 코드 3(「CLI」 절). 서버는 아직 내지 않는다 — 헤드리스 MCP 세션에서 앱 전용 이름은 `not_exposed` 이고, 그 에이전트에게는 서버 안내문(`HEADLESS_NOTICE`)이 같은 뜻을 전한다. 서버가 `needs_app` 을 내는 것은 16-m5-plan M5-20(헤드리스에서 앱으로 넘겨 붙기)이 정한다 |
   | `headless_write` | `denied` | 헤드리스에서 `write` 이상을 불렀다(승인 경로가 없다) | 헤드리스 세션의 `write` 이상 |
   | `cancelled` | `error` | 호출이 취소됐다(취소 알림 · 세션 끊김 · Host 가 그 RPC 를 거둠) | 「호출 취소」 |

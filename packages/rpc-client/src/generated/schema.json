@@ -36502,6 +36502,153 @@
       ],
       "tier": "exec"
     },
+    "openWith.tool.upsert": {
+      "description": "Add an external tool for \"Open with\", or change one, in the global settings (`[open_with.tools.<id>]` in\n`settings.toml`). The tool's settings entry is replaced as a whole by the fields given; for a tool contributed\nby an extension, fields left out keep the extension's values (giving `command` drops the extension's\n`file_command` unless it is given too). Commands are argv arrays run without a shell, and the first element\ncannot use variables; a malformed command or a new tool without `label` and `command` is refused before asking.\nAlways needs approval in Pitwall, every call: the request shows the settings file before and after.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "OpenWithPlatform": {
+            "description": "The OS a tool is offered on.",
+            "enum": [
+              "macos",
+              "linux",
+              "windows"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "command": {
+            "default": null,
+            "description": "Command that opens the project, as an argv array run without a shell: the first element is the program (no\nvariables in it), the others may use `{project_root}` and `{branch}`. Example: `[\"zed\", \"{project_root}\"]`.\nRequired for a new tool.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "fileCommand": {
+            "default": null,
+            "description": "Command that opens a file, as an argv array like `command`; it must use `{file}` and may use `{line}`,\n`{column}`, `{project_root}` and `{branch}`. Example: `[\"zed\", \"{file}:{line}:{column}\"]`.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "Tool id. An id from `open_with_list` changes that tool; a new id adds a tool. Lowercase letters, digits, `-`\nand `_`, starting with a letter or digit, up to 64.",
+            "type": "string"
+          },
+          "label": {
+            "default": null,
+            "description": "Name shown in the \"Open with\" menu. Required for a new tool.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "platforms": {
+            "default": null,
+            "description": "The OSes the tool is offered on. Without it, the contributing extension's list, or every OS for a new tool.",
+            "items": {
+              "$ref": "#/$defs/OpenWithPlatform"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object",
+        "x-pitwall-planned": true
+      },
+      "result": {
+        "$defs": {
+          "ExternalToolInfo": {
+            "properties": {
+              "extension": {
+                "description": "Id of the contributing extension. `null` for a tool defined only in the global settings.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "fromSettings": {
+                "description": "Whether the global settings (`[open_with.tools.<id>]`) changed or added it.",
+                "type": "boolean"
+              },
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "opensFiles": {
+                "description": "Whether it has a command that opens a file too (`file_command`).",
+                "type": "boolean"
+              },
+              "problem": {
+                "description": "A settings format error. When present, the tool does not run (running it ends with `invalidTool`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "extension",
+              "fromSettings",
+              "opensFiles",
+              "problem"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "file": {
+            "description": "The global settings file that was written.",
+            "type": "string"
+          },
+          "overriddenLocally": {
+            "description": "`settings.local.toml` also sets this tool, and its keys win over the ones written.",
+            "type": "boolean"
+          },
+          "tool": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ExternalToolInfo"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The tool as `open_with_list` now shows it. `null` when it is not offered on this OS."
+          }
+        },
+        "required": [
+          "file",
+          "tool",
+          "overriddenLocally"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "project.candidates": {
       "description": "경로의 루트 후보: 워크트리의 메인 저장소, 가장 가까운 `.git`, 빌드 파일이 있는 상위 폴더(가까운 것부터).\n홈 디렉터리와 그 위, 파일 시스템 루트는 넣지 않는다.",
       "kind": "unary",
@@ -38028,6 +38175,227 @@
         "owner"
       ],
       "tier": "read"
+    },
+    "project.tool.register": {
+      "description": "Register a folder as a Pitwall project and return what was detected in it (build files, languages, the settings\nfolder). Needs approval in Pitwall: the request shows the real path that will be registered (symbolic links and\n`..` resolved), the name and where the settings live. Refused before asking: a relative path, a folder that does\nnot exist, the file system root, the home folder or a folder above it, and a folder that is already a project\nroot or lies inside a registered project, including a git worktree of one (use `project_open` for those). The\nnew project is not trusted: only a person can trust it in Pitwall.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "ConfigMode": {
+            "description": "Where the project settings live (design D9).",
+            "oneOf": [
+              {
+                "const": "repository",
+                "description": "The repository's `<root>/.pitwall/`.",
+                "type": "string"
+              },
+              {
+                "const": "personal",
+                "description": "Personal-only `$CONFIG/projects/<slug>/`. The repository's `.pitwall/` is not read.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "configMode": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ConfigMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Where the project settings live. Without it, `repository`."
+          },
+          "name": {
+            "default": null,
+            "description": "Display name. Without it, the folder name.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "root": {
+            "description": "Absolute path of an existing folder. Symbolic links and `..` are resolved: the real path is what gets\nregistered.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "type": "object",
+        "x-pitwall-planned": true
+      },
+      "result": {
+        "$defs": {
+          "ConfigMode": {
+            "description": "Where the project settings live (design D9).",
+            "oneOf": [
+              {
+                "const": "repository",
+                "description": "The repository's `<root>/.pitwall/`.",
+                "type": "string"
+              },
+              {
+                "const": "personal",
+                "description": "Personal-only `$CONFIG/projects/<slug>/`. The repository's `.pitwall/` is not read.",
+                "type": "string"
+              }
+            ]
+          },
+          "ConfigSummary": {
+            "description": "Where the settings are read from and the files there. Contents are not included.",
+            "properties": {
+              "dir": {
+                "description": "`<root>/.pitwall` in repository mode, `$CONFIG/projects/<slug>` for a personal-only project.",
+                "type": "string"
+              },
+              "files": {
+                "description": "Settings file ids in that folder (`project`, `run/dev-server` …). A `.local.toml` file is merged into the same\nid. Sorted by name.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "mode": {
+                "$ref": "#/$defs/ConfigMode"
+              }
+            },
+            "required": [
+              "mode",
+              "dir",
+              "files"
+            ],
+            "type": "object"
+          },
+          "Project": {
+            "description": "A registered project. Paths are absolute paths normalized by [`path::normalize`].",
+            "properties": {
+              "configMode": {
+                "$ref": "#/$defs/ConfigMode"
+              },
+              "createdAt": {
+                "description": "Creation time (Unix milliseconds).",
+                "format": "int64",
+                "type": "integer"
+              },
+              "favorite": {
+                "type": "boolean"
+              },
+              "host": {
+                "description": "The Host the project lives on. Always `local` for now.",
+                "type": "string"
+              },
+              "id": {
+                "description": "Id also used in `$DATA/projects/<id>/` (16 hex digits).",
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "openedAt": {
+                "description": "Last time the project was opened (Unix milliseconds). `null` if it was never opened.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "roots": {
+                "description": "The first one is the main root. There is only one for now; multi-root (F1-6) will allow several.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "slug": {
+                "description": "Name of the personal-only settings folder. Chosen at creation and never changed ([`slug`]).",
+                "type": "string"
+              },
+              "tags": {
+                "description": "Tags, sorted and deduplicated.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "host",
+              "roots",
+              "favorite",
+              "tags",
+              "configMode",
+              "slug",
+              "createdAt",
+              "openedAt"
+            ],
+            "type": "object"
+          },
+          "ProjectInfo": {
+            "properties": {
+              "buildFiles": {
+                "description": "Build file names found in the main root (the same list and order as the root candidates).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "config": {
+                "$ref": "#/$defs/ConfigSummary"
+              },
+              "languages": {
+                "description": "Languages guessed from the build files (`rust`, `typescript` …), in the order of the build files found.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "project": {
+                "$ref": "#/$defs/Project"
+              },
+              "rootExists": {
+                "description": "Whether the main root folder exists on disk. If not (moved or deleted), the lists below are empty.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "project",
+              "rootExists",
+              "buildFiles",
+              "languages",
+              "config"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "info": {
+            "$ref": "#/$defs/ProjectInfo",
+            "description": "The new project and what was detected in its root (the same summary as `project_info`)."
+          },
+          "trusted": {
+            "description": "Whether the project is trusted. Registering never trusts a project — only a person trusts it in Pitwall, and\nuntil then project code (runtime providers, language servers) does not run for it.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "info",
+          "trusted"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
     },
     "project.trust": {
       "description": "프로젝트의 신뢰. 워크트리 프로젝트는 메인 저장소 프로젝트의 신뢰를 따른다(`ownerId`). 없는 id 면 invalid params 오류.",
