@@ -162,9 +162,12 @@ export function LogList(props: LogListProps) {
     frame.current = requestAnimationFrame(draw);
   }, [draw]);
 
+  // 취소한 프레임은 비운다 — 남기면 `schedule` 이 「이미 걸렸다」 고 보고 다시 걸지 않는다. StrictMode(dev)가 effect 를 정리했다
+  // 다시 걸 때 로그가 영영 그려지지 않았다(M5-13b).
   useEffect(
     () => () => {
       if (frame.current !== undefined) cancelAnimationFrame(frame.current);
+      frame.current = undefined;
     },
     [],
   );
