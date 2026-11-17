@@ -5,14 +5,16 @@
 //! - 그 창이 앞에 있으면 아무것도 하지 않는다(다이얼로그가 보인다).
 //! - 앞에 없으면 OS 알림 「<에이전트>가 <툴> 승인을 기다린다」 를 낸다. **창이 다시 앞에 올 때까지 창마다 한 번** — 에이전트가 요청을
 //!   여럿 보내도 알림이 쌓이지 않는다(Host 는 세션당 대기를 8개로 묶는다 — `pw_mcp::approval::MAX_PENDING_PER_SESSION`).
-//! - 알림을 낼 수 없으면(권한 없음 · 내기 실패) 그 창의 주의 요청(macOS 는 Dock 아이콘 튀기기 — [`UserAttentionType::Critical`],
-//!   앱이 앞에 올 때까지)으로 대신한다. 데스크톱의 `tauri-plugin-notification` 은 권한을 늘 「있음」 으로 답한다 — macOS 에서 사람이
-//!   알림을 껐으면 알림이 조용히 사라질 수 있고 그때는 주의 요청도 없다(플러그인이 알 길이 없다).
+//! - 알림과 **함께 늘** 그 창의 주의 요청(macOS 는 Dock 아이콘 튀기기 — [`UserAttentionType::Critical`], 앱이 앞에 올 때까지)을
+//!   한다(M5-14 리뷰 F2). 데스크톱의 `tauri-plugin-notification` 은 권한을 늘 「있음」 으로 답하고, macOS · Windows 에서는 보내기를
+//!   다른 스레드에 맡겨 그 결과를 돌려주지 않는다 — OS 설정에서 끈 알림 · 알림 서버가 거절한 알림을 알 길이 없다. 그래서 알림을
+//!   대신하는 길(알림이 안 될 때만 주의 요청)이 아니라 둘 다 한다. 알림을 만들지도 못하면(권한 없음으로 답함 · 준비 실패) 주의
+//!   요청만 남는다.
 //! - 사람이 알림을 누르면(`tap`) 그 창을 앞으로 가져오고 그 창에 [`REVEAL_EVENT`](요청 id)를 보낸다 — 웹뷰가 그 다이얼로그를 다시
 //!   연다(Esc 로 닫았던 것이어도).
 //!
 //! 알림의 글은 웹뷰가 지금 언어로 만들고 에이전트가 보낸 이름은 웹뷰가 거른다(`src/mcp/agent-text.ts`). 여기서는 길이만 다시 묶고
-//! 제어 문자를 지운다 — 알림 서버가 받는 글이다.
+//! 제어 · 보이지 않는 글자를 U+FFFD 로 바꾼다 — 지우면 웹뷰가 드러내려던 흉내(`claude` + 0폭 공백 + `code`)를 오히려 감춘다.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -41,9 +43,9 @@ pub enum Notice {
     InFront,
     /// 그 창이 앞에 오기 전에 이미 알렸다.
     AlreadyAnnounced,
-    /// OS 알림을 냈다.
+    /// OS 알림을 냈고 창의 주의도 청했다.
     Notified,
-    /// 알림 대신 창의 주의를 청했다.
+    /// 알림을 만들지 못해 창의 주의만 청했다.
     Attention,
 }
 
@@ -102,22 +104,24 @@ impl ApprovalNotices {
             return Notice::AlreadyAnnounced;
         }
         state.announced.insert(window.to_owned());
+        let mut notice = Notice::Attention;
         if notifier.permitted() {
             state.next = state.next.wrapping_add(1);
             let id = state.next;
             match notifier.show(id, &clean(title), &clean(body)) {
                 Ok(()) => {
                     state.shown.insert(id, (window.to_owned(), request));
-                    return Notice::Notified;
+                    notice = Notice::Notified;
                 }
                 Err(error) => {
-                    tracing::warn!(%error, "could not show the approval notification; asking for attention instead");
+                    tracing::warn!(%error, "could not show the approval notification; asking for attention only");
                 }
             }
         }
         drop(state);
+        // 알림을 냈어도 늘 — 낸 알림이 사람에게 닿았는지 알 수 없다(머리 주석).
         attention();
-        Notice::Attention
+        notice
     }
 
     /// 창이 앞에 왔다 — 다음 요청은 다시 알린다.
@@ -133,19 +137,14 @@ impl ApprovalNotices {
     }
 }
 
-/// 알림 서버에 넘길 글: 제어 · 양방향 제어 · 0폭 글자를 빼고 길이를 묶는다(웹뷰가 이미 거른 글이다 — 한 번 더).
+/// 알림 서버에 넘길 글: 제어 · 양방향 제어 · 0폭 글자를 U+FFFD 로 바꾸고 길이를 묶는다(웹뷰가 이미 거른 글이다 — 한 번 더).
 fn clean(text: &str) -> String {
     let mut out: String = text
         .chars()
-        .filter(|c| !invisible(*c))
         .take(NOTICE_CHARS)
+        .map(|c| if invisible(c) { '\u{FFFD}' } else { c })
         .collect();
-    if text
-        .chars()
-        .filter(|c| !invisible(*c))
-        .nth(NOTICE_CHARS)
-        .is_some()
-    {
+    if text.chars().nth(NOTICE_CHARS).is_some() {
         out.push('…');
     }
     out
@@ -316,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn a_window_not_in_front_is_notified_once_until_it_comes_to_the_front() {
+    fn a_window_not_in_front_is_notified_and_asks_for_attention_once_until_it_comes_to_the_front() {
         let notices = ApprovalNotices::default();
         let notifier = FakeNotifier::new(true);
         let attention = Cell::new(0);
@@ -324,6 +323,7 @@ mod tests {
             announce(&notices, "project-1", false, 1, &notifier, &attention),
             Notice::Notified
         );
+        assert_eq!(attention.get(), 1, "알림과 함께 주의 요청");
         let shown = notifier.shown.borrow().clone();
         assert_eq!(shown.len(), 1);
         assert_eq!(shown[0].1, "Pitwall approval request");
@@ -352,7 +352,11 @@ mod tests {
             Notice::Notified
         );
         assert_eq!(notifier.shown.borrow().len(), 3);
-        assert_eq!(attention.get(), 0);
+        assert_eq!(
+            attention.get(),
+            3,
+            "알림마다 주의 요청도 — 앞에 오기 전의 둘째 요청은 둘 다 없다"
+        );
     }
 
     #[test]
@@ -389,8 +393,11 @@ mod tests {
     }
 
     #[test]
-    fn the_notice_text_loses_invisible_characters_and_is_bounded() {
-        assert_eq!(clean("claude\u{200B}code\u{202E}\nx"), "claudecodex");
+    fn the_notice_text_marks_invisible_characters_and_is_bounded() {
+        assert_eq!(
+            clean("claude\u{200B}code\u{202E}\nx"),
+            "claude\u{FFFD}code\u{FFFD}\u{FFFD}x"
+        );
         let long = "a".repeat(NOTICE_CHARS + 5);
         let cleaned = clean(&long);
         assert_eq!(cleaned.chars().count(), NOTICE_CHARS + 1);
