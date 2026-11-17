@@ -490,7 +490,7 @@ pub(crate) fn check_agent_write(
             "would turn off its production or read-only mark; only the person can lower a mark, in Pitwall",
         ));
     }
-    if existing != DbMarks::default() && !targets.iter().any(|t| *t == new_target) {
+    if existing != DbMarks::default() && !targets.contains(&new_target) {
         tracing::info!(target: "pw_db", project = project_id, connection = connection_id, "agent db connection write refused: it moves a marked connection");
         return Err(write_refused(
             project_id,
