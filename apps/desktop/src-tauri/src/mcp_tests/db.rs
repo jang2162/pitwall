@@ -712,9 +712,9 @@ fn finished_row(host: &ToolHost, nth: usize) -> super::AuditRow {
     }
 }
 
-/// 감사 행의 (툴, 결과, 승인 방식).
 /// 감사 행의 (툴, 결과, 승인 방식) — `count` 개가 생기고 모두 끝 기록(`started` 가 아님)을 받을 때까지 기다린다. 끝 기록은 툴 결과
-/// 뒤에 큐로 쓰여 늦을 수 있다(리뷰 F2).
+/// 뒤에 큐로 쓰여 늦을 수 있다(리뷰 F2). 순서는 감사 로그가 약속하는 것만 — 세션 안에서는 호출 순서, 세션끼리는 첫 행 순서다.
+/// 세션마다 쓰기 스레드가 따로라(pw_mcp `audit_writer`) 앞 세션의 늦은 행이 뒤 세션의 행보다 뒤 id 를 받을 수 있다.
 async fn approvals_of(host: &ToolHost, count: usize) -> Vec<(String, String, Option<String>)> {
     let read = || -> Vec<(String, String, Option<String>)> {
         let Ok(conn) = rusqlite::Connection::open_with_flags(
@@ -723,8 +723,10 @@ async fn approvals_of(host: &ToolHost, count: usize) -> Vec<(String, String, Opt
         ) else {
             return Vec::new();
         };
-        let Ok(mut stmt) = conn.prepare("SELECT tool, outcome, approval FROM calls ORDER BY id")
-        else {
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT tool, outcome, approval FROM calls
+             ORDER BY (SELECT min(first.id) FROM calls first WHERE first.session = calls.session), id",
+        ) else {
             return Vec::new();
         };
         stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
@@ -871,12 +873,13 @@ async fn db_connection_test_asks_to_open_even_with_auto_approve() {
                 Some("once".into())
             ),
             ("db_schema".into(), "ok".into(), None),
-            ("db_schema".into(), "denied".into(), None),
             (
                 "db_connection_test".into(),
                 "ok".into(),
                 Some("auto".into())
             ),
+            // 다른 세션의 거절.
+            ("db_schema".into(), "denied".into(), None),
         ]
     );
     other.close().await;
