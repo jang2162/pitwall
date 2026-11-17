@@ -41,6 +41,7 @@ mise trust && mise install && pnpm install
 | 데스크톱 앱 release 번들의 git 시나리오 측정(macOS, 아래 「성능 기준선」 의 「git 시나리오」)                                                                                                                         | `mise run perf-git`     |
 | M2-22 실기 측정 한 번에(`perf-git` + git 저장소 프로젝트의 콜드 스타트 · 유휴 메모리, 결과를 보고서 폴더로 복사)                                                                                                      | `mise run perf-m2`      |
 | M4-19 실기 측정 한 번에(LSP · 심볼 · 콜드 스타트 · 유휴 메모리, 결과를 보고서 폴더로 복사 — 아래 「성능 기준선」 의 「LSP 시나리오」)                                                                                 | `mise run perf-m4`      |
+| M5-22 측정 한 번에(빈 프로젝트 콜드 스타트 · 유휴 메모리 + CLI 벽시계 · MCP 세션 메모리 기록, 결과를 보고서 폴더로 복사 — 아래 「성능 기준선」 의 「M5 기록 항목」)                                                   | `mise run perf-m5`      |
 
 하위 단위만 돌릴 때:
 
@@ -194,6 +195,14 @@ git 저장소를 프로젝트로 잴 때는(M2-22) `--project <폴더>` 를 준�
 - **기다림.** 단계를 시작하기 직전마다 화면 잠금을 보고 풀릴 때까지 기다리며(perf-m3 은 멈춘다 — 이 스크립트는 잠긴 동안 준비 · Rust 단계를 하고 기다린다), 화면 구성이 기준선(내장 화면 하나)과 다르면 같아질 때까지 기다리고(로그에 그 화면을 적는다), 1분 load average 가 코어 수를 넘으면 내려갈 때까지 기다린다. 기다린 시간과 시작 때의 화면은 조건 파일의 단계마다 적힌다. 단계 도중에 화면 구성이 바뀌면 그 단계에 `displaysKept: false` 를 적고 경고한다 — 판정하지 않는다.
 - **결과.** `target/perf/m4-<종류>[-short]-<날짜>-<시각>/` 의 `result.json` · `summary.md`, 회마다 `run-<N>/` 에 표시 파일 · 가짜 서버의 표지 · 앱 로그. `typing` 은 그 폴더 아래 회마다 `typing-on-r<N>/` · `typing-off-r<N>/`(pw-perf 결과)를 두고, 위의 두 파일은 그것을 묶은 판정이다. 끝에 한 번 `docs/superpowers/reports/<날짜>-m4-perf-<종류>[-short]-<시각>.json|.summary.md` 와 조건 파일로 복사한다(perf-m3 과 같다).
 - **보지 않는 것.** 실 서버의 응답 시간(서버마다 다르다 — M4-18 의 live 시험이 보고한다), 사람이 친 키 · 입력기 · 키 반복, 키맵을 거친 ⌘B, 팝업 안의 다른 탭 · 그룹, 문제 툴 윈도우의 필터 · 「현재 파일」 범위, 캐시를 비운 디스크(합성 저장소는 만든 뒤 OS 캐시에 있다). 시나리오가 찾는 DOM(`[data-testid=status-lsp]` 의 `data-state`, `.cm-tooltip-autocomplete`, `.pw-diagnostic`, `[data-testid=status-problems] [data-count]`, `[data-tool-window=problems] [data-keymap-context=problems]` · `[data-problem-row]`, `[data-search-everywhere] [cmdk-input]` · `[data-symbol-query]`, 프로젝트 트리의 `[data-path]`)이 바뀌면 시나리오가 단계 이름과 함께 실패한다 — 고친 뒤 처음 잴 때는 `mise run perf-m4 -- --short` 로 끝까지 도는지 먼저 본다.
+
+### M5 기록 항목
+
+`mise run perf-m5`(macOS, `scripts/perf-m5.mjs`)는 16-m5-plan.md M5-22 를 잰다: 판정은 위의 빈 프로젝트 콜드 스타트 · 유휴 메모리(`pw-perf` 그대로 — M4 기준선과 같은 측정)이고, 기록만 하는 둘(결정 M5-D19 — 목표 행이 없다)은 `pw-perf` 의 시나리오가 아니라 따로 짓는 드라이버 `pw-perf-m5`(`crates/pw-perf/src/bin/pw-perf-m5.rs` — 번들에 들지 않는다)가 잰다. 드라이버는 위의 회 준비(임시 `PITWALL_*_DIR` · 미신뢰로 등록한 빈 프로젝트 · 책임 프로세스를 끊은 띄우기 · `first_frame` · 책임 pid 묶음의 `phys_footprint` · pid 로 끄기 · 그 회의 웹뷰 저장소 지우기)를 `pw_perf` 라이브러리로 그대로 쓴다. 단계 앞의 기다림(화면 잠금 · 화면 구성 · 1분 load average — `--max-load`, 기본은 코어 수)과 결과 복사(`docs/superpowers/reports/<날짜>-m5-perf-<종류>[-short]-<시각>.json|.summary.md`, 조건 파일 `…-m5-perf-conditions-…`)는 perf-m4 와 같다. 조건 파일은 단계마다 시작 · 끝의 load average, CPU 를 20 % 넘게 쓰는 프로세스(다른 빌드 · `PerfPowerServices` 등), 입력 유휴(`HIDIdleTime`)도 적는다.
+
+- **`cli-headless` · `cli-app`.** `<번들>/Contents/MacOS/pitwall tool project_list` 의 벽시계 — 시작은 띄우기 직전, 끝은 프로세스 종료. 준비 1 + 20회를 쉬지 않고 잇는다. `cli-app` 은 같은 `$DATA` 로 앱을 띄우고 첫 프레임 10초 뒤부터 부른다. 회마다 종료 0 이고 출력에 등록한 프로젝트 폴더가 있어야 하고, CLI 로그에 `connected to the running app`(앱 있음) 또는 `serving headless`(헤드리스)가 부른 횟수만큼 있어야 한다 — 아니면 실패다. 앞 두 회의 출력은 `outputs/` 에 남는다.
+- **`mcp-idle`.** 회마다 앱을 새로 띄우고 첫 프레임 10초 뒤(표본 0)에 `pitwall mcp --project <그 프로젝트>` 세션 하나를 붙이거나(세션 회 — `initialize` → `notifications/initialized` → `tools/list` 뒤 stdin 을 열어 둔다) 아무것도 하지 않고(대조 회), 그 뒤 10초마다 60초까지 앱 인스턴스(앱 + WebKit)의 footprint 를 잰다. 준비 1회(대조) 뒤 세션 · 대조를 5짝 번갈아 돈다. **회의 값은 붙은 뒤 40초 이후 표본의 중앙값**이고 증가분은 세션 회 값의 중앙값 − 대조 회 값의 중앙값이다 — 대조 회도 첫 프레임 10 – 30초 사이에 WebKit 이 25 MB 쯤 가라앉고, 세션 회는 상태바가 다시 그려져 그 가라앉음이 늦어져 붙은 뒤 10초 표본만 크게 읽힌다(M5-22 첫 측정 §3 ②). 붙은 뒤 10초 표본의 차와 `pitwall mcp` 프록시 자신의 footprint(앱 묶음 밖의 별도 프로세스)도 함께 적는다. 세션이 앱 소켓에 붙지 않았으면(`mcp` 로그에 `connected to the running app` 이 없다) 실패다.
+- **제외 · 종료 코드.** 화면이 잠겼거나 창이 가려진 회는 제외(`excluded`)하고, 유효한 회가 요청의 절반보다 적으면 드라이버가 3 으로 끝난다. 드라이버가 신호로 끝나면 앱은 `PITWALL_PERF_PARENT` 로 그것을 보고 스스로 정상 종료한다(임시 폴더 `$TMPDIR/pw-m5-<pid>` 는 남는다).
 
 ## RPC 타입 생성
 

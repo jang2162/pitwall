@@ -408,7 +408,7 @@ function prepare(ra) {
   return { ra: installed.program, raVersion: installed.version, head };
 }
 
-function displays() {
+export function displays() {
   const r = run("system_profiler", ["SPDisplaysDataType", "-json"]);
   if (r.status !== 0) return null;
   try {
