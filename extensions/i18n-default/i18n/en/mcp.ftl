@@ -1,4 +1,4 @@
-### MCP — status bar item, session list popup, connection count in the welcome window (16-m5-plan M5-10).
+### MCP — status bar item and connection count in the welcome window (16-m5-plan M5-10), Agent Activity tool window (M5-13).
 ### Keys are wired to the screen by apps/desktop/src/mcp/strings.ts.
 
 ## Status bar item
