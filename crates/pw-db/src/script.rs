@@ -1024,6 +1024,13 @@ pub(crate) async fn run_files(
                 break;
             }
         }
+        // 커밋할지는 모든 문장을 마친 뒤에 정한다 — 그 앞에 온 중지는 커밋하지 않는다(시험이 그 자리에 끼워 넣는다).
+        let may_commit = if in_transaction && !read_only && !broke {
+            control.before_commit().await;
+            control.begin_commit()
+        } else {
+            false
+        };
         let (end, commit_error) = if !in_transaction {
             (SqlTransactionEnd::AutoCommitted, None)
         } else if read_only {
@@ -1032,10 +1039,7 @@ pub(crate) async fn run_files(
         } else if broke {
             rollback(conn).await;
             (SqlTransactionEnd::RolledBack, None)
-        } else if {
-            control.before_commit().await;
-            control.begin_commit()
-        } {
+        } else if may_commit {
             control.after_commit_point().await;
             let committed = within(Budget::PAGE.connect, "commit", conn.commit()).await;
             control.end_commit();
