@@ -364,7 +364,9 @@ fn validate_kind(kind: &RunKindConfig, root: &std::path::Path) -> Result<(), Str
             argv_items("args", args)
         }
         RunKindConfig::DockerCompose { services, file } => {
-            argv_items("services", services)?;
+            for (i, service) in services.iter().enumerate() {
+                arg(&format!("services[{i}]"), service)?;
+            }
             if let Some(file) = file {
                 root::inside(root, file).map_err(|why| format!("file {why}"))?;
             }
@@ -406,9 +408,18 @@ fn no_nul(what: &str, value: &str) -> Result<(), String> {
 }
 
 /// argv 한 칸이 될 필수 값.
+/// 이름 자리(`script` · `command` · `package` · `module` · `task` · 서비스)라 `-` 로 시작하면 받지 않는다 — 그 프로그램이 옵션으로
+/// 읽어(`npm run --prefix=…`, `python3 -c …`) 실행 선택기 · 승인 계획에 「`npm run <이름>`」 으로 보이는 것과 다른 일을 한다.
+/// 감지된 태스크의 이름은 저장소가 정한다(M6-04). 옵션이 정상인 자리(`args` · `tasks`)는 그대로다.
 fn arg(what: &str, value: &str) -> Result<(), String> {
     text(what, value)?;
-    no_nul(what, value)
+    no_nul(what, value)?;
+    if value.starts_with('-') {
+        return Err(format!(
+            "{what} must not start with `-` (it would be read as an option); put options in `args`"
+        ));
+    }
+    Ok(())
 }
 
 /// argv 칸들(빈 칸은 받는다 — `""` 도 인자다).

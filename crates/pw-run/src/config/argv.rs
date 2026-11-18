@@ -136,18 +136,29 @@ const MAVEN_WRAPPER: &[&str] = if cfg!(windows) {
     &["mvnw"]
 };
 
-/// 작업 폴더부터 프로젝트 루트까지(둘 다 포함). 작업 폴더가 루트 밖이면 작업 폴더 하나.
-fn upward<'a>(cx: &'a ArgvContext<'a>) -> impl Iterator<Item = &'a Path> {
-    let inside = cx.cwd.starts_with(cx.root);
-    cx.cwd
-        .ancestors()
-        .take_while(move |dir| !inside || dir.starts_with(cx.root))
-        .take(if inside { usize::MAX } else { 1 })
+/// 작업 폴더부터 프로젝트 루트까지(둘 다 포함). 작업 폴더가 루트 밖이면 작업 폴더 하나. 둘을 실제 경로로 바꿔 비교한다 — 레지스트리의
+/// 루트가 링크를 지난 경로(`/var/…` 대 `/private/var/…`)거나 Windows verbatim 경로가 섞이면 글로는 루트 안이 아니게 보여 lockfile ·
+/// 래퍼를 놓친다(리뷰 권고 1).
+fn upward(cx: &ArgvContext<'_>) -> Vec<PathBuf> {
+    let real = |p: &Path| {
+        std::fs::canonicalize(p)
+            .map(pw_core::registry::path::simplify)
+            .unwrap_or_else(|_| p.to_path_buf())
+    };
+    let (root, cwd) = (real(cx.root), real(cx.cwd));
+    if !cwd.starts_with(&root) {
+        return vec![cwd];
+    }
+    cwd.ancestors()
+        .take_while(|dir| dir.starts_with(&root))
+        .map(Path::to_path_buf)
+        .collect()
 }
 
 /// 작업 폴더에서 루트까지 처음 만나는 lockfile 의 패키지 관리자. 없으면 `npm`.
 fn package_manager(cx: &ArgvContext<'_>) -> &'static str {
     upward(cx)
+        .into_iter()
         .find_map(|dir| {
             LOCKFILES
                 .iter()
@@ -159,7 +170,7 @@ fn package_manager(cx: &ArgvContext<'_>) -> &'static str {
 
 /// 작업 폴더에서 루트까지 처음 만나는 래퍼 파일의 절대 경로.
 fn wrapper(cx: &ArgvContext<'_>, names: &[&str]) -> Option<String> {
-    upward(cx).find_map(|dir| {
+    upward(cx).into_iter().find_map(|dir| {
         names
             .iter()
             .map(|name| dir.join(name))

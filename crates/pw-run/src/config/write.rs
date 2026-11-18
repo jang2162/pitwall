@@ -378,7 +378,7 @@ fn render(before: Option<&str>, config: &RunConfig) -> Result<String, String> {
         pw_core::config::migrate::SCHEMA_KEY.to_owned(),
         Value::from(SCHEMA),
     );
-    sync(doc.as_table_mut(), &value, Some(known_keys()), false);
+    sync(doc.as_table_mut(), &value, Level::Top, false);
     if !had_schema {
         // `schema` 는 첫 줄이다. 다른 키의 순서는 그대로(안정 정렬).
         doc.as_table_mut().sort_values_by(|a, _, b, _| {
@@ -404,14 +404,52 @@ fn prune(map: &mut Map<String, Value>, keep_children: bool) {
     });
 }
 
-/// `table` 을 `new` 에 맞춘다. `known` 이 있으면 그 키만 지우고(최상위), 없으면 `new` 에 없는 키를 모두 지운다(이 크레이트가 뜻을
-/// 아는 표 — `env` · 프로필 · `[debug]`).
-fn sync(
-    table: &mut dyn TableLike,
-    new: &Map<String, Value>,
-    known: Option<&BTreeSet<String>>,
-    inline: bool,
-) {
+/// 표의 자리 — 어느 키가 이 크레이트의 것인가(지워도 되는가)를 정한다.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Level {
+    /// 최상위 — 구성 스키마의 키만 이 크레이트의 것([`known_keys`]).
+    Top,
+    /// `[profiles]` — 이름이 모두 프로필이라 새 구성에 없는 프로필은 지운다.
+    Profiles,
+    /// `[profiles.<이름>]` — `RunProfile` 의 키만 이 크레이트의 것([`profile_keys`]). 새 버전이 더한 키는 지킨다(리뷰 3).
+    Profile,
+    /// 키가 모두 값인 표(`env` · `[debug]` — `[debug]` 는 모든 키를 들고 다닌다) — 새 값에 없는 키는 지운다.
+    Free,
+}
+
+impl Level {
+    fn known(self) -> Option<&'static BTreeSet<String>> {
+        match self {
+            Level::Top => Some(known_keys()),
+            Level::Profile => Some(profile_keys()),
+            Level::Profiles | Level::Free => None,
+        }
+    }
+
+    fn child(self, key: &str) -> Level {
+        match (self, key) {
+            (Level::Top, "profiles") => Level::Profiles,
+            (Level::Profiles, _) => Level::Profile,
+            _ => Level::Free,
+        }
+    }
+}
+
+/// `RunProfile` 의 키(`env` · `args`).
+fn profile_keys() -> &'static BTreeSet<String> {
+    static KEYS: OnceLock<BTreeSet<String>> = OnceLock::new();
+    KEYS.get_or_init(|| {
+        let schema = schemars::schema_for!(super::RunProfile);
+        let root = schema.as_value();
+        let mut keys = BTreeSet::new();
+        collect_keys(root, root, &mut keys, 0);
+        keys
+    })
+}
+
+/// `table` 을 `new` 에 맞춘다. 새 값에 없는 키 가운데 그 자리([`Level`])에서 이 크레이트의 것만 지운다 — 모르는 키는 둔다.
+fn sync(table: &mut dyn TableLike, new: &Map<String, Value>, level: Level, inline: bool) {
+    let known = level.known();
     let stale: Vec<String> = table
         .iter()
         .map(|(k, _)| k.to_owned())
@@ -431,7 +469,7 @@ fn sync(
             Value::Object(inner) if item.is_table_like() => {
                 let inline_here = item.is_inline_table();
                 if let Some(child) = item.as_table_like_mut() {
-                    sync(child, inner, None, inline || inline_here);
+                    sync(child, inner, level.child(key), inline || inline_here);
                 }
             }
             _ => {

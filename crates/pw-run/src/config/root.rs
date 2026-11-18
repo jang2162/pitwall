@@ -62,7 +62,9 @@ pub fn inside(root: &Path, rel: &str) -> Result<PathBuf, String> {
         }
     }
     if real.starts_with(&real_root) {
-        Ok(real)
+        // Windows 의 `canonicalize` 는 verbatim 경로(`\\?\C:\…`)를 준다 — 작업 폴더 · `-f` 로 넘기면 `cmd.exe` 가 받지 않고, 레지스트리의
+        // 루트(보통 경로)와 앞부분 비교가 어긋난다.
+        Ok(pw_core::registry::path::simplify(real))
     } else {
         Err(format!(
             "{rel:?} resolves to {}, outside the project root {}",

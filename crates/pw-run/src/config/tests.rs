@@ -364,6 +364,8 @@ fn paths_outside_the_root_make_the_config_unusable() {
     let f = Fixture::new();
     let outside = f.base.join("outside");
     fs::create_dir_all(outside.join("deep")).unwrap();
+    // 루트 이름으로 시작하는 옆 폴더 — 경로 조각이 아니라 글 앞부분으로 비교하면 루트 안으로 보인다.
+    fs::create_dir_all(f.base.join("proj-outside")).unwrap();
     fs::write(outside.join(".env"), "SECRET=1\n").unwrap();
     f.dir("app/sub");
     #[cfg(unix)]
@@ -381,6 +383,8 @@ fn paths_outside_the_root_make_the_config_unusable() {
         "cwd = 'app/sub/../../..'",
         "cwd = 'not-yet/../../outside'",
         "cwd = '../OUTSIDE'",
+        "cwd = '../proj-outside'",
+        "env_file = ['../proj-outside/.env']",
         "env_file = ['../outside/.env']",
         "env_file = ['.env', 'app/../../outside/.env']",
     ];
@@ -925,4 +929,304 @@ fn the_canonical_form_does_not_see_layers() {
         set.get("split").unwrap().config.canonical(),
         set.get("whole").unwrap().config.canonical()
     );
+}
+
+// --- 리뷰(17-m6-plan M6-01 리뷰) 뒤에 더한 것 ------------------------------------------------------------------------
+
+/// 리뷰 2: 저장소 안의 구성 파일이 체크아웃 밖을 가리키는 링크면 읽지 않고, 까닭에 그 파일 내용이 실리지 않는다. 저장소 안을
+/// 가리키는 링크는 읽는다.
+#[cfg(unix)]
+#[test]
+fn a_link_out_of_the_repository_is_not_read() {
+    let f = Fixture::new();
+    let secret = f.base.join("secret.ini");
+    fs::write(
+        &secret,
+        "[default]\naws_secret_access_key = SUPERSECRETVALUE123\n",
+    )
+    .unwrap();
+    let outside_toml = f.base.join("outside.toml");
+    fs::write(
+        &outside_toml,
+        "name = 'OUTSIDE NAME'\ntype = 'shell'\ncommand = 'cat ~/.ssh/id_rsa'\n",
+    )
+    .unwrap();
+    let inside = f.root.join("configs/dev.toml");
+    fs::create_dir_all(inside.parent().unwrap()).unwrap();
+    fs::write(
+        &inside,
+        "name = 'Inside'\ntype = 'shell'\ncommand = 'true'\n",
+    )
+    .unwrap();
+    let run = f.root.join(".pitwall/run");
+    fs::create_dir_all(&run).unwrap();
+    std::os::unix::fs::symlink(&secret, run.join("leak.toml")).unwrap();
+    std::os::unix::fs::symlink(&outside_toml, run.join("valid.toml")).unwrap();
+    std::os::unix::fs::symlink(&inside, run.join("inside.toml")).unwrap();
+
+    let set = read(&f.place());
+    assert_eq!(
+        set.configs
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect::<Vec<_>>(),
+        ["inside"]
+    );
+    for id in ["leak", "valid"] {
+        let u = set.unusable.iter().find(|u| u.id == id).unwrap();
+        assert!(
+            u.reason.contains("outside the project"),
+            "{id}: {}",
+            u.reason
+        );
+        for content in [
+            "SUPERSECRETVALUE123",
+            "aws_secret",
+            "OUTSIDE NAME",
+            "id_rsa",
+        ] {
+            assert!(!u.reason.contains(content), "{id}: {}", u.reason);
+        }
+        assert_eq!(u.name, None, "{id}");
+    }
+
+    // 개인 전용 폴더는 dotfiles 링크를 따른다.
+    let mut personal = f.project.clone();
+    personal.config_mode = ConfigMode::Personal;
+    let dir = f.paths.personal_project_dir("proj").join("run");
+    fs::create_dir_all(&dir).unwrap();
+    std::os::unix::fs::symlink(&outside_toml, dir.join("dotfile.toml")).unwrap();
+    let place = RunConfigPlace::new(&f.paths, &personal, None).unwrap();
+    assert_eq!(
+        read(&place).get("dotfile").unwrap().config.name,
+        "OUTSIDE NAME"
+    );
+}
+
+/// 까닭 글에는 파일의 값이 실리지 않는다 — TOML 오류는 줄 · 칸만, 꼴 오류는 값을 걷는다(env 값은 비밀일 수 있다).
+#[test]
+fn unusable_reasons_carry_no_file_values() {
+    let f = Fixture::new();
+    for (id, body, line) in [
+        (
+            "toml",
+            "name = 'x'\ntype = 'shell'\ncommand = 'x'\nenv = { API_KEY = \"SECRET-ONE }\n",
+            Some("line 5"),
+        ),
+        (
+            "number",
+            "name = 'x'\ntype = 'shell'\ncommand = 'x'\nenv = { PORT = 31337 }\n",
+            None,
+        ),
+        (
+            "string",
+            "name = 'x'\ntype = 'shell'\ncommand = 'x'\nenv_file = \"SECRET-TWO\"\n",
+            None,
+        ),
+        ("bool", "name = 'x'\ntype = 'shell'\ncommand = true\n", None),
+    ] {
+        f.run_file(&format!("{id}.toml"), &format!("schema = 1\n{body}"));
+        let set = read(&f.place());
+        let u = set.unusable.iter().find(|u| u.id == id).unwrap();
+        for content in ["SECRET-ONE", "31337", "SECRET-TWO", "true"] {
+            assert!(!u.reason.contains(content), "{id}: {}", u.reason);
+        }
+        if let Some(line) = line {
+            assert!(u.reason.contains(line), "{id}: {}", u.reason);
+        }
+    }
+    assert_eq!(
+        read::redact(
+            r#"invalid type: string "a \"b\" c", expected a sequence; integer `5`; unknown variant `x`"#
+        ),
+        "invalid type: string, expected a sequence; integer; unknown variant `x`"
+    );
+}
+
+/// 리뷰 3: 쓰기는 `[profiles.<이름>]` 안의 모르는 키(새 버전이 더한 키)도 지킨다. 새 구성에 없는 프로필은 지운다.
+#[test]
+fn writing_keeps_unknown_keys_inside_a_profile() {
+    let f = Fixture::new();
+    let path = f.run_file(
+        "dev.toml",
+        "schema = 1\nname = 'Dev'\ntype = 'cargo'\ncommand = 'run'\n\n[profiles.fast]\n# from a newer Pitwall\n\
+         future_profile_key = 'keep me'\nargs = ['--release']\n\n[profiles.gone]\nargs = []\n",
+    );
+    let place = f.place();
+    let mut config = read(&place).get("dev").unwrap().config.clone();
+    config.profiles.remove("gone");
+    config.profiles.get_mut("fast").unwrap().args = Some(strings(&["--release", "--", "x"]));
+    write(&place, "dev", RunConfigLocation::Shared, Some(&config)).unwrap();
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(
+        text.contains("# from a newer Pitwall\nfuture_profile_key = 'keep me'"),
+        "{text}"
+    );
+    assert!(!text.contains("[profiles.gone]"), "{text}");
+    assert_eq!(read(&place).get("dev").unwrap().config, config);
+}
+
+/// 빈자리 ②: 워크트리와 메인 체크아웃에 개인 파일이 둘 다 있으면 워크트리 것만 쓴다(파일 단위 폴백 — 병합하지 않는다).
+#[test]
+fn a_worktree_local_file_wins_over_the_main_one_as_a_whole() {
+    let f = Fixture::new();
+    let wt = f.base.join("wt");
+    fake_worktree(&f.root, &wt);
+    f.run_file(
+        "dev.local.toml",
+        "schema = 1\nenv = { FROM = 'main', ONLY_MAIN = '1' }\n",
+    );
+    let wt_run = wt.join(".pitwall/run");
+    fs::create_dir_all(&wt_run).unwrap();
+    fs::write(
+        wt_run.join("dev.toml"),
+        "schema = 1\nname = 'W'\ntype = 'shell'\ncommand = 'wt'\n",
+    )
+    .unwrap();
+    fs::write(
+        wt_run.join("dev.local.toml"),
+        "schema = 1\nenv = { FROM = 'worktree' }\n",
+    )
+    .unwrap();
+    let place = RunConfigPlace::new(&f.paths, &f.project, Some(&wt.display().to_string())).unwrap();
+    let set = read(&place);
+    let dev = set.get("dev").unwrap();
+    assert_eq!(
+        dev.config.env.get("FROM").map(String::as_str),
+        Some("worktree")
+    );
+    assert_eq!(dev.config.env.get("ONLY_MAIN"), None);
+    assert_eq!(
+        dev.layers[1].path,
+        wt_run.join("dev.local.toml").display().to_string()
+    );
+}
+
+/// 빈자리 ③: `.pitwall/run` 자체가 체크아웃 밖을 가리키는 링크면 쓰지 않는다.
+#[cfg(unix)]
+#[test]
+fn writing_refuses_a_run_folder_that_resolves_outside_the_checkout() {
+    let f = Fixture::new();
+    let outside = f.base.join("elsewhere");
+    fs::create_dir_all(&outside).unwrap();
+    fs::create_dir_all(f.root.join(".pitwall")).unwrap();
+    std::os::unix::fs::symlink(&outside, f.root.join(".pitwall/run")).unwrap();
+    let config = parse("name = 'x'\ntype = 'shell'\ncommand = 'true'");
+    let err = write(&f.place(), "dev", RunConfigLocation::Shared, Some(&config)).unwrap_err();
+    assert_eq!(err.code, code::CONFLICT, "{err:?}");
+    assert!(
+        fs::read_dir(&outside).unwrap().next().is_none(),
+        "wrote outside the checkout"
+    );
+}
+
+/// 빈자리 ⑤: 프로필의 `args` 는 `args` 가 있는 종류만, 프로필 env 이름도 검증한다.
+#[test]
+fn profiles_are_validated() {
+    let f = Fixture::new();
+    for body in [
+        "[profiles.p]\nargs = ['--x']",
+        "[profiles.p]\nenv = { 'BAD-NAME' = '1' }",
+        "[profiles.'a.b']",
+    ] {
+        let reason = unusable_reason(&f, body).unwrap_or_else(|| panic!("`{body}` was accepted"));
+        assert!(reason.starts_with("profile"), "`{body}`: {reason}");
+    }
+    assert_eq!(
+        unusable_reason(&f, "[profiles.p]\nenv = { GOOD = '1' }"),
+        None
+    );
+}
+
+/// 권고 2: 이름 자리 값이 `-` 로 시작하면 옵션으로 읽히므로 쓸 수 없다. 옵션이 정상인 자리(`args` · `tasks`)는 받는다.
+#[test]
+fn a_name_that_reads_as_an_option_is_unusable() {
+    let f = Fixture::new();
+    let place = f.place();
+    for (id, body) in [
+        ("npm", "type = 'npm'\nscript = '--prefix=/tmp'"),
+        ("py", "type = 'python'\nscript = '-c'\nargs = ['print(1)']"),
+        (
+            "go",
+            "type = 'go'\ncommand = 'run'\npackage = '-exec=/bin/sh'",
+        ),
+        ("mise", "type = 'mise-task'\ntask = '--cd=/'"),
+        (
+            "compose",
+            "type = 'docker-compose'\nservices = ['web', '--build']",
+        ),
+        ("cargo", "type = 'cargo'\ncommand = '--config=x'"),
+    ] {
+        f.run_file(
+            &format!("{id}.toml"),
+            &format!("schema = 1\nname = 'x'\n{body}\n"),
+        );
+        let set = read(&place);
+        let u = set
+            .unusable
+            .iter()
+            .find(|u| u.id == id)
+            .unwrap_or_else(|| panic!("{id} was accepted"));
+        assert!(
+            u.reason.contains("must not start with `-`"),
+            "{id}: {}",
+            u.reason
+        );
+    }
+    let fine = parse("name = 'x'\ntype = 'cargo'\ncommand = 'run'\nargs = ['--release']");
+    validate(&fine, &f.root).unwrap();
+    let fine = parse("name = 'x'\ntype = 'gradle'\ntasks = ['--offline', 'build']");
+    validate(&fine, &f.root).unwrap();
+}
+
+/// 권고 1: 루트가 링크를 지난 경로(macOS 의 `/var` → `/private/var`)여도 작업 폴더의 실제 경로와 맞춰 lockfile · 래퍼를 찾는다.
+#[cfg(unix)]
+#[test]
+fn lockfiles_are_found_when_the_root_is_reached_through_a_link() {
+    let f = Fixture::new();
+    fs::write(f.root.join("pnpm-lock.yaml"), "").unwrap();
+    fs::write(f.root.join("gradlew"), "").unwrap();
+    let web = f.dir("packages/web");
+    let linked = f.base.join("linked-root");
+    std::os::unix::fs::symlink(&f.root, &linked).unwrap();
+    let login = shell();
+    let cx = ArgvContext {
+        root: &linked,
+        cwd: &web,
+        login_shell: &login,
+    };
+    let npm = parse("name = 'n'\ntype = 'npm'\nscript = 'dev'");
+    assert_eq!(argv(&npm, None, &cx).unwrap()[0], "pnpm");
+    let gradle = parse("name = 'g'\ntype = 'gradle'\ntasks = ['build']");
+    assert_eq!(
+        argv(&gradle, None, &cx).unwrap()[0],
+        f.root.join("gradlew").display().to_string()
+    );
+}
+
+/// 빈자리 ④: `run.config.delete` 는 정확히 그 id 의 구성만 지운다 — 대소문자를 가리지 않는 파일 시스템에서 `dev` 로 `Dev.toml`
+/// 을 지우지 않는다.
+#[tokio::test]
+async fn delete_takes_the_exact_id_only() {
+    let h = host();
+    let own = ConnectionScope::Project(h.project.clone());
+    let file = h.root.join(".pitwall/run/Dev.toml");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(
+        &file,
+        "schema = 1\nname = 'Dev'\ntype = 'shell'\ncommand = 'x'\n",
+    )
+    .unwrap();
+    for location in [Value::Null, json!("shared")] {
+        let err = call(
+            &h,
+            own.clone(),
+            "run.config.delete",
+            json!({"projectId": h.project, "id": "dev", "location": location}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, code::NOT_FOUND, "{err:?}");
+        assert!(file.exists(), "`dev` deleted `Dev.toml`");
+    }
 }

@@ -14,13 +14,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use pw_core::config::merge::{merge, to_json};
-use pw_core::config::migrate::{FileMigrateError, MigrateError, Schemas, migrate_in_memory};
+use pw_core::config::migrate::{MigrateError, Schemas};
 use pw_core::config::{AppPaths, ConfigSource, LayerOrigin};
 use pw_core::registry::path::{WorktreeRootError, worktree_root};
 use pw_core::registry::{ConfigMode, Project};
 use pw_rpc::RpcError;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use toml_edit::DocumentMut;
 
 use super::{DIR, FILE_KEYS, RunConfig, valid_id, validate};
 
@@ -175,7 +176,7 @@ pub fn read(place: &RunConfigPlace) -> RunConfigSet {
         }
     }
     for (id, files) in found {
-        match load_one(&place.root, &id, &files) {
+        match load_one(&place.root, place.repository, &id, &files) {
             Ok(loaded) => set.configs.push(loaded),
             Err(unusable) => set.unusable.push(*unusable),
         }
@@ -203,6 +204,7 @@ fn layers_of(files: &Files) -> Vec<RunConfigLayer> {
 
 fn load_one(
     root: &Path,
+    repository: bool,
     id: &str,
     files: &Files,
 ) -> Result<LoadedRunConfig, Box<UnusableRunConfig>> {
@@ -218,7 +220,8 @@ fn load_one(
     let mut value = Map::new();
     let schemas = Schemas::builtin();
     for path in [&files.shared, &files.local].into_iter().flatten() {
-        let layer = read_layer(path, schemas.get(DIR)).map_err(|reason| unusable(None, reason))?;
+        let layer = read_layer(path, repository, schemas.get(DIR))
+            .map_err(|reason| unusable(None, reason))?;
         merge(&mut value, layer);
     }
     let name = value.get("name").and_then(Value::as_str).map(str::to_owned);
@@ -237,25 +240,90 @@ fn load_one(
     })
 }
 
-/// 레이어 파일 하나의 값(`schema` 를 뺀 것). 구버전은 메모리에서만 올린다.
+/// 레이어 파일 하나의 값(`schema` 를 뺀 것). 구버전은 메모리에서만 올린다(디스크에 쓰지 않는다).
+///
+/// 까닭 글에는 **파일 내용을 싣지 않는다** — TOML 오류는 줄 · 칸과 문법 설명만(설정 계층의 오류 글은 그 줄을 그대로 싣는다),
+/// 구성 꼴 오류의 값은 [`redact`] 가 걷는다. 그 글은 실행 선택기 · 실행 툴(M6-12)로 나가고, 파일에는 env 값(비밀)이 있다.
+/// 저장소 안(`repository`)의 구성 파일이 체크아웃 밖으로 풀리는 링크면 읽지 않는다(17-m6-plan M6-01 리뷰 2) — 쓰기와 같은 규칙이고,
+/// 개인 전용 폴더는 dotfiles 링크를 따른다.
 fn read_layer(
     path: &Path,
+    repository: bool,
     migrator: Option<&pw_core::config::migrate::Migrator>,
 ) -> Result<Map<String, Value>, String> {
-    match migrate_in_memory(path, migrator) {
-        Ok(m) => {
-            let mut map = to_json(m.doc.as_table());
-            map.remove(pw_core::config::migrate::SCHEMA_KEY);
-            Ok(map)
+    if repository && let Some(checkout) = path.ancestors().nth(3) {
+        let real = fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let inside = fs::canonicalize(checkout).is_ok_and(|c| real.starts_with(c));
+        if !inside {
+            return Err(format!(
+                "{} is a link that points outside the project; Pitwall does not read it — replace it with a plain file",
+                path.display()
+            ));
         }
-        Err(FileMigrateError::Migrate {
-            error: MigrateError::FutureVersion { found, supported },
-            ..
-        }) => Err(format!(
-            "{}: `schema = {found}` is newer than this app reads (up to {supported}); update Pitwall to use it",
-            path.display()
-        )),
-        Err(e) => Err(e.to_string()),
+    }
+    let text = pw_core::config::robust::retrying(|| fs::read_to_string(path))
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut doc: DocumentMut = text.parse().map_err(|e: toml_edit::TomlError| {
+        let at = e.span().map_or(0, |span| span.start);
+        let line = text[..at.min(text.len())].matches('\n').count() + 1;
+        let column = text[..at.min(text.len())]
+            .rsplit('\n')
+            .next()
+            .map_or(0, |l| l.chars().count())
+            + 1;
+        format!(
+            "{}: not valid TOML at line {line}, column {column}: {}",
+            path.display(),
+            e.message()
+        )
+    })?;
+    if let Some(migrator) = migrator {
+        match migrator.migrate(&mut doc) {
+            Ok(_) => {}
+            Err(MigrateError::FutureVersion { found, supported }) => {
+                return Err(format!(
+                    "{}: `schema = {found}` is newer than this app reads (up to {supported}); update Pitwall to use it",
+                    path.display()
+                ));
+            }
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        }
+    }
+    let mut map = to_json(doc.as_table());
+    map.remove(pw_core::config::migrate::SCHEMA_KEY);
+    Ok(map)
+}
+
+/// serde 오류 글에서 파일의 값을 걷는다(`invalid type: string "…"` · ``integer `5` `` 등 — 키 이름 · 종류 이름은 남긴다).
+pub(crate) fn redact(message: &str) -> String {
+    let mut out = String::with_capacity(message.len());
+    let mut rest = message;
+    loop {
+        let next = [
+            ("string \"", '"'),
+            ("integer `", '`'),
+            ("floating point `", '`'),
+            ("boolean `", '`'),
+            ("character `", '`'),
+        ]
+        .into_iter()
+        .filter_map(|(open, close)| rest.find(open).map(|at| (at, open, close)))
+        .min_by_key(|(at, _, _)| *at);
+        let Some((at, open, close)) = next else {
+            out.push_str(rest);
+            return out;
+        };
+        out.push_str(&rest[..at]);
+        out.push_str(open.trim_end_matches(['"', '`']).trim_end());
+        let after = &rest[at + open.len()..];
+        // 닫는 글자까지 건너뛴다(문자열 안의 `\"` 는 닫는 것이 아니다).
+        let mut escaped = false;
+        let end = after.char_indices().find(|(_, c)| {
+            let hit = *c == close && !escaped;
+            escaped = *c == '\\' && !escaped;
+            hit
+        });
+        rest = end.map_or("", |(i, c)| &after[i + c.len_utf8()..]);
     }
 }
 
@@ -270,7 +338,7 @@ pub fn from_file_value(mut value: Map<String, Value>) -> Result<RunConfig, Strin
             value.insert((*rpc).to_owned(), v);
         }
     }
-    serde_json::from_value(Value::Object(value)).map_err(|e| e.to_string())
+    serde_json::from_value(Value::Object(value)).map_err(|e| redact(&e.to_string()))
 }
 
 /// 구성을 파일 값(파일 키 — snake_case)으로. 없는 값(`null`)은 뺀다.

@@ -105,7 +105,7 @@ M5 까지 된 것은 다시 계획하지 않는다 — 내장 터미널의 PTY �
 
 | 부품 | 주인 | 나머지 행이 하는 것 |
 |---|---|---|
-| 실행 구성 타입 · JSON Schema · 읽기 · `pw_run::config::write` | M6-01 | 종류를 더하는 행(M6-09 `sql` · M6-21 `compound`)은 갈래 하나를 더한다. 쓰기는 이 함수만 쓴다(M6-07 · 13) |
+| 실행 구성 타입 · JSON Schema · 읽기 · `pw_run::config::write` | M6-01 | 종류를 더하는 행(M6-09 `sql` · M6-21 `compound`)은 갈래 하나를 더한다. 쓰기는 `pw_run::config` 의 `plan` → `apply`(묶음 `write`)만 쓴다(M6-07 · 13 — 승인을 청하는 M6-13 은 `plan` 을 계획에 싣고 승인 뒤 `apply`) |
 | 실행 관리자 · `RunId` · `RunKind` · 링 버퍼 · `run.*` RPC | M6-02 | M6-09 · 17 은 `RunKind` 갈래를, M6-08 은 포트 칸을, M6-21 은 순서 실행을 더한다 |
 | `pw_core::registry::exec`(에이전트 실행 허가) · `PlanRules.policy_auto` · `pw_mcp::server` 의 판정 등급 | M6-10 | 툴 행은 계획을 만들고 `policy_auto` 를 판정만 한다 |
 | 「사람이 본 구성」 기록 | M6-11 | M6-02 · 07 · 14 는 기록 함수를 부르기만 한다 |
