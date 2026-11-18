@@ -655,3 +655,42 @@ async fn a_different_version_does_not_join_a_running_install() {
     assert_eq!(a.version, "1.0.0");
     assert_eq!(fx.server.hits("/demo-2.tar.gz"), 0);
 }
+
+/// 고정 표 대조(결정 M4-D17): 같은 (저장 이름, 주소)의 행과 해시가 같아야 한다. 행이 없는 파일 · 이름은 같고 주소가 다른 행 · 해시가
+/// 다른 행은 모두 거절이다(리뷰 권고 — 「행이 없다」 는 설치 경로로 닿지 않는 방어선이라 함수로 본다).
+#[test]
+fn a_downloaded_file_needs_its_own_pinned_row() {
+    let body = b"payload";
+    let row = Row::file("demo", "1.0.0", "demo.tar.gz", "/demo.tar.gz", body);
+    let pinned = pinned_toml(&[row]).artifacts;
+    let file = |name: &str, path: &str| crate::package::ToolDownload {
+        name: name.into(),
+        url: format!("{FAKE}{path}"),
+        dest: None,
+        format: crate::package::ArchiveFormat::TarGz,
+    };
+    let sha = sha256_hex(body);
+    assert_eq!(
+        check_pinned(&pinned, &file("demo.tar.gz", "/demo.tar.gz"), &sha),
+        Ok(())
+    );
+    assert_eq!(
+        check_pinned(&pinned, &file("extra.tar.gz", "/extra.tar.gz"), &sha),
+        Err("extra.tar.gz has no pinned hash".to_owned())
+    );
+    assert_eq!(
+        check_pinned(&pinned, &file("demo.tar.gz", "/elsewhere.tar.gz"), &sha),
+        Err("demo.tar.gz has no pinned hash".to_owned())
+    );
+    assert_eq!(
+        check_pinned(
+            &pinned,
+            &file("demo.tar.gz", "/demo.tar.gz"),
+            &"f".repeat(64)
+        ),
+        Err(format!(
+            "demo.tar.gz has SHA-256 {} but {sha} is pinned",
+            "f".repeat(64)
+        ))
+    );
+}

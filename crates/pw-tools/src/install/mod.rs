@@ -936,27 +936,7 @@ impl ToolsInstaller {
             // ⓐ 고정 해시(기본 번들). ⓑ registry 의 체크섬은 Mason 패키지 정의에 칸이 없어(M4-03 — 체크섬은 릴리스 산출물 단위뿐)
             // 볼 것이 없다. 둘 다 없으면 「체크섬 없음」 으로 기록한다.
             if let Some(rows) = &plan.pinned {
-                let row = rows.iter().find(|a| a.name == f.name && a.url == f.url);
-                match row {
-                    Some(a) if a.sha256 == got.sha256 => {}
-                    Some(a) => {
-                        return Err(failed(
-                            "checksum",
-                            name,
-                            format!(
-                                "{} has SHA-256 {} but {} is pinned",
-                                f.name, got.sha256, a.sha256
-                            ),
-                        ));
-                    }
-                    None => {
-                        return Err(failed(
-                            "checksum",
-                            name,
-                            format!("{} has no pinned hash", f.name),
-                        ));
-                    }
-                }
+                check_pinned(rows, f, &got.sha256).map_err(|m| failed("checksum", name, m))?;
             }
             unpacker
                 .unpack(out, &f.name, f.format, f.dest.as_deref())
@@ -1659,8 +1639,24 @@ fn show_args(args: &[OsString]) -> String {
         .join(" ")
 }
 
-/// 런처를 설치 폴더에 쓴다 — 유닉스는 그 경로에 셸 스크립트(0755), Windows 는 `<경로>.cmd`. 받은 보관 파일에 같은 경로가 이미
-/// 있으면 실패한다(받은 배포물을 덮어쓰지 않는다 — 경로는 덮어쓰기 정의를 읽을 때 본다, `Override::parse`).
+/// 받은 파일 하나를 고정 표와 대조한다: (저장 이름, 주소)가 같은 행의 SHA-256 과 같아야 한다. 행이 없거나 다르면 그 설치 전체가
+/// 실패다(결정 M4-D17). `rows` 는 `Pinned::pinned_for` 가 받을 파일 전부를 덮을 때만 주므로 「행이 없다」 는 설치 경로로는 닿지
+/// 않는 방어선이다 — 그래서 이 함수를 따로 시험한다.
+fn check_pinned(
+    rows: &[Artifact],
+    f: &crate::package::ToolDownload,
+    sha256: &str,
+) -> Result<(), String> {
+    match rows.iter().find(|a| a.name == f.name && a.url == f.url) {
+        Some(a) if a.sha256 == sha256 => Ok(()),
+        Some(a) => Err(format!(
+            "{} has SHA-256 {sha256} but {} is pinned",
+            f.name, a.sha256
+        )),
+        None => Err(format!("{} has no pinned hash", f.name)),
+    }
+}
+
 /// 위임 실행 파일(`node:` · `pyvenv:`)의 런처 자리(설치 폴더 기준). Windows 는 그 `.cmd` 다.
 fn launcher_path(bin: &str) -> String {
     let rel = format!("{LAUNCHER_DIR}/{bin}");
@@ -1766,6 +1762,8 @@ fn cmd_escape(s: &str) -> String {
     out
 }
 
+/// 런처를 설치 폴더에 쓴다 — 유닉스는 그 경로에 셸 스크립트(0755), Windows 는 `<경로>.cmd`. 받은 보관 파일에 같은 경로가 이미
+/// 있으면 실패한다(받은 배포물을 덮어쓰지 않는다 — 경로는 덮어쓰기 정의를 읽을 때 본다, `Override::parse`).
 fn write_launchers(
     dir: &Path,
     launchers: &BTreeMap<String, crate::overrides::Launcher>,

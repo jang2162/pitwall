@@ -527,11 +527,18 @@ fn an_untrusted_project_does_not_read_the_shared_layer() {
     let f = Fixture::new("schema = 1\n");
     let evil = executable(&f.tmp.path().join("evil/ra"), "true");
     let mine = executable(&f.tmp.path().join("mine/ruff"), "true");
+    let evil_dap = executable(&f.tmp.path().join("evil/js-debug"), "true");
+    let mine_dap = executable(&f.tmp.path().join("mine/codelldb"), "true");
     let shared = format!(
-        "schema = 1\n[lsp.rust-analyzer]\npath = \"{}\"\nargs = [\"--evil\"]\n",
-        evil.display()
+        "schema = 1\n[lsp.rust-analyzer]\npath = \"{}\"\nargs = [\"--evil\"]\n[dap.js-debug-adapter]\npath = \"{}\"\nargs = [\"--evil\"]\nenv = {{ EVIL = \"1\" }}\n",
+        evil.display(),
+        evil_dap.display()
     );
-    let local = format!("schema = 1\n[lsp.ruff]\npath = \"{}\"\n", mine.display());
+    let local = format!(
+        "schema = 1\n[lsp.ruff]\npath = \"{}\"\n[dap.codelldb]\npath = \"{}\"\n",
+        mine.display(),
+        mine_dap.display()
+    );
     let (id, _) = f.project(
         &[
             (".pitwall/project.toml", &shared),
@@ -553,11 +560,57 @@ fn an_untrusted_project_does_not_read_the_shared_layer() {
         Some(mine.as_path())
     );
 
+    // `[dap.<id>]` 도 같다(17-m6-plan.md M6-16 리뷰 — 공유 파일의 어댑터 경로 · 인자 · 환경은 미신뢰에서 읽지 않고, 개인 파일은 읽는다).
+    // 내장 확장에 어댑터가 아직 없어(M6-19) 정의를 직접 준다.
+    let js = adapter_def("js-debug-adapter");
+    let lldb = adapter_def("codelldb");
+    let dap = |trusted: bool| {
+        let view = f.servers.view(&id, None).unwrap();
+        assert_eq!(view.trusted, trusted);
+        let root = view.root.clone();
+        (
+            f.servers
+                .adapter_setup_in(&view, "dev.example.dap", &js, &root),
+            f.servers
+                .adapter_setup_in(&view, "dev.example.dap", &lldb, &root),
+        )
+    };
+    let (js_setup, lldb_setup) = dap(false);
+    assert_eq!(js_setup.config.path, None);
+    assert_eq!(js_setup.config.args, Vec::<String>::new());
+    assert!(!js_setup.config.env.contains_key("EVIL"));
+    assert!(
+        matches!(
+            js_setup.launch,
+            AdapterLaunch::Process(LspResolution::NotInstalled { .. })
+        ),
+        "{:?}",
+        js_setup.launch
+    );
+    assert_eq!(
+        lldb_setup.launch,
+        AdapterLaunch::Process(found_at(&mine_dap))
+    );
+
     f.projects.set_trust(&id, true).unwrap();
     let list = f.list(&id);
     let ra = server(&list, "rust-analyzer");
     assert_eq!(ra.resolution.path(), Some(evil.as_path()));
     assert_eq!(ra.args, ["--evil"]);
+    let (js_setup, _) = dap(true);
+    assert_eq!(js_setup.launch, AdapterLaunch::Process(found_at(&evil_dap)));
+    assert_eq!(js_setup.config.args, ["--evil"]);
+    assert_eq!(js_setup.config.env["EVIL"], "1");
+}
+
+/// 설정 경로로 찾은 결과.
+fn found_at(path: &Path) -> LspResolution {
+    LspResolution::Found {
+        path: path.to_path_buf(),
+        step: LspResolveStep::Settings,
+        version: None,
+        skipped: vec![],
+    }
 }
 
 /// `lsp.servers.list` 는 기본 번들 서버 여섯을 등록 순서로 내고, 전역 · 프로젝트 · 정의의 설정을 깊게 합친다. 모르는 서버의 설정은
