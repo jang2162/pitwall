@@ -121,7 +121,8 @@ pub enum RunKindConfig {
         #[serde(default)]
         args: Vec<String>,
     },
-    /// `docker compose [-f <file>] up [services…]`. Stopping sends SIGINT first so compose stops the containers.
+    /// `docker compose [-f <file>] up [services…]`, `file` passed as its path inside the project root. Stopping sends SIGINT
+    /// first so compose stops the containers.
     DockerCompose {
         #[serde(default)]
         services: Vec<String>,

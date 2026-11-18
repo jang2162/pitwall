@@ -8333,7 +8333,10 @@ export type RunKindConfig =
 { type: "go"; command: string; package?: string | null; args?: string[] } | 
 /**  `python -m <module>` or `python <script>`; exactly one of the two. */
 { type: "python"; module?: string | null; script?: string | null; args?: string[] } | 
-/**  `docker compose [-f <file>] up [services…]`. Stopping sends SIGINT first so compose stops the containers. */
+/**
+ *  `docker compose [-f <file>] up [services…]`, `file` passed as its path inside the project root. Stopping sends SIGINT
+ *  first so compose stops the containers.
+ */
 { type: "docker-compose"; services?: string[]; 
 /**  Compose file relative to the project root. Without it compose finds its own. */
 file?: string | null } | 

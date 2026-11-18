@@ -91,8 +91,11 @@ pub fn argv(
         }
         RunKindConfig::DockerCompose { services, file } => {
             out.extend(["docker".to_owned(), "compose".to_owned()]);
+            // `file` 은 프로젝트 루트 기준이고 compose 는 `-f` 를 작업 폴더 기준으로 푼다 — 루트 안의 실제 경로로 넘긴다.
             if let Some(file) = file {
-                out.extend(["-f".to_owned(), file.clone()]);
+                let path =
+                    super::root::inside(cx.root, file).map_err(|why| format!("file {why}"))?;
+                out.extend(["-f".to_owned(), path.display().to_string()]);
             }
             out.push("up".to_owned());
             out.extend(services.iter().cloned());

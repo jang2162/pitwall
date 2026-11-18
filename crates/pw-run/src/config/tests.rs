@@ -180,16 +180,16 @@ fn every_kind_builds_its_argv_field_by_field() {
         (
             "name = 'd'\ntype = 'docker-compose'\nfile = 'deploy/compose.yaml'\nservices = ['web', 'db']",
             None,
-            &f.root,
-            strings(&[
-                "docker",
-                "compose",
-                "-f",
-                "deploy/compose.yaml",
-                "up",
-                "web",
-                "db",
-            ]),
+            &backend,
+            vec![
+                "docker".into(),
+                "compose".into(),
+                "-f".into(),
+                f.root.join("deploy/compose.yaml").display().to_string(),
+                "up".into(),
+                "web".into(),
+                "db".into(),
+            ],
         ),
         (
             "name = 'k'\ntype = 'mise-task'\ntask = 'build:all'",

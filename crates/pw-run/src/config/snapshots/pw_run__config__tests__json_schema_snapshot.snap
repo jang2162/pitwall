@@ -222,7 +222,7 @@ expression: "serde_json::to_string_pretty(&json_schema()).unwrap()"
       ]
     },
     {
-      "description": "`docker compose [-f <file>] up [services…]`. Stopping sends SIGINT first so compose stops the containers.",
+      "description": "`docker compose [-f <file>] up [services…]`, `file` passed as its path inside the project root. Stopping sends SIGINT\nfirst so compose stops the containers.",
       "type": "object",
       "properties": {
         "file": {
