@@ -585,7 +585,7 @@ impl DbSessions {
                     .config
                     .map_err(|_| RpcError::invalid_params(crate::gate::invalid_settings(&id)))?;
                 Ok((
-                    Some(config.driver.clone()),
+                    Some(config.driver),
                     config.name.clone(),
                     DbMarks::of(&config),
                 ))

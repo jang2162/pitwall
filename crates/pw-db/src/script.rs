@@ -774,20 +774,19 @@ pub(crate) async fn run_statements(
             && (statement.implicit_commit || statement.may_end)
             && at + 1 < planned.len()
             && conn.transaction_state() == TransactionState::Idle
+            && let Err(error) = begin(conn, false, cancel, inactivity).await
         {
-            if let Err(error) = begin(conn, false, cancel, inactivity).await {
-                let next = &planned[at + 1];
-                ran.error = Some(DbScriptError {
-                    index: next.index,
-                    line: lines.line(next.range),
-                    range: next.range,
-                    error,
-                });
-                if let Some(error) = &ran.error {
-                    observe(StatementEvent::Failed(error));
-                }
-                break;
+            let next = &planned[at + 1];
+            ran.error = Some(DbScriptError {
+                index: next.index,
+                line: lines.line(next.range),
+                range: next.range,
+                error,
+            });
+            if let Some(error) = &ran.error {
+                observe(StatementEvent::Failed(error));
             }
+            break;
         }
     }
     ran
@@ -907,7 +906,7 @@ pub(crate) async fn run_files(
     };
     let in_transaction = read_only || transaction != SqlTransaction::None;
     let groups: Vec<std::ops::Range<usize>> = if read_only || transaction == SqlTransaction::All {
-        vec![0..files.len()]
+        std::iter::once(0..files.len()).collect()
     } else {
         (0..files.len()).map(|i| i..i + 1).collect()
     };
@@ -1055,6 +1054,7 @@ struct StatementRows {
 
 /// 문장 하나: 실행 → 행을 읽는 그때 응답 예산(`room`)에 더하며 `max_rows` 까지 읽고, 한 행을 더 읽어 넘는지 본다 → 넘거나 예산이
 /// 다하면 커서를 버린다. 한 번에 읽는 몫도 남은 예산으로 줄인다 — 드라이버가 읽는 양이 예산 몫(+ 한 묶음)에 머문다.
+#[allow(clippy::too_many_arguments)] // 문장 하나의 갈래(행 상한 · 셀 상한 · 세기)와 실행의 자리(취소 · 비활동 · 예산) 그대로다.
 async fn run_one(
     conn: &mut dyn SqlConnection,
     statement: &Planned,
