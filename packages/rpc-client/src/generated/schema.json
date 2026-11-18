@@ -42081,13 +42081,22 @@
         "$defs": {
           "PurlKind": {
             "description": "설치하는 purl 형식.",
-            "enum": [
-              "github",
-              "generic",
-              "npm",
-              "pypi"
-            ],
-            "type": "string"
+            "oneOf": [
+              {
+                "enum": [
+                  "github",
+                  "generic",
+                  "npm",
+                  "pypi"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "openvsx",
+                "description": "Open VSX 의 VS Code 확장(`.vsix` — zip 으로 푼다). 받을 주소는 `https://open-vsx.org/api/<네임스페이스>/<이름>/<판>/file/<파일>`\n이다(mason 의 openvsx 받기와 같은 꼴).",
+                "type": "string"
+              }
+            ]
           },
           "ToolBroken": {
             "description": "설치 기록을 읽지 못한 패키지.",
@@ -42357,13 +42366,22 @@
           },
           "PurlKind": {
             "description": "설치하는 purl 형식.",
-            "enum": [
-              "github",
-              "generic",
-              "npm",
-              "pypi"
-            ],
-            "type": "string"
+            "oneOf": [
+              {
+                "enum": [
+                  "github",
+                  "generic",
+                  "npm",
+                  "pypi"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "openvsx",
+                "description": "Open VSX 의 VS Code 확장(`.vsix` — zip 으로 푼다). 받을 주소는 `https://open-vsx.org/api/<네임스페이스>/<이름>/<판>/file/<파일>`\n이다(mason 의 openvsx 받기와 같은 꼴).",
+                "type": "string"
+              }
+            ]
           },
           "ResolvedTool": {
             "description": "한 대상에서 받을 것 · 실행할 것.",
@@ -42481,6 +42499,57 @@
                 "properties": {
                   "kind": {
                     "const": "python",
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "value"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "설치 폴더 안의 실행 파일(`exec:` — 실행 비트를 준다). codelldb 처럼 자기 자리를 기준으로 옆 파일을 찾는 실행 파일이다.",
+                "properties": {
+                  "kind": {
+                    "const": "exec",
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "value"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "런타임 환경의 node 로 돌리는 스크립트(`node:` — 설치 폴더 안 경로). 설치기가 런처를 만든다.",
+                "properties": {
+                  "kind": {
+                    "const": "node",
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "value"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "그 패키지 venv 의 python 으로 `-m` 돌리는 모듈(`pyvenv:` — `debugpy.adapter`). 설치기가 런처를 만든다.",
+                "properties": {
+                  "kind": {
+                    "const": "pyvenv",
                     "type": "string"
                   },
                   "value": {
@@ -42750,7 +42819,7 @@
                 "type": "object"
               },
               {
-                "description": "M4 가 설치하지 않는 purl 형식(`cargo` · `golang` · `openvsx` 등 — 15-m4-plan.md §3).",
+                "description": "설치하지 않는 purl 형식(`cargo` · `golang` 등 — 15-m4-plan.md §3, 17-m6-plan.md 「3」).",
                 "properties": {
                   "purlType": {
                     "type": "string"
@@ -42767,7 +42836,7 @@
                 "type": "object"
               },
               {
-                "description": "지원하지 않는 `bin` 위임(`node:` · `java-jar:` · `exec:` 등).",
+                "description": "지원하지 않는 `bin` 위임(`java-jar:` · `golang:` 등).",
                 "properties": {
                   "bin": {
                     "type": "string"
@@ -43069,7 +43138,7 @@
                 "type": "object"
               },
               {
-                "description": "M4 가 설치하지 않는 purl 형식(`cargo` · `golang` · `openvsx` 등 — 15-m4-plan.md §3).",
+                "description": "설치하지 않는 purl 형식(`cargo` · `golang` 등 — 15-m4-plan.md §3, 17-m6-plan.md 「3」).",
                 "properties": {
                   "purlType": {
                     "type": "string"
@@ -43086,7 +43155,7 @@
                 "type": "object"
               },
               {
-                "description": "지원하지 않는 `bin` 위임(`node:` · `java-jar:` · `exec:` 등).",
+                "description": "지원하지 않는 `bin` 위임(`java-jar:` · `golang:` 등).",
                 "properties": {
                   "bin": {
                     "type": "string"
@@ -43550,13 +43619,22 @@
         "$defs": {
           "PurlKind": {
             "description": "설치하는 purl 형식.",
-            "enum": [
-              "github",
-              "generic",
-              "npm",
-              "pypi"
-            ],
-            "type": "string"
+            "oneOf": [
+              {
+                "enum": [
+                  "github",
+                  "generic",
+                  "npm",
+                  "pypi"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "openvsx",
+                "description": "Open VSX 의 VS Code 확장(`.vsix` — zip 으로 푼다). 받을 주소는 `https://open-vsx.org/api/<네임스페이스>/<이름>/<판>/file/<파일>`\n이다(mason 의 openvsx 받기와 같은 꼴).",
+                "type": "string"
+              }
+            ]
           },
           "ToolChecksum": {
             "description": "받을 것의 고정 해시 여부.",

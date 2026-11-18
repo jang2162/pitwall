@@ -7908,7 +7908,12 @@ export type ProjectTrust = {
 };
 
 /**  설치하는 purl 형식. */
-export type PurlKind = "github" | "generic" | "npm" | "pypi";
+export type PurlKind = "github" | "generic" | "npm" | "pypi" | 
+/**
+ *  Open VSX 의 VS Code 확장(`.vsix` — zip 으로 푼다). 받을 주소는 `https://open-vsx.org/api/<네임스페이스>/<이름>/<판>/file/<파일>`
+ *  이다(mason 의 openvsx 받기와 같은 꼴).
+ */
+"openvsx";
 
 export type RecentParams = {
 	/**  없으면 20. */
@@ -8926,7 +8931,13 @@ export type ToolBin =
 /**  venv 의 실행 파일 이름(`venv/bin/<이름>`). */
 { kind: "pypi"; value: string } | 
 /**  venv 의 python 으로 돌리는 스크립트(설치 폴더 안 경로). */
-{ kind: "python"; value: string };
+{ kind: "python"; value: string } | 
+/**  설치 폴더 안의 실행 파일(`exec:` — 실행 비트를 준다). codelldb 처럼 자기 자리를 기준으로 옆 파일을 찾는 실행 파일이다. */
+{ kind: "exec"; value: string } | 
+/**  런타임 환경의 node 로 돌리는 스크립트(`node:` — 설치 폴더 안 경로). 설치기가 런처를 만든다. */
+{ kind: "node"; value: string } | 
+/**  그 패키지 venv 의 python 으로 `-m` 돌리는 모듈(`pyvenv:` — `debugpy.adapter`). 설치기가 런처를 만든다. */
+{ kind: "pyvenv"; value: string };
 
 /**  설치 기록을 읽지 못한 패키지. */
 export type ToolBroken = {
@@ -9096,9 +9107,9 @@ export type ToolUnsupported =
 { reason: "unknownKey"; key: string } | 
 /**  형식이 맞지 않는다(필수 키가 없다 · 형이 다르다 · 상한을 넘는다 · 경로가 폴더 밖이다). */
 { reason: "invalidDefinition"; message: string } | 
-/**  M4 가 설치하지 않는 purl 형식(`cargo` · `golang` · `openvsx` 등 — 15-m4-plan.md §3). */
+/**  설치하지 않는 purl 형식(`cargo` · `golang` 등 — 15-m4-plan.md §3, 17-m6-plan.md 「3」). */
 { reason: "purlType"; purlType: string } | 
-/**  지원하지 않는 `bin` 위임(`node:` · `java-jar:` · `exec:` 등). */
+/**  지원하지 않는 `bin` 위임(`java-jar:` · `golang:` 등). */
 { reason: "toolBin"; bin: string; value: string } | 
 /**  모르는 표현식(필터 · 함수 · 오타). 대상별 항목에 있으면 그 대상만 빠진다. */
 { reason: "expression"; expression: string } | 
