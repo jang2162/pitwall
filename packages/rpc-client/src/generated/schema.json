@@ -43500,7 +43500,7 @@
       "tier": "write"
     },
     "run.tool.configList": {
-      "description": "This project's run configurations: usable ones (merged from the shared `.pitwall/run/<id>.toml` and the\nperson's `<id>.local.toml`), files that cannot be used and why, and tasks detected from project files (npm\nscripts, Make targets, just recipes, compose services — with the file they came from). `env` values whose name\npoints to a secret are `[redacted]`. Runs nothing and writes nothing.",
+      "description": "This project's run configurations: usable ones (merged from the shared `.pitwall/run/<id>.toml` and the\nperson's `<id>.local.toml`), files that cannot be used and why, and tasks detected from project files (npm\nscripts, Make targets, just recipes, compose services — with the file they came from). `env` values whose name\npoints to a secret are `[redacted]` and URL passwords in `env` values are masked. Runs nothing and writes nothing.",
       "kind": "unary",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -43869,7 +43869,7 @@
             "properties": {
               "config": {
                 "$ref": "#/$defs/RunConfig",
-                "description": "The merged configuration. `env` values whose name points to a secret (`TOKEN`, `PASSWORD`, `SECRET`, `KEY` …) are\nshown as `[redacted]`."
+                "description": "The merged configuration. `env` values whose name points to a secret (`TOKEN`, `PASSWORD`, `SECRET`, `KEY` …) are\nshown as `[redacted]`, and the password in a URL inside any other `env` value (`postgres://user:pass@host`) is\nmasked. Commands and arguments are shown as written."
               },
               "files": {
                 "description": "Files that gave values (shared first).",
@@ -43965,6 +43965,40 @@
             ],
             "type": "object"
           },
+          "RunToolTaskList": {
+            "properties": {
+              "detector": {
+                "type": "string"
+              },
+              "state": {
+                "$ref": "#/$defs/RunToolTaskListState"
+              }
+            },
+            "required": [
+              "detector",
+              "state"
+            ],
+            "type": "object"
+          },
+          "RunToolTaskListState": {
+            "oneOf": [
+              {
+                "const": "notRead",
+                "description": "Not read yet — only the person can have Pitwall read it (it runs the build tool).",
+                "type": "string"
+              },
+              {
+                "const": "read",
+                "description": "Read; the listed tasks are current.",
+                "type": "string"
+              },
+              {
+                "const": "stale",
+                "description": "Read before the build files changed — only the common tasks are listed until the person reads it again.",
+                "type": "string"
+              }
+            ]
+          },
           "RunToolUnusableConfig": {
             "description": "A configuration file that cannot be used, and why.",
             "properties": {
@@ -44027,6 +44061,13 @@
               "null"
             ]
           },
+          "taskLists": {
+            "description": "Detectors whose full task list is read only when the person asks for it in Pitwall (gradle, maven) — until then\nonly their common tasks are listed.",
+            "items": {
+              "$ref": "#/$defs/RunToolTaskList"
+            },
+            "type": "array"
+          },
           "unusable": {
             "description": "Configuration files that cannot be used (by id).",
             "items": {
@@ -44040,6 +44081,7 @@
           "unusable",
           "detected",
           "detectProblems",
+          "taskLists",
           "problem"
         ],
         "type": "object"

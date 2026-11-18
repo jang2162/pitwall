@@ -1161,7 +1161,7 @@ export type UnaryMethods = {
 	 * This project's run configurations: usable ones (merged from the shared `.pitwall/run/<id>.toml` and the
 	 * person's `<id>.local.toml`), files that cannot be used and why, and tasks detected from project files (npm
 	 * scripts, Make targets, just recipes, compose services — with the file they came from). `env` values whose name
-	 * points to a secret are `[redacted]`. Runs nothing and writes nothing.
+	 * points to a secret are `[redacted]` and URL passwords in `env` values are masked. Runs nothing and writes nothing.
 	 */
 	"run.tool.configList": { params: RunToolConfigListParams; result: RunToolConfigList };
 	/**
@@ -1619,7 +1619,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"run.stop": {"name":"run.stop","kind":"unary","tier":"exec","roles":["owner"],"params":"RunIdParams","output":"RunInfo","doc":" 실행을 중지한다 — 프로세스 세션 전체에 SIGTERM, 5초 안에 끝나지 않은 것은 SIGKILL(compose 는 SIGINT 를 먼저). 기다리지\n 않는다(끝나면 `run.exited`). 이미 끝난 실행이면 아무것도 하지 않는다.\n","mcp":null,"fileScope":false},
 	"run.tasks.refresh": {"name":"run.tasks.refresh","kind":"unary","tier":"exec","roles":["owner"],"params":"RunTasksRefreshParams","output":"RunTasksRefreshed","doc":" 사람이 「태스크 읽기」 를 눌렀다 — gradle · maven 은 빌드 스크립트를 돌려 태스크 목록을 읽고 캐시한다(Host 작업으로 진행 ·\n 취소가 보인다). 그 프로젝트 창의 연결만(아니면 permission denied), 미신뢰 프로젝트면 permission denied\n (`data.reason = \"untrusted\"`), 모르는 감지기는 invalid params, 취소되면 cancelled.\n","mcp":null,"fileScope":false},
 	"run.tool.configDelete": {"name":"run.tool.configDelete","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<RunToolConfigDeleteParams>","output":"RunToolConfigDelete","doc":" Delete a run configuration's file — the shared one, the personal one (`location`), or both (no `location`). The person\n sees what is deleted and approves it in Pitwall first. Detected tasks (`detected:…`) have no file and cannot be deleted.\n","mcp":{"group":"run","name":"run_config_delete"},"fileScope":false},
-	"run.tool.configList": {"name":"run.tool.configList","kind":"unary","tier":"read","roles":["owner"],"params":"RunToolConfigListParams","output":"RunToolConfigList","doc":" This project's run configurations: usable ones (merged from the shared `.pitwall/run/<id>.toml` and the\n person's `<id>.local.toml`), files that cannot be used and why, and tasks detected from project files (npm\n scripts, Make targets, just recipes, compose services — with the file they came from). `env` values whose name\n points to a secret are `[redacted]`. Runs nothing and writes nothing.\n","mcp":{"group":"run","name":"run_config_list"},"fileScope":false},
+	"run.tool.configList": {"name":"run.tool.configList","kind":"unary","tier":"read","roles":["owner"],"params":"RunToolConfigListParams","output":"RunToolConfigList","doc":" This project's run configurations: usable ones (merged from the shared `.pitwall/run/<id>.toml` and the\n person's `<id>.local.toml`), files that cannot be used and why, and tasks detected from project files (npm\n scripts, Make targets, just recipes, compose services — with the file they came from). `env` values whose name\n points to a secret are `[redacted]` and URL passwords in `env` values are masked. Runs nothing and writes nothing.\n","mcp":{"group":"run","name":"run_config_list"},"fileScope":false},
 	"run.tool.configUpsert": {"name":"run.tool.configUpsert","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<RunToolConfigUpsertParams>","output":"RunToolConfigUpsert","doc":" Create or change a run configuration — `.pitwall/run/<id>.toml` (shared, committed; the default) or `<id>.local.toml`\n (personal, `location: \"local\"`). `config` is the whole configuration of that file, checked against the run\n configuration schema (`type`: shell, npm, gradle, maven, cargo, go, python, docker-compose, mise-task) before anything is\n asked: `cwd` and `envFile` must stay inside the project root, and `env` takes no secrets (names with a secret word are\n refused — use `envFile`). The person sees the file's diff and approves it in Pitwall first. Saving does not approve\n running: `run_start` still asks the person for a configuration an agent created or changed.\n","mcp":{"group":"run","name":"run_config_upsert"},"fileScope":false},
 	"run.tool.logs": {"name":"run.tool.logs","kind":"unary","tier":"read","roles":["owner"],"params":"RunToolLogsParams","output":"RunToolLogs","doc":" Read a run's output (also of runs a person started). By default the last 200 lines; `tail` sets the count,\n `since` reads on from an offset (`nextSince` of an earlier call — poll with it for new output), `grep` keeps\n only lines matching a regular expression. Terminal escapes are removed. The result is cut to about 192 KiB\n (`truncated`). Output is kept in memory only: the last 8 MiB while running, the last 1 MiB after the run ends,\n and only for the latest 20 finished runs of the project — older output is gone (`logStart`, `dropped`). A\n `runId` that is not a run of this project is `not found`.\n","mcp":{"group":"run","name":"run_logs"},"fileScope":false},
 	"run.tool.status": {"name":"run.tool.status","kind":"unary","tier":"read","roles":["owner"],"params":"RunToolStatusParams","output":"RunToolStatus","doc":" This project's runs: running ones and the finished ones Pitwall still keeps (the latest 20 per project) — state,\n exit code or signal, pid, working directory, start and end times, and whether a person (from the Pitwall window)\n or an agent started it. With `runId`, that run only (`not found` if it is not a run of this project).\n","mcp":{"group":"run","name":"run_status"},"fileScope":false},
@@ -8602,7 +8602,8 @@ export type RunToolConfig = {
 	id: string,
 	/**
 	 *  The merged configuration. `env` values whose name points to a secret (`TOKEN`, `PASSWORD`, `SECRET`, `KEY` …) are
-	 *  shown as `[redacted]`.
+	 *  shown as `[redacted]`, and the password in a URL inside any other `env` value (`postgres://user:pass@host`) is
+	 *  masked. Commands and arguments are shown as written.
 	 */
 	config: RunConfig,
 	/**  Files that gave values (shared first). */
@@ -8649,6 +8650,11 @@ export type RunToolConfigList = {
 	/**  Detected tasks (by detector, then name). */
 	detected: RunToolDetectedTask[],
 	detectProblems: RunToolDetectProblem[],
+	/**
+	 *  Detectors whose full task list is read only when the person asks for it in Pitwall (gradle, maven) — until then
+	 *  only their common tasks are listed.
+	 */
+	taskLists: RunToolTaskList[],
 	/**  Why the configuration folder itself could not be read. Its configurations are not listed. */
 	problem: string | null,
 };
@@ -8826,6 +8832,19 @@ export type RunToolStatusParams = {
 	/**  One run. Without it, every run of the project that Pitwall still keeps. */
 	runId?: string | null,
 };
+
+export type RunToolTaskList = {
+	detector: string,
+	state: RunToolTaskListState,
+};
+
+export type RunToolTaskListState = 
+/**  Not read yet — only the person can have Pitwall read it (it runs the build tool). */
+"notRead" | 
+/**  Read; the listed tasks are current. */
+"read" | 
+/**  Read before the build files changed — only the common tasks are listed until the person reads it again. */
+"stale";
 
 /**  A configuration file that cannot be used, and why. */
 export type RunToolUnusableConfig = {
