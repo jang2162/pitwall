@@ -59,7 +59,7 @@ pub fn run_in_session(
     run_with(command, timeout, limit, cancel, true, &mut |_| {})
 }
 
-/// [`run_watched`] 가 부른 쪽에 알리는 때.
+/// [`run_watched`] 가 부른 쪽에 알리는 때(Windows 에서는 오지 않는다 — 그쪽 `run_watched` 는 부르지 않는다).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Watch {
     /// 띄웠다(새 세션의 리더 pid).
@@ -230,15 +230,6 @@ pub fn run_watched(
     _watch: &mut dyn FnMut(Watch),
 ) -> Result<Output, RunError> {
     run(command, timeout, limit, cancel)
-}
-
-/// [`run_watched`] 가 부른 쪽에 알리는 때(Windows 에서는 오지 않는다).
-#[cfg(not(unix))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Watch {
-    Started(u32),
-    Running,
-    Ended,
 }
 
 /// Windows: 세션이 없어 [`run`] 과 같다(자식만 죽인다).
