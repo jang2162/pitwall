@@ -11,8 +11,9 @@
 //! - **비밀**(03 §5-1 「비밀」): 값은 로그 · 오류 · 감사 · 시험 메시지에 쓰지 않는다. [`RunEnv`] · [`EnvError`] 의 `Debug` ·
 //!   `Display` 는 이름 · 경로 · 줄 번호만 보인다. 사람에게 값을 보이는 곳은 승인 계획 하나이고([`RunEnv::masked`] — 비밀 단어
 //!   키는 `pw_core::secret` 로 가린다), 그 계획의 글은 감사에 남지 않는다(계획 해시만).
-//! - **「사람이 본 구성」 해시**(M6-11): [`RunEnv::content_hash`] — env 의 이름과 값, `env_file` 의 경로와 각 파일 내용의
-//!   sha256, 프로필. 값은 해시로만 나간다.
+//! - **「사람이 본 구성」 해시**(M6-11)의 입력: 풀린 env([`RunEnv::vars`] — 이름과 값)와 `env_file` 마다의 다이제스트
+//!   ([`RunEnv::files`] — 루트 기준 경로와 내용 sha256). 해시하는 것은 M6-11 이다(공유 부품 표 — 기록의 주인). 다이제스트의
+//!   sha256 은 값을 낸 바로 그 바이트의 것이다(한 번 읽은 버퍼 하나에서 둘 다 낸다 — 다시 읽는 틈이 없다).
 //! - 미신뢰 프로젝트의 거절(F1-7 · 메인 판정 M6-P6)은 띄우는 쪽(M6-02)이 이것을 부르기 전에 한다 — 여기는 신뢰를 보지 않는다.
 
 pub mod dotenv;
@@ -41,11 +42,10 @@ pub struct RunEnv {
     vars: BTreeMap<String, String>,
     files: Vec<EnvFileDigest>,
     profile: Option<String>,
-    config_env: BTreeMap<String, String>,
-    profile_env: BTreeMap<String, String>,
 }
 
-/// 읽은 `.env` 파일 하나: 구성에 적힌 경로(프로젝트 루트 기준 — 워크트리와 무관하다)와 읽은 바이트의 sha256(소문자 16진).
+/// 읽은 `.env` 파일 하나: 구성에 적힌 경로(프로젝트 루트 기준 — 워크트리와 무관하다)와, [`RunEnv::vars`] 의 값을 낸 바로 그
+/// 바이트의 sha256(소문자 16진 64자). 「사람이 본 구성」 해시(M6-11)의 입력이다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EnvFileDigest {
     pub path: String,
@@ -94,8 +94,6 @@ impl RunEnv {
             vars,
             files,
             profile: profile.map(str::to_owned),
-            config_env: config.env.clone(),
-            profile_env,
         })
     }
 
@@ -109,7 +107,7 @@ impl RunEnv {
         self.vars
     }
 
-    /// 읽은 `.env` 파일들(구성의 순서).
+    /// 읽은 `.env` 파일들의 다이제스트(구성의 순서) — 「사람이 본 구성」 해시(M6-11)의 입력.
     pub fn files(&self) -> &[EnvFileDigest] {
         &self.files
     }
@@ -138,29 +136,6 @@ impl RunEnv {
                 (name.clone(), shown)
             })
             .collect()
-    }
-
-    /// 「사람이 본 구성」 해시(M6-11)에 드는 env 의 몫: `sha256:<16진>`. 덮는 것은 구성의 `env`(이름과 값), 고른 프로필과 그
-    /// `env`, `env_file` 의 경로(적힌 그대로)와 각 파일 내용의 sha256 이다 — 값 하나 · `.env` 한 줄(주석이라도)만 바뀌어도 달라진다.
-    /// 워크트리 · 런타임 환경과는 무관하다(같은 구성 · 같은 파일 내용이면 같은 해시).
-    pub fn content_hash(&self) -> String {
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Covered<'a> {
-            env: &'a BTreeMap<String, String>,
-            env_file: &'a [EnvFileDigest],
-            profile: Option<&'a str>,
-            profile_env: &'a BTreeMap<String, String>,
-        }
-        let covered = Covered {
-            env: &self.config_env,
-            env_file: &self.files,
-            profile: self.profile.as_deref(),
-            profile_env: &self.profile_env,
-        };
-        // 필드 순서는 구조체가, 키 순서는 BTreeMap 이 정한다 — 같은 값이면 같은 글이다.
-        let text = serde_json::to_string(&covered).expect("the env digest serializes to JSON");
-        format!("sha256:{}", hex(&Sha256::digest(text.as_bytes())))
     }
 }
 

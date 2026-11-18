@@ -8,9 +8,14 @@
 //!   풀지 않으므로 겹따옴표 값 안에 `"` 를 넣으려면 홑따옴표로 감싼다. 따옴표 값은 여러 줄에 걸칠 수 있다(PEM 키). 닫는 따옴표
 //!   뒤에는 공백과 주석만 올 수 있다.
 //! - **변수 확장(`${OTHER}` · `$OTHER`)은 하지 않는다** — 글자 그대로다. 셸 · 다른 도구와 결과가 다를 때 원인을 찾기 어렵다.
-//! - 같은 이름이 두 번 나오면 뒤의 것이다. 줄 끝 `\r\n` 과 파일 앞의 BOM 은 받는다.
+//!   `PATH=./node_modules/.bin:$PATH` 도 글자 그대로의 PATH 가 되어 런타임 환경의 PATH 를 통째로 바꾼다(그러면 거의 모든 명령을
+//!   찾지 못한다) — PATH 앞에 붙이려면 앞뒤를 모두 적는다.
+//! - 같은 이름이 두 번 나오면 뒤의 것이다. 파일 앞의 BOM 은 받는다.
+//! - 줄 끝은 `\n` 과 `\r\n` 이다. 따옴표 값 안의 `\r\n` 도 `\n` 하나다(Windows 에서 저장한 PEM 이 다른 도구와 같은 값). 뒤에
+//!   `\n` 이 없는 `\r`(옛 Mac 줄 끝)은 어디에 있든 오류다 — 줄 끝으로도 글자로도 보지 않는다(글자로 보면 `A=1\rB=2` 가 조용히
+//!   변수 하나가 된다).
 //!
-//! 이 밖의 꼴(이름이 아닌 키, `=` 없는 줄, 닫히지 않은 따옴표, NUL)은 오류다 — 조용히 건너뛰면 변수 하나가 빠진 채 돈다. 오류에는
+//! 이 밖의 꼴(이름이 아닌 키, `=` 없는 줄, 닫히지 않은 따옴표, NUL, 외톨이 `\r`)은 오류다 — 조용히 건너뛰면 변수 하나가 빠진 채 돈다. 오류에는
 //! 줄 번호와 까닭만 싣고 **그 줄의 글은 싣지 않는다**(값이 비밀일 수 있다 — M6-03 ③).
 
 use std::fmt;
@@ -18,6 +23,13 @@ use std::fmt;
 /// 파일 하나를 읽은 결과: 나온 순서대로 (이름, 값). 같은 이름이 둘이면 둘 다 들어 있고 뒤의 것이 이긴다([`super`] 가 합친다).
 pub fn parse(text: &str) -> Result<Vec<(String, String)>, SyntaxError> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    if let Some(at) = lone_cr(text) {
+        let line = text[..at].matches('\n').count() + 1;
+        return Err(SyntaxError {
+            line,
+            problem: Problem::LoneCr,
+        });
+    }
     let mut cursor = Cursor {
         chars: text.chars().collect(),
         at: 0,
@@ -101,6 +113,8 @@ pub enum Problem {
     TextAfterQuote,
     /// 값에 NUL 이 있다(환경 변수에 넣을 수 없다).
     Nul,
+    /// 뒤에 `\n` 이 없는 `\r` 이 있다.
+    LoneCr,
 }
 
 impl fmt::Display for SyntaxError {
@@ -113,6 +127,9 @@ impl fmt::Display for SyntaxError {
             Problem::UnclosedQuote => "a quoted value is not closed",
             Problem::TextAfterQuote => "only a `#` comment may follow a closing quote",
             Problem::Nul => "the value contains a NUL character",
+            Problem::LoneCr => {
+                "a carriage return without a line feed (save the file with LF or CRLF line endings)"
+            }
         };
         write!(f, "line {}: {why}", self.line)
     }
@@ -186,6 +203,8 @@ impl Cursor {
                     self.at += 1;
                     out.push('\n');
                 }
+                // 외톨이 `\r` 은 [`parse`] 가 미리 거절했다 — 여기의 `\r` 은 `\r\n` 의 앞이다.
+                '\r' => {}
                 '\n' => {
                     self.line += 1;
                     out.push('\n');
@@ -214,11 +233,21 @@ impl Cursor {
     }
 }
 
-/// 지금 자리가 줄 끝(`\n` 또는 `\r\n`)인가. 줄 가운데의 `\r` 하나는 값의 글자다.
+/// 지금 자리가 줄 끝(`\n` 또는 `\r\n`)인가. 외톨이 `\r` 은 [`parse`] 가 미리 거절했다.
 fn is_line_end(cursor: &Cursor) -> bool {
     match cursor.peek() {
         Some('\n') => true,
-        Some('\r') => cursor.peek_at(1) == Some('\n') || cursor.peek_at(1).is_none(),
+        Some('\r') => cursor.peek_at(1) == Some('\n'),
         _ => false,
     }
+}
+
+/// 뒤에 `\n` 이 없는 첫 `\r` 의 바이트 위치.
+fn lone_cr(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    bytes
+        .iter()
+        .enumerate()
+        .find(|(i, b)| **b == b'\r' && bytes.get(i + 1) != Some(&b'\n'))
+        .map(|(i, _)| i)
 }

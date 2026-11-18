@@ -195,6 +195,31 @@ fn dotenv_files_with_comments_crlf_bom_and_multiline_values() {
 }
 
 #[test]
+fn crlf_is_one_line_feed_inside_quotes_too() {
+    let text = "A=\"-----BEGIN-----\r\nabc\r\n-----END-----\"\r\nB='x\r\ny'\r\nC=\"one\\ntwo\"\r\nD=plain\r\n";
+    assert_eq!(
+        pairs(text),
+        vec![
+            (
+                "A".to_owned(),
+                "-----BEGIN-----\nabc\n-----END-----".to_owned()
+            ),
+            ("B".to_owned(), "x\ny".to_owned()),
+            ("C".to_owned(), "one\ntwo".to_owned()),
+            ("D".to_owned(), "plain".to_owned()),
+        ]
+    );
+    // 줄 번호는 `\r\n` 을 한 줄로 센다.
+    assert_eq!(
+        parse("A=\"x\r\ny\"\r\nB\r\n"),
+        Err(SyntaxError {
+            line: 3,
+            problem: Problem::MissingEquals
+        })
+    );
+}
+
+#[test]
 fn dotenv_errors_name_the_line_and_never_the_text() {
     let table: &[(&str, usize, Problem)] = &[
         ("A=1\nnot a pair\n", 2, Problem::InvalidName),
@@ -209,6 +234,12 @@ fn dotenv_errors_name_the_line_and_never_the_text() {
         ("A=\"say \\\"hi\\\"\"", 1, Problem::TextAfterQuote),
         ("A=\"multi\nline\"\nB", 3, Problem::MissingEquals),
         ("A=x\0y", 1, Problem::Nul),
+        // 외톨이 `\r`(옛 Mac 줄 끝) — 글자로 보면 `B` 가 조용히 `A` 의 값에 붙는다.
+        ("A=1\rB=2\r", 1, Problem::LoneCr),
+        ("A=1\r", 1, Problem::LoneCr),
+        ("A=1\nB=\"x\ry\"\n", 2, Problem::LoneCr),
+        ("A='x\r\ny\r'", 2, Problem::LoneCr),
+        ("# comment\rB=2\n", 1, Problem::LoneCr),
     ];
     for (text, line, problem) in table {
         assert_eq!(
@@ -316,8 +347,18 @@ fn missing_large_and_non_text_files_are_errors() {
         let fifo = f.root.join(".env.fifo");
         let c = std::ffi::CString::new(fifo.display().to_string()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
-        // FIFO 를 열다 막히지 않고 일반 파일이 아니라고 거절한다.
-        assert!(matches!(resolve(".env.fifo"), Err(EnvError::Read { .. })));
+        // FIFO 를 열다 막히지 않고 일반 파일이 아니라고 거절한다. 막히는 회귀가 시험을 멈추지 않고 실패하게 따로 돌려 시한을 둔다.
+        let mut cfg = config("name = \"x\"\ntype = \"shell\"\ncommand = \"true\"\n");
+        cfg.env_file = vec![".env.fifo".to_owned()];
+        let root = f.root.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(RunEnv::resolve(&cfg, None, &root));
+        });
+        let result = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("reading a FIFO env_file blocked instead of being refused");
+        assert!(matches!(result, Err(EnvError::Read { .. })));
     }
 }
 
@@ -344,7 +385,6 @@ fn debug_and_errors_never_show_values() {
     ] {
         assert!(debug.contains(shown), "{shown} missing from {debug}");
     }
-    assert!(!env.content_hash().contains(SECRET));
 
     // 오류의 Display · Debug 에도 값이 없다.
     let mut broken = cfg.clone();
@@ -379,66 +419,66 @@ fn the_plan_view_masks_secret_names_only() {
     assert_eq!(masked, want);
 }
 
-// 「사람이 본 구성」 해시(M6-11)의 env 몫.
+// 「사람이 본 구성」 해시(M6-11)의 입력 — `.env` 파일마다의 다이제스트.
 
-#[test]
-fn the_content_hash_follows_values_file_bytes_and_the_profile() {
-    let f = Fixture::new();
-    f.write(".env.local", "DB=local\n");
-    let body = "name = \"x\"\ntype = \"shell\"\ncommand = \"true\"\nenv_file = [\".env.local\"]\nenv = { MODE = \"dev\" }\n[profiles.p]\nenv = { MODE = \"prod\" }\n";
-    let hash = |cfg: &RunConfig, profile: Option<&str>| {
-        RunEnv::resolve(cfg, profile, &f.root)
-            .unwrap()
-            .content_hash()
-    };
-    let cfg = config(body);
-    let first = hash(&cfg, None);
-    assert!(
-        first.starts_with("sha256:") && first.len() == 7 + 64,
-        "{first}"
-    );
-    // 같은 것을 다시 읽으면 같다.
-    assert_eq!(hash(&cfg, None), first);
-
-    // 구성 env 의 값 하나만.
-    let changed_value = config(&body.replace("\"dev\"", "\"dev2\""));
-    assert_ne!(hash(&changed_value, None), first);
-    // 프로필을 고름 · 프로필 env 의 값만.
-    assert_ne!(hash(&cfg, Some("p")), first);
-    let changed_profile = config(&body.replace("\"prod\"", "\"prod2\""));
-    assert_ne!(hash(&changed_profile, Some("p")), hash(&cfg, Some("p")));
-
-    // `.env.local` 한 줄만(값 · 주석 모두 — 파일 바이트의 sha256).
-    f.write(".env.local", "DB=other\n");
-    assert_ne!(hash(&cfg, None), first);
-    f.write(".env.local", "DB=local\n# note\n");
-    assert_ne!(hash(&cfg, None), first);
-    f.write(".env.local", "DB=local\n");
-    assert_eq!(hash(&cfg, None), first);
-
-    // 같은 내용의 다른 파일 이름은 다르다(경로를 덮는다).
-    f.write(".env.other", "DB=local\n");
-    let renamed = config(&body.replace(".env.local", ".env.other"));
-    assert_ne!(hash(&renamed, None), first);
+fn sha256(bytes: &[u8]) -> String {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 #[test]
-fn the_content_hash_does_not_depend_on_the_worktree() {
+fn env_file_digests_are_the_sha256_of_the_bytes_that_gave_the_values() {
+    let f = Fixture::new();
+    // BOM · CRLF · 주석이 든 파일 — 다이제스트는 푼 글이 아니라 읽은 바이트 그대로의 것이다.
+    let first = "\u{feff}DB=local\r\n# note\r\n";
+    let second = "DB=second\n";
+    f.write(".env", first);
+    f.write("conf/.env.local", second);
+    let cfg = config(
+        "name = \"x\"\ntype = \"shell\"\ncommand = \"true\"\nenv_file = [\".env\", \"conf/.env.local\"]\n",
+    );
+    let env = RunEnv::resolve(&cfg, None, &f.root).unwrap();
+    assert_eq!(
+        env.files(),
+        [
+            EnvFileDigest {
+                path: ".env".to_owned(),
+                sha256: sha256(first.as_bytes()),
+            },
+            EnvFileDigest {
+                path: "conf/.env.local".to_owned(),
+                sha256: sha256(second.as_bytes()),
+            },
+        ]
+    );
+    assert_eq!(env.vars().get("DB").map(String::as_str), Some("second"));
+    // `printf 'A=1\n' | shasum -a 256` — 도구 밖의 값과도 맞춘다.
+    assert_eq!(
+        sha256(b"A=1\n"),
+        "91d6a3d55e9fea7911c537afae6607c77fa8bc0f3a76c375e104ac5a8cfa84db"
+    );
+
+    // 주석 한 줄만 바꿔도 다이제스트가 바뀐다(값은 같다).
+    f.write(".env", "\u{feff}DB=local\r\n# other note\r\n");
+    let again = RunEnv::resolve(&cfg, None, &f.root).unwrap();
+    assert_eq!(again.vars(), env.vars());
+    assert_ne!(again.files()[0].sha256, env.files()[0].sha256);
+    assert_eq!(again.files()[1], env.files()[1]);
+}
+
+#[test]
+fn env_file_digests_do_not_depend_on_the_worktree() {
     let a = Fixture::new();
     let b = Fixture::new();
     for f in [&a, &b] {
         f.write(".env", "A=1\n");
     }
     let cfg = config("name = \"x\"\ntype = \"shell\"\ncommand = \"true\"\nenv_file = [\".env\"]\n");
-    let ha = RunEnv::resolve(&cfg, None, &a.root).unwrap();
-    let hb = RunEnv::resolve(&cfg, None, &b.root).unwrap();
-    assert_eq!(ha.content_hash(), hb.content_hash());
-    assert_eq!(
-        ha.files(),
-        [EnvFileDigest {
-            path: ".env".to_owned(),
-            // `printf 'A=1\n' | shasum -a 256`
-            sha256: "91d6a3d55e9fea7911c537afae6607c77fa8bc0f3a76c375e104ac5a8cfa84db".to_owned(),
-        }]
-    );
+    let ea = RunEnv::resolve(&cfg, None, &a.root).unwrap();
+    let eb = RunEnv::resolve(&cfg, None, &b.root).unwrap();
+    assert_eq!(ea.files(), eb.files());
+    assert_eq!(ea.files()[0].path, ".env");
 }
