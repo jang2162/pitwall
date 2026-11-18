@@ -7,13 +7,14 @@
 //!   `alias` · `export` · `import` · `mod` 줄과 변수 대입(`x := …`)은 레시피가 아니다.
 //! - 빼는 레시피: 비공개(`_` 로 시작하거나 `[private]` 속성). 매개변수가 필요한 레시피도 넣는다 — 돌리면 just 가 무엇이 빠졌는지
 //!   알리고, 「구성으로 저장」 한 뒤 명령에 인자를 더할 수 있다.
-//! - 정의 본문: 머리 줄과 그 아래 들여 쓴 몸 줄(사이의 빈 줄은 건너뛴다).
+//! - 정의 본문: 파일 전체의 sha256 과 레시피 이름([`super::file_definition`]) — 의존 레시피 · `set shell` · 변수가 그 레시피의
+//!   실행을 바꾸므로 레시피의 몸만으로는 모자라다.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use super::{
-    DetectContext, DetectedTask, Found, TaskDetector, file, lines_list, shell_command,
-    shell_safe_name,
+    DetectContext, DetectedTask, Found, TaskDetector, file, file_definition, lines_list,
+    pick_names, sha256_hex, shell_command, shell_safe_name,
 };
 use crate::config::{RunConfig, RunKindConfig};
 
@@ -54,7 +55,8 @@ impl TaskDetector for JustDetector {
         };
         let parsed = parse(&text);
         let mut found = Found::default();
-        for (recipe, body) in parsed.recipes {
+        let sha = sha256_hex(&text);
+        for recipe in pick_names(name, parsed.recipes, &mut found.skipped) {
             found.tasks.push(DetectedTask {
                 detector: ID,
                 config: RunConfig {
@@ -68,9 +70,9 @@ impl TaskDetector for JustDetector {
                     profiles: Default::default(),
                     debug: None,
                 },
+                definition: file_definition(&sha, &recipe),
                 name: recipe,
                 source: path.clone(),
-                definition: body,
             });
         }
         if !parsed.unsafe_lines.is_empty() {
@@ -87,8 +89,8 @@ impl TaskDetector for JustDetector {
 /// 읽은 결과.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Parsed {
-    /// 레시피 → 정의 본문(이름이 겹치면 뒤의 것 — `set allow-duplicate-recipes` 의 just 와 같다).
-    pub recipes: BTreeMap<String, String>,
+    /// 레시피(중복 없이).
+    pub recipes: BTreeSet<String>,
     /// 셸에 안전하지 않은 이름의 레시피가 있던 줄(1부터).
     pub unsafe_lines: Vec<usize>,
 }
@@ -155,7 +157,7 @@ pub fn parse(text: &str) -> Parsed {
             continue;
         }
         if line.starts_with([' ', '\t']) {
-            continue; // 레시피 밖의 들여 쓴 줄(위에서 몸으로 읽지 못한 것)
+            continue; // 레시피의 몸
         }
         if line.starts_with('[') {
             private |= attribute_private(line);
@@ -173,25 +175,6 @@ pub fn parse(text: &str) -> Parsed {
             continue; // `x := …`
         }
         let name = header_name(&line[..colon]);
-        // 몸: 들여 쓴 줄(사이의 빈 줄은 건너뛰고, 빈 줄 뒤에 들여 쓴 줄이 없으면 끝).
-        let mut body = line.to_owned();
-        while i < lines.len() {
-            let next = lines[i];
-            if next.trim().is_empty() {
-                // 빈 줄들 뒤의 첫 줄이 들여 쓴 줄이면 몸이 이어진다(한 번만 앞을 본다 — 빈 줄이 많아도 선형).
-                let after = (i..lines.len()).find(|&j| !lines[j].trim().is_empty());
-                match after {
-                    Some(j) if lines[j].starts_with([' ', '\t']) => i = j,
-                    _ => break,
-                }
-            } else if next.starts_with([' ', '\t']) {
-                body.push('\n');
-                body.push_str(next);
-                i += 1;
-            } else {
-                break;
-            }
-        }
         if attributes_private || name.starts_with('_') {
             continue;
         }
@@ -199,7 +182,7 @@ pub fn parse(text: &str) -> Parsed {
             parsed.unsafe_lines.push(number);
             continue;
         }
-        parsed.recipes.insert(name.to_owned(), body);
+        parsed.recipes.insert(name.to_owned());
     }
     parsed
 }

@@ -2,7 +2,8 @@
 //!
 //! - 루트 바로 아래의 이름만 읽는다(정확한 대소문자 — [`entries`]).
 //! - 링크는 따르되 실제 경로가 루트 안이어야 한다 — 루트 밖(`/etc/…` · 홈의 비밀 파일)을 가리키면 읽지 않고 까닭이다.
-//! - 정규 파일만 연다 — FIFO · 장치 파일은 열기만 해도 멈추거나 끝이 없다.
+//! - 정규 파일만 읽는다 — FIFO · 장치 파일은 열기만 해도 멈추거나 끝이 없다. 유닉스에서는 `O_NONBLOCK` 으로 열고 **연 핸들**이
+//!   정규 파일인지 본다 — 보고 나서 여는 사이에 FIFO 로 바뀌어도 멈추지 않는다.
 //! - [`MAX_BYTES`] 를 넘으면 그만큼만 읽고 까닭이다. UTF-8 이 아니면 까닭이다.
 
 use std::collections::BTreeSet;
@@ -44,13 +45,21 @@ pub fn read(root: &Path, name: &str) -> Result<Option<(PathBuf, String)>, String
             "{name} is a link that points outside the project; Pitwall does not read it"
         ));
     }
-    let meta = fs::metadata(&real).map_err(|e| format!("{name}: {e}"))?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(&real).map_err(|e| format!("{name}: {e}"))?;
+    let meta = file.metadata().map_err(|e| format!("{name}: {e}"))?;
     if !meta.is_file() {
         return Err(format!("{name} is not a regular file"));
     }
     let mut bytes = Vec::new();
-    fs::File::open(&real)
-        .and_then(|f| f.take(MAX_BYTES + 1).read_to_end(&mut bytes))
+    file.take(MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
         .map_err(|e| format!("{name}: {e}"))?;
     if bytes.len() as u64 > MAX_BYTES {
         return Err(format!(

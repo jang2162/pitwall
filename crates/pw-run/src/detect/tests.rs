@@ -223,7 +223,7 @@ fn empty_project_detects_nothing() {
 #[test]
 fn makefile_leaves_out_special_pattern_and_variable_targets() {
     let parsed = make::parse(MAKEFILE);
-    let names: Vec<&str> = parsed.targets.keys().map(String::as_str).collect();
+    let names: Vec<&str> = parsed.targets.iter().map(String::as_str).collect();
     assert_eq!(
         names,
         ["build", "clean", "deps", "docs/site", "test", "win-only"]
@@ -240,15 +240,10 @@ fn makefile_leaves_out_special_pattern_and_variable_targets() {
         "OUT",
         "fake",
     ] {
-        assert!(!parsed.targets.contains_key(gone), "{gone} was detected");
+        assert!(!parsed.targets.contains(gone), "{gone} was detected");
     }
     // `a;rm` 은 셸에 안전하지 않아 빠지고 줄 번호가 남는다.
     assert_eq!(parsed.unsafe_lines, [40]);
-    // 레시피는 `\` 로 이은 줄 · 사이의 주석을 지나 다음 규칙 앞까지.
-    assert_eq!(
-        parsed.targets["build"],
-        "build: deps ## 빌드\n\t$(CC) $(FLAGS) -o $(OUT)/app \\\n\t  main.c"
-    );
 }
 
 #[test]
@@ -568,7 +563,7 @@ fn shell_commands_quote_the_name_as_one_argument() {
         assert!(!shell_safe_name(name), "{name:?}");
     }
     let parsed = just::parse("ok:\n  true\nfo;o:\n  true\n");
-    assert_eq!(parsed.recipes.keys().collect::<Vec<_>>(), ["ok"]);
+    assert_eq!(parsed.recipes.iter().collect::<Vec<_>>(), ["ok"]);
     assert_eq!(parsed.unsafe_lines, [3]);
 }
 
@@ -608,15 +603,38 @@ fn definitions_follow_the_body() {
     .unwrap();
     assert_ne!(def(&root, "detected:npm:dev"), before, "post script");
 
-    fs::write(root.join("justfile"), "run:\n    echo a\n").unwrap();
-    let before = def(&root, "detected:just:run");
-    fs::write(root.join("justfile"), "run:\n    echo b\n").unwrap();
-    assert_ne!(def(&root, "detected:just:run"), before, "recipe line");
-
-    fs::write(root.join("Makefile"), "run:\n\techo a\n").unwrap();
-    let before = def(&root, "detected:make:run");
-    fs::write(root.join("Makefile"), "run:\n\techo b\n").unwrap();
-    assert_ne!(def(&root, "detected:make:run"), before, "make recipe");
+    // make · just 는 파일 전체 — 그 태스크의 레시피 밖(선행 대상 · `SHELL` · `set shell`)을 고쳐도 바뀐다(리뷰 「고쳐야 하는 것」 2).
+    for (file, key, edits) in [
+        (
+            "justfile",
+            "detected:just:run",
+            [
+                "prep:\n    echo a\nrun: prep\n    echo run\n",
+                "prep:\n    echo EVIL\nrun: prep\n    echo run\n",
+                "set shell := [\"sh\", \"-c\"]\nprep:\n    echo EVIL\nrun: prep\n    echo run\n",
+            ],
+        ),
+        (
+            "Makefile",
+            "detected:make:run",
+            [
+                "prep:\n\techo a\nrun: prep\n\techo run\n",
+                "prep:\n\techo EVIL\nrun: prep\n\techo run\n",
+                "SHELL := /tmp/evil\nprep:\n\techo EVIL\nrun: prep\n\techo run\n",
+            ],
+        ),
+    ] {
+        let mut seen = std::collections::BTreeSet::new();
+        for text in edits {
+            fs::write(root.join(file), text).unwrap();
+            let definition = def(&root, key);
+            assert!(definition.ends_with(" run"), "{definition}");
+            assert!(
+                seen.insert(definition),
+                "{file}: {text:?} kept the definition"
+            );
+        }
+    }
 
     fs::write(
         root.join("compose.yaml"),
@@ -728,7 +746,8 @@ fn oversized_and_odd_files_are_refused() {
     // SAFETY: 경로는 NUL 로 끝나는 C 문자열이다.
     assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
     fs::write(root.join("justfile"), [0xff, 0xfe, b'\n']).unwrap();
-    let detection = detect(&root, &NoExec);
+    // 회귀하면(FIFO 를 열어 기다리면) 멈추지 않고 시한에서 실패한다.
+    let detection = within(Duration::from_secs(10), move || detect(&root, &NoExec));
     assert!(detection.tasks.is_empty(), "{detection:#?}");
     let reasons: Vec<(&str, &str)> = detection
         .problems
@@ -768,7 +787,7 @@ fn too_many_tasks_are_capped() {
         [DetectProblem {
             detector: "npm".into(),
             reason: format!(
-                "found {} tasks; only the first {MAX_TASKS} by name are listed",
+                "package.json: found {} tasks; only the first {MAX_TASKS} by name are listed",
                 MAX_TASKS + 20
             ),
         }]
@@ -837,11 +856,131 @@ fn compose_alias_bombs_are_bounded() {
         previous = name;
     }
     bomb.push_str("services:\n  web:\n    command: *j\n");
-    let started = std::time::Instant::now();
-    let err = compose::services(&bomb).unwrap_err();
+    // 회귀하면(상한을 걷으면) 멈추지 않고 시한에서 실패한다.
+    let err = within(Duration::from_secs(5), move || {
+        compose::services(&bomb, "compose.yaml", &mut Vec::new()).unwrap_err()
+    });
     assert!(err.contains("expands to more than 256 KiB"), "{err}");
-    assert!(started.elapsed() < Duration::from_secs(5));
 
-    let err = compose::services("services:\n  web: &w\n    again: *w\n").unwrap_err();
+    let err = within(Duration::from_secs(5), || {
+        compose::services(
+            "services:\n  web: &w\n    again: *w\n",
+            "compose.yaml",
+            &mut Vec::new(),
+        )
+        .unwrap_err()
+    });
     assert!(err.contains("nested deeper than"), "{err}");
+}
+
+/// `f` 를 스레드에서 돌려 `limit` 안에 끝나지 않으면 실패한다 — 회귀가 「멈춤」 이 아니라 「실패」 로 드러나게.
+fn within<T: Send + 'static>(limit: Duration, f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(limit)
+        .unwrap_or_else(|e| panic!("did not finish within {limit:?}: {e}"))
+}
+
+/// 감지 하나를 시한 안에 돌리고 정의 본문 합계를 본다.
+fn bounded_detect(root: PathBuf) -> (Detection, usize, Duration) {
+    let started = std::time::Instant::now();
+    let detection = within(Duration::from_secs(5), move || detect(&root, &NoExec));
+    let elapsed = started.elapsed();
+    let total = detection.tasks.iter().map(|t| t.definition.len()).sum();
+    (detection, total, elapsed)
+}
+
+/// 증폭 막기(리뷰 「막는 것」 1): 대상 4000 개를 한 규칙 줄에 적고 250 KB 레시피를 단 273 KB `Makefile` — 정의를 대상마다
+/// 복사하면 1 GB 를 넘었다. 고른 500 개의 정의만, 합계 수 MB 안 · 2 초 안.
+#[test]
+fn many_targets_on_one_rule_do_not_multiply_the_recipe() {
+    let (_tmp, root) = root();
+    let targets: Vec<String> = (0..4000).map(|i| format!("t{i:04}")).collect();
+    let mut text = format!("{}:\n", targets.join(" "));
+    for _ in 0..2500 {
+        text.push_str(&format!("\techo {}\n", "x".repeat(94)));
+    }
+    assert!(text.len() > 270_000, "{}", text.len());
+    fs::write(root.join("Makefile"), &text).unwrap();
+    let (detection, total, elapsed) = bounded_detect(root.clone());
+    assert_eq!(detection.tasks.len(), MAX_TASKS);
+    assert!(total < 64 * 1024, "definitions add up to {total} bytes");
+    assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
+    assert_eq!(
+        detection.problems,
+        [DetectProblem {
+            detector: "make".into(),
+            reason: format!(
+                "Makefile: found 4000 tasks; only the first {MAX_TASKS} by name are listed"
+            ),
+        }]
+    );
+
+    // 같은 대상을 한 줄에 2000 번 적은 104 KB 파일은 대상 하나다.
+    let mut text = format!("{}:\n", ["a"; 2000].join(" "));
+    text.push_str(&format!("\techo {}\n", "x".repeat(100_000)));
+    fs::write(root.join("Makefile"), &text).unwrap();
+    let (detection, total, _) = bounded_detect(root);
+    assert_eq!(detection.tasks.len(), 1);
+    assert!(total < 1024, "{total}");
+}
+
+/// 증폭 막기: 250 KB 앵커 하나를 서비스 3000 개가 가리키는 285 KB compose 파일 — 서비스마다 펼치면 800 MB · 15 초였다. 합계
+/// 상한([`MAX_DEFINITION_BYTES`])에 닿는 순간 멈추고 감지기를 비운다.
+#[test]
+fn many_services_on_one_anchor_stop_at_the_budget() {
+    let (_tmp, root) = root();
+    let mut text = format!("x-big: &big \"{}\"\nservices:\n", "y".repeat(250_000));
+    for i in 0..3000 {
+        text.push_str(&format!("  s{i:04}: {{command: *big}}\n"));
+    }
+    assert!(text.len() > 280_000, "{}", text.len());
+    fs::write(root.join("compose.yaml"), &text).unwrap();
+    let (detection, total, elapsed) = bounded_detect(root);
+    assert!(
+        detection.tasks.is_empty(),
+        "{} tasks",
+        detection.tasks.len()
+    );
+    assert_eq!(total, 0);
+    assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
+    assert_eq!(
+        detection.problems,
+        [DetectProblem {
+            detector: "compose".into(),
+            reason: format!("compose.yaml: {}", over_budget()),
+        }]
+    );
+}
+
+/// 이름 길이 상한: npm · compose 이름도 [`MAX_NAME_LEN`] 을 넘으면 빼고 까닭을 남긴다.
+#[test]
+fn overlong_names_are_left_out() {
+    let (_tmp, root) = root();
+    let long = "n".repeat(MAX_NAME_LEN + 1);
+    fs::write(
+        root.join("package.json"),
+        json!({"scripts": {"dev": "vite", long.clone(): "x"}}).to_string(),
+    )
+    .unwrap();
+    let detection = detect(&root, &NoExec);
+    assert_eq!(
+        detection
+            .tasks
+            .iter()
+            .map(DetectedTask::key)
+            .collect::<Vec<_>>(),
+        ["detected:npm:dev"]
+    );
+    assert_eq!(
+        detection.problems,
+        [DetectProblem {
+            detector: "npm".into(),
+            reason: format!(
+                "package.json: skipped 1 task(s) whose names are longer than {MAX_NAME_LEN} bytes"
+            ),
+        }]
+    );
 }

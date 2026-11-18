@@ -19,7 +19,8 @@ pw-runtime = { path = "../pw-runtime" }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-# 「사람이 본 구성」 해시(M6-11)의 `.env` 파일 내용 해시(pw-core 와 같은 버전).
+# 「사람이 본 구성」 해시(M6-11)의 `.env` 파일 내용 해시와 태스크 감지의 `Makefile` · `justfile` 정의 본문(파일 전체의 해시 —
+# detect/mod.rs `file_definition`). pw-core 와 같은 버전.
 sha2 = "0.10.9"
 specta = { workspace = true, features = ["derive"] }
 # 실행 구성 파일을 고칠 때 주석 · 모르는 키를 지킨다(pw-core 의 설정 쓰기와 같은 버전).

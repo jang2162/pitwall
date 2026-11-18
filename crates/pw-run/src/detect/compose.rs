@@ -5,7 +5,8 @@
 //!   그 파일을 `file` 로 적는다 — 덮어쓰기 파일(`compose.override.yaml`)은 섞지 않는다(정의 본문이 그 파일 하나의 것이어야 한다).
 //!   `include` · `extends` 는 따라가지 않는다.
 //! - **YAML 은 이벤트로만 읽는다**(`yaml_rust2::parser`) — `YamlLoader` 는 별칭(`*a`)을 만날 때마다 앵커의 값을 복사해, 별칭을 겹친
-//!   1 MiB 파일 하나로 메모리가 폭발한다. 여기는 노드를 한 번씩만 들고, 정의 본문을 쓸 때만 별칭을 펼치되 길이 · 깊이 상한을 둔다.
+//!   1 MiB 파일 하나로 메모리가 폭발한다. 여기는 노드를 한 번씩만 들고, 정의 본문을 쓸 때만 별칭을 펼치되 서비스마다의 길이 · 깊이 상한과 서비스 전부의 합계
+//!   상한([`super::Budget`])을 쓰는 도중에 센다.
 //! - 정의 본문: 그 서비스의 값(별칭 · `<<` 병합을 펼친 것)을 정규 글로 — 주석 · 공백 · 따옴표 꼴과 무관하고 태그(`!reset` 등)와
 //!   「따옴표를 쓴 값인가」 는 든다. `command` · `entrypoint` · `environment` 가 바뀌면 본문이 바뀐다(결정 M6-D6 ⓒ).
 
@@ -14,7 +15,9 @@ use std::collections::HashMap;
 use yaml_rust2::parser::{Event, MarkedEventReceiver, Parser, Tag};
 use yaml_rust2::scanner::{Marker, TScalarStyle};
 
-use super::{DetectContext, DetectedTask, Found, TaskDetector, file};
+use super::{
+    Budget, DetectContext, DetectedTask, Found, TaskDetector, file, over_budget, pick_names,
+};
 use crate::config::{RunConfig, RunKindConfig};
 
 pub const ID: &str = "compose";
@@ -26,7 +29,7 @@ pub const SOURCES: &[&str] = &[
     "docker-compose.yml",
 ];
 
-/// 서비스 하나의 정의 본문 상한(별칭을 펼친 길이).
+/// 서비스 하나의 정의 본문 상한(별칭을 펼친 길이). 서비스 전부의 합계는 [`super::MAX_DEFINITION_BYTES`].
 pub const MAX_DEFINITION: usize = 256 * 1024;
 /// 정의 본문을 쓸 때의 깊이 상한(별칭을 지나는 것 포함).
 const MAX_DEPTH: usize = 64;
@@ -49,8 +52,9 @@ impl TaskDetector for ComposeDetector {
         let Some((path, text)) = file::read(cx.root, name)? else {
             return Ok(Found::default());
         };
-        let services = services(&text).map_err(|why| format!("{name}: {why}"))?;
         let mut found = Found::default();
+        let services =
+            services(&text, name, &mut found.skipped).map_err(|why| format!("{name}: {why}"))?;
         for (service, definition) in services {
             found.tasks.push(DetectedTask {
                 detector: ID,
@@ -157,8 +161,14 @@ impl MarkedEventReceiver for Builder {
     }
 }
 
-/// compose 글의 (서비스 이름, 정의 본문). 이름순이 아니라 파일 순서다. 형식 오류는 까닭(줄 · 칸만 — 내용은 싣지 않는다).
-pub fn services(text: &str) -> Result<Vec<(String, String)>, String> {
+/// compose 글의 (서비스 이름, 정의 본문) — 이름순, [`pick_names`] 가 고른 것만. 형식 오류 · 상한 넘김은 까닭(줄 · 칸만 — 내용은
+/// 싣지 않는다). 정의는 고른 서비스만 만들고, 합계를 만드는 도중에 [`Budget`] 으로 센다 — 한 앵커를 가리키는 서비스 수천이 그 수만큼
+/// 펼쳐지지 않는다. `source` 는 까닭에 쓰는 파일 이름, 뺀 서비스의 까닭은 `skipped` 에 더한다.
+pub fn services(
+    text: &str,
+    source: &str,
+    skipped: &mut Vec<String>,
+) -> Result<Vec<(String, String)>, String> {
     let mut builder = Builder::default();
     Parser::new_from_str(text)
         .load(&mut builder, false)
@@ -193,21 +203,46 @@ pub fn services(text: &str) -> Result<Vec<(String, String)>, String> {
         }
         _ => return Err("`services` is not a mapping".to_owned()),
     };
-    let mut out = Vec::new();
+    // 이름 → 값(같은 이름이 둘이면 앞의 것). `<<`(서비스 묶음 병합)는 서비스가 아니다.
+    let mut values: HashMap<&str, usize> = HashMap::new();
     for (k, v) in entries {
-        let Node::Scalar { value: name, .. } = &builder.nodes[*k] else {
-            continue;
-        };
-        if name == "<<" {
-            continue;
+        if let Node::Scalar { value: name, .. } = &builder.nodes[*k]
+            && name != "<<"
+        {
+            values.entry(name.as_str()).or_insert(*v);
         }
+    }
+    let names = values.keys().map(|n| (*n).to_owned()).collect::<Vec<_>>();
+    let mut budget = Budget::default();
+    let mut out = Vec::new();
+    for name in pick_names(source, names, skipped) {
+        let limit = MAX_DEFINITION.min(budget.left());
         let mut definition = String::new();
-        write(&builder, *v, 0, &mut definition)
-            .map_err(|why| format!("service on line {}: {why}", line_of(text, name)))?;
-        out.push((name.clone(), definition));
+        write(&builder, values[name.as_str()], 0, limit, &mut definition).map_err(|e| match e {
+            TooLong if limit < MAX_DEFINITION => over_budget(),
+            TooLong => format!(
+                "the service on line {} expands to more than {} KiB (through aliases)",
+                line_of(text, &name),
+                MAX_DEFINITION / 1024
+            ),
+            TooDeep => format!(
+                "the service on line {} is nested deeper than {MAX_DEPTH} levels (through aliases)",
+                line_of(text, &name)
+            ),
+        })?;
+        budget.take(definition.len())?;
+        out.push((name, definition));
     }
     Ok(out)
 }
+
+/// 정의를 쓰다 멈춘 까닭.
+#[derive(Debug)]
+enum WriteError {
+    TooLong,
+    TooDeep,
+}
+use WriteError::{TooDeep, TooLong};
 
 /// 까닭에 이름을 싣지 않으려고 줄 번호만 — 그 이름이 키로 처음 나오는 줄.
 fn line_of(text: &str, name: &str) -> usize {
@@ -220,19 +255,20 @@ fn line_of(text: &str, name: &str) -> usize {
         .map_or(0, |i| i + 1)
 }
 
-/// 노드를 정규 글로(별칭을 펼친다). 길이가 [`MAX_DEFINITION`] 을 넘거나 깊이가 [`MAX_DEPTH`] 를 넘으면(스스로를 가리키는 별칭
-/// 포함) 까닭.
-fn write(builder: &Builder, at: usize, depth: usize, out: &mut String) -> Result<(), String> {
+/// 노드를 정규 글로(별칭을 펼친다). 쓰는 **도중에** 길이가 `limit` 을 넘거나 깊이가 [`MAX_DEPTH`] 를 넘으면(스스로를 가리키는 별칭
+/// 포함) 멈춘다.
+fn write(
+    builder: &Builder,
+    at: usize,
+    depth: usize,
+    limit: usize,
+    out: &mut String,
+) -> Result<(), WriteError> {
     if depth > MAX_DEPTH {
-        return Err(format!(
-            "nested deeper than {MAX_DEPTH} levels (through aliases)"
-        ));
+        return Err(TooDeep);
     }
-    if out.len() > MAX_DEFINITION {
-        return Err(format!(
-            "expands to more than {} KiB (through aliases)",
-            MAX_DEFINITION / 1024
-        ));
+    if out.len() > limit {
+        return Err(TooLong);
     }
     let tag = |out: &mut String, tag: &Option<String>| {
         if let Some(tag) = tag {
@@ -250,6 +286,9 @@ fn write(builder: &Builder, at: usize, depth: usize, out: &mut String) -> Result
             if *quoted {
                 out.push('q');
             }
+            if out.len() + value.len() > limit {
+                return Err(TooLong);
+            }
             out.push_str(&serde_json::Value::String(value.clone()).to_string());
         }
         Node::Seq(items, t) => {
@@ -259,7 +298,7 @@ fn write(builder: &Builder, at: usize, depth: usize, out: &mut String) -> Result
                 if i > 0 {
                     out.push(',');
                 }
-                write(builder, *item, depth + 1, out)?;
+                write(builder, *item, depth + 1, limit, out)?;
             }
             out.push(']');
         }
@@ -270,14 +309,14 @@ fn write(builder: &Builder, at: usize, depth: usize, out: &mut String) -> Result
                 if i > 0 {
                     out.push(',');
                 }
-                write(builder, *k, depth + 1, out)?;
+                write(builder, *k, depth + 1, limit, out)?;
                 out.push(':');
-                write(builder, *v, depth + 1, out)?;
+                write(builder, *v, depth + 1, limit, out)?;
             }
             out.push('}');
         }
         Node::Alias(id) => match builder.anchors.get(id) {
-            Some(target) => write(builder, *target, depth + 1, out)?,
+            Some(target) => write(builder, *target, depth + 1, limit, out)?,
             None => out.push_str("null"),
         },
     }

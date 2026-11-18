@@ -15,6 +15,10 @@
 //!   [`npm::script_definition`] 이 같은 본문을 준다.
 //! - **읽기의 경계**([`file`]): 루트의 정규 파일만, 1 MiB 까지, 루트 밖을 가리키는 링크는 읽지 않는다. 감지기 하나가 실패하면 그
 //!   감지기만 비우고 까닭을 [`DetectProblem`] 으로 남긴다. 까닭에는 파일 내용을 싣지 않는다(줄 번호 · 개수만).
+//! - **증폭 막기**: 1 MiB 파일 하나라도 정의 본문은 곱으로 불어날 수 있다(한 규칙 줄의 대상 수천 × 긴 레시피, 한 앵커를 가리키는
+//!   서비스 수천). 그래서 감지기는 이름을 먼저 고르고([`pick_names`] — 이름순 [`MAX_TASKS`] 개, [`MAX_NAME_LEN`] 까지) 고른 것만
+//!   정의를 만들며, 만드는 **도중에** 정의 합계를 [`Budget`]([`MAX_DEFINITION_BYTES`])으로 센다 — 넘는 순간 그 감지기를 까닭으로
+//!   비운다. 다 만든 뒤 자르지 않는다.
 
 pub mod compose;
 pub mod file;
@@ -35,9 +39,16 @@ pub use watch::{Seen, follow_files, subscribe_files};
 /// 감지된 태스크 열쇠의 머리.
 pub const KEY_PREFIX: &str = "detected:";
 
-/// 감지기 하나가 내는 태스크 수의 상한. 넘으면 앞의 것만 두고 까닭을 남긴다(커밋된 `package.json` 하나로 목록 · 선택기가 무거워지지
-/// 않게).
+/// 감지기 하나가 내는 태스크 수의 상한. 넘으면 이름순 앞의 것만 두고 까닭을 남긴다(커밋된 `package.json` 하나로 목록 · 선택기가
+/// 무거워지지 않게). 감지기는 정의를 만들기 전에 이것으로 자른다([`pick_names`]).
 pub const MAX_TASKS: usize = 500;
+
+/// 감지된 태스크 이름의 길이 상한(바이트). 넘는 이름은 빼고 까닭을 남긴다 — 열쇠(`detected:<감지기>:<이름>`)를 기록하는 쪽(M6-11)도
+/// 길이 상한이 있다.
+pub const MAX_NAME_LEN: usize = 200;
+
+/// 감지기 하나가 만드는 정의 본문의 합계 상한(4 MiB). 만드는 도중에 센다([`Budget`]).
+pub const MAX_DEFINITION_BYTES: usize = 4 * 1024 * 1024;
 
 /// 감지된 태스크의 열쇠 `detected:<감지기>:<이름>` — 「사람이 본 구성」 기록(M6-11)의 구성 열쇠. 감지기 id 에는 `:` 이 없으므로
 /// 이름에 `:` 이 있어도(`build:prod`) 첫 두 `:` 로 가른다([`parse_key`]).
@@ -115,8 +126,9 @@ pub struct DetectedTask {
     /// 가상 구성 — 「구성으로 저장」 하면 이것이 파일이 된다. [`validate`] 를 지난 것만 있다.
     pub config: RunConfig,
     /// 명령 정의 본문 — 「사람이 본 구성」 해시(M6-11)가 넣는다. 감지기마다 다르다: `package.json` script 는 그 script 와 npm 이
-    /// 함께 돌리는 `pre` · `post` script 의 본문, `Makefile` · `justfile` 은 그 대상 · 레시피의 머리 줄과 레시피 줄, compose 는
-    /// 그 서비스의 값(별칭을 펼친 것). 기록 · 로그에 쓰지 않는다(env 값이 있을 수 있다).
+    /// 함께 돌리는 `pre` · `post` script 의 본문, `Makefile` · `justfile` 은 **출처 파일 전체**의 sha256 과 그 이름([`file_definition`]
+    /// — 선행 대상 · `SHELL` · `set shell` 처럼 그 태스크의 실행을 바꾸는 것이 같은 파일의 다른 자리에 있다), compose 는 그 서비스의
+    /// 값(별칭을 펼친 것). 기록 · 로그에 쓰지 않는다(env 값이 있을 수 있다).
     pub definition: String,
 }
 
@@ -227,12 +239,94 @@ pub fn detect_with(
     out
 }
 
+/// 정의 본문의 합계 예산 — 감지기 하나가 정의를 만드는 동안 쓴 바이트를 센다.
+#[derive(Debug)]
+pub struct Budget {
+    left: usize,
+}
+
+impl Default for Budget {
+    fn default() -> Self {
+        Self::new(MAX_DEFINITION_BYTES)
+    }
+}
+
+impl Budget {
+    pub fn new(bytes: usize) -> Self {
+        Self { left: bytes }
+    }
+
+    /// 남은 바이트.
+    pub fn left(&self) -> usize {
+        self.left
+    }
+
+    /// `bytes` 를 쓴다. 남은 것보다 많으면 까닭(그 감지기를 비운다).
+    pub fn take(&mut self, bytes: usize) -> Result<(), String> {
+        self.left = self.left.checked_sub(bytes).ok_or_else(over_budget)?;
+        Ok(())
+    }
+}
+
+/// 예산을 넘었을 때의 까닭.
+pub(crate) fn over_budget() -> String {
+    format!(
+        "the task definitions add up to more than {} KiB (a name repeated many times or aliases); Pitwall stops reading the file",
+        MAX_DEFINITION_BYTES / 1024
+    )
+}
+
+/// 정의를 만들 이름을 고른다 — 이름순 · 중복 없이 · [`MAX_NAME_LEN`] 까지 · 앞의 [`MAX_TASKS`] 개. 뺀 까닭은 `skipped` 에 더한다
+/// (`source` 는 출처 파일 이름). 정의를 만들기 **전에** 부른다.
+pub fn pick_names(
+    source: &str,
+    names: impl IntoIterator<Item = String>,
+    skipped: &mut Vec<String>,
+) -> Vec<String> {
+    let mut long = 0;
+    let all: BTreeSet<String> = names
+        .into_iter()
+        .filter(|n| {
+            let ok = n.len() <= MAX_NAME_LEN;
+            long += usize::from(!ok);
+            ok
+        })
+        .collect();
+    if long > 0 {
+        skipped.push(format!(
+            "{source}: skipped {long} task(s) whose names are longer than {MAX_NAME_LEN} bytes"
+        ));
+    }
+    if all.len() > MAX_TASKS {
+        skipped.push(format!(
+            "{source}: found {} tasks; only the first {MAX_TASKS} by name are listed",
+            all.len()
+        ));
+    }
+    all.into_iter().take(MAX_TASKS).collect()
+}
+
+/// `Makefile` · `justfile` 의 정의 본문: `sha256:<파일 전체의 hex> <이름>`. 파일의 어느 자리를 고쳐도 그 파일의 모든 태스크가
+/// 달라진다(선행 대상의 레시피 · 변수 · `SHELL` · `set shell` 이 그 태스크의 실행을 바꾼다 — 리뷰 「고쳐야 하는 것」 2).
+pub fn file_definition(file_sha256: &str, name: &str) -> String {
+    format!("sha256:{file_sha256} {name}")
+}
+
+/// 글의 sha256(hex).
+pub(crate) fn sha256_hex(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 /// 셸 종류(`shell`)로 감지한 태스크의 이름이 셸 글 안에 안전한가: 영문자 · 숫자 · `_` 로 시작하고 영문자 · 숫자 · `_` · `-` · `.` ·
 /// `+` · `/` 만. 그 밖의 이름은 감지에서 빼고 까닭을 남긴다 — 따옴표 · `$` · 공백 · `;` 를 셸 글로 옮기는 규칙은 셸마다(로그인
 /// 셸 · PowerShell) 다르다.
 pub fn shell_safe_name(name: &str) -> bool {
     let mut bytes = name.bytes();
-    name.len() <= 200
+    name.len() <= MAX_NAME_LEN
         && bytes
             .next()
             .is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_')

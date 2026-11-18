@@ -6,14 +6,14 @@ detected:just:build
   source: justfile
   config: {"command":"just 'build'","cwd":null,"debug":null,"env":{},"envFile":[],"name":"build","profiles":{},"type":"shell"}
   argv: ["/bin/zsh", "-l", "-c", "just 'build'"]
-  definition: "build target='debug:fast':\n    cargo build --profile {{target}}\n    echo done"
+  definition: "sha256:70988763077f4635a44951facc2f8fcf4ca8b1c9f075016128e40dc89bf9a16c build"
 detected:just:serve
   source: justfile
   config: {"command":"just 'serve'","cwd":null,"debug":null,"env":{},"envFile":[],"name":"serve","profiles":{},"type":"shell"}
   argv: ["/bin/zsh", "-l", "-c", "just 'serve'"]
-  definition: "serve port:\n\tpython3 -m http.server {{port}}"
+  definition: "sha256:70988763077f4635a44951facc2f8fcf4ca8b1c9f075016128e40dc89bf9a16c serve"
 detected:just:test
   source: justfile
   config: {"command":"just 'test'","cwd":null,"debug":null,"env":{},"envFile":[],"name":"test","profiles":{},"type":"shell"}
   argv: ["/bin/zsh", "-l", "-c", "just 'test'"]
-  definition: "@test *args: build\n    cargo test {{args}}"
+  definition: "sha256:70988763077f4635a44951facc2f8fcf4ca8b1c9f075016128e40dc89bf9a16c test"

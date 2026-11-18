@@ -6,13 +6,14 @@
 //!   대상별 변수 `t: X = 1`)과 지시어 줄(`ifeq` · `include` · `define … endef` 의 몸 등)은 규칙이 아니다.
 //! - 빼는 대상: `.` 으로 시작하는 것(`.PHONY` 같은 특수 대상 · 접미사 규칙 `.c.o`), 패턴 규칙(`%`), 변수 대상(`$(VAR)`), 와일드카드.
 //!   셸에 안전하지 않은 이름([`super::shell_safe_name`])은 빼고 줄 번호를 남긴다.
-//! - 정의 본문: 그 대상을 적은 규칙 줄마다 그 줄과 레시피 줄(탭으로 시작하는 줄, `\` 로 이은 줄)을 파일 순서로.
+//! - 정의 본문: 파일 전체의 sha256 과 대상 이름([`super::file_definition`]) — 선행 대상의 레시피 · 변수 · `SHELL` 이 그 대상의
+//!   실행을 바꾸므로 대상의 레시피만으로는 모자라다. 대상마다 본문을 복사하지 않아 대상 수천 × 긴 레시피로 불어나지 않는다.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use super::{
-    DetectContext, DetectedTask, Found, TaskDetector, file, lines_list, shell_command,
-    shell_safe_name,
+    DetectContext, DetectedTask, Found, TaskDetector, file, file_definition, lines_list,
+    pick_names, sha256_hex, shell_command, shell_safe_name,
 };
 use crate::config::{RunConfig, RunKindConfig};
 
@@ -40,7 +41,8 @@ impl TaskDetector for MakeDetector {
         };
         let parsed = parse(&text);
         let mut found = Found::default();
-        for (target, body) in parsed.targets {
+        let sha = sha256_hex(&text);
+        for target in pick_names(name, parsed.targets, &mut found.skipped) {
             found.tasks.push(DetectedTask {
                 detector: ID,
                 config: RunConfig {
@@ -54,9 +56,9 @@ impl TaskDetector for MakeDetector {
                     profiles: Default::default(),
                     debug: None,
                 },
-                name: target,
                 source: path.clone(),
-                definition: body,
+                definition: file_definition(&sha, &target),
+                name: target,
             });
         }
         if !parsed.unsafe_lines.is_empty() {
@@ -73,8 +75,8 @@ impl TaskDetector for MakeDetector {
 /// 읽은 결과.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Parsed {
-    /// 대상 → 정의 본문.
-    pub targets: BTreeMap<String, String>,
+    /// 대상(중복 없이).
+    pub targets: BTreeSet<String>,
     /// 셸에 안전하지 않은 이름의 대상이 있던 줄(1부터).
     pub unsafe_lines: Vec<usize>,
 }
@@ -89,8 +91,6 @@ const DIRECTIVES: &[&str] = &[
 struct Line {
     /// 첫 물리 줄의 번호(1부터).
     number: usize,
-    /// 원문(물리 줄들을 `\n` 으로 이은 것) — 정의 본문에 넣는다.
-    raw: String,
     /// `\` 이음을 공백으로 바꾼 것 — 규칙을 읽는다.
     joined: String,
 }
@@ -108,15 +108,12 @@ fn logical_lines(text: &str) -> Vec<Line> {
         };
         match &mut current {
             Some(line) => {
-                line.raw.push('\n');
-                line.raw.push_str(physical);
                 line.joined.push(' ');
                 line.joined.push_str(piece.trim_start());
             }
             None => {
                 current = Some(Line {
                     number: i + 1,
-                    raw: physical.to_owned(),
                     joined: piece.to_owned(),
                 });
             }
@@ -219,14 +216,13 @@ pub fn parse(text: &str) -> Parsed {
         let Some(targets) = rule_targets(&line.joined) else {
             continue;
         };
-        // 규칙 줄과 그 레시피(탭 줄 — 사이의 빈 줄 · 주석 줄은 건너뛴다).
-        let mut body = line.raw.clone();
+        // 그 레시피(탭 줄 — 사이의 빈 줄 · 주석 줄도)를 건너뛴다.
         while i < lines.len() {
             let next = &lines[i];
-            if next.joined.starts_with('\t') {
-                body.push('\n');
-                body.push_str(&next.raw);
-            } else if !(next.joined.trim().is_empty() || next.joined.starts_with('#')) {
+            if !(next.joined.starts_with('\t')
+                || next.joined.trim().is_empty()
+                || next.joined.starts_with('#'))
+            {
                 break;
             }
             i += 1;
@@ -241,11 +237,9 @@ pub fn parse(text: &str) -> Parsed {
                 }
                 continue;
             }
-            let entry = parsed.targets.entry(target.to_owned()).or_default();
-            if !entry.is_empty() {
-                entry.push('\n');
+            if !parsed.targets.contains(target) {
+                parsed.targets.insert(target.to_owned());
             }
-            entry.push_str(&body);
         }
     }
     parsed

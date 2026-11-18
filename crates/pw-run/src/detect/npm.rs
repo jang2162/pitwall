@@ -7,7 +7,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
-use super::{DetectContext, DetectedTask, Found, TaskDetector, file};
+use super::{Budget, DetectContext, DetectedTask, Found, TaskDetector, file, pick_names};
 use crate::config::{RunConfig, RunKindConfig};
 
 pub const ID: &str = "npm";
@@ -35,12 +35,15 @@ impl TaskDetector for NpmDetector {
             return Ok(Found::default());
         };
         let mut found = Found::default();
-        let mut not_text = 0;
-        for (name, body) in &scripts {
-            if !body.is_string() {
-                not_text += 1;
-                continue;
-            }
+        let not_text = scripts.values().filter(|v| !v.is_string()).count();
+        let names = scripts
+            .iter()
+            .filter(|(_, v)| v.is_string())
+            .map(|(k, _)| k.clone());
+        let mut budget = Budget::default();
+        for name in &pick_names(SOURCE, names, &mut found.skipped) {
+            let definition = definition(&scripts, name).unwrap_or_default();
+            budget.take(definition.len())?;
             found.tasks.push(DetectedTask {
                 detector: ID,
                 name: name.clone(),
@@ -56,7 +59,7 @@ impl TaskDetector for NpmDetector {
                     profiles: Default::default(),
                     debug: None,
                 },
-                definition: definition(&scripts, name).unwrap_or_default(),
+                definition,
             });
         }
         if not_text > 0 {
