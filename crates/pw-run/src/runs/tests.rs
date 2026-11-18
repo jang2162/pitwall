@@ -260,6 +260,7 @@ impl Fixture {
             .start(
                 &grant,
                 None,
+                None,
                 &RunStartParams {
                     project_id: self.project.clone(),
                     config_id: id.into(),
@@ -1160,6 +1161,7 @@ async fn closing_a_project_stops_only_its_runs() {
         .start(
             &grant,
             None,
+            None,
             &RunStartParams {
                 project_id: other.clone(),
                 config_id: "job".into(),
@@ -1700,4 +1702,81 @@ async fn an_unreadable_env_file_launches_nothing() {
     assert_eq!(e.code, code::INVALID_PARAMS, "{e:?}");
     assert!(format!("{:?}", e.data).contains(".env.missing"), "{e:?}");
     assert_eq!(f.fake_launcher().calls(), 0);
+}
+
+// ---- M6-02 ⑧: 「사람이 본 구성」 기록(M6-11) ----------------------------------------------------------------------------
+
+/// 창의 `run.start` 는 띄운 값으로 그 구성을 「사람이 본 구성」 으로 기록한다 — 같은 내용이면 같은 해시이고, `.env` 한 줄을 바꾸면
+/// 다시 띄울 때 기록이 바뀐다. 에이전트 갈래는 기록하지 않는다.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_window_start_records_the_configuration_as_seen() {
+    let f = Fixture::fake(RunLimits::default());
+    fs::write(f.root.join(".env.local"), "TOKEN=one\n").unwrap();
+    f.config(
+        &f.root,
+        "dev",
+        "name = \"dev\"\ntype = \"shell\"\ncommand = \"true\"\nenv_file = [\".env.local\"]",
+    );
+    assert_eq!(f.projects.run_seen(&f.project, "dev").unwrap(), None);
+    let mut c = f.client();
+    c.ok::<RunInfo>(
+        "run.start",
+        json!({"projectId": f.project, "configId": "dev"}),
+    )
+    .await;
+    let first = f
+        .projects
+        .run_seen(&f.project, "dev")
+        .unwrap()
+        .expect("recorded");
+    assert_eq!(first.place, pw_core::registry::run_seen::SeenPlace::Run);
+    assert!(f.projects.human_saw(&f.project, "dev", &first.hash));
+
+    c.ok::<RunInfo>(
+        "run.start",
+        json!({"projectId": f.project, "configId": "dev"}),
+    )
+    .await;
+    assert_eq!(
+        f.projects
+            .run_seen(&f.project, "dev")
+            .unwrap()
+            .unwrap()
+            .hash,
+        first.hash
+    );
+
+    fs::write(f.root.join(".env.local"), "TOKEN=two\n").unwrap();
+    c.ok::<RunInfo>(
+        "run.start",
+        json!({"projectId": f.project, "configId": "dev"}),
+    )
+    .await;
+    let changed = f.projects.run_seen(&f.project, "dev").unwrap().unwrap();
+    assert_ne!(changed.hash, first.hash);
+
+    let spec = RunSpec {
+        config: "agent-only".into(),
+        argv: vec!["true".into()],
+        cwd: f.root.clone(),
+        env: BTreeMap::new(),
+        profile: None,
+    };
+    let grant = f.agent_grant(&f.project, spec);
+    f.runs.start_agent(&grant, 0, agent(), None).unwrap();
+    assert_eq!(f.projects.run_seen(&f.project, "agent-only").unwrap(), None);
+}
+
+/// 띄우지 못한 구성(미신뢰 · 없는 프로필)은 기록하지 않는다.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_start_records_nothing() {
+    let f = Fixture::fake(RunLimits::default());
+    f.shell_config("dev", "true");
+    let mut c = f.client();
+    c.error(
+        "run.start",
+        json!({"projectId": f.project, "configId": "dev", "profile": "nope"}),
+    )
+    .await;
+    assert_eq!(f.projects.run_seen(&f.project, "dev").unwrap(), None);
 }

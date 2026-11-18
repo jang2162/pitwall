@@ -50,6 +50,7 @@ use pw_core::bus::{EventBus, Scope};
 use pw_core::config::AppPaths;
 use pw_core::registry::exec::{AgentRunGrant, ExecGrant, RunSpec};
 use pw_core::registry::path::normalize;
+use pw_core::registry::run_seen::SeenBy;
 use pw_core::registry::{Registry, RegistryError};
 use pw_rpc::{RpcError, code};
 use pw_runtime::Runtime;
@@ -476,10 +477,12 @@ impl Runs {
     }
 
     /// 창의 길: 구성 `configId` 를 읽어 띄운다(머리 주석 「띄우기」). 블로킹한다(구성 · 레지스트리 읽기, 로그인 셸 기다리기).
-    /// 미신뢰 프로젝트는 구성을 읽기 전에 거절한다.
+    /// 미신뢰 프로젝트는 구성을 읽기 전에 거절한다. `seen` 이 있으면 띄운 뒤 그 값으로 「사람이 본 구성」 을 기록한다(M6-11 —
+    /// [`Self::record_seen`]).
     pub fn start(
         &self,
         grant: &ExecGrant,
+        seen: Option<SeenBy>,
         window: Option<String>,
         params: &RunStartParams,
     ) -> Result<RunInfo, RpcError> {
@@ -493,6 +496,7 @@ impl Runs {
                 worktree: params.worktree.clone(),
                 size,
                 restart_of: None,
+                seen,
             },
         )
     }
@@ -550,6 +554,7 @@ impl Runs {
         )
         .map_err(RpcError::invalid_params)?;
         let env = crate::shell::child_env(&run_env.apply(&runtime.env));
+        let argv_seen = argv.clone();
         let new = NewRun {
             project_id: project.id.clone(),
             config: loaded.id.clone(),
@@ -566,7 +571,76 @@ impl Runs {
             size: what.size,
             restart_of: what.restart_of,
         };
-        self.start_process(new, argv, env)
+        let info = self.start_process(new, argv, env)?;
+        if let Some(by) = what.seen {
+            self.record_seen(
+                &by,
+                &loaded.id,
+                &place.root,
+                config,
+                &argv_seen,
+                &cwd,
+                &run_env,
+            );
+        }
+        Ok(info)
+    }
+
+    /// 창에서 띄운 구성을 「사람이 본 구성」 으로 기록한다(17-m6-plan M6-02 ⑧ · M6-11): 띄운 값 그대로(argv · 작업 폴더 · M6-03 이 푼
+    /// env · 정의 본문)를 `pw_run::seen::hash` 로 해시해 `Registry::record_run_seen` 에 적는다. 해시를 만들지 못하거나(정의 본문이
+    /// 없는 `mise-task` — M6-05 전) 기록하지 못하면(`readOnly` · `memory`) 건너뛴다 — 실행을 막지 않고, 다음 에이전트 실행이 한 번
+    /// 묻는다.
+    #[allow(clippy::too_many_arguments)] // 해시의 재료 그대로다.
+    fn record_seen(
+        &self,
+        by: &SeenBy,
+        key: &str,
+        root: &Path,
+        config: &crate::config::RunConfig,
+        argv: &[String],
+        cwd: &Path,
+        env: &RunEnv,
+    ) {
+        let Ok(host) = self.inner.host() else {
+            return;
+        };
+        let home = self
+            .inner
+            .runtime
+            .login_shell_env()
+            .0
+            .env
+            .get("HOME")
+            .map(PathBuf::from);
+        let definition = match &config.kind {
+            crate::config::RunKindConfig::Npm { script } => {
+                crate::detect::npm::script_definition(root, cwd, script)
+                    .inspect_err(|why| tracing::debug!(target: "pw_run", key, %why, "cannot read the npm script definition"))
+                    .ok()
+                    .flatten()
+            }
+            _ => None,
+        };
+        let parts = crate::seen::SeenParts {
+            key,
+            root,
+            config,
+            argv,
+            cwd,
+            home: home.as_deref(),
+            env,
+            definition: definition.as_deref(),
+        };
+        match crate::seen::hash(&parts) {
+            Ok(hash) => {
+                if let Err(e) = host.projects.record_run_seen(by, &[(key.to_owned(), hash)]) {
+                    tracing::debug!(target: "pw_run", key, error = %e, "the run started but was not recorded as seen");
+                }
+            }
+            Err(why) => {
+                tracing::debug!(target: "pw_run", key, %why, "the run started but its seen hash could not be made");
+            }
+        }
     }
 
     /// 에이전트의 길(M6-14): 승인을 지난 계획의 `step` 번째 [`RunSpec`] 을 그대로 띄운다(머리 주석 「띄우기」). 구성을 다시 읽지
@@ -809,6 +883,7 @@ impl Runs {
     pub async fn restart(
         &self,
         grant: &ExecGrant,
+        seen: Option<SeenBy>,
         window: Option<String>,
         run_id: &str,
     ) -> Result<RunInfo, RpcError> {
@@ -837,6 +912,7 @@ impl Runs {
                     worktree: worktree.clone(),
                     size,
                     restart_of: Some(run.id.clone()),
+                    seen,
                 },
             ),
             Relaunch::Spec(spec) => this.start_spec(
@@ -905,6 +981,8 @@ struct Relaunched {
     worktree: Option<String>,
     size: (u16, u16),
     restart_of: Option<RunId>,
+    /// 사람이 본 구성으로 기록할 증거(창의 연결). 에이전트 허가로 다시 띄우는 길에는 없다.
+    seen: Option<SeenBy>,
 }
 
 impl Inner {

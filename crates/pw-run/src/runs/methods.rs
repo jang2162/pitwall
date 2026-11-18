@@ -17,6 +17,7 @@ use std::sync::Arc;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use pw_core::registry::exec::{Launch, exec_grant};
+use pw_core::registry::run_seen::{SeenBy, SeenPlace};
 use pw_core::registry::state::scope_may_write;
 use pw_rpc::{ConnectionScope, Router, RpcError, StreamSink, code, rpc_method};
 use serde::{Deserialize, Serialize};
@@ -278,10 +279,12 @@ pub fn register(router: &mut Router, runs: Runs) {
         .unary(RunStart, move |ctx, params: RunStartParams| {
             let runs = start.clone();
             let granted = exec_grant(ctx.scope(), &params.project_id, &Launch::Process);
+            // 사람이 그 프로젝트 창에서 띄운다 — 띄운 값이 「사람이 본 구성」 이 된다(M6-02 ⑧ · M6-11).
+            let seen = SeenBy::window(ctx.scope(), &params.project_id, SeenPlace::Run).ok();
             let window = ctx.window().map(str::to_owned);
             async move {
                 let grant = granted?;
-                blocking(move || runs.start(&grant, window, &params)).await
+                blocking(move || runs.start(&grant, seen, window, &params)).await
             }
         })
         .unary(RunStop, move |ctx, params: RunIdParams| {
@@ -293,8 +296,11 @@ pub fn register(router: &mut Router, runs: Runs) {
             let runs = restart.clone();
             let granted = controlling_project(ctx.scope())
                 .and_then(|project| exec_grant(ctx.scope(), project, &Launch::Process));
+            let seen = controlling_project(ctx.scope())
+                .ok()
+                .and_then(|project| SeenBy::window(ctx.scope(), project, SeenPlace::Run).ok());
             let window = ctx.window().map(str::to_owned);
-            async move { runs.restart(&granted?, window, &params.run_id).await }
+            async move { runs.restart(&granted?, seen, window, &params.run_id).await }
         })
         .unary(RunListMethod, move |ctx, params: RunListParams| {
             let result = if scope_may_write(ctx.scope(), &params.project_id) {
