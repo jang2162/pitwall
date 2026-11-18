@@ -3231,6 +3231,59 @@ fn project_root(
     })
 }
 
+/// [`pw_lsp_servers::LspCommands`] 의 답 시한 — jdtls 의 `vscode.java.startDebugSession` 은 처음 부를 때 플러그인을 띄운다.
+const DEBUG_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// 디버그 세션(M6-17)이 언어 서버가 여는 어댑터(java-debug)를 시작할 때 부른다(17-m6-plan.md M6-19).
+///
+/// (프로젝트, 작업 공간 루트, 서버)가 정확히 맞고 떠 있는 인스턴스에만 보낸다 — 다른 프로젝트 · 같은 저장소의 다른 워크트리에 떠 있는
+/// 같은 서버로 가지 않는다(그 서버가 연 포트에 붙으면 엉뚱한 작업 공간을 디버그한다). 맞는 인스턴스가 없으면(띄우지 않았다 · 미신뢰라
+/// 서버가 없다 · 루트가 하위 폴더다) `None` — 서버를 띄우지 않는다. 루트는 실제 경로로 견준다(인스턴스 키와 같다).
+///
+/// 문서 요청의 가드(「서버가 알린 명령 · 이 창에 내준 명령」 — `edit::execute_command`)를 지나지 않는다: 명령 이름은 내장 확장의
+/// 어댑터 정의(`start.command`)에서 오고, 부르는 쪽은 디버그 허가(`DebugGrant`)를 지난 Host 의 코드다.
+impl pw_lsp_servers::LspCommands for LspManager {
+    fn execute_command<'a>(
+        &'a self,
+        project_id: &'a str,
+        root: &'a Path,
+        server: &'a str,
+        command: &'a str,
+        arguments: Vec<Value>,
+    ) -> pw_lsp_servers::CommandAnswer<'a> {
+        Box::pin(async move {
+            let root = real_path(root)?;
+            let running = {
+                let state = lock(&self.inner.state);
+                state
+                    .instances
+                    .iter()
+                    .find(|(k, i)| {
+                        k.project_id == project_id
+                            && k.server == server
+                            && k.root == root
+                            && i.state.is_running()
+                    })
+                    .and_then(|(_, i)| i.server.clone())
+            }?;
+            let options = RequestOptions {
+                timeout: DEBUG_COMMAND_TIMEOUT,
+                cancel: CancellationToken::new(),
+            };
+            let params = json!({ "command": command, "arguments": arguments });
+            Some(
+                running
+                    .request_raw("workspace/executeCommand", params, options)
+                    .await
+                    .map_err(|e| match e {
+                        RequestError::Server(e) => e.message,
+                        other => other.to_string(),
+                    }),
+            )
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

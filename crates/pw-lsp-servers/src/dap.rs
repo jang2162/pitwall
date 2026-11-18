@@ -12,6 +12,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::path::Path;
 use std::pin::Pin;
 use std::time::Duration;
 
@@ -257,13 +258,16 @@ pub fn add_bundles<'a>(
 pub type CommandAnswer<'a> =
     Pin<Box<dyn Future<Output = Option<Result<Json, String>>> + Send + 'a>>;
 
-/// 떠 있는 언어 서버에 명령을 보내는 곳. 서버 관리자(`pw-lsp`)가 구현하고 디버그 세션(M6-17)이 그 프로젝트 · 워크트리에 맞춰
-/// 붙인다.
+/// 떠 있는 언어 서버에 명령을 보내는 곳. 서버 관리자(`pw-lsp` 의 `LspManager`)가 구현하고 디버그 세션(M6-17)이 부른다.
 pub trait LspCommands: Send + Sync {
-    /// 떠 있는 서버 `server` 에 `workspace/executeCommand { command, arguments }` 를 보내고 답(`result`)을 받는다. 그 서버가 떠 있지
-    /// 않으면 `None`.
+    /// 프로젝트 `project_id` 의 작업 공간 루트 `root` 에 떠 있는 서버 `server` 에 `workspace/executeCommand { command, arguments }`
+    /// 를 보내고 답(`result`)을 받는다. (프로젝트, 루트, 서버)가 정확히 맞는 인스턴스가 떠 있지 않으면 `None` — 다른 프로젝트 ·
+    /// 다른 워크트리의 같은 서버로 가지 않는다(M6-19 — 엉뚱한 jdtls 가 연 포트에 붙지 않게). `project_id` · `root` 는 디버그 세션을
+    /// 연 쪽(허가를 지난 그 프로젝트 · 체크아웃)의 값이다 — 어댑터 정의 · 실행 구성의 값이 아니다.
     fn execute_command<'a>(
         &'a self,
+        project_id: &'a str,
+        root: &'a Path,
         server: &'a str,
         command: &'a str,
         arguments: Vec<Json>,
@@ -321,6 +325,8 @@ impl std::error::Error for AdapterStartError {}
 /// 포트(`127.0.0.1`)에 TCP 로 붙은 연결과 그 포트를 준다. 서버가 떠 있지 않으면 띄우지 않고 거절한다 — 언어 서버를 띄우는 것은
 /// 서버 관리자의 일이고, 디버그 세션이 그 서버의 수명을 쥐지 않는다. `timeout` 은 명령의 답과 연결을 합친 시한이다.
 pub async fn connect_via_language_server(
+    project_id: &str,
+    root: &Path,
     start: &AdapterStart,
     servers: &dyn LspCommands,
     timeout: Duration,
@@ -328,7 +334,7 @@ pub async fn connect_via_language_server(
     let server = start.lsp.name.as_str();
     let work = async {
         let answer = servers
-            .execute_command(server, &start.command, Vec::new())
+            .execute_command(project_id, root, server, &start.command, Vec::new())
             .await
             .ok_or_else(|| AdapterStartError::NotRunning {
                 server: server.to_owned(),

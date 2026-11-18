@@ -313,8 +313,11 @@ pub fn spec(
 }
 
 /// 언어 서버가 여는 어댑터(`start`)의 포트: 떠 있는 그 서버에 `start.command` 를 보내 답한 포트(1 – 65535). 서버가 떠 있지 않거나
-/// 명령 길(`LspCommands`)이 없으면 띄우지 않고 거절한다 — 언어 서버의 수명은 서버 관리자의 것이다.
+/// 명령 길(`LspCommands`)이 없으면 띄우지 않고 거절한다 — 언어 서버의 수명은 서버 관리자의 것이다. `project_id` · `root` 는 세션을
+/// 연 허가(`DebugGrant`)의 것이다 — 그 프로젝트 · 체크아웃의 서버에만 묻는다(M6-19).
 pub async fn language_server_port(
+    project_id: &str,
+    root: &Path,
     setup: &AdapterSetup,
     commands: Option<Arc<dyn LspCommands>>,
     timeout: Duration,
@@ -332,7 +335,7 @@ pub async fn language_server_port(
     let commands = commands.ok_or_else(not_running)?;
     let answer = tokio::time::timeout(
         timeout,
-        commands.execute_command(server, command, Vec::new()),
+        commands.execute_command(project_id, root, server, command, Vec::new()),
     )
     .await
     .map_err(|_| RpcError::internal(format!("`{server}` did not open the debug adapter in time")))?

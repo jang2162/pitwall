@@ -963,11 +963,15 @@ async fn a_failed_start_leaves_an_ended_run_with_the_reason() {
 struct FakeJdtls {
     port: u16,
     asked: Mutex<Vec<(String, String)>>,
+    /// 명령을 받은 (프로젝트, 루트) — 디버그 세션을 연 그 프로젝트 · 체크아웃이어야 한다(M6-19).
+    scope: Mutex<Vec<(String, std::path::PathBuf)>>,
 }
 
 impl pw_lsp_servers::LspCommands for FakeJdtls {
     fn execute_command<'a>(
         &'a self,
+        project_id: &'a str,
+        root: &'a std::path::Path,
         server: &'a str,
         command: &'a str,
         _arguments: Vec<Value>,
@@ -976,6 +980,10 @@ impl pw_lsp_servers::LspCommands for FakeJdtls {
             .lock()
             .unwrap()
             .push((server.to_owned(), command.to_owned()));
+        self.scope
+            .lock()
+            .unwrap()
+            .push((project_id.to_owned(), root.to_owned()));
         Box::pin(async move { (server == "jdtls").then(|| Ok(json!(self.port))) })
     }
 }
@@ -1017,6 +1025,7 @@ async fn a_language_server_adapter_attaches_through_the_port_it_opens() {
     let jdtls = Arc::new(FakeJdtls {
         port,
         asked: Mutex::default(),
+        scope: Mutex::default(),
     });
     f.debugger
         .attach_language_servers(Arc::clone(&jdtls) as Arc<dyn pw_lsp_servers::LspCommands>);
@@ -1027,6 +1036,11 @@ async fn a_language_server_adapter_attaches_through_the_port_it_opens() {
             "jdtls".to_owned(),
             "vscode.java.startDebugSession".to_owned()
         )]
+    );
+    // 명령은 세션을 연 프로젝트 · 그 체크아웃의 루트로 간다(M6-19 — 다른 프로젝트의 jdtls 로 가지 않게).
+    assert_eq!(
+        *jdtls.scope.lock().unwrap(),
+        [(f.project.clone(), f.root.clone())]
     );
     let attach = f.received("attach");
     assert_eq!(attach.last().unwrap()["arguments"], json!({ "port": 5005 }));

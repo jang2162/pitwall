@@ -1262,6 +1262,8 @@ struct FakeServers {
 impl LspCommands for FakeServers {
     fn execute_command<'a>(
         &'a self,
+        _project_id: &'a str,
+        _root: &'a std::path::Path,
         server: &'a str,
         command: &'a str,
         _arguments: Vec<serde_json::Value>,
@@ -1292,10 +1294,15 @@ async fn a_start_adapter_connects_to_the_port_its_language_server_answers() {
         answer: Ok(json!(port)),
         asked: Default::default(),
     };
-    let (got, mut stream) =
-        dap::connect_via_language_server(start, &servers, Duration::from_secs(5))
-            .await
-            .unwrap();
+    let (got, mut stream) = dap::connect_via_language_server(
+        "p",
+        std::path::Path::new("/p"),
+        start,
+        &servers,
+        Duration::from_secs(5),
+    )
+    .await
+    .unwrap();
     assert_eq!(got, port);
     assert_eq!(
         *servers.asked.lock().unwrap(),
@@ -1320,9 +1327,15 @@ async fn a_start_adapter_connects_to_the_port_its_language_server_answers() {
             asked: Default::default(),
         };
         async move {
-            dap::connect_via_language_server(start, &servers, Duration::from_secs(5))
-                .await
-                .map(|(port, _)| port)
+            dap::connect_via_language_server(
+                "p",
+                std::path::Path::new("/p"),
+                start,
+                &servers,
+                Duration::from_secs(5),
+            )
+            .await
+            .map(|(port, _)| port)
         }
     };
     let not_running = connect("kotlin-lsp", Ok(json!(port))).await.unwrap_err();

@@ -237,6 +237,8 @@ impl Debugger {
                 .await?
         };
         let port = adapter::language_server_port(
+            &project_id,
+            &root,
             &prepared.setup,
             self.inner.commands.get().cloned(),
             self.inner.timeouts.connect,

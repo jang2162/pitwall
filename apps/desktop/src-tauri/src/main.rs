@@ -202,6 +202,9 @@ fn local_host_parts(
         Arc::clone(&runtime),
         Arc::clone(&lsp_servers) as Arc<dyn pw_debug::Adapters>,
     );
+    // 언어 서버가 여는 어댑터(java-debug — jdtls 의 `vscode.java.startDebugSession`, M6-19)는 서버 관리자에 명령을 보낸다. 관리자는
+    // 그 세션의 프로젝트 · 루트에 떠 있는 인스턴스에만 보낸다.
+    debugger.attach_language_servers(Arc::new(lsp.clone()) as Arc<dyn pw_lsp_servers::LspCommands>);
     let debugger_methods = debugger.clone();
     // 구문 강조(`syntax.*`). 문법 엔진은 처음 문서를 열 때 만든다.
     let syntax = Arc::new(pw_syntax::Syntax::new(Arc::clone(&extensions)));
