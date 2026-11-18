@@ -38001,23 +38001,23 @@
                 "type": "object"
               },
               {
-                "description": "DB 에 보낼 SQL 문장들(16-m5-plan M5-18 의 `db_execute` 가 채운다 — 꼴은 메인 판정 2026-11-17, M5-14 · M5-18 이 같이\n쓴다). 승인 다이얼로그(M5-14)는 문장마다 등급을 보이고, 등급이 [`SqlGrade::Destructive`] 인 문장이 하나라도 있으면\n연결 이름을 쳐야 허용할 수 있다. `irreversible` 이면 「되돌릴 수 없다」 를 보인다(트랜잭션 밖에서 커밋되는 문장 — MySQL 의\nDDL 등).",
+                "description": "DB 에 보낼 SQL 문장들(16-m5-plan M5-18 의 `db_execute` 가 채운다 — 꼴은 메인 판정 2026-11-17, M5-14 · M5-18 이 같이\n쓴다). 승인 다이얼로그(M5-14)는 문장마다 등급을 보이고, 등급이 [`SqlGrade::Destructive`] 인 문장이 하나라도 있으면\n연결 이름을 쳐야 허용할 수 있다. `irreversible` 이면 「되돌릴 수 없다」 를 보인다(트랜잭션 밖에서 커밋되는 문장 — MySQL 의\nDDL 등).\n\n파일 여럿 · 트랜잭션 방식(17-m6-plan M6-09 ⑥ — 실행 구성의 `sql` 종류, M6-14 · M6-21 이 채운다): `files` 는 읽은 파일들(순서\n대로 — `sql` 글이면 비었다), 문장의 `file` 은 그 목록의 번호다. `transaction` 이 없으면 호출 하나가 트랜잭션 하나다\n(`db_execute`). `keepsOnFailure` 면 「실패해도 앞 파일 · 앞 문장이 남는다」 를 보인다(`per_file` · `none`).",
                 "properties": {
                   "connection": {
                     "$ref": "#/$defs/SqlTarget"
                   },
-                  "file": {
-                    "anyOf": [
-                      {
-                        "$ref": "#/$defs/SqlFile"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "description": "`file` 입력으로 읽은 SQL 이면 그 파일."
+                  "files": {
+                    "description": "읽은 SQL 파일들(순서대로). `sql` 글이면 비었다.",
+                    "items": {
+                      "$ref": "#/$defs/SqlFile"
+                    },
+                    "type": "array"
                   },
                   "irreversible": {
+                    "type": "boolean"
+                  },
+                  "keepsOnFailure": {
+                    "description": "실패해도 앞 파일(`per_file`) · 앞 문장(`none`)이 남는다.",
                     "type": "boolean"
                   },
                   "kind": {
@@ -38029,13 +38029,26 @@
                       "$ref": "#/$defs/SqlStatement"
                     },
                     "type": "array"
+                  },
+                  "transaction": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/SqlPlanTransaction"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "트랜잭션 방식. 없으면 문장 전부가 트랜잭션 하나다."
                   }
                 },
                 "required": [
                   "kind",
                   "connection",
-                  "file",
+                  "files",
                   "statements",
+                  "transaction",
+                  "keepsOnFailure",
                   "irreversible"
                 ],
                 "type": "object"
@@ -38141,9 +38154,38 @@
             ],
             "type": "string"
           },
+          "SqlPlanTransaction": {
+            "description": "실행 구성 `sql` 종류의 트랜잭션 방식(`pw_run::config::SqlTransaction` 과 같은 이름 · 같은 직렬화 — pw-core 는 pw-run 에\n의존하지 않는다).",
+            "oneOf": [
+              {
+                "const": "all",
+                "description": "모든 파일이 트랜잭션 하나.",
+                "type": "string"
+              },
+              {
+                "const": "per_file",
+                "description": "파일마다 하나 — 실패하면 그 파일만 롤백된다.",
+                "type": "string"
+              },
+              {
+                "const": "none",
+                "description": "트랜잭션 없음 — 문장마다 자동 커밋.",
+                "type": "string"
+              }
+            ]
+          },
           "SqlStatement": {
             "description": "문장 하나.",
             "properties": {
+              "file": {
+                "description": "그 문장이 든 파일([`PlanChange::Sql`] 의 `files` 번호). `sql` 글이면 `null`.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "grade": {
                 "$ref": "#/$defs/SqlGrade"
               },
@@ -38167,7 +38209,8 @@
               "index",
               "line",
               "grade",
-              "text"
+              "text",
+              "file"
             ],
             "type": "object"
           },
@@ -42590,6 +42633,38 @@
                   "task"
                 ],
                 "type": "object"
+              },
+              {
+                "description": "SQL files run on a database connection. No process is started: Pitwall runs the statements itself, through the same\npath as the SQL console and `db_execute`, and classifies the files every time it runs them — a file that gains a\nwrite asks again, whatever the configuration says.",
+                "properties": {
+                  "connection": {
+                    "description": "Connection id (`.pitwall/db/<id>.toml`).",
+                    "type": "string"
+                  },
+                  "files": {
+                    "description": "SQL files relative to the project root, run in this order. A file outside the root makes the configuration\nunusable.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "transaction": {
+                    "$ref": "#/$defs/SqlTransaction",
+                    "default": "all",
+                    "description": "How the files are grouped into transactions. A failing statement always stops the run."
+                  },
+                  "type": {
+                    "const": "sql",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "connection",
+                  "files",
+                  "transaction"
+                ],
+                "type": "object"
               }
             ],
             "properties": {
@@ -42722,6 +42797,26 @@
               "args"
             ],
             "type": "object"
+          },
+          "SqlTransaction": {
+            "description": "How an `sql` configuration's files are grouped into transactions.",
+            "oneOf": [
+              {
+                "const": "all",
+                "description": "Every file in one transaction: if any statement fails, nothing of the run is kept.",
+                "type": "string"
+              },
+              {
+                "const": "per_file",
+                "description": "One transaction per file: a failure rolls back that file only — the files before it stay committed.",
+                "type": "string"
+              },
+              {
+                "const": "none",
+                "description": "No transaction: every statement commits on its own, so the statements before a failure stay. For statements that\ncannot run inside a transaction (PostgreSQL `CREATE INDEX CONCURRENTLY`, `VACUUM`).",
+                "type": "string"
+              }
+            ]
           },
           "TaskList": {
             "description": "감지기 하나의 누를 때만 읽는 목록(`run.config.list` 의 `taskLists`). 사람의 누름은 `run.tasks.refresh { detector }`.",
@@ -43096,6 +43191,37 @@
                   "task"
                 ],
                 "type": "object"
+              },
+              {
+                "description": "SQL files run on a database connection. No process is started: Pitwall runs the statements itself, through the same\npath as the SQL console and `db_execute`, and classifies the files every time it runs them — a file that gains a\nwrite asks again, whatever the configuration says.",
+                "properties": {
+                  "connection": {
+                    "description": "Connection id (`.pitwall/db/<id>.toml`).",
+                    "type": "string"
+                  },
+                  "files": {
+                    "description": "SQL files relative to the project root, run in this order. A file outside the root makes the configuration\nunusable.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "transaction": {
+                    "$ref": "#/$defs/SqlTransaction",
+                    "default": "all",
+                    "description": "How the files are grouped into transactions. A failing statement always stops the run."
+                  },
+                  "type": {
+                    "const": "sql",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "connection",
+                  "files"
+                ],
+                "type": "object"
               }
             ],
             "properties": {
@@ -43192,6 +43318,26 @@
               }
             },
             "type": "object"
+          },
+          "SqlTransaction": {
+            "description": "How an `sql` configuration's files are grouped into transactions.",
+            "oneOf": [
+              {
+                "const": "all",
+                "description": "Every file in one transaction: if any statement fails, nothing of the run is kept.",
+                "type": "string"
+              },
+              {
+                "const": "per_file",
+                "description": "One transaction per file: a failure rolls back that file only — the files before it stay committed.",
+                "type": "string"
+              },
+              {
+                "const": "none",
+                "description": "No transaction: every statement commits on its own, so the statements before a failure stay. For statements that\ncannot run inside a transaction (PostgreSQL `CREATE INDEX CONCURRENTLY`, `VACUUM`).",
+                "type": "string"
+              }
+            ]
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -43575,6 +43721,319 @@
         },
         "required": [
           "runId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LaunchedBy": {
+            "description": "실행을 띄운 자리(M6-12 ② · M6-14 ⑦ 이 읽는다 — 사람이 띄운 실행은 에이전트의 정책 자동이 닿지 않는다).",
+            "oneOf": [
+              {
+                "description": "A person, from the project window (`window` is the window label when known).",
+                "properties": {
+                  "kind": {
+                    "const": "window",
+                    "type": "string"
+                  },
+                  "window": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "window"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "An agent, through a run tool (`session` is the MCP session, `client` the agent's client name when it gave one).",
+                "properties": {
+                  "client": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "kind": {
+                    "const": "agent",
+                    "type": "string"
+                  },
+                  "session": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "session",
+                  "client"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "RunExit": {
+            "description": "끝난 꼴.",
+            "properties": {
+              "code": {
+                "description": "끝 코드. 신호로 끝났으면 `null`.",
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "signal": {
+                "description": "끝낸 신호의 이름(예: `Terminated: 15`). 코드로 끝났으면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "code",
+              "signal"
+            ],
+            "type": "object"
+          },
+          "RunState": {
+            "oneOf": [
+              {
+                "enum": [
+                  "running",
+                  "exited"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "stopping",
+                "description": "중지를 보냈고 아직 끝나지 않았다.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "실행 하나의 정보(`run.list` · `run.start` · 이벤트 `run.started` · `run.exited`).",
+        "properties": {
+          "config": {
+            "description": "구성 열쇠(구성 id · 감지된 태스크의 열쇠).",
+            "type": "string"
+          },
+          "cwd": {
+            "description": "작업 폴더(정규화한 절대 경로) — 콘솔의 상대 경로 링크 기준(M6-06 ②).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "endedAt": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "exit": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunExit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "description": "종류: `process`(M6-02) · `sql`(M6-09) · `debug`(M6-17).",
+            "type": "string"
+          },
+          "launchedBy": {
+            "$ref": "#/$defs/LaunchedBy"
+          },
+          "logEnd": {
+            "description": "로그의 끝 오프셋(쓴 바이트 수 전체).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "logStart": {
+            "description": "남은 로그의 첫 오프셋(그 앞은 버려졌다).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "description": "보이는 이름(구성의 `name`).",
+            "type": "string"
+          },
+          "pid": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "restartOf": {
+            "description": "「다시 실행」 으로 이 실행이 이어받은 앞 실행.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runId": {
+            "type": "string"
+          },
+          "startedAt": {
+            "description": "시작 시각(Unix 밀리초).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/$defs/RunState"
+          },
+          "worktree": {
+            "description": "창이 고른 활성 워크트리 꼭대기. 주 체크아웃 · 에이전트가 띄운 실행이면 `null`(에이전트 실행의 작업 폴더는 `cwd`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "runId",
+          "projectId",
+          "config",
+          "name",
+          "kind",
+          "launchedBy",
+          "worktree",
+          "cwd",
+          "profile",
+          "pid",
+          "state",
+          "exit",
+          "startedAt",
+          "endedAt",
+          "restartOf",
+          "logStart",
+          "logEnd"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "run.sql.start": {
+      "description": "`sql` 실행 구성 하나를 돌린다 — 프로세스를 띄우지 않고 그 DB 연결에서(실행 관리자의 실행 하나: 출력은 `run.attach`, 끝은\n`run.exited`, 중지는 `run.stop`). 파일들은 지금 읽어 분류한다. 그 프로젝트의 창이 아닌 연결 · 미신뢰 프로젝트(연결하지\n않는다)는 permission denied, `sql` 이 아닌 구성 · 쓸 수 없는 구성은 invalid params, read-only 연결의 조회 밖 문장 ·\n트랜잭션 제어 문장은 permission denied. 조회가 아닌 문장이 있으면 3001(`data` 는 `RunSqlConfirmRequired`) — 사람이 확인한 뒤\n`confirmed` 를 실어 다시 부른다(파일이 그사이 바뀌었으면 다시 3001). 비밀 · 확인이 필요한 연결은 3101 · 3102.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "DbConfirmed": {
+            "description": "창이 사람의 확인을 받은 증거. `statementsHash` 는 [`code::CONFIRM_REQUIRED`] 가 준 그대로.",
+            "properties": {
+              "grade": {
+                "$ref": "#/$defs/RiskGrade"
+              },
+              "name": {
+                "default": null,
+                "description": "사람이 친 연결 이름(프로덕션 파괴 등급).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "statementsHash": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "grade",
+              "statementsHash"
+            ],
+            "type": "object"
+          },
+          "RiskGrade": {
+            "description": "Risk grade. The order is the order of risk — several statements combine to the highest grade (`Ord::max`).",
+            "oneOf": [
+              {
+                "enum": [
+                  "ddl"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "read",
+                "description": "A read — does not change data.",
+                "type": "string"
+              },
+              {
+                "const": "write",
+                "description": "A write (a key-scoped `UPDATE` · `INSERT`, a `SELECT` with a side-effecting function, transaction control,\netc.).",
+                "type": "string"
+              },
+              {
+                "const": "unboundedWrite",
+                "description": "An unscoped write (an `UPDATE` · `DELETE` with no WHERE or an always-true one).",
+                "type": "string"
+              },
+              {
+                "const": "destructive",
+                "description": "Destructive (`DROP` · `TRUNCATE`). A statement the parser could not read also lands here (reason `unparsed`,\nfail-closed).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "configId": {
+            "description": "`sql` 구성 id(`.pitwall/run/<id>.toml`).",
+            "type": "string"
+          },
+          "confirmed": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DbConfirmed"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "앞 호출의 `3001` 을 사람이 확인한 증거(`risk-confirm.tsx` 가 돌려준 그대로)."
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "창의 활성 워크트리 꼭대기(`ActiveWorktree.top`). 구성 · 연결 설정 · 파일을 그 워크트리에서 읽는다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "configId"
         ],
         "type": "object"
       },
@@ -44622,6 +45081,38 @@
                   "task"
                 ],
                 "type": "object"
+              },
+              {
+                "description": "SQL files run on a database connection. No process is started: Pitwall runs the statements itself, through the same\npath as the SQL console and `db_execute`, and classifies the files every time it runs them — a file that gains a\nwrite asks again, whatever the configuration says.",
+                "properties": {
+                  "connection": {
+                    "description": "Connection id (`.pitwall/db/<id>.toml`).",
+                    "type": "string"
+                  },
+                  "files": {
+                    "description": "SQL files relative to the project root, run in this order. A file outside the root makes the configuration\nunusable.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "transaction": {
+                    "$ref": "#/$defs/SqlTransaction",
+                    "default": "all",
+                    "description": "How the files are grouped into transactions. A failing statement always stops the run."
+                  },
+                  "type": {
+                    "const": "sql",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "connection",
+                  "files",
+                  "transaction"
+                ],
+                "type": "object"
               }
             ],
             "properties": {
@@ -44712,6 +45203,26 @@
               "args"
             ],
             "type": "object"
+          },
+          "SqlTransaction": {
+            "description": "How an `sql` configuration's files are grouped into transactions.",
+            "oneOf": [
+              {
+                "const": "all",
+                "description": "Every file in one transaction: if any statement fails, nothing of the run is kept.",
+                "type": "string"
+              },
+              {
+                "const": "per_file",
+                "description": "One transaction per file: a failure rolls back that file only — the files before it stay committed.",
+                "type": "string"
+              },
+              {
+                "const": "none",
+                "description": "No transaction: every statement commits on its own, so the statements before a failure stay. For statements that\ncannot run inside a transaction (PostgreSQL `CREATE INDEX CONCURRENTLY`, `VACUUM`).",
+                "type": "string"
+              }
+            ]
           },
           "TaskList": {
             "description": "감지기 하나의 누를 때만 읽는 목록(`run.config.list` 의 `taskLists`). 사람의 누름은 `run.tasks.refresh { detector }`.",
@@ -45152,6 +45663,38 @@
                   "task"
                 ],
                 "type": "object"
+              },
+              {
+                "description": "SQL files run on a database connection. No process is started: Pitwall runs the statements itself, through the same\npath as the SQL console and `db_execute`, and classifies the files every time it runs them — a file that gains a\nwrite asks again, whatever the configuration says.",
+                "properties": {
+                  "connection": {
+                    "description": "Connection id (`.pitwall/db/<id>.toml`).",
+                    "type": "string"
+                  },
+                  "files": {
+                    "description": "SQL files relative to the project root, run in this order. A file outside the root makes the configuration\nunusable.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "transaction": {
+                    "$ref": "#/$defs/SqlTransaction",
+                    "default": "all",
+                    "description": "How the files are grouped into transactions. A failing statement always stops the run."
+                  },
+                  "type": {
+                    "const": "sql",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "connection",
+                  "files",
+                  "transaction"
+                ],
+                "type": "object"
               }
             ],
             "properties": {
@@ -45409,6 +45952,26 @@
               "files"
             ],
             "type": "object"
+          },
+          "SqlTransaction": {
+            "description": "How an `sql` configuration's files are grouped into transactions.",
+            "oneOf": [
+              {
+                "const": "all",
+                "description": "Every file in one transaction: if any statement fails, nothing of the run is kept.",
+                "type": "string"
+              },
+              {
+                "const": "per_file",
+                "description": "One transaction per file: a failure rolls back that file only — the files before it stay committed.",
+                "type": "string"
+              },
+              {
+                "const": "none",
+                "description": "No transaction: every statement commits on its own, so the statements before a failure stay. For statements that\ncannot run inside a transaction (PostgreSQL `CREATE INDEX CONCURRENTLY`, `VACUUM`).",
+                "type": "string"
+              }
+            ]
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -45712,6 +46275,37 @@
                   "task"
                 ],
                 "type": "object"
+              },
+              {
+                "description": "SQL files run on a database connection. No process is started: Pitwall runs the statements itself, through the same\npath as the SQL console and `db_execute`, and classifies the files every time it runs them — a file that gains a\nwrite asks again, whatever the configuration says.",
+                "properties": {
+                  "connection": {
+                    "description": "Connection id (`.pitwall/db/<id>.toml`).",
+                    "type": "string"
+                  },
+                  "files": {
+                    "description": "SQL files relative to the project root, run in this order. A file outside the root makes the configuration\nunusable.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "transaction": {
+                    "$ref": "#/$defs/SqlTransaction",
+                    "default": "all",
+                    "description": "How the files are grouped into transactions. A failing statement always stops the run."
+                  },
+                  "type": {
+                    "const": "sql",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "connection",
+                  "files"
+                ],
+                "type": "object"
               }
             ],
             "properties": {
@@ -45808,6 +46402,26 @@
               }
             },
             "type": "object"
+          },
+          "SqlTransaction": {
+            "description": "How an `sql` configuration's files are grouped into transactions.",
+            "oneOf": [
+              {
+                "const": "all",
+                "description": "Every file in one transaction: if any statement fails, nothing of the run is kept.",
+                "type": "string"
+              },
+              {
+                "const": "per_file",
+                "description": "One transaction per file: a failure rolls back that file only — the files before it stay committed.",
+                "type": "string"
+              },
+              {
+                "const": "none",
+                "description": "No transaction: every statement commits on its own, so the statements before a failure stay. For statements that\ncannot run inside a transaction (PostgreSQL `CREATE INDEX CONCURRENTLY`, `VACUUM`).",
+                "type": "string"
+              }
+            ]
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",

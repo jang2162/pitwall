@@ -1182,6 +1182,14 @@ export type UnaryMethods = {
 	 */
 	"run.restart": { params: RunIdParams; result: RunInfo };
 	/**
+	 * `sql` 실행 구성 하나를 돌린다 — 프로세스를 띄우지 않고 그 DB 연결에서(실행 관리자의 실행 하나: 출력은 `run.attach`, 끝은
+	 * `run.exited`, 중지는 `run.stop`). 파일들은 지금 읽어 분류한다. 그 프로젝트의 창이 아닌 연결 · 미신뢰 프로젝트(연결하지
+	 * 않는다)는 permission denied, `sql` 이 아닌 구성 · 쓸 수 없는 구성은 invalid params, read-only 연결의 조회 밖 문장 ·
+	 * 트랜잭션 제어 문장은 permission denied. 조회가 아닌 문장이 있으면 3001(`data` 는 `RunSqlConfirmRequired`) — 사람이 확인한 뒤
+	 * `confirmed` 를 실어 다시 부른다(파일이 그사이 바뀌었으면 다시 3001). 비밀 · 확인이 필요한 연결은 3101 · 3102.
+	 */
+	"run.sql.start": { params: RunSqlStartParams; result: RunInfo };
+	/**
 	 * 실행 구성 하나를 띄운다(PTY — 런타임 환경 위에 구성의 `env_file` · `env` · 프로필). 실행은 Host 의 것이라 이 연결이 닫혀도 돈다 — 출력은
 	 * `run.attach`, 끝은 이벤트 `run.exited`. 그 프로젝트의 창이 아닌 연결이면 permission denied, 미신뢰 프로젝트면 띄우지 않고
 	 * permission denied(`data.reason = "untrusted"`), 작업 폴더가 푼 뒤에 바뀌었거나 사라졌으면 띄우지 않고 permission
@@ -1674,6 +1682,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"run.list": {"name":"run.list","kind":"unary","tier":"read","roles":["owner"],"params":"RunListParams","output":"RunList","doc":" 그 프로젝트의 실행(실행 중 · 남은 끝난 실행)과 상태 · 끝 코드.\n","mcp":null,"fileScope":false},
 	"run.resize": {"name":"run.resize","kind":"unary","tier":"write","roles":["owner"],"params":"RunResizeParams","output":"()","doc":" 실행 콘솔의 PTY 크기를 바꾼다. 0 인 크기는 invalid params.\n","mcp":null,"fileScope":false},
 	"run.restart": {"name":"run.restart","kind":"unary","tier":"exec","roles":["owner"],"params":"RunIdParams","output":"RunInfo","doc":" 다시 실행: 중지하고 프로세스 트리가 끝난 것을 본 뒤 같은 구성을 새 실행으로 띄운다(`restartOf` 가 앞 실행).\n","mcp":null,"fileScope":false},
+	"run.sql.start": {"name":"run.sql.start","kind":"unary","tier":"exec","roles":["owner"],"params":"RunSqlStartParams","output":"RunInfo","doc":" `sql` 실행 구성 하나를 돌린다 — 프로세스를 띄우지 않고 그 DB 연결에서(실행 관리자의 실행 하나: 출력은 `run.attach`, 끝은\n `run.exited`, 중지는 `run.stop`). 파일들은 지금 읽어 분류한다. 그 프로젝트의 창이 아닌 연결 · 미신뢰 프로젝트(연결하지\n 않는다)는 permission denied, `sql` 이 아닌 구성 · 쓸 수 없는 구성은 invalid params, read-only 연결의 조회 밖 문장 ·\n 트랜잭션 제어 문장은 permission denied. 조회가 아닌 문장이 있으면 3001(`data` 는 `RunSqlConfirmRequired`) — 사람이 확인한 뒤\n `confirmed` 를 실어 다시 부른다(파일이 그사이 바뀌었으면 다시 3001). 비밀 · 확인이 필요한 연결은 3101 · 3102.\n","mcp":null,"fileScope":false},
 	"run.start": {"name":"run.start","kind":"unary","tier":"exec","roles":["owner"],"params":"RunStartParams","output":"RunInfo","doc":" 실행 구성 하나를 띄운다(PTY — 런타임 환경 위에 구성의 `env_file` · `env` · 프로필). 실행은 Host 의 것이라 이 연결이 닫혀도 돈다 — 출력은\n `run.attach`, 끝은 이벤트 `run.exited`. 그 프로젝트의 창이 아닌 연결이면 permission denied, 미신뢰 프로젝트면 띄우지 않고\n permission denied(`data.reason = \"untrusted\"`), 작업 폴더가 푼 뒤에 바뀌었거나 사라졌으면 띄우지 않고 permission\n denied(`data.reason = \"cwd_changed\"`), 없는 구성은 not found, 쓸 수 없는 구성 · 프로젝트 밖 작업 폴더 · 없는\n 프로필 · 읽지 못한 `env_file` 은 invalid params.\n","mcp":null,"fileScope":false},
 	"run.stop": {"name":"run.stop","kind":"unary","tier":"exec","roles":["owner"],"params":"RunIdParams","output":"RunInfo","doc":" 실행을 중지한다 — 프로세스 세션 전체에 SIGTERM, 5초 안에 끝나지 않은 것은 SIGKILL(compose 는 SIGINT 를 먼저). 기다리지\n 않는다(끝나면 `run.exited`). 이미 끝난 실행이면 아무것도 하지 않는다.\n","mcp":null,"fileScope":false},
 	"run.tasks.refresh": {"name":"run.tasks.refresh","kind":"unary","tier":"exec","roles":["owner"],"params":"RunTasksRefreshParams","output":"RunTasksRefreshed","doc":" 사람이 「태스크 읽기」 를 눌렀다 — gradle · maven 은 빌드 스크립트를 돌려 태스크 목록을 읽고 캐시한다(Host 작업으로 진행 ·\n 취소가 보인다). 그 프로젝트 창의 연결만(아니면 permission denied), 미신뢰 프로젝트면 permission denied\n (`data.reason = \"untrusted\"`), 모르는 감지기는 invalid params, 취소되면 cancelled.\n","mcp":null,"fileScope":false},
@@ -8271,10 +8280,18 @@ export type PlanChange =
  *  쓴다). 승인 다이얼로그(M5-14)는 문장마다 등급을 보이고, 등급이 [`SqlGrade::Destructive`] 인 문장이 하나라도 있으면
  *  연결 이름을 쳐야 허용할 수 있다. `irreversible` 이면 「되돌릴 수 없다」 를 보인다(트랜잭션 밖에서 커밋되는 문장 — MySQL 의
  *  DDL 등).
+ * 
+ *  파일 여럿 · 트랜잭션 방식(17-m6-plan M6-09 ⑥ — 실행 구성의 `sql` 종류, M6-14 · M6-21 이 채운다): `files` 는 읽은 파일들(순서
+ *  대로 — `sql` 글이면 비었다), 문장의 `file` 은 그 목록의 번호다. `transaction` 이 없으면 호출 하나가 트랜잭션 하나다
+ *  (`db_execute`). `keepsOnFailure` 면 「실패해도 앞 파일 · 앞 문장이 남는다」 를 보인다(`per_file` · `none`).
  */
 { kind: "sql"; connection: SqlTarget; 
-/**  `file` 입력으로 읽은 SQL 이면 그 파일. */
-file: SqlFile | null; statements: SqlStatement[]; irreversible: boolean };
+/**  읽은 SQL 파일들(순서대로). `sql` 글이면 비었다. */
+files: SqlFile[]; statements: SqlStatement[]; 
+/**  트랜잭션 방식. 없으면 문장 전부가 트랜잭션 하나다. */
+transaction: SqlPlanTransaction | null; 
+/**  실패해도 앞 파일(`per_file`) · 앞 문장(`none`)이 남는다. */
+keepsOnFailure: boolean; irreversible: boolean };
 
 export type PlanFormat = "json" | "text";
 
@@ -8870,7 +8887,22 @@ export type RunKindConfig =
 /**  Compose file relative to the project root. Without it compose finds its own. */
 file?: string | null } | 
 /**  `mise run <task>`. */
-{ type: "mise-task"; task: string };
+{ type: "mise-task"; task: string } | 
+/**
+ *  SQL files run on a database connection. No process is started: Pitwall runs the statements itself, through the same
+ *  path as the SQL console and `db_execute`, and classifies the files every time it runs them — a file that gains a
+ *  write asks again, whatever the configuration says.
+ */
+{ type: "sql"; 
+/**  Connection id (`.pitwall/db/<id>.toml`). */
+connection: string; 
+/**
+ *  SQL files relative to the project root, run in this order. A file outside the root makes the configuration
+ *  unusable.
+ */
+files: string[]; 
+/**  How the files are grouped into transactions. A failing statement always stops the run. */
+transaction?: SqlTransaction };
 
 export type RunList = {
 	/**  실행 중인 것과 남은 끝난 것(프로젝트마다 최근 20개), 시작 순. */
@@ -8893,6 +8925,48 @@ export type RunResizeParams = {
 	runId: string,
 	cols: number,
 	rows: number,
+};
+
+/**
+ *  [`code::CONFIRM_REQUIRED`] 의 `data` — 실행 구성 `sql` 종류의 확인(머리 주석 ③). `request` 를 SQL 콘솔의 위험 확인
+ *  (`risk-confirm.tsx`)에 그대로 넘기고 `sql` 을 그 글로 준다.
+ */
+export type RunSqlConfirmRequired = {
+	/**  문장 번호는 파일을 이어 0 부터 센 것, 범위는 `sql` 기준이다. `statementsHash` 를 `confirmed` 로 그대로 돌려준다. */
+	request: DbConfirmRequired,
+	connection: RunSqlConnection,
+	files: RunSqlFile[],
+	transaction: SqlTransaction,
+	/**  파일들을 줄바꿈 하나로 이은 글(보이기만 한다 — 실행은 Host 가 다시 읽은 글로 한다). */
+	sql: string,
+};
+
+/**  확인하는 연결. */
+export type RunSqlConnection = {
+	id: string,
+	name: string,
+	production: boolean,
+	readOnly: boolean,
+};
+
+/**  확인하는 파일 하나. */
+export type RunSqlFile = {
+	/**  프로젝트 루트 기준 경로. */
+	path: string,
+	/**  읽은 바이트의 sha256(hex). */
+	contentHash: string,
+	/**  이 파일의 문장 수. */
+	statements: number,
+};
+
+export type RunSqlStartParams = {
+	projectId: string,
+	/**  창의 활성 워크트리 꼭대기(`ActiveWorktree.top`). 구성 · 연결 설정 · 파일을 그 워크트리에서 읽는다. */
+	worktree?: string | null,
+	/**  `sql` 구성 id(`.pitwall/run/<id>.toml`). */
+	configId: string,
+	/**  앞 호출의 `3001` 을 사람이 확인한 증거(`risk-confirm.tsx` 가 돌려준 그대로). */
+	confirmed?: DbConfirmed | null,
 };
 
 export type RunStartParams = {
@@ -9514,6 +9588,18 @@ export type SqlInsertTextResult = {
 	text: string,
 };
 
+/**
+ *  실행 구성 `sql` 종류의 트랜잭션 방식(`pw_run::config::SqlTransaction` 과 같은 이름 · 같은 직렬화 — pw-core 는 pw-run 에
+ *  의존하지 않는다).
+ */
+export type SqlPlanTransaction = 
+/**  모든 파일이 트랜잭션 하나. */
+"all" | 
+/**  파일마다 하나 — 실패하면 그 파일만 롤백된다. */
+"per_file" | 
+/**  트랜잭션 없음 — 문장마다 자동 커밋. */
+"none";
+
 /**  Range in the source text, in UTF-16 units; `to` is exclusive (like CodeMirror's `from` · `to`). */
 export type SqlRange = {
 	from: number,
@@ -9538,6 +9624,8 @@ export type SqlStatement = {
 	line: number,
 	grade: SqlGrade,
 	text: string,
+	/**  그 문장이 든 파일([`PlanChange::Sql`] 의 `files` 번호). `sql` 글이면 `null`. */
+	file: number | null,
 };
 
 export type SqlStatementAtParams = {
@@ -9564,6 +9652,18 @@ export type SqlTarget = {
 	production: boolean,
 	readOnly: boolean,
 };
+
+/**  How an `sql` configuration's files are grouped into transactions. */
+export type SqlTransaction = 
+/**  Every file in one transaction: if any statement fails, nothing of the run is kept. */
+"all" | 
+/**  One transaction per file: a failure rolls back that file only — the files before it stay committed. */
+"per_file" | 
+/**
+ *  No transaction: every statement commits on its own, so the statements before a failure stay. For statements that
+ *  cannot run inside a transaction (PostgreSQL `CREATE INDEX CONCURRENTLY`, `VACUUM`).
+ */
+"none";
 
 /**  libpq 의 `sslmode` 뜻 그대로(결정 M3-D10). 드라이버마다 받는 값은 [`crate::Capabilities::ssl_modes`]. */
 export type SslMode = 
