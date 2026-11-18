@@ -112,6 +112,10 @@ import { AgentActivityToolWindow } from "../mcp/agent-activity";
 import { McpApprovals } from "../mcp/approvals-host";
 import { McpStatus } from "../mcp/mcp-status";
 import { RuntimeStatus } from "../runtime/runtime-status";
+import { useRunClosePrompt } from "../run/run-close";
+import { RunFeature } from "../run/run-feature";
+import { windowRuns } from "../run/run-tabs";
+import { RunToolWindow } from "../run/run-tool-window";
 import {
   STATUS_SLOTS,
   StatusBar,
@@ -171,6 +175,7 @@ const TOOL_WINDOWS: Readonly<Record<string, ComponentType<IDockviewPanelProps>>>
   notifications: NotificationsToolWindow,
   problems: ProblemsToolWindow,
   project: FileTreeToolWindow,
+  run: RunToolWindow,
   searchResults: SearchResultsToolWindow,
   structure: StructureToolWindow,
   terminal: TerminalToolWindow,
@@ -771,6 +776,7 @@ function ProjectWindowBody({
   const apiRef = useRef<DockviewApi>(undefined);
   apiRef.current = api;
   const unsaved = useUnsavedPrompt();
+  const runClose = useRunClosePrompt(windowRuns(), client, projectId);
   const workspace = useWindowEditor(projectId, log, unsaved.ask);
   const actions = useMemo(
     () =>
@@ -808,16 +814,19 @@ function ProjectWindowBody({
   const session = useRef<WorktreeSession>(undefined);
   // 마지막으로 만든 세션. 해제돼도 남긴다 — 다음 세션이 그 처리 끝을 기다린다(worktree-session.ts 의 `after`).
   const lastSession = useRef<WorktreeSession>(undefined);
-  // 창을 닫기 전(닫기 단추 · ⌘W · 앱 종료) 미저장 편집을 묻고, 닫을 것이면 탭 묶음 · 레이아웃을 마저 쓴다.
+  // 창을 닫기 전(닫기 단추 · ⌘W · 앱 종료) 남은 실행(M6-06 ⑥ — 닫으면 Host 가 끝낸다)과 미저장 편집을 묻고, 닫을 것이면 탭
+  // 묶음 · 레이아웃을 마저 쓴다. 실행을 먼저 묻는다 — 거기서 취소하면 미저장 대화상자를 지나지 않는다.
+  const confirmRunsClose = runClose.confirm;
   useEffect(
     () =>
       guardClose?.(async () => {
+        if (!(await confirmRunsClose())) return false;
         if (!(await workspace.confirmWindowClose())) return false;
         session.current?.flush();
         await projectState.store.flush(CLOSE_FLUSH_LIMIT_MS);
         return true;
       }),
-    [guardClose, workspace, projectState.store],
+    [guardClose, workspace, projectState.store, confirmRunsClose],
   );
   useEffect(() => {
     const flush = () => {
@@ -937,6 +946,7 @@ function ProjectWindowBody({
           {projectId !== undefined && <ProjectRuntimeActions projectId={projectId} />}
           {projectId !== undefined && <RuntimeStatus projectId={projectId} />}
           {projectId !== undefined && <McpStatus projectId={projectId} />}
+          {projectId !== undefined && <RunFeature projectId={projectId} />}
           {projectId !== undefined && (
             <DbStatus projectId={projectId} workspace={workspace} api={api} />
           )}
@@ -955,6 +965,7 @@ function ProjectWindowBody({
           {switcher.element}
           {editorOperations}
           {unsaved.element}
+          {runClose.element}
           {/* 상태바(22px) 위에 띄운다. */}
           <Toaster theme={appearance} position="bottom-right" offset={{ bottom: 30, right: 12 }} />
         </div>

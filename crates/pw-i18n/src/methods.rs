@@ -234,6 +234,7 @@ mod tests {
                 "builtin:i18n-default/i18n/ko/mcp.ftl",
                 "builtin:i18n-default/i18n/ko/menu.ftl",
                 "builtin:i18n-default/i18n/ko/project.ftl",
+                "builtin:i18n-default/i18n/ko/run.ftl",
                 "builtin:i18n-default/i18n/ko/welcome.ftl",
                 "builtin:i18n-default/i18n/en/app.ftl",
                 "builtin:i18n-default/i18n/en/db-connection.ftl",
@@ -253,6 +254,7 @@ mod tests {
                 "builtin:i18n-default/i18n/en/mcp.ftl",
                 "builtin:i18n-default/i18n/en/menu.ftl",
                 "builtin:i18n-default/i18n/en/project.ftl",
+                "builtin:i18n-default/i18n/en/run.ftl",
                 "builtin:i18n-default/i18n/en/welcome.ftl",
             ]
         );

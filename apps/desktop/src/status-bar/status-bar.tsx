@@ -57,6 +57,9 @@ export const STATUS_SLOTS = {
   problems: { side: "right", order: 50 },
   /** 활성 탭 문서의 언어 서버 이름 · 상태(M4-17, src/lsp/lsp-status.tsx). 10-ui §2.4 그림의 「Kotlin LSP ✓」 — 문제 수 다음, 작업 앞. */
   lsp: { side: "right", order: 75 },
+  /** 이 프로젝트에서 도는 실행 수 「▶ 실행 2」 — 0 이면 없다. 누르면 「실행」 툴 윈도우(17-m6-plan M6-06 ⑦, src/run/run-feature.tsx).
+   * 포트(M6-08)는 이 항목 안에 그린다(src/run/run-ports.tsx). 백그라운드 작업 앞. */
+  run: { side: "right", order: 90 },
   /** 백그라운드 작업(F11-5). */
   tasks: { side: "right", order: 100 },
   /** 커서 줄:열 · 선택 길이(M1-18). */

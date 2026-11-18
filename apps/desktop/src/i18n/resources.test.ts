@@ -1,4 +1,4 @@
-// 빠진 번역을 잡는다: 내장 언어(ko · en)가 같은 메시지 집합을 갖는지, 화면 코드(welcome · layout · settings · file-tree · search · structure · file-window · git/gutter · git/log · git/merge · git/commit · git/history · db/safety(strings · access-strings) · db/grid · db/explorer · db/connection · db/redis · mcp 의 strings.ts ·
+// 빠진 번역을 잡는다: 내장 언어(ko · en)가 같은 메시지 집합을 갖는지, 화면 코드(welcome · layout · settings · file-tree · search · structure · file-window · git/gutter · git/log · git/merge · git/commit · git/history · db/safety(strings · access-strings) · db/grid · db/explorer · db/connection · db/redis · mcp · run 의 strings.ts ·
 // git/branch-strings.ts · app-strings.ts)와 네이티브 메뉴 · 대화상자 · OS 창 제목(src-tauri/src/menu.rs · shell_command.rs · windows.rs)이 쓰는 id 가
 // 두 언어에 모두 있고 오류 없이 만들어지는지. 폴백(en)이 빠진 메시지를 덮어 화면에서는
 // 티가 나지 않으므로 여기서 언어마다 따로 본다.
@@ -30,6 +30,7 @@ import { gitMergeStrings } from "../git/merge/strings";
 import { PANELS } from "../layout/project-layout";
 import { projectStrings } from "../layout/strings";
 import { mcpStrings } from "../mcp/strings";
+import { runStrings } from "../run/strings";
 import { findStrings } from "../search/strings";
 import { structureStrings } from "../structure/strings";
 import { settingsStrings } from "../settings/strings";
@@ -103,6 +104,16 @@ describe("built-in translations", () => {
     callAll(settingsStrings(t));
     callAll(toolsStrings(t));
     callAll(mcpStrings(t));
+    callAll(runStrings(t));
+    for (const state of ["running", "stopping", "exited"] as const) runStrings(t).state(state);
+    for (const exit of [
+      { code: 0, signal: null },
+      { code: null, signal: "Terminated: 15" },
+    ]) {
+      runStrings(t).exit(exit);
+      runStrings(t).exitedLine(exit);
+    }
+    for (const count of [1, 3]) runStrings(t).close.title(count);
     callAll(fileTreeStrings(t));
     callAll(findStrings(t));
     callAll(structureStrings(t));
