@@ -331,6 +331,12 @@ fn local_host_parts(
                 paths: config.paths.clone(),
                 projects: projects.clone(),
             });
+            // 프로세스를 띄우는 태스크 감지(mise · gradle · maven — M6-05)는 신뢰한 프로젝트에서 그 런타임 환경으로 돌고, 「태스크
+            // 읽기」 는 Host 작업(진행 · 취소)이다.
+            run_configs.attach_detect(pw_run::config::methods::DetectHost::new(
+                Arc::clone(&runtime),
+                host.tasks().clone(),
+            ));
             // 감지 출처(`package.json` · `Makefile` …)가 바뀌면 그 프로젝트의 감지만 다시 하고 달라졌으면 `config.changed` 를 낸다.
             tauri::async_runtime::spawn(pw_run::detect::follow_files(
                 pw_run::detect::subscribe_files(host.bus()),

@@ -285,6 +285,12 @@ fn detectors_do_not_spawn_directly() {
         ("just.rs", include_str!("just.rs")),
         ("compose.rs", include_str!("compose.rs")),
         ("watch.rs", include_str!("watch.rs")),
+        // 프로세스를 띄우는 감지기(M6-05)도 `DetectExec` 로만 띄운다 — 띄우는 곳은 `exec.rs` 하나다.
+        ("mise.rs", include_str!("mise.rs")),
+        ("gradle.rs", include_str!("gradle.rs")),
+        ("maven.rs", include_str!("maven.rs")),
+        ("cache.rs", include_str!("cache.rs")),
+        ("refresh.rs", include_str!("refresh.rs")),
     ];
     for (name, text) in sources {
         // 주석(머리 주석이 「`std::process` 를 부르지 않는다」 고 적는다)은 보지 않는다.

@@ -1,0 +1,7 @@
+[
+  {
+    "name": "deploy",
+    "description": "Deploy it",
+    "source": "/sandbox/proj/mise-tasks/deploy"
+  }
+]

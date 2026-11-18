@@ -20,11 +20,17 @@
 //!   정의를 만들며, 만드는 **도중에** 정의 합계를 [`Budget`]([`MAX_DEFINITION_BYTES`])으로 센다 — 넘는 순간 그 감지기를 까닭으로
 //!   비운다. 다 만든 뒤 자르지 않는다.
 
+pub mod cache;
 pub mod compose;
+pub mod exec;
 pub mod file;
+pub mod gradle;
 pub mod just;
 pub mod make;
+pub mod maven;
+pub mod mise;
 pub mod npm;
+pub mod refresh;
 pub mod watch;
 
 use std::collections::BTreeSet;
@@ -66,6 +72,11 @@ pub fn parse_key(key: &str) -> Option<(&str, &str)> {
 pub trait DetectExec: Send + Sync {
     /// `argv` 를 `cwd` 에서 돌려 표준 출력을 준다. 실패 · 거절은 까닭.
     fn output(&self, detector: &str, argv: &[String], cwd: &Path) -> Result<String, String>;
+
+    /// 누를 때만 읽는 태스크 목록(gradle · maven)의 캐시 폴더(`$DATA/projects/<id>/` — [`cache`]). 없으면 그 목록은 늘 「읽기 전」 이다.
+    fn cache_dir(&self) -> Option<&Path> {
+        None
+    }
 }
 
 /// 아무것도 띄우지 않는 실행기 — 부르면 거절이다. 프로세스를 띄우는 감지기가 없는 동안(M6-05 전)의 기본값.
@@ -94,6 +105,41 @@ pub struct Found {
     pub tasks: Vec<DetectedTask>,
     /// 감지에서 뺀 태스크의 까닭(이름이 셸에 안전하지 않다 등). 파일 내용을 싣지 않는다.
     pub skipped: Vec<String>,
+    /// 누를 때만 읽는 목록(gradle · maven)의 상태 — 그 감지기만 채운다. 창(M6-07)이 「태스크 읽기」 · 「다시 읽기」 를 보인다.
+    pub list: Option<TaskListState>,
+}
+
+/// 누를 때만 읽는 태스크 목록의 상태(결정 M6-D8 · D70).
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    specta::Type,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum TaskListState {
+    /// 아직 읽지 않았다 — 흔한 태스크만 보인다.
+    NotRead,
+    /// 읽은 목록이 보인다(빌드 파일이 그때와 같다).
+    Read,
+    /// 읽은 뒤 빌드 파일 · 런타임 원천 파일이 바뀌었다 — 흔한 태스크만 보이고 다시 읽어야 한다.
+    Stale,
+}
+
+/// 감지기 하나의 누를 때만 읽는 목록(`run.config.list` 의 `taskLists`). 사람의 누름은 `run.tasks.refresh { detector }`.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskList {
+    pub detector: String,
+    pub state: TaskListState,
 }
 
 /// 감지기. [`DETECTORS`] 에 하나씩 둔다.
@@ -102,16 +148,26 @@ pub trait TaskDetector: Sync {
     fn id(&self) -> &'static str;
     /// 감지 출처가 될 수 있는 루트의 파일 이름. 파일 감시가 이 이름이 바뀌면 다시 감지한다.
     fn sources(&self) -> &'static [&'static str];
+    /// 파일 감시: 이 경로가 바뀌면 다시 감지해 볼 만한가. 기본은 파일 이름이 [`Self::sources`] 에 있는가(어느 깊이든).
+    fn watches(&self, path: &Path) -> bool {
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|name| self.sources().contains(&name))
+    }
     /// 감지. 출처 파일이 없으면 빈 [`Found`]. 실패(읽을 수 없음 · 형식 오류)는 까닭 — 그 감지기만 빈다.
     fn detect(&self, cx: &DetectContext<'_>) -> Result<Found, String>;
 }
 
-/// 감지기 목록 — 목록의 순서가 감지 결과의 순서다. M6-05 가 mise · gradle · maven 을 더한다.
+/// 감지기 목록 — 목록의 순서가 감지 결과의 순서다. 앞의 넷은 파일만 읽고(M6-04), 뒤의 셋은 프로세스를 띄운다(M6-05 — mise 는
+/// 신뢰한 프로젝트에서 목록마다, gradle · maven 은 사람이 「태스크 읽기」 를 누를 때만).
 pub static DETECTORS: &[&dyn TaskDetector] = &[
     &npm::NpmDetector,
     &make::MakeDetector,
     &just::JustDetector,
     &compose::ComposeDetector,
+    &mise::MiseDetector,
+    &gradle::GradleDetector,
+    &maven::MavenDetector,
 ];
 
 /// 감지된 태스크 하나.
@@ -157,6 +213,8 @@ pub struct Detection {
     /// [`DETECTORS`] 순서, 감지기 안에서는 이름순.
     pub tasks: Vec<DetectedTask>,
     pub problems: Vec<DetectProblem>,
+    /// 누를 때만 읽는 목록의 상태(감지기 순서).
+    pub lists: Vec<TaskList>,
 }
 
 impl Detection {
@@ -221,6 +279,12 @@ pub fn detect_with(
             }
         }
         out.problems.extend(found.skipped.into_iter().map(problem));
+        if let Some(state) = found.list {
+            out.lists.push(TaskList {
+                detector: detector.id().to_owned(),
+                state,
+            });
+        }
         if invalid > 0 {
             out.problems.push(problem(format!(
                 "skipped {invalid} task(s) that cannot be run as a configuration (a name starting with `-` and the like)"
@@ -237,6 +301,31 @@ pub fn detect_with(
         out.tasks.extend(tasks);
     }
     out
+}
+
+/// 누를 때만 읽는 목록(gradle · maven)을 캐시에서 — 지금 빌드 파일의 열쇠로 읽은 목록이 있으면 그것, 없으면 `None`(부른 쪽이 정적
+/// 목록을 쓴다). 상태는 `found.list` 에, 열쇠를 낼 수 없는 까닭은 `found.skipped` 에 남긴다. 프로세스를 띄우지 않는다.
+pub(crate) fn pressed_list(
+    cx: &DetectContext<'_>,
+    detector: &str,
+    kind: cache::BuildFiles,
+    found: &mut Found,
+) -> Option<Vec<String>> {
+    let lookup = match cx.exec.cache_dir() {
+        None => Ok(cache::Lookup::Missing),
+        Some(dir) => cache::lookup(dir, detector, || cache::key(cx.root, kind)),
+    };
+    let (state, names) = match lookup {
+        Ok(cache::Lookup::Hit(names)) => (TaskListState::Read, Some(names)),
+        Ok(cache::Lookup::Stale) => (TaskListState::Stale, None),
+        Ok(cache::Lookup::Missing) => (TaskListState::NotRead, None),
+        Err(reason) => {
+            found.skipped.push(reason);
+            (TaskListState::Stale, None)
+        }
+    };
+    found.list = Some(state);
+    names
 }
 
 /// 정의 본문의 합계 예산 — 감지기 하나가 정의를 만드는 동안 쓴 바이트를 센다.
@@ -350,5 +439,7 @@ pub(crate) fn lines_list(lines: &[usize]) -> String {
     out.join(", ")
 }
 
+#[cfg(test)]
+mod process_tests;
 #[cfg(test)]
 mod tests;

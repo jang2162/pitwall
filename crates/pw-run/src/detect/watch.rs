@@ -7,13 +7,13 @@ use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use pw_core::bus::{EventBus, Filter, Received, Scope, Subscription};
 use pw_core::config::ConfigChanged;
 use serde::Deserialize;
 
-use super::{DETECTORS, Detection, NoExec, detect};
+use super::{DETECTORS, DetectExec, Detection, NoExec, detect};
 
 /// 감지가 달라졌을 때 내는 `config.changed` 의 `changed` 항목. 창은 이것을 받으면 `run.config.list` 를 다시 부른다.
 pub const CHANGED_KEY: &str = "run/detected";
@@ -22,10 +22,15 @@ const FS_CHANGED: &str = "fs.changed";
 
 type SeenKey = (String, Option<String>);
 
+/// 프로젝트 id → 그 프로젝트의 감지 실행기(신뢰 판정을 지나는 것 — M6-05 `exec::TrustedExec`).
+pub type ExecFor = Arc<dyn Fn(&str) -> Box<dyn DetectExec> + Send + Sync>;
+
 /// 목록을 부른 (프로젝트, 워크트리)마다 (루트, 마지막 감지의 지문).
 #[derive(Default)]
 pub struct Seen {
     entries: Mutex<HashMap<SeenKey, (PathBuf, u64)>>,
+    /// 다시 감지할 때 쓰는 실행기 — 목록과 같은 것이어야 지문이 같다. 붙기 전에는 [`NoExec`].
+    exec: OnceLock<ExecFor>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -44,10 +49,26 @@ pub fn fingerprint(detection: &Detection) -> u64 {
         problem.detector.hash(&mut h);
         problem.reason.hash(&mut h);
     }
+    for list in &detection.lists {
+        list.detector.hash(&mut h);
+        list.state.hash(&mut h);
+    }
     h.finish()
 }
 
 impl Seen {
+    /// 다시 감지할 때의 실행기를 붙인다(목록 `run.config.list` 와 같은 것). 두 번째부터는 무시한다.
+    pub fn set_exec(&self, exec: ExecFor) {
+        let _ = self.exec.set(exec);
+    }
+
+    fn exec_for(&self, project_id: &str) -> Box<dyn DetectExec> {
+        match self.exec.get() {
+            Some(f) => f(project_id),
+            None => Box::new(NoExec),
+        }
+    }
+
     /// 목록이 감지한 결과를 기억한다.
     pub fn remember(
         &self,
@@ -74,7 +95,8 @@ impl Seen {
             .collect();
         let mut changed = Vec::new();
         for (key, root) in targets {
-            let print = fingerprint(&detect(&root, &NoExec));
+            let exec = self.exec_for(&key.0);
+            let print = fingerprint(&detect(&root, exec.as_ref()));
             let mut entries = lock(&self.entries);
             if let Some((_, old)) = entries.get_mut(&key)
                 && *old != print
@@ -89,11 +111,9 @@ impl Seen {
     }
 }
 
-/// 감지 출처 파일인가(이름으로 — 루트 아래의 같은 이름이면 다시 감지해 봐도 값이 같아 알리지 않는다).
+/// 감지 출처 파일인가(감지기마다 [`super::TaskDetector::watches`] — 루트 아래의 같은 이름이면 다시 감지해 봐도 값이 같아 알리지 않는다).
 pub fn is_source(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|name| DETECTORS.iter().any(|d| d.sources().contains(&name)))
+    DETECTORS.iter().any(|d| d.watches(path))
 }
 
 /// 파일 감시 이벤트 구독(모든 프로젝트의 `fs.changed`). Host 를 만든 직후에 연다.

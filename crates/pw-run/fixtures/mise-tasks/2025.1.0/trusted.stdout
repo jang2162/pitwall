@@ -1,0 +1,22 @@
+[
+  {
+    "name": "build",
+    "description": "Build the app",
+    "source": "/sandbox/proj/mise.toml"
+  },
+  {
+    "name": "deploy",
+    "description": "Deploy it",
+    "source": "/sandbox/proj/mise-tasks/deploy"
+  },
+  {
+    "name": "lint",
+    "description": "",
+    "source": "/sandbox/proj/mise.toml"
+  },
+  {
+    "name": "test:unit",
+    "description": "Unit tests",
+    "source": "/sandbox/proj/mise.toml"
+  }
+]

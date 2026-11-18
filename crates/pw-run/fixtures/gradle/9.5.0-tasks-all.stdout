@@ -1,0 +1,108 @@
+
+------------------------------------------------------------
+Tasks runnable from root project 'demo'
+------------------------------------------------------------
+
+Application tasks
+-----------------
+app:run - Runs this project as a JVM application
+
+Build tasks
+-----------
+app:assemble - Assembles the outputs of this project.
+lib:assemble - Assembles the outputs of this project.
+app:build - Assembles and tests this project.
+lib:build - Assembles and tests this project.
+app:buildDependents - Assembles and tests this project and all projects that depend on it.
+lib:buildDependents - Assembles and tests this project and all projects that depend on it.
+app:buildNeeded - Assembles and tests this project and all projects it depends on.
+lib:buildNeeded - Assembles and tests this project and all projects it depends on.
+app:classes - Assembles main classes.
+lib:classes - Assembles main classes.
+app:clean - Deletes the build directory.
+lib:clean - Deletes the build directory.
+app:jar - Assembles a jar archive containing the classes of the 'main' feature.
+lib:jar - Assembles a jar archive containing the classes of the 'main' feature.
+app:testClasses - Assembles test classes.
+lib:testClasses - Assembles test classes.
+
+Build Setup tasks
+-----------------
+init - Initializes a new Gradle build.
+updateDaemonJvm - Generates or updates the Gradle Daemon JVM criteria.
+wrapper - Generates Gradle wrapper files.
+
+Custom tasks
+------------
+hello - Says hello
+
+Distribution tasks
+------------------
+app:assembleDist - Assembles the main distributions
+app:distTar - Bundles the project as a distribution.
+app:distZip - Bundles the project as a distribution.
+app:installDist - Installs the project as a distribution as-is.
+
+Documentation tasks
+-------------------
+app:javadoc - Generates Javadoc API documentation for the 'main' feature.
+lib:javadoc - Generates Javadoc API documentation for the 'main' feature.
+
+Help tasks
+----------
+artifactTransforms - Displays the Artifact Transforms that can be executed in root project 'demo'.
+app:artifactTransforms - Displays the Artifact Transforms that can be executed in project ':app'.
+lib:artifactTransforms - Displays the Artifact Transforms that can be executed in project ':lib'.
+buildEnvironment - Displays all buildscript dependencies declared in root project 'demo'.
+app:buildEnvironment - Displays all buildscript dependencies declared in project ':app'.
+lib:buildEnvironment - Displays all buildscript dependencies declared in project ':lib'.
+dependencies - Displays all dependencies declared in root project 'demo'.
+app:dependencies - Displays all dependencies declared in project ':app'.
+lib:dependencies - Displays all dependencies declared in project ':lib'.
+dependencyInsight - Displays the insight into a specific dependency in root project 'demo'.
+app:dependencyInsight - Displays the insight into a specific dependency in project ':app'.
+lib:dependencyInsight - Displays the insight into a specific dependency in project ':lib'.
+help - Displays a help message.
+app:help - Displays a help message.
+lib:help - Displays a help message.
+javaToolchains - Displays the detected java toolchains.
+app:javaToolchains - Displays the detected java toolchains.
+lib:javaToolchains - Displays the detected java toolchains.
+kotlinDslAccessorsReport - Prints the Kotlin code for accessing the currently available project extensions.
+app:kotlinDslAccessorsReport - Prints the Kotlin code for accessing the currently available project extensions.
+lib:kotlinDslAccessorsReport - Prints the Kotlin code for accessing the currently available project extensions.
+outgoingVariants - Displays the outgoing variants of root project 'demo'.
+app:outgoingVariants - Displays the outgoing variants of project ':app'.
+lib:outgoingVariants - Displays the outgoing variants of project ':lib'.
+projects - Displays the sub-projects of root project 'demo'.
+app:projects - Displays the sub-projects of project ':app'.
+lib:projects - Displays the sub-projects of project ':lib'.
+properties - Displays the properties of root project 'demo'.
+app:properties - Displays the properties of project ':app'.
+lib:properties - Displays the properties of project ':lib'.
+resolvableConfigurations - Displays the configurations that can be resolved in root project 'demo'.
+app:resolvableConfigurations - Displays the configurations that can be resolved in project ':app'.
+lib:resolvableConfigurations - Displays the configurations that can be resolved in project ':lib'.
+tasks - Displays the tasks runnable from root project 'demo' (some of the displayed tasks may belong to subprojects).
+app:tasks - Displays the tasks runnable from project ':app'.
+lib:tasks - Displays the tasks runnable from project ':lib'.
+
+Verification tasks
+------------------
+app:check - Runs all checks.
+lib:check - Runs all checks.
+app:test - Runs the test suite.
+lib:test - Runs the test suite.
+
+Other tasks
+-----------
+app:compileJava - Compiles main Java source.
+lib:compileJava - Compiles main Java source.
+app:compileTestJava - Compiles test Java source.
+lib:compileTestJava - Compiles test Java source.
+prepareKotlinBuildScriptModel
+app:processResources - Processes main resources.
+lib:processResources - Processes main resources.
+app:processTestResources - Processes test resources.
+lib:processTestResources - Processes test resources.
+app:startScripts - Creates OS specific scripts to run the project as a JVM application.

@@ -36,10 +36,34 @@ pub enum RunError {
 /// `command` 를 띄워 끝날 때까지(최대 `timeout`, 그 전에 `cancel` 이 오면 그만) 기다린다. stdin · stdout · stderr 와 세션은 여기서 정한다.
 #[cfg(unix)]
 pub fn run(
+    command: Command,
+    timeout: Duration,
+    limit: usize,
+    cancel: &Cancel,
+) -> Result<Output, RunError> {
+    run_with(command, timeout, limit, cancel, false)
+}
+
+/// [`run`] 과 같되, 자식이 스스로 끝나도 그 세션(프로세스 그룹)에 남은 프로세스를 함께 끝낸다 — 자식이 띄워 두고 끝난 데몬 ·
+/// 백그라운드 프로세스가 남지 않는다(태스크 감지의 `gradle` · `mvn` — 17-m6-plan M6-05). 새 세션을 스스로 만든 손자(`setsid`)는
+/// 그 그룹 밖이라 닿지 않는다.
+#[cfg(unix)]
+pub fn run_in_session(
+    command: Command,
+    timeout: Duration,
+    limit: usize,
+    cancel: &Cancel,
+) -> Result<Output, RunError> {
+    run_with(command, timeout, limit, cancel, true)
+}
+
+#[cfg(unix)]
+fn run_with(
     mut command: Command,
     timeout: Duration,
     limit: usize,
     cancel: &Cancel,
+    reap_session: bool,
 ) -> Result<Output, RunError> {
     use std::fs::File;
     use std::io::Read as _;
@@ -141,7 +165,7 @@ pub fn run(
         }
     };
     drop(pipes);
-    if outcome.is_err() || exited.is_none() {
+    if outcome.is_err() || exited.is_none() || reap_session {
         // 시간을 넘겼거나 상한을 넘겼다. 세션째 끝낸다 — setsid 로 자식 pid 가 그룹 id 다.
         // SAFETY: killpg(2) 는 신호를 보낼 뿐이다.
         unsafe {
@@ -160,6 +184,17 @@ pub fn run(
         stdout,
         stderr,
     })
+}
+
+/// Windows: 세션이 없어 [`run`] 과 같다(자식만 죽인다).
+#[cfg(not(unix))]
+pub fn run_in_session(
+    command: Command,
+    timeout: Duration,
+    limit: usize,
+    cancel: &Cancel,
+) -> Result<Output, RunError> {
+    run(command, timeout, limit, cancel)
 }
 
 /// Windows: 읽기 스레드 둘과 끝 확인으로 같은 일을 한다(세션 대신 자식만 죽인다).
@@ -302,6 +337,47 @@ mod tests {
             "{:?}",
             started.elapsed()
         );
+    }
+
+    /// 세션째 거두는 길은 자식이 스스로 끝나도 그 그룹에 남은 손자(SIGHUP 무시)를 끝낸다. [`run`] 은 남긴다.
+    #[test]
+    fn run_in_session_reaps_what_the_child_left_behind() {
+        let tmp = tempfile::tempdir().unwrap();
+        for (reap, survives) in [(true, false), (false, true)] {
+            let pidfile = tmp.path().join(format!("pid-{reap}"));
+            let script = format!(
+                "(trap '' HUP; exec sleep 30) > /dev/null 2>&1 & echo $! > '{}'; printf done",
+                pidfile.display()
+            );
+            let runner = if reap { run_in_session } else { run };
+            let out = runner(
+                sh(&script),
+                Duration::from_secs(5),
+                1024,
+                &Cancel::default(),
+            )
+            .unwrap();
+            assert_eq!(out.stdout, b"done");
+            let pid: i32 = std::fs::read_to_string(&pidfile)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            // SAFETY: 신호 0 은 프로세스가 있는지만 본다.
+            let alive = || unsafe { libc::kill(pid, 0) } == 0;
+            while alive() && !survives {
+                assert!(Instant::now() < deadline, "the grandchild {pid} survived");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if survives {
+                assert!(alive(), "run() is not expected to reap the session");
+                // SAFETY: 시험이 띄운 손자만 끝낸다.
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
+            }
+        }
     }
 
     #[test]

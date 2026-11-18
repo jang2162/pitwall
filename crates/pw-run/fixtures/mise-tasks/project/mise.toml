@@ -1,0 +1,20 @@
+[env]
+GREETING = "hello"
+
+[tasks.build]
+description = "Build the app"
+run = "echo building"
+depends = ["lint"]
+
+[tasks.lint]
+run = ["echo lint one", "echo lint two"]
+env = { STRICT = "1" }
+
+[tasks."test:unit"]
+description = "Unit tests"
+run = "echo unit"
+dir = "sub"
+
+[tasks.secret]
+hide = true
+run = "echo hidden"

@@ -6,20 +6,28 @@
 //! - 쓰기(`save` · `delete`)는 그 프로젝트 창의 연결만이다(`scope_may_write` — 다른 프로젝트 창 · Host · 파일 범위 · 에이전트
 //!   범위 연결은 permission denied). 목록은 어느 연결이든 읽는다(`db.connection.list` 와 같다).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
+use pw_core::bus::Scope;
 use pw_core::config::AppPaths;
-use pw_core::registry::state::scope_may_write;
+use pw_core::registry::exec::{Launch, exec_grant};
+use pw_core::registry::state::{PROJECTS_DIR, scope_may_write, valid_id};
 use pw_core::registry::{Registry, RegistryError};
+use pw_core::task::{TaskProgress, TaskSpawner, TaskStatus};
 use pw_rpc::{ConnectionScope, Router, RpcError, code, rpc_method};
+use pw_runtime::{Cancel, Runtime};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::RunConfig;
 use super::read::{RunConfigLayer, RunConfigPlace, UnusableRunConfig, read};
 use super::write::{RunConfigLocation, check_id, file_of, plan};
-use crate::detect::{self, DetectProblem, NoExec, Seen};
+use crate::detect::exec::{AUTOMATIC, EnvSource, ExecLimits, PRESSED, TrustedExec};
+use crate::detect::refresh::{RunTasksRefresh, RunTasksRefreshParams, RunTasksRefreshed};
+use crate::detect::{
+    self, DetectExec, DetectProblem, NoExec, Seen, TaskList, cache, gradle, maven, mise,
+};
 
 #[derive(
     Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
@@ -75,6 +83,9 @@ pub struct RunConfigList {
     /// 감지기마다의 실패 · 감지에서 뺀 태스크의 까닭. 실패한 감지기의 태스크는 `detected` 에 없다.
     #[serde(default)]
     pub detect_problems: Vec<DetectProblem>,
+    /// 사람이 「태스크 읽기」 를 눌러야 채워지는 목록(gradle · maven)의 상태 — 창이 그 단추를 보인다(`run.tasks.refresh`).
+    #[serde(default)]
+    pub task_lists: Vec<TaskList>,
     /// 구성 폴더 자체를 읽지 못한 까닭. 그 폴더의 구성은 목록에 없다.
     pub problem: Option<String>,
 }
@@ -168,12 +179,56 @@ pub struct HostParts {
     pub projects: Registry,
 }
 
+/// 프로세스를 띄우는 감지(M6-05)에 Host 를 만든 뒤 붙이는 것 — 런타임 환경과 Host 작업.
+#[derive(Clone)]
+pub struct DetectHost {
+    /// 그 프로젝트 · 작업 폴더의 런타임 환경.
+    pub env: EnvSource,
+    /// 「태스크 읽기」 를 Host 작업(상태바 진행 · 취소)으로 띄운다.
+    pub tasks: TaskSpawner,
+}
+
+impl DetectHost {
+    pub fn new(runtime: Arc<Runtime>, tasks: TaskSpawner) -> Self {
+        Self {
+            env: Arc::new(move |project, dir| runtime.env(project, dir).env.clone()),
+            tasks,
+        }
+    }
+}
+
 /// 실행 구성 RPC 의 서비스.
 #[derive(Default)]
 pub struct RunConfigs {
     host: OnceLock<HostParts>,
     /// 목록이 감지한 결과의 지문 — 파일 감시가 감지만 다시 해 달라졌을 때 알린다([`detect::follow_files`]).
     seen: Arc<Seen>,
+    /// 프로세스를 띄우는 감지의 자리. 붙기 전에는 그 감지기들이 아무것도 띄우지 않는다([`NoExec`]).
+    detect: OnceLock<DetectHost>,
+}
+
+/// 그 프로젝트의 신뢰 판정을 지나는 감지 실행기. 캐시 폴더는 `$DATA/projects/<id>/`.
+fn trusted_exec(
+    parts: &HostParts,
+    detect: &DetectHost,
+    project_id: &str,
+    limits: ExecLimits,
+) -> TrustedExec {
+    let projects = parts.projects.clone();
+    let exec = TrustedExec::new(
+        project_id,
+        Arc::new(move |id| projects.is_trusted(id)),
+        Arc::clone(&detect.env),
+        limits,
+    );
+    match cache_dir(&parts.paths, project_id) {
+        Some(dir) => exec.with_cache_dir(dir),
+        None => exec,
+    }
+}
+
+fn cache_dir(paths: &AppPaths, project_id: &str) -> Option<PathBuf> {
+    valid_id(project_id).then(|| paths.data.join(PROJECTS_DIR).join(project_id))
 }
 
 impl RunConfigs {
@@ -189,6 +244,30 @@ impl RunConfigs {
     /// 감지 기억 — [`detect::follow_files`] 에 넘긴다.
     pub fn seen(&self) -> Arc<Seen> {
         Arc::clone(&self.seen)
+    }
+
+    /// 프로세스를 띄우는 감지(mise · gradle · maven)를 붙인다 — [`Self::attach`] 뒤에 부른다. 두 번째부터는 무시한다.
+    pub fn attach_detect(&self, detect: DetectHost) {
+        if self.detect.set(detect.clone()).is_err() {
+            return;
+        }
+        let Some(parts) = self.host.get().cloned() else {
+            tracing::warn!(target: "pw_run", "run configs: detection attached before the host; file watch re-detection runs no process");
+            return;
+        };
+        self.seen.set_exec(Arc::new(move |project: &str| {
+            Box::new(trusted_exec(&parts, &detect, project, AUTOMATIC)) as Box<dyn DetectExec>
+        }));
+    }
+
+    /// 목록 · 감시가 쓰는 감지 실행기(자동 감지의 상한).
+    fn exec(&self, project_id: &str, limits: ExecLimits) -> Box<dyn DetectExec> {
+        match (self.host.get(), self.detect.get()) {
+            (Some(parts), Some(detect)) => {
+                Box::new(trusted_exec(parts, detect, project_id, limits))
+            }
+            _ => Box::new(NoExec),
+        }
     }
 
     pub(crate) fn host(&self) -> Result<&HostParts, RpcError> {
@@ -212,7 +291,8 @@ impl RunConfigs {
     pub fn list(&self, params: &RunConfigListParams) -> Result<RunConfigList, RpcError> {
         let place = self.place(&params.project_id, params.worktree.as_deref())?;
         let set = read(&place);
-        let detection = detect::detect(&place.root, &NoExec);
+        let exec = self.exec(&params.project_id, AUTOMATIC);
+        let detection = detect::detect(&place.root, exec.as_ref());
         self.seen.remember(
             &params.project_id,
             params.worktree.as_deref(),
@@ -230,18 +310,103 @@ impl RunConfigs {
                 })
                 .collect(),
             unusable: set.unusable,
-            detected: detection
-                .tasks
-                .into_iter()
-                .map(|t| DetectedRunTask {
-                    key: t.key(),
-                    detector: t.detector.to_owned(),
-                    source: t.source.display().to_string(),
-                    config: t.config,
-                })
-                .collect(),
+            detected: listed(detection.tasks),
             detect_problems: detection.problems,
+            task_lists: detection.lists,
             problem: set.problem,
+        })
+    }
+
+    /// `run.tasks.refresh`(머리 주석은 [`crate::detect::refresh`]).
+    pub async fn refresh(
+        self: &Arc<Self>,
+        scope: &ConnectionScope,
+        params: RunTasksRefreshParams,
+    ) -> Result<RunTasksRefreshed, RpcError> {
+        exec_grant(scope, &params.project_id, &Launch::Process)?;
+        let detector: &'static str = match params.detector.as_str() {
+            gradle::ID => gradle::ID,
+            maven::ID => maven::ID,
+            mise::ID => mise::ID,
+            other => {
+                return Err(RpcError::new(
+                    code::INVALID_PARAMS,
+                    format!(
+                        "`{other}` is not a detector whose tasks can be read (gradle, maven, mise)"
+                    ),
+                ));
+            }
+        };
+        let this = Arc::clone(self);
+        let (project_id, worktree) = (params.project_id.clone(), params.worktree.clone());
+        let (place, parts) = blocking(move || {
+            let place = this.place(&project_id, worktree.as_deref())?;
+            Ok((place, this.host()?.clone()))
+        })
+        .await?;
+        let id = params.project_id.clone();
+        if !parts.projects.is_trusted(&id) {
+            return Err(untrusted(&id));
+        }
+        let detect = self
+            .detect
+            .get()
+            .cloned()
+            .ok_or_else(|| RpcError::internal("task detection is not attached to a host"))?;
+        let cancel = Cancel::default();
+        let exec = trusted_exec(&parts, &detect, &id, PRESSED).with_cancel(cancel.clone());
+        let root = place.root.clone();
+        let tasks = detect.tasks.scoped(
+            Scope::Project(id.clone()),
+            tokio_util::sync::CancellationToken::new(),
+        );
+        let title = match detector {
+            gradle::ID => "Reading Gradle tasks",
+            maven::ID => "Reading Maven goals",
+            _ => "Reading mise tasks",
+        };
+        let mut handle = tasks.spawn(title, move |ctx| async move {
+            ctx.report(TaskProgress {
+                done: 0,
+                total: None,
+                message: Some(title.to_owned()),
+            });
+            // 작업이 취소돼 이 future 가 버려지면 도는 프로세스를 세션째 끝낸다.
+            let _stop = CancelOnDrop(cancel);
+            tokio::task::spawn_blocking(move || read_tasks(detector, &root, &exec))
+                .await
+                .map_err(|e| e.to_string())?
+        });
+        // 요청이 버려지면(창이 닫힘 · 취소) 작업도 멈춘다.
+        let _cancel_with_request = handle.cancel_on_drop();
+        let status = handle.wait().await;
+        let error = match status {
+            TaskStatus::Completed => None,
+            TaskStatus::Failed { error } => Some(error),
+            TaskStatus::Cancelled => {
+                return Err(RpcError::new(
+                    code::CANCELLED,
+                    "reading the tasks was cancelled",
+                ));
+            }
+            TaskStatus::Running => Some("the task ended without a result".to_owned()),
+        };
+        let this = Arc::clone(self);
+        let project_id = params.project_id.clone();
+        let root = place.root.clone();
+        let detection = blocking(move || {
+            let exec = this.exec(&project_id, AUTOMATIC);
+            let all: &[&dyn detect::TaskDetector] = detect::DETECTORS;
+            let only: Vec<&dyn detect::TaskDetector> =
+                all.iter().copied().filter(|d| d.id() == detector).collect();
+            Ok(detect::detect_with(&only, &root, exec.as_ref()))
+        })
+        .await?;
+        Ok(RunTasksRefreshed {
+            detected: listed(detection.tasks),
+            detect_problems: detection.problems,
+            task_lists: detection.lists,
+            error,
         })
     }
 
@@ -302,6 +467,51 @@ impl RunConfigs {
         }
         Ok(RunConfigDeleted { paths })
     }
+}
+
+/// 감지된 태스크 → 목록의 항목.
+fn listed(tasks: Vec<detect::DetectedTask>) -> Vec<DetectedRunTask> {
+    tasks
+        .into_iter()
+        .map(|t| DetectedRunTask {
+            key: t.key(),
+            detector: t.detector.to_owned(),
+            source: t.source.display().to_string(),
+            config: t.config,
+        })
+        .collect()
+}
+
+/// 버려질 때 취소를 보낸다.
+struct CancelOnDrop(Cancel);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
+/// 「태스크 읽기」 의 몸통(블로킹): gradle · maven 은 읽어서 캐시에 쓰고, mise 는 아무것도 하지 않는다(감지가 늘 새로 읽는다).
+fn read_tasks(detector: &str, root: &Path, exec: &TrustedExec) -> Result<(), String> {
+    let (names, kind) = match detector {
+        gradle::ID => (gradle::read(root, exec)?, cache::BuildFiles::Gradle),
+        maven::ID => (maven::read(root, exec)?, cache::BuildFiles::Maven),
+        _ => return Ok(()),
+    };
+    let dir = exec
+        .cache_dir()
+        .ok_or_else(|| "this project has no folder for the task list".to_owned())?;
+    let key = cache::key(root, kind)?;
+    cache::store(dir, detector, &key, &names)
+}
+
+/// 미신뢰 프로젝트의 거절 — M6-02 의 실행 거절(`pw_run::runs::untrusted`)과 같은 꼴. 뒤에 병합되는 쪽이 하나로 합친다.
+fn untrusted(project_id: &str) -> RpcError {
+    RpcError::new(
+        code::PERMISSION_DENIED,
+        "trust the project before Pitwall runs its build scripts to read tasks",
+    )
+    .with_data(json!({ "projectId": project_id, "reason": "untrusted" }))
 }
 
 fn exists(path: &Path) -> bool {
@@ -371,6 +581,13 @@ pub fn register(router: &mut Router, configs: Arc<RunConfigs>) {
             move |ctx, params: RunConfigDeleteParams| {
                 let (c, scope) = (Arc::clone(&delete), ctx.scope().clone());
                 blocking(move || c.delete(&scope, &params))
+            },
+        )
+        .unary(
+            RunTasksRefresh,
+            move |ctx, params: RunTasksRefreshParams| {
+                let (c, scope) = (Arc::clone(&configs), ctx.scope().clone());
+                async move { c.refresh(&scope, params).await }
             },
         );
     // MCP 툴 메서드(M6-13 — `run_config_upsert` · `run_config_delete`).
