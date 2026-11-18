@@ -16,7 +16,8 @@
 //!   요소가 심링크로 바뀌었으면 띄우지 않는다(M6-10 리뷰에서 넘김 ⑦).
 //!
 //! 두 길 모두 **미신뢰 프로젝트는 띄우지 않는다**(메인 판정 M6-P6 — `PERMISSION_DENIED`, `data.reason = "untrusted"`). 환경은 런타임
-//! 환경(03 「런타임 환경 (D26)」) 위에 구성의 env 를 얹고 PTY 로 띄운다(메인 판정 M6-P2).
+//! 환경(03 「런타임 환경 (D26)」) 위에 구성의 env(`crate::env::RunEnv` — `env_file` → `env` → 프로필, M6-03)를 얹고 PTY 로
+//! 띄운다(메인 판정 M6-P2). 에이전트 갈래는 허가의 `RunSpec.env`(계획 때 푼 값)를 얹는다.
 //!
 //! # 실행의 종류
 //!
@@ -58,6 +59,7 @@ use tokio::sync::watch;
 
 use crate::config::argv::{ArgvContext, argv};
 use crate::config::{RunConfigPlace, read};
+use crate::env::RunEnv;
 use crate::pty::Ending;
 
 pub use log::{LogSlice, Meter, RunLog};
@@ -532,6 +534,9 @@ impl Runs {
                 cwd.display()
             )));
         }
+        // 신뢰는 위에서 봤다 — `.env` 는 그 뒤에 읽는다(M6-03 머리 주석). 오류 글에는 값이 없다(이름 · 경로 · 줄만).
+        let run_env = RunEnv::resolve(config, what.profile.as_deref(), &place.root)
+            .map_err(|e| RpcError::invalid_params(e.to_string()))?;
         let runtime = self.inner.runtime.env(&project.id, &cwd);
         let login_shell = crate::shell::default_argv(&runtime.env);
         let argv = argv(
@@ -544,8 +549,7 @@ impl Runs {
             },
         )
         .map_err(RpcError::invalid_params)?;
-        let mut env = crate::shell::child_env(&runtime.env);
-        overlay(&mut env, &config_env(config, what.profile.as_deref()));
+        let env = crate::shell::child_env(&run_env.apply(&runtime.env));
         let new = NewRun {
             project_id: project.id.clone(),
             config: loaded.id.clone(),
@@ -603,8 +607,8 @@ impl Runs {
         }
         let cwd = granted_cwd(&spec.cwd)?;
         let runtime = self.inner.runtime.env(project_id, &cwd);
-        let mut env = crate::shell::child_env(&runtime.env);
-        overlay(&mut env, &spec.env);
+        // 승인된 값 그대로 얹는다 — `.env` 를 다시 읽지 않는다(M6-10).
+        let env = crate::shell::child_env(&crate::env::apply(&runtime.env, &spec.env));
         let new = NewRun {
             project_id: project_id.to_owned(),
             config: spec.config.clone(),
@@ -1009,27 +1013,6 @@ fn granted_cwd(cwd: &Path) -> Result<PathBuf, RpcError> {
 /// 작업 폴더가 판정 뒤에 바뀌었다(`PERMISSION_DENIED`, `data.reason = "cwd_changed"`) — 아무것도 돌지 않았다.
 pub fn cwd_changed(message: String) -> RpcError {
     RpcError::new(code::PERMISSION_DENIED, message).with_data(json!({ "reason": "cwd_changed" }))
-}
-
-/// 구성의 env(+ 고른 프로필의 env). `env_file`(`.env`)은 M6-03 이 이 자리에서 읽어 앞에 얹는다(덮는 순서: 런타임 환경 →
-/// `env_file` → `env` → 프로필의 `env`).
-fn config_env(
-    config: &crate::config::RunConfig,
-    profile: Option<&str>,
-) -> BTreeMap<String, String> {
-    let mut env = config.env.clone();
-    if let Some(over) = profile.and_then(|p| config.profiles.get(p)) {
-        env.extend(over.env.iter().map(|(k, v)| (k.clone(), v.clone())));
-    }
-    env
-}
-
-/// `base` 위에 `vars` 를 얹는다(같은 이름은 바꾼다).
-fn overlay(base: &mut Vec<(OsString, OsString)>, vars: &BTreeMap<String, String>) {
-    for (name, value) in vars {
-        base.retain(|(n, _)| n.as_os_str() != name.as_str());
-        base.push((name.into(), value.into()));
-    }
 }
 
 fn size_of(cols: Option<u16>, rows: Option<u16>) -> Result<(u16, u16), RpcError> {

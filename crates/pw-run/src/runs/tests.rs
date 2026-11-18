@@ -942,21 +942,22 @@ async fn an_untrusted_project_runs_nothing() {
 // ---- ⑦ 런타임 환경의 PATH --------------------------------------------------------------------------------------------------
 
 /// 완료 기준 ⑦: 런타임 환경의 PATH 가 프로세스에 들어간다 — 맨 이름 프로그램(`cargo`)을 그 PATH 로 찾고, 프로세스의 `$PATH` 가 그
-/// 값이다. 구성의 env 도 얹힌다.
+/// 값이다. 구성의 `env` 와 `env_file`(M6-03 의 `RunEnv`)도 얹힌다.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_runtime_path_reaches_the_process() {
     let f = Fixture::real();
     let probe = f.bin.join("cargo");
     fs::write(
         &probe,
-        "#!/bin/sh\necho \"PROBE PATH=$PATH GREETING=$GREETING ARGS=$*\"\n",
+        "#!/bin/sh\necho \"PROBE PATH=$PATH GREETING=$GREETING FROM_FILE=$FROM_FILE ARGS=$*\"\n",
     )
     .unwrap();
     fs::set_permissions(&probe, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(f.root.join(".env.local"), "FROM_FILE=yes\n").unwrap();
     f.config(
         &f.root,
         "probe",
-        "name = \"probe\"\ntype = \"cargo\"\ncommand = \"run\"\nargs = [\"a b\"]\nenv = { GREETING = \"hello\" }",
+        "name = \"probe\"\ntype = \"cargo\"\ncommand = \"run\"\nargs = [\"a b\"]\nenv = { GREETING = \"hello\" }\nenv_file = [\".env.local\"]",
     );
     let mut c = f.client();
     let run = info(
@@ -972,7 +973,7 @@ async fn the_runtime_path_reaches_the_process() {
         .unwrap();
     assert_eq!(exit.code, Some(0), "{:?}", a.text);
     let expected = format!(
-        "PROBE PATH={}:/usr/bin:/bin GREETING=hello ARGS=run a b",
+        "PROBE PATH={}:/usr/bin:/bin GREETING=hello FROM_FILE=yes ARGS=run a b",
         f.bin.display()
     );
     assert!(a.text.contains(&expected), "{:?}", a.text);
@@ -1678,4 +1679,25 @@ async fn every_held_run_is_released_without_a_stray_line() {
             assert_eq!(String::from_utf8_lossy(&text), format!("hi{i}\r\n"));
         }
     }
+}
+
+/// 읽지 못한 `env_file`(없는 파일)은 띄우지 않고 invalid params — 오류 글에 값이 없다(M6-03 의 `EnvError`).
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unreadable_env_file_launches_nothing() {
+    let f = Fixture::fake(RunLimits::default());
+    f.config(
+        &f.root,
+        "dev",
+        "name = \"dev\"\ntype = \"shell\"\ncommand = \"true\"\nenv_file = [\".env.missing\"]",
+    );
+    let mut c = f.client();
+    let e = c
+        .error(
+            "run.start",
+            json!({"projectId": f.project, "configId": "dev"}),
+        )
+        .await;
+    assert_eq!(e.code, code::INVALID_PARAMS, "{e:?}");
+    assert!(format!("{:?}", e.data).contains(".env.missing"), "{e:?}");
+    assert_eq!(f.fake_launcher().calls(), 0);
 }
