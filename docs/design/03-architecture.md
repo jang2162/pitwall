@@ -185,7 +185,7 @@ default = "zed"      # 외부 도구 id (04 F8)
 # .pitwall/run/dev-server.toml — 스키마는 17-m6-plan M6-01(`pw_run::config`)
 schema = 1
 name = "Dev Server"
-type = "gradle"               # shell | npm | gradle | maven | cargo | go | python | docker-compose | mise-task (sql · compound 는 M6-09 · M6-21)
+type = "gradle"               # shell | npm | gradle | maven | cargo | go | python | docker-compose | mise-task | sql (compound 는 M6-21)
 tasks = ["bootRun"]           # shell 만 글(command — 로그인 셸의 -c)이고, 그 밖 종류는 필드 값 하나가 argv 한 칸이다(래퍼 gradlew 가 있으면 그것)
 cwd = "."                     # 프로젝트 루트 기준. 루트 밖(.. · 링크 · 절대 경로)이면 쓸 수 없다
 env = { SPRING_PROFILES_ACTIVE = "local" }
@@ -196,6 +196,16 @@ env = { SPRING_PROFILES_ACTIVE = "prod" }
 adapter = "java-debug"
 mode = "attach"               # launch | attach — JVM 번들 어댑터는 attach 만(17-m6-plan 결정 M6-P20)
 port = 5005
+```
+
+```toml
+# .pitwall/run/seed.toml — `sql` 종류(17-m6-plan M6-09): 프로세스 없이 그 DB 연결에서 SQL 콘솔 · db_execute 와 같은 실행 경로로 돈다
+schema = 1
+name = "Seed"
+type = "sql"
+connection = "local-pg"       # .pitwall/db/<id>.toml
+files = ["db/seed.sql", "db/fixtures.sql"]   # 프로젝트 루트 기준, 순서대로. 실행할 때마다 읽어 분류한다(가장 높은 등급)
+transaction = "all"           # all(기본 — 트랜잭션 하나) | per_file(파일마다 — 실패하면 그 파일만 롤백) | none(문장마다 자동 커밋 — CREATE INDEX CONCURRENTLY 등). 실패하면 늘 멈춘다
 ```
 
 ```toml
