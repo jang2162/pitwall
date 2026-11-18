@@ -171,32 +171,27 @@ pub fn read(root: &Path, exec: &dyn DetectExec) -> Result<Vec<String>, String> {
 }
 
 /// `gradle tasks --all` 의 출력에서 태스크 이름: 무리 머리(이름 줄 + `---` 줄) 아래 빈 줄까지의 `<이름>` · `<이름> - <설명>` 줄.
-/// `Rules` 무리(패턴)는 뺀다.
+/// 이름에 공백이 있는 줄은 뺀다 — `Rules` 무리의 `Pattern: clean<TaskName>: …` 이 그렇다.
 pub fn parse_tasks(out: &str) -> Vec<String> {
     let lines: Vec<&str> = out.lines().map(str::trim_end).collect();
     let is_rule = |l: &str| l.len() >= 3 && l.bytes().all(|b| b == b'-');
     let mut names = Vec::new();
-    let mut group: Option<&str> = None;
+    let mut in_group = false;
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i];
-        match group {
-            None => {
-                if !line.is_empty()
-                    && !is_rule(line)
-                    && lines.get(i + 1).is_some_and(|l| is_rule(l))
-                {
-                    group = Some(line);
-                    i += 2;
-                    continue;
-                }
+        if !in_group {
+            if !line.is_empty() && !is_rule(line) && lines.get(i + 1).is_some_and(|l| is_rule(l)) {
+                in_group = true;
+                i += 2;
+                continue;
             }
-            Some(_) if line.is_empty() => group = None,
-            Some(header) => {
-                let name = line.split(" - ").next().unwrap_or_default().trim();
-                if header != "Rules" && !name.is_empty() && !name.contains(char::is_whitespace) {
-                    names.push(name.to_owned());
-                }
+        } else if line.is_empty() {
+            in_group = false;
+        } else {
+            let name = line.split(" - ").next().unwrap_or_default().trim();
+            if !name.is_empty() && !name.contains(char::is_whitespace) {
+                names.push(name.to_owned());
             }
         }
         i += 1;

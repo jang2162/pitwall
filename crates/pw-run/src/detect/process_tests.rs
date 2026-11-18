@@ -481,6 +481,24 @@ fn the_effective_pom_reader_expands_no_entity() {
     assert_eq!(maven::plugin_goals(refs).unwrap(), ["x:ok"]);
 }
 
+/// `pluginManagement` · `reporting` · `profiles` 아래의 플러그인은 그 execution 이 있어도 goal 로 나오지 않는다(빌드에 묶이지 않았다).
+#[test]
+fn only_build_plugins_give_goals() {
+    let plugin = |a: &str, g: &str| {
+        format!(
+            "<plugin><artifactId>{a}</artifactId><executions><execution><goals><goal>{g}</goal></goals></execution></executions></plugin>"
+        )
+    };
+    let xml = format!(
+        "<projects><project><build><pluginManagement><plugins>{}</plugins></pluginManagement><plugins>{}</plugins></build><reporting><plugins>{}</plugins></reporting><profiles><profile><build><plugins>{}</plugins></build></profile></profiles></project></projects>",
+        plugin("maven-managed-plugin", "m"),
+        plugin("maven-used-plugin", "u"),
+        plugin("maven-report-plugin", "r"),
+        plugin("maven-profile-plugin", "p"),
+    );
+    assert_eq!(maven::plugin_goals(&xml).unwrap(), ["used:u"]);
+}
+
 /// Maven 읽기: 0700 임시 폴더의 파일로 받고 끝나면 지운다. 라이프사이클 + goal.
 #[test]
 fn maven_reads_the_effective_pom_through_a_private_temporary_file() {
