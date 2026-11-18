@@ -25,7 +25,7 @@ use pw_rpc::{ConnectionScope, Router, RpcError, code, rpc_method};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::{LaunchedBy, Run, RunExit, RunId, RunInfo, RunLog, RunState, Runs};
+use super::{LaunchedBy, Run, RunExit, RunId, RunInfo, RunLog, RunPort, RunState, Runs};
 use crate::config::read::RunConfigLayer;
 use crate::config::{RunConfig, RunConfigPlace, read, shown};
 use crate::detect::exec::CacheOnly;
@@ -266,6 +266,8 @@ pub struct RunToolRun {
     /// Log end offset (bytes written so far).
     #[specta(type = pw_rpc::JsNumber)]
     pub log_end: u64,
+    /// TCP ports the run's process tree listens on, read every 2 seconds while it runs. Empty once the run has ended.
+    pub ports: Vec<RunPort>,
 }
 
 #[derive(
@@ -606,6 +608,7 @@ fn tool_run(info: RunInfo) -> RunToolRun {
         restart_of: info.restart_of,
         log_start: info.log_start,
         log_end: info.log_end,
+        ports: info.ports,
     }
 }
 

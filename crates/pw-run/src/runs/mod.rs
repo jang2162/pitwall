@@ -37,6 +37,7 @@
 
 pub mod log;
 pub mod methods;
+pub mod ports;
 mod process;
 pub mod tool;
 
@@ -66,6 +67,7 @@ use crate::pty::Ending;
 
 pub use log::{LogSlice, Meter, RunLog};
 pub use methods::RunStartParams;
+pub use ports::{RunPort, TOPIC_PORTS};
 pub use process::{ProcessLauncher, ProcessSpec, PtyLauncher};
 
 /// 실행 하나의 id. Host 안에서 유일하다(연결마다의 번호가 아니다) — 앞은 Host 를 띄울 때 정한 무작위 글, 뒤는 차례.
@@ -94,6 +96,8 @@ pub struct RunLimits {
     pub stop_grace: Duration,
     /// compose 의 SIGINT 뒤 SIGTERM 까지(compose 의 기본 컨테이너 중지 시간 10초).
     pub interrupt_grace: Duration,
+    /// 듣는 포트를 읽는 간격(M6-08 — [`ports`]).
+    pub port_interval: Duration,
 }
 
 const MIB: usize = 1024 * 1024;
@@ -107,6 +111,7 @@ impl Default for RunLimits {
             host_total: 64 * MIB,
             stop_grace: Duration::from_secs(5),
             interrupt_grace: Duration::from_secs(10),
+            port_interval: Duration::from_secs(2),
         }
     }
 }
@@ -196,6 +201,8 @@ pub struct RunInfo {
     /// 로그의 끝 오프셋(쓴 바이트 수 전체).
     #[specta(type = pw_rpc::JsNumber)]
     pub log_end: u64,
+    /// 프로세스 트리가 듣는 TCP 포트(포트 순 — M6-08, [`ports`]). 끝난 실행 · 프로세스가 아닌 종류는 빈 목록.
+    pub ports: Vec<RunPort>,
 }
 
 /// 실행의 종류(머리 주석 「실행의 종류」). 출력과 끝은 [`RunOutput`] 으로 알린다.
@@ -270,6 +277,10 @@ pub struct Run {
     changed: watch::Sender<u64>,
     /// 낸 이벤트. `run.exited` 가 `run.started` 보다 먼저 나가지 않게 둘을 이 잠금 안에서 낸다(곧바로 끝나는 프로그램).
     announced: Mutex<Announced>,
+    /// 듣는 포트(폴링이 쓴다 — [`ports`]). `status` 다음에 잠근다.
+    ports: Mutex<Vec<RunPort>>,
+    /// 앞선 폴링에서 찾은 프로세스 트리.
+    known: Mutex<ports::Known>,
 }
 
 #[derive(Default)]
@@ -322,7 +333,25 @@ impl Run {
             restart_of: self.restart_of.clone(),
             log_start: log.start(),
             log_end: log.end(),
+            ports: lock(&self.ports).clone(),
         }
+    }
+
+    /// 폴링이 읽은 포트를 둔다. 끝난 실행에는 두지 않는다. 바뀌었으면 참.
+    fn set_ports(&self, ports: Vec<RunPort>) -> bool {
+        let status = lock(&self.status);
+        if status.state == RunState::Exited {
+            return false;
+        }
+        let mut now = lock(&self.ports);
+        if *now == ports {
+            return false;
+        }
+        *now = ports;
+        drop(now);
+        drop(status);
+        self.bump();
+        true
     }
 
     pub fn state(&self) -> RunState {
@@ -394,6 +423,7 @@ impl RunOutput {
             status.state = RunState::Exited;
             status.exit = Some(exit);
             status.ended_at = Some(now_ms());
+            lock(&self.run.ports).clear();
         }
         tracing::info!(target: "pw_run", run = %self.run.id, exit = ?lock(&self.run.status).exit, "run exited");
         if let Some(inner) = self.runs.upgrade() {
@@ -428,6 +458,7 @@ struct Inner {
     table: Mutex<Table>,
     nonce: String,
     next: AtomicU64,
+    poller: ports::Poller,
 }
 
 #[derive(Default)]
@@ -459,6 +490,7 @@ impl Runs {
                 table: Mutex::default(),
                 nonce: nonce(),
                 next: AtomicU64::new(1),
+                poller: ports::Poller::default(),
             }),
         };
         let mut managers = lock(&MANAGERS);
@@ -475,6 +507,11 @@ impl Runs {
 
     pub fn limits(&self) -> RunLimits {
         self.inner.limits
+    }
+
+    /// 살아 있는 포트 폴링 스레드 수 — 끝나지 않은 실행이 없으면 0(M6-08 ③).
+    pub fn port_pollers(&self) -> usize {
+        self.inner.poller.threads()
     }
 
     /// 모든 실행의 로그 바이트 합.
@@ -797,6 +834,8 @@ impl Runs {
             control: OnceLock::new(),
             changed: watch::channel(0).0,
             announced: Mutex::default(),
+            ports: Mutex::default(),
+            known: Mutex::default(),
         });
         // 띄우는 동안 나온 출력 · 곧바로 끝난 실행도 받도록 표에 먼저 넣는다.
         lock(&self.inner.table)
@@ -820,6 +859,9 @@ impl Runs {
         // 이미 보냈을 수도 있다(두 번 불려도 된다 — `RunKind::stop`).
         if run.state() == RunState::Stopping {
             kind.stop();
+        }
+        if kind.pid().is_some() && run.state() != RunState::Exited {
+            ports::ensure_polling(&self.inner);
         }
         let info = run.info();
         tracing::info!(target: "pw_run", run = %id, project = %info.project_id, config = %info.config, pid = ?info.pid, launched_by = ?info.launched_by, "run started");

@@ -43,6 +43,17 @@ yaml-rust2 = "0.13.0"
 # 세션의 프로세스 찾기(getsid · proc_listallpids)와 신호. 버전은 데스크톱 크레이트와 같게 둔다.
 libc = "0.2.190"
 
+[target."cfg(windows)".dependencies]
+# 실행의 포트 표시(17-m6-plan M6-08, 메인 판정 M6-P12): 듣는 소켓 표(`GetExtendedTcpTable`)와 프로세스 트리(Toolhelp · 만든 시각).
+# 다른 크레이트와 같은 판.
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_Networking_WinSock",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_Threading",
+] }
+
 [dev-dependencies]
 # 실행 구성 JSON Schema 스냅숏(17-m6-plan M6-01 ⑦).
 insta = "1.49.0"

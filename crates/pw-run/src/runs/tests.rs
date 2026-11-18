@@ -1943,3 +1943,8 @@ async fn the_program_waits_at_the_gate_until_the_check() {
     );
     assert!(marker.exists(), "the program never ran");
 }
+
+// ---- 포트 표시(M6-08) ----------------------------------------------------------------------------------------------------
+
+#[path = "ports_tests.rs"]
+mod ports_tests;

@@ -155,6 +155,45 @@ fn targets(
     found.into_iter().collect()
 }
 
+/// 지금 있는 프로세스마다의 (pid, 부모, 세션, 시작 시각) — 실행의 포트 읽기(`crate::runs::ports`)가 한 번 훑어 모든 실행의 트리를
+/// 가른다. `getsid` 가 읽히지 않는 것(좀비 · 사라진 것)은 뺀다.
+pub(crate) fn processes() -> Vec<(pid_t, Option<pid_t>, pid_t, Option<u64>)> {
+    all_pids()
+        .into_iter()
+        .filter(|&pid| pid > 0)
+        .filter_map(|pid| {
+            let session = session_of(pid)?;
+            let (parent, started) = parent_and_start(pid);
+            Some((pid, parent, session, started))
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn parent_and_start(pid: pid_t) -> (Option<pid_t>, Option<u64>) {
+    bsd_info(pid).map_or((None, None), |info| {
+        (
+            pid_t::try_from(info.pbi_ppid).ok(),
+            Some(info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec),
+        )
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn parent_and_start(pid: pid_t) -> (Option<pid_t>, Option<u64>) {
+    proc_stat(pid).map_or((None, None), |stat| {
+        (
+            stat.get(1).and_then(|p| p.parse().ok()),
+            stat.get(19).and_then(|t| t.parse().ok()),
+        )
+    })
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn parent_and_start(_pid: pid_t) -> (Option<pid_t>, Option<u64>) {
+    (None, None)
+}
+
 fn session_of(pid: pid_t) -> Option<pid_t> {
     // SAFETY: getsid(2) 는 메모리를 건드리지 않는다.
     let sid = unsafe { libc::getsid(pid) };
