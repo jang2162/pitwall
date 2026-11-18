@@ -1147,6 +1147,12 @@ export type UnaryMethods = {
 	 */
 	"run.stop": { params: RunIdParams; result: RunInfo };
 	/**
+	 * 사람이 「태스크 읽기」 를 눌렀다 — gradle · maven 은 빌드 스크립트를 돌려 태스크 목록을 읽고 캐시한다(Host 작업으로 진행 ·
+	 * 취소가 보인다). 그 프로젝트 창의 연결만(아니면 permission denied), 미신뢰 프로젝트면 permission denied
+	 * (`data.reason = "untrusted"`), 모르는 감지기는 invalid params, 취소되면 cancelled.
+	 */
+	"run.tasks.refresh": { params: RunTasksRefreshParams; result: RunTasksRefreshed };
+	/**
 	 * Delete a run configuration's file — the shared one, the personal one (`location`), or both (no `location`). The person
 	 * sees what is deleted and approves it in Pitwall first. Detected tasks (`detected:…`) have no file and cannot be deleted.
 	 */
@@ -1589,6 +1595,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"run.restart": {"name":"run.restart","kind":"unary","tier":"exec","roles":["owner"],"params":"RunIdParams","output":"RunInfo","doc":" 다시 실행: 중지하고 프로세스 트리가 끝난 것을 본 뒤 같은 구성을 새 실행으로 띄운다(`restartOf` 가 앞 실행).\n","mcp":null,"fileScope":false},
 	"run.start": {"name":"run.start","kind":"unary","tier":"exec","roles":["owner"],"params":"RunStartParams","output":"RunInfo","doc":" 실행 구성 하나를 띄운다(PTY — 런타임 환경 위에 구성의 `env_file` · `env` · 프로필). 실행은 Host 의 것이라 이 연결이 닫혀도 돈다 — 출력은\n `run.attach`, 끝은 이벤트 `run.exited`. 그 프로젝트의 창이 아닌 연결이면 permission denied, 미신뢰 프로젝트면 띄우지 않고\n permission denied(`data.reason = \"untrusted\"`), 작업 폴더가 푼 뒤에 바뀌었거나 사라졌으면 띄우지 않고 permission\n denied(`data.reason = \"cwd_changed\"`), 없는 구성은 not found, 쓸 수 없는 구성 · 프로젝트 밖 작업 폴더 · 없는\n 프로필 · 읽지 못한 `env_file` 은 invalid params.\n","mcp":null,"fileScope":false},
 	"run.stop": {"name":"run.stop","kind":"unary","tier":"exec","roles":["owner"],"params":"RunIdParams","output":"RunInfo","doc":" 실행을 중지한다 — 프로세스 세션 전체에 SIGTERM, 5초 안에 끝나지 않은 것은 SIGKILL(compose 는 SIGINT 를 먼저). 기다리지\n 않는다(끝나면 `run.exited`). 이미 끝난 실행이면 아무것도 하지 않는다.\n","mcp":null,"fileScope":false},
+	"run.tasks.refresh": {"name":"run.tasks.refresh","kind":"unary","tier":"exec","roles":["owner"],"params":"RunTasksRefreshParams","output":"RunTasksRefreshed","doc":" 사람이 「태스크 읽기」 를 눌렀다 — gradle · maven 은 빌드 스크립트를 돌려 태스크 목록을 읽고 캐시한다(Host 작업으로 진행 ·\n 취소가 보인다). 그 프로젝트 창의 연결만(아니면 permission denied), 미신뢰 프로젝트면 permission denied\n (`data.reason = \"untrusted\"`), 모르는 감지기는 invalid params, 취소되면 cancelled.\n","mcp":null,"fileScope":false},
 	"run.tool.configDelete": {"name":"run.tool.configDelete","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<RunToolConfigDeleteParams>","output":"RunToolConfigDelete","doc":" Delete a run configuration's file — the shared one, the personal one (`location`), or both (no `location`). The person\n sees what is deleted and approves it in Pitwall first. Detected tasks (`detected:…`) have no file and cannot be deleted.\n","mcp":{"group":"run","name":"run_config_delete"},"fileScope":false},
 	"run.tool.configUpsert": {"name":"run.tool.configUpsert","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<RunToolConfigUpsertParams>","output":"RunToolConfigUpsert","doc":" Create or change a run configuration — `.pitwall/run/<id>.toml` (shared, committed; the default) or `<id>.local.toml`\n (personal, `location: \"local\"`). `config` is the whole configuration of that file, checked against the run\n configuration schema (`type`: shell, npm, gradle, maven, cargo, go, python, docker-compose, mise-task) before anything is\n asked: `cwd` and `envFile` must stay inside the project root, and `env` takes no secrets (names with a secret word are\n refused — use `envFile`). The person sees the file's diff and approves it in Pitwall first. Saving does not approve\n running: `run_start` still asks the person for a configuration an agent created or changed.\n","mcp":{"group":"run","name":"run_config_upsert"},"fileScope":false},
 	"runtime.get": {"name":"runtime.get","kind":"unary","tier":"read","roles":["owner"],"params":"RuntimeGetParams","output":"RuntimeInfo","doc":" 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.\n","mcp":null,"fileScope":false},
@@ -8385,6 +8392,8 @@ export type RunConfigList = {
 	detected: DetectedRunTask[],
 	/**  감지기마다의 실패 · 감지에서 뺀 태스크의 까닭. 실패한 감지기의 태스크는 `detected` 에 없다. */
 	detectProblems?: DetectProblem[],
+	/**  사람이 「태스크 읽기」 를 눌러야 채워지는 목록(gradle · maven)의 상태 — 창이 그 단추를 보인다(`run.tasks.refresh`). */
+	taskLists?: TaskList[],
 	/**  구성 폴더 자체를 읽지 못한 까닭. 그 폴더의 구성은 목록에 없다. */
 	problem: string | null,
 };
@@ -8542,6 +8551,25 @@ export type RunStartParams = {
 export type RunState = "running" | 
 /**  중지를 보냈고 아직 끝나지 않았다. */
 "stopping" | "exited";
+
+export type RunTasksRefreshParams = {
+	projectId: string,
+	/**  `run.config.list` 의 `worktree` 와 같다. */
+	worktree?: string | null,
+	/**  다시 읽을 감지기: `gradle` · `maven` · `mise`. */
+	detector: string,
+};
+
+export type RunTasksRefreshed = {
+	/**  그 감지기의 감지된 태스크(읽은 뒤의 것). */
+	detected: DetectedRunTask[],
+	/**  그 감지기의 감지 까닭. */
+	detectProblems: DetectProblem[],
+	/**  그 감지기의 목록 상태(gradle · maven). */
+	taskLists: TaskList[],
+	/**  읽지 못한 까닭(도구 없음 · 시한 · 실패 끝 코드 · 형식 다름). 있으면 캐시는 그대로다. */
+	error: string | null,
+};
 
 export type RunToolConfigDelete = {
 	id: string,
@@ -9222,10 +9250,25 @@ export type TaskInfo = {
 	progress: TaskProgress,
 };
 
+/**  감지기 하나의 누를 때만 읽는 목록(`run.config.list` 의 `taskLists`). 사람의 누름은 `run.tasks.refresh { detector }`. */
+export type TaskList = {
+	detector: string,
+	state: TaskListState,
+};
+
 export type TaskListParams = {
 	/**  이 프로젝트의 작업도 함께. 없으면 Host 범위 작업만. */
 	projectId?: string | null,
 };
+
+/**  누를 때만 읽는 태스크 목록의 상태(결정 M6-D8 · D70). */
+export type TaskListState = 
+/**  아직 읽지 않았다 — 흔한 태스크만 보인다. */
+"notRead" | 
+/**  읽은 목록이 보인다(빌드 파일이 그때와 같다). */
+"read" | 
+/**  읽은 뒤 빌드 파일 · 런타임 원천 파일이 바뀌었다 — 흔한 태스크만 보이고 다시 읽어야 한다. */
+"stale";
 
 /**
  *  진행 양은 2^53 안에 머문다고 보고 TS `number` 로 낸다(pw-rpc `JsNumber`).

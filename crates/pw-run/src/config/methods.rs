@@ -559,7 +559,8 @@ async fn blocking<T: Send + 'static>(
 
 /// 핸들러를 붙인다.
 pub fn register(router: &mut Router, configs: Arc<RunConfigs>) {
-    let (list, save, delete) = (
+    let (list, save, delete, refresh) = (
+        Arc::clone(&configs),
         Arc::clone(&configs),
         Arc::clone(&configs),
         Arc::clone(&configs),
@@ -586,7 +587,7 @@ pub fn register(router: &mut Router, configs: Arc<RunConfigs>) {
         .unary(
             RunTasksRefresh,
             move |ctx, params: RunTasksRefreshParams| {
-                let (c, scope) = (Arc::clone(&configs), ctx.scope().clone());
+                let (c, scope) = (Arc::clone(&refresh), ctx.scope().clone());
                 async move { c.refresh(&scope, params).await }
             },
         );

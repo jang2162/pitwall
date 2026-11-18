@@ -41344,6 +41344,42 @@
             ],
             "type": "object"
           },
+          "TaskList": {
+            "description": "감지기 하나의 누를 때만 읽는 목록(`run.config.list` 의 `taskLists`). 사람의 누름은 `run.tasks.refresh { detector }`.",
+            "properties": {
+              "detector": {
+                "type": "string"
+              },
+              "state": {
+                "$ref": "#/$defs/TaskListState"
+              }
+            },
+            "required": [
+              "detector",
+              "state"
+            ],
+            "type": "object"
+          },
+          "TaskListState": {
+            "description": "누를 때만 읽는 태스크 목록의 상태(결정 M6-D8 · D70).",
+            "oneOf": [
+              {
+                "const": "notRead",
+                "description": "아직 읽지 않았다 — 흔한 태스크만 보인다.",
+                "type": "string"
+              },
+              {
+                "const": "read",
+                "description": "읽은 목록이 보인다(빌드 파일이 그때와 같다).",
+                "type": "string"
+              },
+              {
+                "const": "stale",
+                "description": "읽은 뒤 빌드 파일 · 런타임 원천 파일이 바뀌었다 — 흔한 태스크만 보이고 다시 읽어야 한다.",
+                "type": "string"
+              }
+            ]
+          },
           "UnusableRunConfig": {
             "description": "쓸 수 없는 구성 하나 — 목록에 남는다.",
             "properties": {
@@ -41408,6 +41444,14 @@
               "null"
             ]
           },
+          "taskLists": {
+            "default": [],
+            "description": "사람이 「태스크 읽기」 를 눌러야 채워지는 목록(gradle · maven)의 상태 — 창이 그 단추를 보인다(`run.tasks.refresh`).",
+            "items": {
+              "$ref": "#/$defs/TaskList"
+            },
+            "type": "array"
+          },
           "unusable": {
             "description": "쓸 수 없는 구성과 까닭(id 순) — 모르는 `type` · 형식 오류 · 루트 밖 `cwd` 등. 버리지 않고 보인다.",
             "items": {
@@ -41421,6 +41465,7 @@
           "unusable",
           "detected",
           "detectProblems",
+          "taskLists",
           "problem"
         ],
         "type": "object"
@@ -42866,6 +42911,502 @@
           "restartOf",
           "logStart",
           "logEnd"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "run.tasks.refresh": {
+      "description": "사람이 「태스크 읽기」 를 눌렀다 — gradle · maven 은 빌드 스크립트를 돌려 태스크 목록을 읽고 캐시한다(Host 작업으로 진행 ·\n취소가 보인다). 그 프로젝트 창의 연결만(아니면 permission denied), 미신뢰 프로젝트면 permission denied\n(`data.reason = \"untrusted\"`), 모르는 감지기는 invalid params, 취소되면 cancelled.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "detector": {
+            "description": "다시 읽을 감지기: `gradle` · `maven` · `mise`.",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "`run.config.list` 의 `worktree` 와 같다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "detector"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DebugConfig": {
+            "additionalProperties": true,
+            "description": "`[debug]`. Keys other than `adapter` and `mode` (`program`, `port`, `pid` …) fill the debug adapter's launch or attach\ntemplate and are kept as written.",
+            "properties": {
+              "adapter": {
+                "default": null,
+                "description": "Debug adapter id. Without it the adapter is chosen by language.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mode": {
+                "$ref": "#/$defs/DebugMode",
+                "default": "launch"
+              }
+            },
+            "required": [
+              "adapter",
+              "mode"
+            ],
+            "type": "object"
+          },
+          "DebugMode": {
+            "description": "`launch` starts the program under the debugger; `attach` only connects to a program that is already running.",
+            "enum": [
+              "launch",
+              "attach"
+            ],
+            "type": "string"
+          },
+          "DetectProblem": {
+            "description": "감지기 하나의 실패 · 뺀 태스크의 까닭. 목록(`run.config.list` 의 `detectProblems`)에 남는다 — 감지 목록이 조용히 짧아지지 않게.",
+            "properties": {
+              "detector": {
+                "description": "감지기 id(`npm` · `make` · `just` · `compose` …).",
+                "type": "string"
+              },
+              "reason": {
+                "description": "까닭(어느 파일 · 무엇 · 몇째 줄). 파일 내용은 담지 않는다.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "detector",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "DetectedRunTask": {
+            "description": "파일 없이 감지된 태스크(가상 구성 — 감지기는 `crate::detect`). 「구성으로 저장」 은 `config` 를 `run.config.save` 로 쓴다.",
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/RunConfig"
+              },
+              "detector": {
+                "description": "감지기 id(`npm` · `make` · `just` · `compose`, M6-05 가 `mise` · `gradle` · `maven`).",
+                "type": "string"
+              },
+              "key": {
+                "description": "`detected:<감지기>:<이름>` — 「사람이 본 구성」 기록(M6-11)의 열쇠.",
+                "type": "string"
+              },
+              "source": {
+                "description": "감지 출처 파일(절대 경로).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "detector",
+              "source",
+              "config"
+            ],
+            "type": "object"
+          },
+          "RunConfig": {
+            "description": "One run configuration: the common fields plus the kind (`type`, [`RunKindConfig`]). Doc comments of the configuration types are\nEnglish — they become the JSON Schema descriptions an agent reads (M6-13, decision M5-D39).",
+            "oneOf": [
+              {
+                "description": "A shell command line, passed verbatim to the login shell's `-c` (pipes and expansions are the shell's).",
+                "properties": {
+                  "command": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "shell",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "command"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "A `package.json` script. The package manager (npm, pnpm, yarn, bun) follows the lockfile.",
+                "properties": {
+                  "script": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "npm",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "script"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "Gradle tasks. Uses the `gradlew` wrapper when there is one.",
+                "properties": {
+                  "tasks": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": {
+                    "const": "gradle",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "tasks"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "Maven goals. Uses the `mvnw` wrapper when there is one.",
+                "properties": {
+                  "tasks": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": {
+                    "const": "maven",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "tasks"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`cargo <command> <args…>`.",
+                "properties": {
+                  "args": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "command": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "cargo",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "command",
+                  "args"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`go <command> [package] <args…>`.",
+                "properties": {
+                  "args": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "command": {
+                    "type": "string"
+                  },
+                  "package": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "const": "go",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "command",
+                  "package",
+                  "args"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`python -m <module>` or `python <script>`; exactly one of the two.",
+                "properties": {
+                  "args": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "module": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "script": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "const": "python",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "module",
+                  "script",
+                  "args"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`docker compose [-f <file>] up [services…]`, `file` passed as its path inside the project root. Stopping sends SIGINT\nfirst so compose stops the containers.",
+                "properties": {
+                  "file": {
+                    "default": null,
+                    "description": "Compose file relative to the project root. Without it compose finds its own.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "services": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": {
+                    "const": "docker-compose",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "services",
+                  "file"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`mise run <task>`.",
+                "properties": {
+                  "task": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "mise-task",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "task"
+                ],
+                "type": "object"
+              }
+            ],
+            "properties": {
+              "cwd": {
+                "default": null,
+                "description": "Working directory, relative to the project root (inside the active worktree). Defaults to the project root. A path that\nresolves outside the root (`..`, a symbolic link) makes the configuration unusable.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "debug": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DebugConfig"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "How to debug this configuration. Without it the configuration cannot be debugged."
+              },
+              "env": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "default": {},
+                "description": "Environment variables (name to value), applied over the runtime environment and `envFile`.",
+                "type": "object"
+              },
+              "envFile": {
+                "default": [],
+                "description": "`.env` files relative to the project root, applied in order. A file outside the root makes the configuration unusable.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "name": {
+                "description": "Display name (run selector, console tab).",
+                "type": "string"
+              },
+              "profiles": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/RunProfile"
+                },
+                "default": {},
+                "description": "Named overrides picked in the run selector.",
+                "type": "object"
+              }
+            },
+            "required": [
+              "name",
+              "cwd",
+              "env",
+              "envFile",
+              "profiles",
+              "debug"
+            ],
+            "type": "object"
+          },
+          "RunProfile": {
+            "description": "A profile (`[profiles.<name>]`): overrides applied over the configuration when it is picked.",
+            "properties": {
+              "args": {
+                "default": null,
+                "description": "Replaces the kind's `args` as a whole. Only for kinds with `args` (cargo, go, python).",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "env": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "default": {},
+                "description": "Applied key by key over the configuration's `env`.",
+                "type": "object"
+              }
+            },
+            "required": [
+              "env",
+              "args"
+            ],
+            "type": "object"
+          },
+          "TaskList": {
+            "description": "감지기 하나의 누를 때만 읽는 목록(`run.config.list` 의 `taskLists`). 사람의 누름은 `run.tasks.refresh { detector }`.",
+            "properties": {
+              "detector": {
+                "type": "string"
+              },
+              "state": {
+                "$ref": "#/$defs/TaskListState"
+              }
+            },
+            "required": [
+              "detector",
+              "state"
+            ],
+            "type": "object"
+          },
+          "TaskListState": {
+            "description": "누를 때만 읽는 태스크 목록의 상태(결정 M6-D8 · D70).",
+            "oneOf": [
+              {
+                "const": "notRead",
+                "description": "아직 읽지 않았다 — 흔한 태스크만 보인다.",
+                "type": "string"
+              },
+              {
+                "const": "read",
+                "description": "읽은 목록이 보인다(빌드 파일이 그때와 같다).",
+                "type": "string"
+              },
+              {
+                "const": "stale",
+                "description": "읽은 뒤 빌드 파일 · 런타임 원천 파일이 바뀌었다 — 흔한 태스크만 보이고 다시 읽어야 한다.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "detectProblems": {
+            "description": "그 감지기의 감지 까닭.",
+            "items": {
+              "$ref": "#/$defs/DetectProblem"
+            },
+            "type": "array"
+          },
+          "detected": {
+            "description": "그 감지기의 감지된 태스크(읽은 뒤의 것).",
+            "items": {
+              "$ref": "#/$defs/DetectedRunTask"
+            },
+            "type": "array"
+          },
+          "error": {
+            "description": "읽지 못한 까닭(도구 없음 · 시한 · 실패 끝 코드 · 형식 다름). 있으면 캐시는 그대로다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "taskLists": {
+            "description": "그 감지기의 목록 상태(gradle · maven).",
+            "items": {
+              "$ref": "#/$defs/TaskList"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "detected",
+          "detectProblems",
+          "taskLists",
+          "error"
         ],
         "type": "object"
       },
