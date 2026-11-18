@@ -1914,3 +1914,32 @@ async fn a_window_restart_records_the_configuration_as_seen() {
     let again = f.projects.run_seen(&f.project, "dev").unwrap().unwrap();
     assert_ne!(again.hash, first.hash);
 }
+
+/// 감싼 셸은 문이 열릴 때까지 프로그램을 돌리지 않는다 — 띄운 뒤 확인 전에 300 ms 를 쉬어도 그동안 프로그램의 표지가 생기지 않고,
+/// 확인 뒤에 생긴다(문을 걷으면 쉬는 동안 프로그램이 돌아 실패한다 — 확인 실패 때의 SIGKILL 이 셸 시작보다 빨라 다른 시험으로는
+/// 보이지 않는다).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_program_waits_at_the_gate_until_the_check() {
+    let f = Fixture::real();
+    let marker = f.tmp.path().join("ran");
+    let early = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (seen_early, probe) = (Arc::clone(&early), marker.clone());
+    process::hooks::on_spawned(&f.root, move || {
+        std::thread::sleep(Duration::from_millis(300));
+        seen_early.store(probe.exists(), Ordering::SeqCst);
+    });
+    let grant = f.agent_grant(&f.project, touching_spec(&f.root, &marker));
+    let run = f.runs.start_agent(&grant, 0, agent(), None).unwrap();
+    let exit = tokio::time::timeout(
+        Duration::from_secs(10),
+        f.runs.find(&f.project, &run.run_id).unwrap().exited(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(exit.code, Some(0));
+    assert!(
+        !early.load(Ordering::SeqCst),
+        "the program ran before the check"
+    );
+    assert!(marker.exists(), "the program never ran");
+}

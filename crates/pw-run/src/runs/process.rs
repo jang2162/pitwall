@@ -125,6 +125,8 @@ impl ProcessLauncher for PtyLauncher {
             })
             .map_err(RpcError::internal)?,
         );
+        #[cfg(all(test, unix))]
+        hooks::after_spawn(&spec.cwd);
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         let gate = release(&pty, &spec.cwd, &pinned, gate, &output)?;
         // 확인이 끝났다 — 이제 폴더 핸들을 놓는다(머리 주석 「작업 폴더」 1).
@@ -281,7 +283,8 @@ fn kill_now(pty: &Pty, pid: libc::pid_t) {
     pty.terminate();
 }
 
-/// 시험이 「띄우기 바로 앞」 과 「띄우기」 사이에 파일 시스템을 바꾸는 자리(작업 폴더마다 한 번).
+/// 시험이 「띄우기 바로 앞」 과 「띄우기」 사이(`on_spawn`), 「띄운 뒤」 와 「확인」 사이(`on_spawned`)에 끼어드는 자리(작업 폴더마다
+/// 한 번).
 #[cfg(all(test, unix))]
 pub(crate) mod hooks {
     use std::path::{Path, PathBuf};
@@ -290,17 +293,17 @@ pub(crate) mod hooks {
     type Hook = Box<dyn FnOnce() + Send>;
 
     static BEFORE_SPAWN: Mutex<Vec<(PathBuf, Hook)>> = Mutex::new(Vec::new());
+    static AFTER_SPAWN: Mutex<Vec<(PathBuf, Hook)>> = Mutex::new(Vec::new());
 
-    pub(crate) fn on_spawn(cwd: &Path, hook: impl FnOnce() + Send + 'static) {
-        BEFORE_SPAWN
-            .lock()
+    fn add(list: &Mutex<Vec<(PathBuf, Hook)>>, cwd: &Path, hook: Hook) {
+        list.lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push((cwd.to_path_buf(), Box::new(hook)));
+            .push((cwd.to_path_buf(), hook));
     }
 
-    pub(crate) fn before_spawn(cwd: &Path) {
+    fn run(list: &Mutex<Vec<(PathBuf, Hook)>>, cwd: &Path) {
         let hooks: Vec<Hook> = {
-            let mut all = BEFORE_SPAWN.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut all = list.lock().unwrap_or_else(PoisonError::into_inner);
             all.extract_if(.., |(path, _)| path == cwd)
                 .map(|(_, hook)| hook)
                 .collect()
@@ -308,6 +311,22 @@ pub(crate) mod hooks {
         for hook in hooks {
             hook();
         }
+    }
+
+    pub(crate) fn on_spawn(cwd: &Path, hook: impl FnOnce() + Send + 'static) {
+        add(&BEFORE_SPAWN, cwd, Box::new(hook));
+    }
+
+    pub(crate) fn on_spawned(cwd: &Path, hook: impl FnOnce() + Send + 'static) {
+        add(&AFTER_SPAWN, cwd, Box::new(hook));
+    }
+
+    pub(crate) fn before_spawn(cwd: &Path) {
+        run(&BEFORE_SPAWN, cwd);
+    }
+
+    pub(crate) fn after_spawn(cwd: &Path) {
+        run(&AFTER_SPAWN, cwd);
     }
 }
 
