@@ -779,12 +779,18 @@ fn main() {
                 // MCP: 대기 중인 승인을 거두고 세션들의 감사 큐를 비운다 — 최대 2초 종료가 늦어질 수 있다(16-m5-plan M5-12).
                 app.state::<pw_mcp::sessions::Sessions>()
                     .shutdown(std::time::Duration::from_secs(2));
-                pw_run::shutdown();
-                // DB 의 SSH 터널(M3-11) — 남은 ssh 프로세스 그룹을 끝낸다.
-                pw_db_driver::tunnel::shutdown();
+                end_processes_on_exit();
                 update::restart_if_installed(app);
             }
         });
+}
+
+/// 앱이 끝날 때(`RunEvent::Exit` — 뒤에 `std::process::exit` 가 와 Drop 이 돌지 않는다) 남은 자식 프로세스를 끝낸다: 터미널의 셸과
+/// 실행(`run.*` — 중지 중인 것 포함, 17-m6-plan M6-02 · M6-06)은 `pw_run::shutdown`, DB 의 SSH 터널(M3-11)은 남은 ssh 프로세스 그룹.
+/// 프로젝트 창을 닫을 때의 확인(M6-06 ⑥)은 창이 하고, 여기는 묻지 않는다 — 이미 닫기로 한 뒤다.
+fn end_processes_on_exit() {
+    pw_run::shutdown();
+    pw_db_driver::tunnel::shutdown();
 }
 
 #[cfg(test)]
@@ -1131,5 +1137,129 @@ mod tests {
                 denied
             );
         });
+    }
+
+    /// 앱 종료 흉내(시험 [`exiting_the_app_ends_runs`] 가 이 시험 바이너리를 자식으로 띄울 때만 돈다): 실행 하나(SIGHUP · SIGTERM 을
+    /// 무시하는 손자를 둔다)를 띄워 중지를 걸고 pid 를 찍은 뒤 [`end_processes_on_exit`] 를 부르고 Tauri 처럼 `std::process::exit` 로
+    /// 끝난다.
+    #[cfg(unix)]
+    #[test]
+    fn app_exit_probe() {
+        use pw_run::pty::Ending;
+        use pw_run::runs::{
+            LaunchedBy, NewRun, ProcessLauncher, ProcessSpec, PtyLauncher, Relaunch, Runs,
+        };
+
+        if std::env::var("PW_APP_EXIT_PROBE").is_err() {
+            return;
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let pids = runtime.block_on(async {
+            let runs = Runs::new(Arc::new(pw_runtime::Runtime::new(
+                pw_runtime::LoginShell::new(None, Duration::from_secs(1)),
+            )));
+            let spec = ProcessSpec {
+                argv: [
+                    "/bin/sh",
+                    "-c",
+                    "(trap '' HUP TERM; exec sleep 100) & echo BG=$!; echo DONE; wait",
+                ]
+                .map(str::to_owned)
+                .to_vec(),
+                cwd: std::fs::canonicalize(std::env::temp_dir()).unwrap(),
+                env: vec![("PATH".into(), "/usr/bin:/bin".into())],
+                cols: 80,
+                rows: 24,
+                ending: Ending::Terminate {
+                    grace: Duration::from_secs(5),
+                },
+            };
+            let info = runs
+                .start_kind(
+                    NewRun {
+                        project_id: "p".into(),
+                        config: "probe".into(),
+                        name: "probe".into(),
+                        launched_by: LaunchedBy::Window { window: None },
+                        worktree: None,
+                        cwd: Some(spec.cwd.clone()),
+                        profile: None,
+                        relaunch: Relaunch::None,
+                        size: (80, 24),
+                        restart_of: None,
+                    },
+                    |output| PtyLauncher.launch(&spec, output),
+                )
+                .unwrap();
+            let run = runs.find("p", &info.run_id).unwrap();
+            let text = loop {
+                let text = run
+                    .with_log(|log| String::from_utf8_lossy(&log.read(0, 4096).bytes).into_owned());
+                if text.contains("DONE") {
+                    break text;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            };
+            runs.stop("p", &info.run_id).unwrap();
+            let background: u32 = text
+                .split("BG=")
+                .nth(1)
+                .unwrap()
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+                .parse()
+                .unwrap();
+            [background, info.pid.unwrap()]
+        });
+        println!("PIDS={},{}", pids[0], pids[1]);
+        end_processes_on_exit();
+        std::process::exit(0);
+    }
+
+    /// 17-m6-plan M6-06 완료 기준(Rust): 앱 종료 길([`end_processes_on_exit`] — `RunEvent::Exit` 가 부른다)이 실행을 끝낸다 — 중지
+    /// 중이던 실행과 SIGHUP · SIGTERM 을 무시하는 손자까지 1초 안에 사라진다.
+    #[cfg(unix)]
+    #[test]
+    fn exiting_the_app_ends_runs() {
+        fn alive(pid: u32) -> bool {
+            // SAFETY: 신호 0 은 존재만 본다.
+            unsafe { libc::kill(libc::pid_t::try_from(pid).unwrap(), 0) == 0 }
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["tests::app_exit_probe", "--exact", "--nocapture"])
+            .env("PW_APP_EXIT_PROBE", "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let exited = std::time::Instant::now();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let pids: Vec<u32> = stdout
+            .lines()
+            .find_map(|l| l.strip_prefix("PIDS="))
+            .unwrap_or_else(|| {
+                panic!(
+                    "no pids in {stdout:?} {:?}",
+                    String::from_utf8_lossy(&output.stderr)
+                )
+            })
+            .split(',')
+            .map(|p| p.parse().unwrap())
+            .collect();
+        let left = loop {
+            let left: Vec<u32> = pids.iter().copied().filter(|&p| alive(p)).collect();
+            if left.is_empty() || exited.elapsed() > Duration::from_secs(1) {
+                break left;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        for &pid in &left {
+            // SAFETY: 이 시험이 띄운 프로세스다.
+            unsafe { libc::kill(libc::pid_t::try_from(pid).unwrap(), libc::SIGKILL) };
+        }
+        assert!(left.is_empty(), "{left:?} of {pids:?} outlived the app");
     }
 }
