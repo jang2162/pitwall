@@ -8,8 +8,12 @@
 //!   (`gradlew` · `mvnw`)는 감지기가 루트 안의 절대 경로로 넘긴다.
 //! - **시한 · 상한**([`ExecLimits`]): 자동 감지(목록 · 파일 감시)는 [`AUTOMATIC`](30초), 사람이 「태스크 읽기」 를 누른 것은
 //!   [`PRESSED`](5분 — Host 작업으로 진행 · 취소가 보인다). 출력이 상한을 넘거나 시한을 넘기면 세션째 끝내고 까닭이다.
-//! - **남기지 않는다**: 자식은 새 세션에서 돌고, 끝나면(스스로 끝나도) 그 세션에 남은 프로세스(gradle 의 1회용 데몬, 빌드
-//!   스크립트가 띄운 것)를 함께 끝낸다(`pw_runtime::process::run_in_session`). stdin 은 `/dev/null` 이다.
+//! - **남기지 않는다**: 자식은 새 세션에서 돌고, 끝나면(스스로 끝나도 · 시한 · 상한 · 취소) 그 세션의 프로세스와 **도는 동안 본
+//!   자손**(부모 pid 를 따라 — 스스로 `setsid` 한 것도. gradle 은 `org.gradle.jvmargs` 가 있으면 `--no-daemon` 이어도 1회용 데몬을
+//!   띄우고 그 데몬은 새 세션이 된다 — M6-05 리뷰 실측)을 SIGTERM → [`END_GRACE`] → SIGKILL 로 끝낸다(`pw_runtime::process::run_watched`
+//!   \+ `crate::tree::Descendants`). 닿지 않는 것은 관찰 사이(약 100 ms)에 태어나 부모를 떠난 것, 그리고 Windows(세션 · 자손 찾기가
+//!   없어 자식만 끝낸다)다. stdin 은 `/dev/null` 이다.
+//! - **신뢰를 거두면 멈춘다**: 도는 동안 약 1 초마다 신뢰를 다시 보고, 거두어졌으면 위와 같이 끝내고 까닭이다.
 //! - **까닭에 출력을 싣지 않는다**: 실패의 까닭은 프로그램 이름과 끝 코드뿐이다 — stderr 에는 설정 파일의 줄(값)이 섞인다.
 
 use std::ffi::OsString;
@@ -42,6 +46,13 @@ pub const PRESSED: ExecLimits = ExecLimits {
     timeout: Duration::from_secs(5 * 60),
     max_output: 32 * 1024 * 1024,
 };
+
+/// 끝낼 때 SIGTERM 뒤 SIGKILL 까지 기다리는 시간(인터럽트를 삼키는 빌드 스크립트는 SIGKILL 로 끝난다).
+pub const END_GRACE: Duration = Duration::from_secs(1);
+/// 도는 동안 자손을 기록하는 간격.
+const OBSERVE_EVERY: Duration = Duration::from_millis(100);
+/// 도는 동안 신뢰를 다시 보는 간격.
+const TRUST_EVERY: Duration = Duration::from_secs(1);
 
 /// 그 프로젝트의 신뢰를 지금 판정한다.
 pub type TrustCheck = Arc<dyn Fn(&str) -> bool + Send + Sync>;
@@ -90,6 +101,90 @@ impl TrustedExec {
     }
 }
 
+impl TrustedExec {
+    /// 띄우고 끝날 때까지: 도는 동안 자손을 기록하고 신뢰를 다시 보며, 끝나면 세션과 기록한 자손을 끝낸다(머리 주석).
+    fn run(
+        &self,
+        command: Command,
+        withdrawn: &std::cell::Cell<bool>,
+    ) -> Result<process::Output, RunError> {
+        #[cfg(unix)]
+        let mut descendants: Option<crate::tree::Descendants> = None;
+        let started = std::time::Instant::now();
+        let (mut observed, mut checked) = (started, started);
+        let cancel = self.cancel.clone();
+        let mut watch = |event: process::Watch| match event {
+            process::Watch::Started(pid) => {
+                #[cfg(unix)]
+                {
+                    let mut d = crate::tree::Descendants::new(pid as libc::pid_t);
+                    d.observe();
+                    descendants = Some(d);
+                }
+                let _ = pid;
+            }
+            process::Watch::Running => {
+                let now = std::time::Instant::now();
+                if now.duration_since(observed) >= OBSERVE_EVERY {
+                    observed = now;
+                    #[cfg(unix)]
+                    if let Some(d) = descendants.as_mut() {
+                        d.observe();
+                    }
+                }
+                if now.duration_since(checked) >= TRUST_EVERY {
+                    checked = now;
+                    if !self.trusted() {
+                        withdrawn.set(true);
+                        cancel.cancel();
+                    }
+                }
+            }
+            process::Watch::Ended =>
+            {
+                #[cfg(unix)]
+                if let Some(d) = descendants.take() {
+                    d.end(&[(libc::SIGTERM, END_GRACE)]);
+                }
+            }
+        };
+        process::run_watched(
+            command,
+            self.limits.timeout,
+            self.limits.max_output,
+            &self.cancel,
+            &mut watch,
+        )
+    }
+}
+
+/// 그 프로젝트 창이 아닌 연결(Host · 다른 프로젝트 창 · 파일 창 · 에이전트)의 목록이 쓰는 실행기: 아무것도 띄우지 않고 캐시만 읽는다
+/// — 프로세스를 띄우는 감지(mise)는 까닭 [`NOT_THIS_WINDOW`] 로 비고, 누를 때만 읽는 목록(gradle · maven)은 캐시 그대로 보인다. 그
+/// 프로젝트의 코드는 그 프로젝트 창만 돌린다(M6-05 리뷰 권고 2 — 메인 판정).
+pub struct CacheOnly {
+    cache_dir: Option<PathBuf>,
+}
+
+impl CacheOnly {
+    pub fn new(cache_dir: Option<PathBuf>) -> Self {
+        Self { cache_dir }
+    }
+}
+
+/// [`CacheOnly`] 의 까닭.
+pub const NOT_THIS_WINDOW: &str =
+    "tasks that need a process to list (mise) are listed only in the project's own window";
+
+impl DetectExec for CacheOnly {
+    fn output(&self, _detector: &str, _argv: &[String], _cwd: &Path) -> Result<String, String> {
+        Err(NOT_THIS_WINDOW.to_owned())
+    }
+
+    fn cache_dir(&self) -> Option<&Path> {
+        self.cache_dir.as_deref()
+    }
+}
+
 /// 감지 실행이 거절 · 실패한 까닭의 머리 — 미신뢰.
 pub fn untrusted_reason(program: &str) -> String {
     format!(
@@ -121,13 +216,9 @@ impl DetectExec for TrustedExec {
             // 색 코드 · 진행 막대가 출력에 섞이지 않게.
             .env("NO_COLOR", "1")
             .env("TERM", "dumb");
-        let output = process::run_in_session(
-            command,
-            self.limits.timeout,
-            self.limits.max_output,
-            &self.cancel,
-        )
-        .map_err(|e| match e {
+        let withdrawn = std::cell::Cell::new(false);
+        let output = self.run(command, &withdrawn).map_err(|e| match e {
+            RunError::Cancelled if withdrawn.get() => untrusted_reason(&shown),
             RunError::Spawn(e) => format!("cannot start `{shown}`: {e}"),
             RunError::TimedOut => format!(
                 "`{shown}` did not finish within {:?}; Pitwall stopped it",

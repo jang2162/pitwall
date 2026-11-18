@@ -23,7 +23,7 @@ use serde_json::json;
 use super::RunConfig;
 use super::read::{RunConfigLayer, RunConfigPlace, UnusableRunConfig, read};
 use super::write::{RunConfigLocation, check_id, file_of, plan};
-use crate::detect::exec::{AUTOMATIC, EnvSource, ExecLimits, PRESSED, TrustedExec};
+use crate::detect::exec::{AUTOMATIC, CacheOnly, EnvSource, ExecLimits, PRESSED, TrustedExec};
 use crate::detect::refresh::{RunTasksRefresh, RunTasksRefreshParams, RunTasksRefreshed};
 use crate::detect::{
     self, DetectExec, DetectProblem, NoExec, Seen, TaskList, cache, gradle, maven, mise,
@@ -287,18 +287,34 @@ impl RunConfigs {
         RunConfigPlace::new(&host.paths, &project, worktree)
     }
 
-    /// `run.config.list`.
-    pub fn list(&self, params: &RunConfigListParams) -> Result<RunConfigList, RpcError> {
+    /// `run.config.list`. 프로세스를 띄우는 감지(mise)는 그 프로젝트 창의 연결(`scope`)일 때만 돈다 — 다른 연결에는 캐시 · 정적 결과만
+    /// 준다([`CacheOnly`]). 파일 감시가 다시 감지할 자리도 그 창의 목록만 기억한다.
+    pub fn list(
+        &self,
+        scope: &ConnectionScope,
+        params: &RunConfigListParams,
+    ) -> Result<RunConfigList, RpcError> {
         let place = self.place(&params.project_id, params.worktree.as_deref())?;
         let set = read(&place);
-        let exec = self.exec(&params.project_id, AUTOMATIC);
+        let own_window = scope_may_write(scope, &params.project_id);
+        let exec: Box<dyn DetectExec> = if own_window {
+            self.exec(&params.project_id, AUTOMATIC)
+        } else {
+            let dir = self
+                .host
+                .get()
+                .and_then(|parts| cache_dir(&parts.paths, &params.project_id));
+            Box::new(CacheOnly::new(dir))
+        };
         let detection = detect::detect(&place.root, exec.as_ref());
-        self.seen.remember(
-            &params.project_id,
-            params.worktree.as_deref(),
-            &place.root,
-            &detection,
-        );
+        if own_window {
+            self.seen.remember(
+                &params.project_id,
+                params.worktree.as_deref(),
+                &place.root,
+                &detection,
+            );
+        }
         Ok(RunConfigList {
             configs: set
                 .configs
@@ -346,7 +362,7 @@ impl RunConfigs {
         .await?;
         let id = params.project_id.clone();
         if !parts.projects.is_trusted(&id) {
-            return Err(untrusted(&id));
+            return Err(crate::runs::untrusted(&id));
         }
         let detect = self
             .detect
@@ -498,20 +514,13 @@ fn read_tasks(detector: &str, root: &Path, exec: &TrustedExec) -> Result<(), Str
         maven::ID => (maven::read(root, exec)?, cache::BuildFiles::Maven),
         _ => return Ok(()),
     };
+    // 캐시에는 목록에 둘 이름만 쓴다(꼴 · 길이 · 개수 — 수만 개를 내는 빌드도 캐시 파일이 상한을 넘지 않는다).
+    let names = gradle::plain_names(detector, names, &mut Vec::new());
     let dir = exec
         .cache_dir()
         .ok_or_else(|| "this project has no folder for the task list".to_owned())?;
     let key = cache::key(root, kind)?;
     cache::store(dir, detector, &key, &names)
-}
-
-/// 미신뢰 프로젝트의 거절 — M6-02 의 실행 거절(`pw_run::runs::untrusted`)과 같은 꼴. 뒤에 병합되는 쪽이 하나로 합친다.
-fn untrusted(project_id: &str) -> RpcError {
-    RpcError::new(
-        code::PERMISSION_DENIED,
-        "trust the project before Pitwall runs its build scripts to read tasks",
-    )
-    .with_data(json!({ "projectId": project_id, "reason": "untrusted" }))
 }
 
 fn exists(path: &Path) -> bool {
@@ -568,9 +577,9 @@ pub fn register(router: &mut Router, configs: Arc<RunConfigs>) {
     router
         .unary(
             RunConfigListMethod,
-            move |_ctx, params: RunConfigListParams| {
-                let c = Arc::clone(&list);
-                blocking(move || c.list(&params))
+            move |ctx, params: RunConfigListParams| {
+                let (c, scope) = (Arc::clone(&list), ctx.scope().clone());
+                blocking(move || c.list(&scope, &params))
             },
         )
         .unary(RunConfigSave, move |ctx, params: RunConfigSaveParams| {

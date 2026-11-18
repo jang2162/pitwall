@@ -7,8 +7,9 @@
 //!   열쇠를 쓴다.
 //! - **찾는 범위**: 루트 아래를 [`MAX_DEPTH`] 깊이 · [`MAX_ENTRIES`] 항목까지, 링크를 따르지 않고 숨은 폴더(`.mvn` 밖)와 산출물
 //!   폴더(`build` · `target` · `node_modules` …)는 들어가지 않는다. 넘거나 빌드 파일이 [`MAX_FILE`] 을 넘으면 열쇠를 낼 수 없다 —
-//!   캐시를 쓰지도 읽지도 않는다(까닭은 목록에 남는다). 빌드 파일이 부르는 다른 파일(`buildSrc` 의 소스, `apply from:` 의 스크립트)은
-//!   보지 않는다.
+//!   캐시를 쓰지도 읽지도 않는다(까닭은 목록에 남는다). 빌드 파일이 부르는 다른 파일(`buildSrc` 의 소스, `apply from:` 의 스크립트)과 사람 수준의
+//!   설정(`~/.gradle/gradle.properties` · `~/.gradle/init.d`, `~/.m2/settings.xml`)은 보지 않는다 — 그것만 바뀌면 「다시 읽기」 를
+//!   사람이 누른다.
 //! - **파일**: 판([`VERSION`])이 다르거나 깨졌으면 버린다(정적 목록으로). 감지기마다 최근 열쇠 [`KEPT`] 개를 둔다. 임시 파일 +
 //!   rename 으로 쓴다. 이름만 담는다 — 태스크 설명 · 출력은 담지 않는다.
 
@@ -253,6 +254,13 @@ pub fn store(dir: &Path, detector: &str, key: &str, tasks: &[String]) -> Result<
     );
     lists.truncate(KEPT);
     let text = serde_json::to_vec(&file).map_err(|e| e.to_string())?;
+    // 읽는 쪽이 버릴 크기는 쓰지 않는다 — 다른 감지기의 기록까지 함께 사라진다.
+    if text.len() as u64 > MAX_CACHE_FILE {
+        return Err(format!(
+            "the task list cache would be larger than {} MiB; Pitwall does not write it",
+            MAX_CACHE_FILE / (1024 * 1024)
+        ));
+    }
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let mut tmp =
         tempfile::NamedTempFile::new_in(dir).map_err(|e| format!("{}: {e}", dir.display()))?;

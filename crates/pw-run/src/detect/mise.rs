@@ -127,6 +127,18 @@ pub fn tasks(stdout: &str) -> Result<Found, String> {
     let mut found = Found::default();
     let mut by_name: BTreeMap<String, PathBuf> = BTreeMap::new();
     let mut unsourced = 0;
+    let total = listed.len();
+    // 이름은 argv 한 칸으로만 가지만 목록 · 실행 선택기에 그대로 보인다 — 줄바꿈 · 이스케이프 같은 제어 문자가 든 이름은 뺀다.
+    let listed: Vec<Listed> = listed
+        .into_iter()
+        .filter(|t| !t.name.chars().any(char::is_control))
+        .collect();
+    if listed.len() < total {
+        found.skipped.push(format!(
+            "skipped {} mise task(s) whose names contain control characters",
+            total - listed.len()
+        ));
+    }
     for task in listed.into_iter().filter(|t| !t.hide) {
         match task.file.or(task.source) {
             Some(path) if Path::new(&path).is_absolute() => {

@@ -34,21 +34,63 @@ pub fn terminate_sessions(leaders: &[pid_t], grace: Duration) {
 /// 시간 안에 다 끝나면 멈춘다. 모든 단계 뒤에 남은 것에는 SIGKILL 을 보낸다. 끝날 때까지 블로킹한다. 실행(`crate::runs`)의 중지는
 /// `[(SIGTERM, 5 s)]`, compose 는 그 앞에 `(SIGINT, …)` 이고, 터미널은 `[(SIGHUP, 300 ms)]` 다.
 pub fn end_sessions(leaders: &[pid_t], steps: &[(libc::c_int, Duration)], reach: Reach) {
-    let mut known = BTreeMap::new();
+    end_known(leaders, steps, reach, &mut BTreeMap::new());
+}
+
+/// 띄운 프로세스(새 세션의 리더) 하나의 세션과 자손을 **도는 동안** 기록해 두었다가 끝낸다 — 태스크 감지(17-m6-plan M6-05)가 띄운
+/// gradle 의 1회용 데몬은 스스로 `setsid` 하고, 클라이언트가 먼저 끝나면 init 으로 넘어가 부모로는 찾을 수 없다. 도는 동안
+/// [`Self::observe`] 가 본 자손은 (pid, 시작 시각)으로 남아 끝낼 때 함께 끝난다. 닿지 않는 것은 관찰 사이(약 100 ms)에 태어나
+/// 부모를 떠난 것이다.
+#[derive(Debug)]
+pub struct Descendants {
+    leader: pid_t,
+    known: BTreeMap<pid_t, Option<u64>>,
+}
+
+impl Descendants {
+    pub fn new(leader: pid_t) -> Self {
+        Self {
+            leader,
+            known: BTreeMap::new(),
+        }
+    }
+
+    /// 지금의 세션 프로세스와 자손을 기록한다.
+    pub fn observe(&mut self) {
+        let _ = targets(&[self.leader], Reach::SessionAndChildren, &mut self.known);
+    }
+
+    /// 기록한 것과 지금 찾은 것을 단계마다 신호로 끝내고, 남은 것은 SIGKILL. 끝날 때까지 블로킹한다.
+    pub fn end(mut self, steps: &[(libc::c_int, Duration)]) {
+        end_known(
+            &[self.leader],
+            steps,
+            Reach::SessionAndChildren,
+            &mut self.known,
+        );
+    }
+}
+
+fn end_known(
+    leaders: &[pid_t],
+    steps: &[(libc::c_int, Duration)],
+    reach: Reach,
+    known: &mut BTreeMap<pid_t, Option<u64>>,
+) {
     for &(signal, grace) in steps {
-        let targets = targets(leaders, reach, &mut known);
+        let targets = targets(leaders, reach, known);
         signal_all(leaders, &targets, signal);
         signal_all(leaders, &targets, libc::SIGCONT);
         let deadline = Instant::now() + grace;
         while Instant::now() < deadline {
-            if targets_left(leaders, reach, &mut known) {
+            if targets_left(leaders, reach, known) {
                 std::thread::sleep(Duration::from_millis(10));
             } else {
                 return;
             }
         }
     }
-    let left = targets(leaders, reach, &mut known);
+    let left = targets(leaders, reach, known);
     if !left.is_empty() {
         tracing::debug!(target: "pw_run", ?leaders, ?left, "killing session processes that outlived the stop signals");
     }

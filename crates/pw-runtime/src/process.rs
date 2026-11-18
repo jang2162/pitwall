@@ -41,12 +41,14 @@ pub fn run(
     limit: usize,
     cancel: &Cancel,
 ) -> Result<Output, RunError> {
-    run_with(command, timeout, limit, cancel, false)
+    run_with(command, timeout, limit, cancel, false, &mut |_| {})
 }
 
-/// [`run`] 과 같되, 자식이 스스로 끝나도 그 세션(프로세스 그룹)에 남은 프로세스를 함께 끝낸다 — 자식이 띄워 두고 끝난 데몬 ·
-/// 백그라운드 프로세스가 남지 않는다(태스크 감지의 `gradle` · `mvn` — 17-m6-plan M6-05). 새 세션을 스스로 만든 손자(`setsid`)는
-/// 그 그룹 밖이라 닿지 않는다.
+/// [`run`] 과 같되, 자식이 스스로 끝나도 그 세션(프로세스 그룹)에 남은 프로세스를 함께 끝낸다. **스스로 `setsid` 한 자손(gradle 의
+/// 1회용 데몬)은 그 그룹 밖이라 닿지 않는다** — 그것까지 끝내려면 [`run_watched`] 로 자손을 따라간다.
+///
+/// 정상으로 끝난 자식은 거둔 뒤 `killpg` 하므로, 그룹이 이미 비었으면 그 사이 같은 번호를 받은 다른 그룹에 닿을 아주 짧은 틈이
+/// 있다(새 세션 리더의 pid 가 곧바로 다시 쓰여야 한다 — 실용상 무시한다).
 #[cfg(unix)]
 pub fn run_in_session(
     command: Command,
@@ -54,7 +56,32 @@ pub fn run_in_session(
     limit: usize,
     cancel: &Cancel,
 ) -> Result<Output, RunError> {
-    run_with(command, timeout, limit, cancel, true)
+    run_with(command, timeout, limit, cancel, true, &mut |_| {})
+}
+
+/// [`run_watched`] 가 부른 쪽에 알리는 때.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Watch {
+    /// 띄웠다(새 세션의 리더 pid).
+    Started(u32),
+    /// 도는 중 — 약 20 ms 마다 한 번. 부른 쪽이 자손을 기록할 때다.
+    Running,
+    /// 끝난다(스스로 · 시한 · 상한 · 취소). 세션 그룹을 끝내기 **전**이라 자손의 부모 관계가 아직 남아 있다 — 부른 쪽이 기록한 자손과
+    /// 지금 보이는 자손을 끝낼 때다.
+    Ended,
+}
+
+/// [`run_in_session`] 과 같되 띄운 뒤 · 도는 동안 · 끝난 뒤를 `watch` 로 알린다 — 부른 쪽이 자식의 자손(부모 pid 를 따라)을 도는
+/// 동안 기록해 두었다가 끝날 때 함께 끝낼 수 있게(태스크 감지 — `pw_run::detect::exec`). `Ended` 는 오류로 끝나도 한 번 온다.
+#[cfg(unix)]
+pub fn run_watched(
+    command: Command,
+    timeout: Duration,
+    limit: usize,
+    cancel: &Cancel,
+    watch: &mut dyn FnMut(Watch),
+) -> Result<Output, RunError> {
+    run_with(command, timeout, limit, cancel, true, watch)
 }
 
 #[cfg(unix)]
@@ -64,6 +91,7 @@ fn run_with(
     limit: usize,
     cancel: &Cancel,
     reap_session: bool,
+    watch: &mut dyn FnMut(Watch),
 ) -> Result<Output, RunError> {
     use std::fs::File;
     use std::io::Read as _;
@@ -89,6 +117,7 @@ fn run_with(
         .spawn()
         .map_err(|e| RunError::Spawn(e.to_string()))?;
     let pid = child.id();
+    watch(Watch::Started(pid));
     let stdout = child.stdout.take().map(|p| File::from(OwnedFd::from(p)));
     let stderr = child.stderr.take().map(|p| File::from(OwnedFd::from(p)));
     // [stdout, stderr]. 닫힌(EOF · 오류) 파이프는 `None` 이다.
@@ -98,6 +127,7 @@ fn run_with(
     let mut exited: Option<(ExitStatus, Instant)> = None;
     let mut chunk = vec![0u8; 64 * 1024];
     let outcome = loop {
+        watch(Watch::Running);
         if exited.is_none()
             && let Ok(Some(status)) = child.try_wait()
         {
@@ -165,6 +195,9 @@ fn run_with(
         }
     };
     drop(pipes);
+    // 부른 쪽이 자손을 끝낸다 — 세션 그룹을 끝내기 **전**에. 먼저 그룹을 끝내면 그 사이 부모를 잃은 자손(스스로 `setsid` 한 것)이
+    // init 으로 넘어가 마지막 관찰에서 빠진다.
+    watch(Watch::Ended);
     if outcome.is_err() || exited.is_none() || reap_session {
         // 시간을 넘겼거나 상한을 넘겼다. 세션째 끝낸다 — setsid 로 자식 pid 가 그룹 id 다.
         // SAFETY: killpg(2) 는 신호를 보낼 뿐이다.
@@ -174,16 +207,38 @@ fn run_with(
     }
     // 죽였든 스스로 끝났든 거둔다(좀비를 남기지 않는다).
     let status = match exited {
-        Some((status, _)) => status,
-        None => child.wait().map_err(|e| RunError::Spawn(e.to_string()))?,
+        Some((status, _)) => Ok(status),
+        None => child.wait().map_err(|e| RunError::Spawn(e.to_string())),
     };
     outcome?;
+    let status = status?;
     let [stdout, stderr] = bufs;
     Ok(Output {
         status,
         stdout,
         stderr,
     })
+}
+
+/// Windows: 세션이 없어 [`run`] 과 같고 `watch` 를 부르지 않는다(자식만 죽인다).
+#[cfg(not(unix))]
+pub fn run_watched(
+    command: Command,
+    timeout: Duration,
+    limit: usize,
+    cancel: &Cancel,
+    _watch: &mut dyn FnMut(Watch),
+) -> Result<Output, RunError> {
+    run(command, timeout, limit, cancel)
+}
+
+/// [`run_watched`] 가 부른 쪽에 알리는 때(Windows 에서는 오지 않는다).
+#[cfg(not(unix))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Watch {
+    Started(u32),
+    Running,
+    Ended,
 }
 
 /// Windows: 세션이 없어 [`run`] 과 같다(자식만 죽인다).

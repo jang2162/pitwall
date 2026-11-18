@@ -1,8 +1,8 @@
 //! 사람의 「태스크 읽기」(17-m6-plan M6-05 ④ — 결정 M6-D8 · D70): `run.tasks.refresh { projectId, worktree?, detector }`.
 //!
 //! - **누구**: 그 프로젝트 창의 연결만(`exec_grant` — Host · 다른 프로젝트 창 · 파일 창 · 에이전트 범위는 `PERMISSION_DENIED`).
-//!   MCP 툴로는 내지 않는다. 미신뢰 프로젝트면 아무것도 띄우지 않고 `PERMISSION_DENIED`(`data.reason = "untrusted"` — M6-02 의 실행
-//!   거절과 같은 꼴).
+//!   MCP 툴로는 내지 않는다. 미신뢰 프로젝트면 아무것도 띄우지 않고 M6-02 의 실행 거절
+//!   (`pw_run::runs::untrusted` — `PERMISSION_DENIED`, `data.reason = "untrusted"`) 그대로다. 도는 동안 신뢰를 거두면 멈춘다.
 //! - **무엇**: `gradle` · `maven` 은 빌드 스크립트를 돌려 목록을 읽고([`super::gradle::read`] · [`super::maven::read`]) 캐시에 쓴다.
 //!   `mise` 는 캐시하지 않으므로 감지만 다시 한다.
 //! - **보이게**: 프로젝트 범위 Host 작업(상태바의 진행 · `task.cancel`)으로 돈다. 취소하거나 요청이 버려지면 프로세스를 세션째

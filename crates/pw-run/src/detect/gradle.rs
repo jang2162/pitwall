@@ -9,7 +9,9 @@
 use std::path::{Path, PathBuf};
 
 use super::cache::BuildFiles;
-use super::{DetectContext, DetectExec, DetectedTask, Found, TaskDetector, file, pick_names};
+use super::{
+    Budget, DetectContext, DetectExec, DetectedTask, Found, TaskDetector, file, pick_names,
+};
 use crate::config::{RunConfig, RunKindConfig};
 
 pub const ID: &str = "gradle";
@@ -70,7 +72,7 @@ impl TaskDetector for GradleDetector {
         };
         build_tasks(ID, &cx.root.join(source), names, &mut found, |name| {
             RunKindConfig::Gradle { tasks: vec![name] }
-        });
+        })?;
         Ok(found)
     }
 }
@@ -97,16 +99,10 @@ pub(crate) fn build_tasks(
     names: Vec<String>,
     found: &mut Found,
     kind: impl Fn(String) -> RunKindConfig,
-) {
-    let total = names.len();
-    let names: Vec<String> = names.into_iter().filter(|n| task_name(n)).collect();
-    if names.len() < total {
-        found.skipped.push(format!(
-            "skipped {} task(s) whose names are not plain task names",
-            total - names.len()
-        ));
-    }
-    for name in pick_names(detector, names, &mut found.skipped) {
+) -> Result<(), String> {
+    let mut budget = Budget::default();
+    for name in plain_names(detector, names, &mut found.skipped) {
+        budget.take(name.len())?;
         found.tasks.push(DetectedTask {
             detector,
             name: name.clone(),
@@ -123,6 +119,22 @@ pub(crate) fn build_tasks(
             definition: name,
         });
     }
+    Ok(())
+}
+
+/// 읽은 이름 → 목록에 둘 이름: 꼴([`task_name`] — 셸에 안전한 글자와 `:`, [`super::MAX_NAME_LEN`] 까지)이 아닌 것을 빼고 이름순 ·
+/// 중복 없이 앞의 [`super::MAX_TASKS`] 개(`pick_names`). 뺀 까닭은 `skipped` 에. 캐시에 쓰기 전(`run.tasks.refresh`)과 캐시를
+/// 읽은 뒤(감지) 둘 다 지난다 — 손으로 고친 캐시도 같은 규칙이다.
+pub fn plain_names(detector: &str, names: Vec<String>, skipped: &mut Vec<String>) -> Vec<String> {
+    let total = names.len();
+    let names: Vec<String> = names.into_iter().filter(|n| task_name(n)).collect();
+    if names.len() < total {
+        skipped.push(format!(
+            "skipped {} task(s) whose names are not plain task names",
+            total - names.len()
+        ));
+    }
+    pick_names(detector, names, skipped)
 }
 
 /// Gradle · Maven 태스크 이름으로 받는 꼴: 영문자 · 숫자 · `_` 로 시작하고 영문자 · 숫자 · `_` · `-` · `.` · `:` · `+` 만.
@@ -145,8 +157,9 @@ fn program(root: &Path) -> String {
     }
 }
 
-/// 「태스크 읽기」: `gradle tasks --all` 을 루트에서 돌려 태스크 이름을 읽는다(`--no-daemon` — 데몬을 남기지 않는다. 남은 것은 실행기가
-/// 세션째 끝낸다). 이름은 거르지 않는다 — 감지가 거른다.
+/// 「태스크 읽기」: `gradle tasks --all` 을 루트에서 돌려 태스크 이름을 읽는다. `--no-daemon` · `-Dorg.gradle.daemon=false` 를 주지만
+/// `org.gradle.jvmargs` 가 있으면 gradle 은 그래도 1회용 데몬(새 세션)을 띄운다 — 그것은 실행기가 자손으로 따라가 끝낸다
+/// ([`super::exec`] 머리 주석). 이름은 여기서 거르지 않는다 — 쓰기 전([`plain_names`])과 감지가 거른다.
 pub fn read(root: &Path, exec: &dyn DetectExec) -> Result<Vec<String>, String> {
     let argv: Vec<String> = [
         program(root).as_str(),
@@ -155,6 +168,7 @@ pub fn read(root: &Path, exec: &dyn DetectExec) -> Result<Vec<String>, String> {
         "--quiet",
         "--console=plain",
         "--no-daemon",
+        "-Dorg.gradle.daemon=false",
     ]
     .iter()
     .map(|s| (*s).to_owned())

@@ -33,6 +33,9 @@ const COMMON_GOALS: [(&str, &str); 2] = [
     ("quarkus-maven-plugin", "quarkus:dev"),
 ];
 
+/// effective POM 요소 중첩의 상한(POM 은 열 단계 안팎이다).
+pub const MAX_DEPTH: usize = 64;
+
 /// effective POM 파일의 크기 상한.
 pub const MAX_EFFECTIVE_POM: u64 = 16 * 1024 * 1024;
 
@@ -63,7 +66,7 @@ impl TaskDetector for MavenDetector {
         };
         build_tasks(ID, &cx.root.join(SOURCE), names, &mut found, |name| {
             RunKindConfig::Maven { tasks: vec![name] }
-        });
+        })?;
         Ok(found)
     }
 }
@@ -165,6 +168,11 @@ pub fn plugin_goals(xml: &str) -> Result<Vec<String>, String> {
                 return Err("the effective POM has a DOCTYPE; Pitwall does not read it".to_owned());
             }
             Event::Start(start) => {
+                if path.len() >= MAX_DEPTH {
+                    return Err(format!(
+                        "the effective POM nests elements deeper than {MAX_DEPTH}; Pitwall does not read it"
+                    ));
+                }
                 path.push(start.local_name().as_ref().to_owned());
                 text.clear();
                 tainted = false;
