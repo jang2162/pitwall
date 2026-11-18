@@ -44,6 +44,12 @@ export function runStrings(t: Translate) {
       t("run-exited-line", { code: exit.code ?? "none", signal: exit.signal ?? "?" }),
     droppedLine: (bytes: number) => t("run-dropped-line", { bytes }),
     attachFailed: (message: string) => t("run-attach-failed", { message }),
+    /** 포트 칩(탭 머리 · 상태바 — 내용은 M6-08 의 포트를 받아 채운다, run-ports.tsx). */
+    port: {
+      label: (port: number) => t("run-port-label", { port }),
+      open: (url: string) => t("run-port-open", { url }),
+      allAddresses: t("run-port-all-addresses"),
+    },
     status: {
       label: (count: number) => t("run-status-label", { count }),
       hint: (count: number) => t("run-status-hint", { count }),

@@ -63,7 +63,7 @@ export class FakeRunHost {
     subscribe: ((_params: unknown, listener: (event: EventMessage) => void) => {
       this.listener = listener;
       return Promise.resolve({ subscriptionId: 1, unsubscribe: async () => {} });
-    }) as RpcClient["subscribe"],
+    }) as unknown as RpcClient["subscribe"],
   };
 
   push(runId: string, item: RunAttachEvent | "end") {

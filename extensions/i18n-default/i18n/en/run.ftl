@@ -47,6 +47,15 @@ run-dropped-line = [{ $bytes } bytes of earlier output were dropped]
 # $message: the reason the Host reported
 run-attach-failed = [Could not show the output: { $message }]
 
+## Port chips (M6-08's ports, drawn by src/run/run-ports.tsx)
+
+# $port: TCP port number
+run-port-label = :{ $port }
+# $url: the address the chip opens (http://localhost:<port>, or http://[::1]:<port> for an IPv6-only listener)
+run-port-open = Open { $url }
+# Shown on a port listening on every address (0.0.0.0 or ::), reachable from other machines
+run-port-all-addresses = all addresses
+
 ## Status bar
 
 # $count: running runs of this project

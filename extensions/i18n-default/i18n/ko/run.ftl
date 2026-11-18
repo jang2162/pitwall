@@ -47,6 +47,15 @@ run-dropped-line = [앞 출력 { $bytes } 바이트가 버려졌다]
 # $message: Host 가 알린 까닭
 run-attach-failed = [출력을 보이지 못했다: { $message }]
 
+## 포트 칩(M6-08 의 포트, src/run/run-ports.tsx 가 그린다)
+
+# $port: TCP 포트 번호
+run-port-label = :{ $port }
+# $url: 칩이 여는 주소(http://localhost:<port>, IPv6 에만 듣으면 http://[::1]:<port>)
+run-port-open = { $url } 열기
+# 모든 주소(0.0.0.0 · ::)에 듣는 포트 — 다른 기기에서도 닿는다
+run-port-all-addresses = 모든 주소
+
 ## 상태바
 
 # $count: 이 프로젝트에서 실행 중인 것
