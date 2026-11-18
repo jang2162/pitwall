@@ -15,7 +15,9 @@
 // - 에이전트가 보낸 글(클라이언트 이름 · 요약 · 경로 · 바뀔 글 · 문장)은 테두리 친 칸 안에만 그리고 넓은 규칙(agent-text.ts)으로
 //   거른다 — 한 줄 자리는 줄바꿈도 표지가 되고, 여러 줄 자리는 높이를 묶어 그 안에서 굴린다. 단추 줄은 굴리는 칸 밖(아래)에
 //   늘 있다. 그래서 긴 글 · 줄바꿈 · 단추처럼 꾸민 글이 다이얼로그의 칸이나 단추처럼 보이지 않고 단추를 화면 밖으로 밀지 못한다.
-// - SQL(`PlanChange` 의 `sql`): 연결 표지(프로덕션 · 읽기 전용), 파일이면 경로, 「되돌릴 수 없다」, 문장마다 등급. 조회가 아닌
+// - SQL(`PlanChange` 의 `sql`): 연결 표지(프로덕션 · 읽기 전용), 파일이면 경로(여럿이면 차례대로 — 실행 구성의 `sql` 종류,
+//   17-m6-plan M6-09 ⑥, 문장마다 그 파일), 트랜잭션 방식과 「실패해도 앞 파일은 커밋된다」(`per_file`) · 「실패해도 앞 문장은
+//   남는다」(`none`), 「되돌릴 수 없다」, 문장마다 등급. 조회가 아닌
 //   문장은 수와 상관없이 모두 보이고 넘는 조회 문장만 접는다(접은 수를 보인다). 파괴 등급 문장이
 //   하나라도 있으면 그 연결 이름을 쳐야 허용 단추가 켜진다(위험 쿼리 확인과 같은 부품 — db/safety/name-confirm.tsx).
 // - 남은 시한과 「n개 중 k」 를 보인다. 시한이 지나면 approvals.ts 가 요청을 빼 다이얼로그가 내려간다. 시계가 1초마다 다이얼로그를
@@ -247,6 +249,18 @@ function FileChange({
   );
 }
 
+/** 문장의 이름: 파일 여럿 · 파일 하나의 계획이면 그 파일과 줄(실행 구성의 `sql` 종류), 글이면 번호와 줄. */
+function statementLabel(
+  statement: SqlStatement,
+  files: Extract<PlanChange, { kind: "sql" }>["files"],
+  T: Strings,
+): string {
+  const file = statement.file === null ? undefined : files[statement.file];
+  return file
+    ? T.sql.statementIn(statement.index + 1, agentLine(file.path), statement.line)
+    : T.sql.statement(statement.index + 1, statement.line);
+}
+
 function SqlChange({ change, T }: { change: Extract<PlanChange, { kind: "sql" }>; T: Strings }) {
   const grade = useDbSafetyStrings().grade;
   const shown = shownStatements(change.statements);
@@ -261,16 +275,21 @@ function SqlChange({ change, T }: { change: Extract<PlanChange, { kind: "sql" }>
           readOnly={change.connection.readOnly}
         />
       </span>
-      {change.file && (
-        <span className="flex items-baseline gap-2">
+      {change.files.map((file, at) => (
+        <span key={at} className="flex items-baseline gap-2">
           <span className="flex-none text-[12px] font-semibold">{T.sql.file}</span>
-          <AgentLine
-            text={change.file.path}
-            max={SUMMARY_CHARS}
-            T={T}
-            testId="mcp-approval-sql-file"
-          />
+          <AgentLine text={file.path} max={SUMMARY_CHARS} T={T} testId="mcp-approval-sql-file" />
         </span>
+      ))}
+      {change.transaction && (
+        <p data-testid="mcp-approval-sql-transaction" className="text-[12px]">
+          {T.sql.transaction[change.transaction]}
+        </p>
+      )}
+      {change.keepsOnFailure && change.transaction && change.transaction !== "all" && (
+        <p role="alert" data-testid="mcp-approval-keeps-on-failure" className="text-ui-accent">
+          {T.sql.keepsOnFailure[change.transaction]}
+        </p>
       )}
       {change.irreversible && (
         <p role="alert" data-testid="mcp-approval-irreversible" className="text-ui-accent">
@@ -279,16 +298,16 @@ function SqlChange({ change, T }: { change: Extract<PlanChange, { kind: "sql" }>
       )}
       <p className="text-[12px]">{T.sql.statements(change.statements.length)}</p>
       <ol className="flex flex-col gap-2">
-        {shown.map((statement: SqlStatement) => (
+        {shown.map((statement: SqlStatement, at: number) => (
           <li
-            key={statement.index}
+            key={at}
             data-testid="mcp-approval-statement"
             data-grade={statement.grade}
             className="flex flex-col gap-0.5"
           >
             <span className="flex items-center gap-2 text-[12px]">
               <span className="text-ui-muted-foreground">
-                {T.sql.statement(statement.index + 1, statement.line)}
+                {statementLabel(statement, change.files, T)}
               </span>
               <span
                 data-testid="mcp-approval-statement-grade"

@@ -115,6 +115,17 @@ export function mcpStrings(t: Translate) {
         irreversible: t("mcp-approval-sql-irreversible"),
         statements: (count: number) => t("mcp-approval-sql-statements", { count }),
         statement: (n: number, line: number) => t("mcp-approval-sql-statement", { n, line }),
+        statementIn: (n: number, file: string, line: number) =>
+          t("mcp-approval-sql-statement-in", { n, file, line }),
+        transaction: {
+          all: t("mcp-approval-sql-transaction-all"),
+          per_file: t("mcp-approval-sql-transaction-per-file"),
+          none: t("mcp-approval-sql-transaction-none"),
+        },
+        keepsOnFailure: {
+          per_file: t("mcp-approval-sql-keeps-files"),
+          none: t("mcp-approval-sql-keeps-statements"),
+        },
         foldedReads: (count: number) => t("mcp-approval-sql-folded-reads", { count }),
       },
       remaining: (time: string) => t("mcp-approval-remaining", { time }),

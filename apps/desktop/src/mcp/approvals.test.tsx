@@ -379,8 +379,10 @@ function sql(statements: SqlStatement[], over: Partial<Extract<PlanChange, { kin
   return {
     kind: "sql",
     connection: { name: "prod-main", production: true, readOnly: false },
-    file: null,
+    files: [],
     statements,
+    transaction: null,
+    keepsOnFailure: false,
     irreversible: false,
     ...over,
   } satisfies PlanChange;
@@ -391,6 +393,7 @@ const stmt = (index: number, grade: SqlStatement["grade"], text: string): SqlSta
   line: index + 1,
   grade,
   text,
+  file: null,
 });
 
 it("a destructive SQL statement needs the connection name before allowing", async () => {
@@ -411,7 +414,7 @@ it("a destructive SQL statement needs the connection name before allowing", asyn
                 stmt(1, "destructive", "DROP TABLE t"),
               ],
               {
-                file: { path: "/w/migrate.sql", sha256: "ab" },
+                files: [{ path: "/w/migrate.sql", sha256: "ab" }],
                 irreversible: true,
               },
             ),
@@ -441,6 +444,72 @@ it("a destructive SQL statement needs the connection name before allowing", asyn
   expect(button("once")!.disabled).toBe(false);
   await act(async () => button("once")!.click());
   expect(f.answers).toEqual([{ id: 1, answer: "once" }]);
+});
+
+it("an sql run config's plan shows its files, its transaction mode and what a failure keeps", async () => {
+  const f = await mount();
+  const plan = (transaction: "all" | "per_file" | "none") =>
+    open(
+      request({
+        tier: "dangerous",
+        answers: ["deny", "once"],
+        plan: {
+          ...request().plan,
+          changes: [
+            sql(
+              [
+                { ...stmt(0, "write", "INSERT INTO a VALUES (1)"), file: 0 },
+                { ...stmt(0, "write", "INSERT INTO b VALUES (1)"), file: 1 },
+              ],
+              {
+                connection: { name: "local-pg", production: false, readOnly: false },
+                files: [
+                  { path: "db/seed.sql", sha256: "aa" },
+                  { path: "db/fixtures.sql", sha256: "bb" },
+                ],
+                transaction,
+                keepsOnFailure: transaction !== "all",
+              },
+            ),
+          ],
+        },
+      }),
+    );
+  await f.push(plan("per_file"));
+  const files = [
+    ...dialog()!.querySelectorAll<HTMLElement>("[data-testid=mcp-approval-sql-file]"),
+  ].map((e) => e.textContent);
+  expect(files).toEqual(["db/seed.sql", "db/fixtures.sql"]);
+  expect(text("mcp-approval-sql-transaction")).toBe(T.sql.transaction.per_file);
+  expect(text("mcp-approval-keeps-on-failure")).toBe(T.sql.keepsOnFailure.per_file);
+  const labels = [
+    ...dialog()!.querySelectorAll<HTMLElement>("[data-testid=mcp-approval-statement]"),
+  ].map((e) => e.textContent ?? "");
+  expect(labels[1]).toContain(T.sql.statementIn(1, "db/fixtures.sql", 1));
+});
+
+it("an all-in-one sql run plan does not say a failure keeps anything", async () => {
+  const f = await mount();
+  await f.push(
+    open(
+      request({
+        tier: "dangerous",
+        answers: ["deny", "once"],
+        plan: {
+          ...request().plan,
+          changes: [
+            sql([{ ...stmt(0, "write", "INSERT INTO a VALUES (1)"), file: 0 }], {
+              connection: { name: "local-pg", production: false, readOnly: false },
+              files: [{ path: "db/seed.sql", sha256: "aa" }],
+              transaction: "all",
+            }),
+          ],
+        },
+      }),
+    ),
+  );
+  expect(text("mcp-approval-sql-transaction")).toBe(T.sql.transaction.all);
+  expect(dialog()!.querySelector("[data-testid=mcp-approval-keeps-on-failure]")).toBeNull();
 });
 
 it("SQL without a destructive statement does not ask for the name", async () => {

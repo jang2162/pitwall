@@ -128,6 +128,13 @@ mcp-approval-sql-statements =
     }
 # $n: statement number (from 1), $line: first line
 mcp-approval-sql-statement = Statement { $n } · line { $line }
+# $n: statement number within its file (from 1), $file: the file (relative to the project root), $line: first line
+mcp-approval-sql-statement-in = Statement { $n } · { $file }:{ $line }
+mcp-approval-sql-transaction-all = All files run in one transaction — if any statement fails, nothing is kept
+mcp-approval-sql-transaction-per-file = One transaction per file
+mcp-approval-sql-transaction-none = No transaction — every statement commits on its own
+mcp-approval-sql-keeps-files = Even if it fails, the files before the failing one stay committed
+mcp-approval-sql-keeps-statements = Even if it fails, the statements before the failing one stay committed
 # $count: read statements folded away (statements that are not reads are always all shown)
 mcp-approval-sql-folded-reads =
     { $count ->

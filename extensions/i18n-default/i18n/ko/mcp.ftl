@@ -109,6 +109,13 @@ mcp-approval-sql-irreversible = 되돌릴 수 없다 — 트랜잭션 밖에서 
 mcp-approval-sql-statements = 문장 { $count }개
 # $n: 문장 번호(1 기준), $line: 시작 줄
 mcp-approval-sql-statement = 문장 { $n } · { $line }줄
+# $n: 그 파일 안의 문장 번호(1 기준), $file: 파일(프로젝트 루트 기준), $line: 시작 줄
+mcp-approval-sql-statement-in = 문장 { $n } · { $file } { $line }줄
+mcp-approval-sql-transaction-all = 모든 파일이 트랜잭션 하나 — 한 문장이라도 실패하면 아무것도 남지 않는다
+mcp-approval-sql-transaction-per-file = 파일마다 트랜잭션 하나
+mcp-approval-sql-transaction-none = 트랜잭션 없음 — 문장마다 저절로 커밋된다
+mcp-approval-sql-keeps-files = 실패해도 앞 파일은 커밋된다
+mcp-approval-sql-keeps-statements = 실패해도 앞 문장은 커밋된 채 남는다
 # $count: 접어 보이지 않은 조회 문장 수(조회가 아닌 문장은 늘 모두 보인다)
 mcp-approval-sql-folded-reads = 그리고 조회 문장 { $count }개는 접었다 — 조회가 아닌 문장은 모두 보인다
 # $time: 남은 시간(분:초)
