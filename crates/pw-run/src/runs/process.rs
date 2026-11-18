@@ -15,10 +15,12 @@
 //!
 //! 1. **띄우기 바로 앞** — 폴더를 열어 그 핸들의 실제 경로(macOS `F_GETPATH`, Linux `/proc/self/fd`)가 정규화한 경로와 같은지 보고,
 //!    그 폴더의 (장치, inode)를 쥔다([`pin`]).
-//! 2. **띄운 뒤, 프로그램이 돌기 전** — 프로그램을 `/bin/sh -c 'kill -STOP $$ && exec "$@"'` 로 감싸 띄운다. 셸은 `chdir` 한 뒤
-//!    스스로 멈추고, 그동안 그 프로세스의 실제 작업 폴더(macOS `proc_pidinfo`, Linux `/proc/<pid>/cwd`)의 (장치, inode)가 쥔 것과
-//!    같은지 본다. 같으면 SIGCONT 로 이어 그 자리에서 프로그램을 `exec` 하고(같은 pid), 다르면(바꿔치기 · `$HOME` 으로 떨어짐)
-//!    SIGKILL 로 끝내고 실패한다 — 사람의 프로그램은 한 줄도 돌지 않는다.
+//! 2. **띄운 뒤, 프로그램이 돌기 전** — 프로그램을 `/bin/sh -c 'IFS= read -r _ && exec "$@"'` 로 감싸 띄운다. 띄우기가 돌아오면
+//!    자식은 이미 `chdir` · `exec` 를 마쳤고 셸은 PTY 에서 한 줄을 기다린다. 그동안 그 프로세스의 실제 작업 폴더(macOS
+//!    `proc_pidinfo`, Linux `/proc/<pid>/cwd`)의 (장치, inode)가 쥔 것과 같은지 본다. 같으면 에코를 끈 채 줄바꿈 하나를 넣어
+//!    그 자리에서 프로그램을 `exec` 하게 하고(같은 pid — 그 줄은 출력에 남지 않는다), 다르면(바꿔치기 · `$HOME` 으로 떨어짐)
+//!    SIGKILL 로 끝내고 실패한다 — 사람의 프로그램은 한 줄도 돌지 않는다. `kill -STOP $$` 로 멈췄다 SIGCONT 로 잇는 길은 쓰지
+//!    않는다 — macOS 에서 수백 번에 한 번 SIGCONT 뒤에도 깨지 않고 잠든 채 남았다(실측).
 //!
 //! macOS · Linux 밖의 유닉스는 프로세스의 작업 폴더를 읽지 못해 1 만 한다.
 
@@ -78,11 +80,7 @@ pub trait ProcessLauncher: Send + Sync + 'static {
 
 /// 프로그램을 감싸는 셸 글(머리 주석 「작업 폴더」 2). `$0` 다음이 프로그램의 argv 다.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-const HOLD: &str = "kill -STOP $$ && exec \"$@\"";
-
-/// 감싼 셸이 멈추기를 기다리는 시간의 상한.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-const HOLD_TIMEOUT: Duration = Duration::from_secs(10);
+const HOLD: &str = "IFS= read -r _ && exec \"$@\"";
 
 /// PTY 로 띄운다.
 pub struct PtyLauncher;
@@ -174,35 +172,27 @@ fn real_path(_dir: &std::fs::File, cwd: &Path) -> Option<PathBuf> {
     std::fs::canonicalize(cwd).ok()
 }
 
-/// 머리 주석 「작업 폴더」 2: 감싼 셸이 멈추기를 기다려 그 작업 폴더가 `pinned` 인지 보고 이어 돌린다. 아니면 끝내고 실패한다.
+/// 머리 주석 「작업 폴더」 2: 감싼 셸의 작업 폴더가 `pinned` 인지 보고 한 줄을 넣어 프로그램을 돌린다. 아니면 끝내고 실패한다.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn release(pty: &Pty, cwd: &Path, pinned: (u64, u64)) -> Result<(), RpcError> {
     let Some(pid) = pty.pid().and_then(|p| libc::pid_t::try_from(p).ok()) else {
         pty.terminate();
         return Err(RpcError::internal("the run has no process id"));
     };
-    let deadline = std::time::Instant::now() + HOLD_TIMEOUT;
-    while !crate::tree::is_stopped(pid) {
-        if std::time::Instant::now() >= deadline || crate::tree::cwd_identity(pid).is_none() {
-            kill_now(pty, pid);
-            return Err(RpcError::internal("the run's process did not start"));
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    let actual = crate::tree::cwd_identity(pid);
-    if actual != Some(pinned) {
+    if crate::tree::cwd_identity(pid) != Some(pinned) {
         kill_now(pty, pid);
         tracing::warn!(target: "pw_run", cwd = %cwd.display(), "the run's process landed in another working directory; ended it");
         return Err(cwd_changed(
             "the run's working directory changed while it was being started".to_owned(),
         ));
     }
-    // SAFETY: kill(2) 은 메모리를 건드리지 않는다. 방금 띄운, 멈춰 있는 우리 자식이다.
-    unsafe { libc::kill(pid, libc::SIGCONT) };
-    Ok(())
+    pty.send_unechoed(b"\n").map_err(|e| {
+        kill_now(pty, pid);
+        RpcError::internal(e)
+    })
 }
 
-/// 멈춘 셸을 곧바로 끝낸다(SIGKILL 은 멈춘 프로세스에도 닿는다 — 이어 돌며 `exec` 하지 않는다).
+/// 기다리는 셸을 곧바로 끝낸다(프로그램을 `exec` 하지 않는다).
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn kill_now(pty: &Pty, pid: libc::pid_t) {
     // SAFETY: 위와 같다.

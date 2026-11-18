@@ -551,12 +551,14 @@ async fn stopping_a_run_ends_its_grandchildren() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_finished_run_leaves_no_background_process_behind() {
     let f = Fixture::real();
-    let mark = f.tmp.path().join("got-term");
+    let (mark, ready) = (f.tmp.path().join("got-term"), f.tmp.path().join("ready"));
+    // 리더는 손자가 신호 처리를 건 뒤에 끝난다 — 먼저 끝나면 커널이 보내는 SIGHUP 에 손자가 그 전에 죽는다.
     f.shell_config(
         "bg",
         &format!(
-            "(trap '' HUP; trap 'touch {}; exit' TERM; while :; do sleep 0.1; done) & echo BG=$!",
-            mark.display()
+            "(trap '' HUP; trap 'touch {mark}; exit' TERM; touch {ready}; while :; do sleep 0.1; done) & echo BG=$!; while [ ! -f {ready} ]; do sleep 0.01; done",
+            mark = mark.display(),
+            ready = ready.display(),
         ),
     );
     let mut c = f.client();
@@ -1648,4 +1650,32 @@ async fn a_child_that_left_the_session_is_stopped_too() {
         kill(escaped);
     }
     assert!(!left, "the child that left the session outlived the stop");
+}
+
+/// 감싼 셸을 풀어 주는 줄은 출력에 비치지 않고, 띄운 실행마다 프로그램이 돈다(멈췄다 SIGCONT 로 잇던 앞 방식은 macOS 에서 수백 번에
+/// 한 번 깨지 않고 남았다 — 여기서는 50번이 모두 끝나야 한다).
+#[tokio::test(flavor = "multi_thread")]
+async fn every_held_run_is_released_without_a_stray_line() {
+    let f = Fixture::real();
+    // 10개씩 — 끝난 실행은 프로젝트마다 20개만 남으므로 묶음마다 확인한다.
+    for batch in 0..5 {
+        let mut runs = Vec::new();
+        for i in batch * 10..batch * 10 + 10 {
+            let spec = RunSpec {
+                argv: vec!["/bin/echo".into(), format!("hi{i}")],
+                ..touching_spec(&f.root, Path::new("/nonexistent"))
+            };
+            let grant = f.agent_grant(&f.project, spec);
+            let info = f.runs.start_agent(&grant, 0, agent(), None).unwrap();
+            runs.push((i, f.runs.find(&f.project, &info.run_id).unwrap()));
+        }
+        for (i, run) in runs {
+            let exit = tokio::time::timeout(Duration::from_secs(10), run.exited())
+                .await
+                .unwrap_or_else(|_| panic!("run {i} was never released"));
+            assert_eq!(exit.code, Some(0));
+            let text = run.with_log(|log| log.read(0, 4096).bytes);
+            assert_eq!(String::from_utf8_lossy(&text), format!("hi{i}\r\n"));
+        }
+    }
 }

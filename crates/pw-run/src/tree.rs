@@ -154,12 +154,6 @@ pub fn parent_of(pid: pid_t) -> Option<pid_t> {
     bsd_info(pid).and_then(|info| pid_t::try_from(info.pbi_ppid).ok())
 }
 
-/// 멈춰 있는가(SIGSTOP).
-#[cfg(target_os = "macos")]
-pub fn is_stopped(pid: pid_t) -> bool {
-    bsd_info(pid).is_some_and(|info| info.pbi_status == libc::SSTOP)
-}
-
 /// 프로세스의 작업 폴더의 (장치, inode). 읽지 못하면 `None`.
 #[cfg(target_os = "macos")]
 pub fn cwd_identity(pid: pid_t) -> Option<(u64, u64)> {
@@ -205,11 +199,6 @@ pub fn parent_of(pid: pid_t) -> Option<pid_t> {
 }
 
 #[cfg(target_os = "linux")]
-pub fn is_stopped(pid: pid_t) -> bool {
-    proc_stat(pid).is_some_and(|(state, _)| state == "T" || state == "t")
-}
-
-#[cfg(target_os = "linux")]
 pub fn cwd_identity(pid: pid_t) -> Option<(u64, u64)> {
     std::fs::metadata(format!("/proc/{pid}/cwd"))
         .ok()
@@ -234,11 +223,6 @@ fn proc_stat(pid: pid_t) -> Option<(String, String)> {
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn parent_of(_pid: pid_t) -> Option<pid_t> {
     None
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-pub fn is_stopped(_pid: pid_t) -> bool {
-    false
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
