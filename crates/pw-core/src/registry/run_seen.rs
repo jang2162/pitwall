@@ -312,3 +312,67 @@ fn hex(bytes: &[u8]) -> String {
         out
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn content() -> SeenContent {
+        SeenContent {
+            config: r#"{"env":{"API_TOKEN":"s3cret"}}"#.into(),
+            argv: vec!["npm".into(), "run".into(), "dev".into()],
+            cwd: ".".into(),
+            env: BTreeMap::from([("API_TOKEN".into(), "s3cret".into())]),
+            env_files: vec![EnvFileDigest::of(".env", Some(b"API_TOKEN=s3cret"))],
+            profile: None,
+            definition: Some("vite --port 3000".into()),
+        }
+    }
+
+    /// 기록 · 판정이 받는 해시는 `sha256:<64 hex>` 꼴뿐이다 — 값 원문 · 다른 꼴은 표에 들어갈 수 없다.
+    #[test]
+    fn only_hash_shaped_text_is_a_seen_hash() {
+        let hash = content().hash();
+        assert_eq!(SeenHash::parse(hash.as_str()), Some(hash.clone()));
+        let upper = hash.as_str().to_uppercase().replace("SHA256:", "sha256:");
+        for refused in [
+            "API_TOKEN=s3cret",
+            "s3cret",
+            "",
+            "sha256:",
+            "sha256:abc",
+            upper.as_str(),
+            &format!("{hash}0"),
+            &hash.as_str().replace("sha256:", "md5:"),
+        ] {
+            assert_eq!(SeenHash::parse(refused), None, "{refused:?}");
+        }
+    }
+
+    /// 필드 하나만 달라도 해시가 다르고, `Debug` 에 값이 없다.
+    #[test]
+    fn every_field_is_hashed_and_debug_hides_values() {
+        let base = content().hash();
+        let variants: [fn(&mut SeenContent); 7] = [
+            |c| c.config.push(' '),
+            |c| c.argv.push("--x".into()),
+            |c| c.cwd = "web".into(),
+            |c| {
+                c.env.insert("API_TOKEN".into(), "other".into());
+            },
+            |c| c.env_files[0] = EnvFileDigest::of(".env", None),
+            |c| c.profile = Some("prod".into()),
+            |c| c.definition = None,
+        ];
+        for change in variants {
+            let mut c = content();
+            change(&mut c);
+            assert_ne!(c.hash(), base);
+        }
+        let debug = format!("{:?}", content());
+        assert!(
+            !debug.contains("s3cret") && !debug.contains("vite"),
+            "{debug}"
+        );
+    }
+}

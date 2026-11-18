@@ -224,7 +224,7 @@ mode = "launch"
 }
 
 /// ⑤ `env` 의 값 하나 · `.env.local` 한 줄 · `package.json` 의 그 script 본문만 바꿔도 기록과 다르다(이름만 해시하면 실패).
-/// 구성 밖의 `[debug]` · 프로필 · 고른 프로필도 해시에 든다.
+/// 구성의 `[debug]` 와 고른 프로필도 해시에 든다.
 #[test]
 fn values_env_files_and_definitions_are_part_of_the_hash() {
     let f = Fixture::new();
@@ -261,10 +261,16 @@ fn values_env_files_and_definitions_are_part_of_the_hash() {
         "dev"
     ));
     f.write(".pitwall/run/dev.toml", DEV);
-    // `.env.local` 의 한 줄(이름은 그대로) — 값을 해시에 넣지 않아도, 파일 내용의 sha256 이 없어도 실패한다.
+    // `.env.local` 의 한 줄(이름은 그대로) — 덮은 env 의 값과 파일 내용의 sha256 이 둘 다 이것을 잡는다(둘 다 빼면 실패).
     assert!(changed(
         ".env.local",
         "DB_HOST=localhost\nDB_PASSWORD=two\n",
+        "dev"
+    ));
+    // 구성의 `env` 가 덮는 키(`PORT`)의 줄만 바꿔 덮은 env 가 그대로여도 다르다 — 파일 내용의 sha256(빼면 실패).
+    assert!(changed(
+        ".env.local",
+        "DB_HOST=localhost\nDB_PASSWORD=one\nPORT=1\n",
         "dev"
     ));
     f.write(".env.local", "DB_HOST=localhost\nDB_PASSWORD=one\n");
