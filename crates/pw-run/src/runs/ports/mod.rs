@@ -48,7 +48,7 @@ use super::{Inner, Run, RunInfo, RunState, lock};
 /// 실행의 포트가 바뀌었을 때 버스로 내는 이벤트(프로젝트 범위). payload 는 [`RunInfo`](`ports` 칸).
 pub const TOPIC_PORTS: &str = "run.ports";
 
-/// 실행의 프로세스 트리가 듣는 TCP 포트 하나.
+/// A TCP port the run's process tree listens on.
 #[derive(
     Debug,
     Clone,

@@ -8915,7 +8915,7 @@ export type RunListParams = {
 	projectId: string,
 };
 
-/**  실행의 프로세스 트리가 듣는 TCP 포트 하나. */
+/**  A TCP port the run's process tree listens on. */
 export type RunPort = {
 	port: number,
 	/**  Listening on every address (`0.0.0.0` or `::`) — reachable from other machines on the network. */

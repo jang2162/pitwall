@@ -42108,7 +42108,7 @@
             "type": "object"
           },
           "RunPort": {
-            "description": "실행의 프로세스 트리가 듣는 TCP 포트 하나.",
+            "description": "A TCP port the run's process tree listens on.",
             "properties": {
               "addresses": {
                 "description": "The local addresses it listens on, sorted (`127.0.0.1`, `::1`, `0.0.0.0`, `::`, …).",
@@ -43679,7 +43679,7 @@
             "type": "object"
           },
           "RunPort": {
-            "description": "실행의 프로세스 트리가 듣는 TCP 포트 하나.",
+            "description": "A TCP port the run's process tree listens on.",
             "properties": {
               "addresses": {
                 "description": "The local addresses it listens on, sorted (`127.0.0.1`, `::1`, `0.0.0.0`, `::`, …).",
@@ -43873,7 +43873,7 @@
             "type": "object"
           },
           "RunPort": {
-            "description": "실행의 프로세스 트리가 듣는 TCP 포트 하나.",
+            "description": "A TCP port the run's process tree listens on.",
             "properties": {
               "addresses": {
                 "description": "The local addresses it listens on, sorted (`127.0.0.1`, `::1`, `0.0.0.0`, `::`, …).",
@@ -44495,7 +44495,7 @@
             "type": "object"
           },
           "RunPort": {
-            "description": "실행의 프로세스 트리가 듣는 TCP 포트 하나.",
+            "description": "A TCP port the run's process tree listens on.",
             "properties": {
               "addresses": {
                 "description": "The local addresses it listens on, sorted (`127.0.0.1`, `::1`, `0.0.0.0`, `::`, …).",
@@ -44762,7 +44762,7 @@
             "type": "object"
           },
           "RunPort": {
-            "description": "실행의 프로세스 트리가 듣는 TCP 포트 하나.",
+            "description": "A TCP port the run's process tree listens on.",
             "properties": {
               "addresses": {
                 "description": "The local addresses it listens on, sorted (`127.0.0.1`, `::1`, `0.0.0.0`, `::`, …).",
@@ -46881,7 +46881,7 @@
       "result": {
         "$defs": {
           "RunPort": {
-            "description": "실행의 프로세스 트리가 듣는 TCP 포트 하나.",
+            "description": "A TCP port the run's process tree listens on.",
             "properties": {
               "addresses": {
                 "description": "The local addresses it listens on, sorted (`127.0.0.1`, `::1`, `0.0.0.0`, `::`, …).",
