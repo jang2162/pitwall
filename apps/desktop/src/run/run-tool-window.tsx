@@ -16,7 +16,6 @@ import { useStore } from "zustand";
 
 import { useI18n } from "../i18n/i18n-provider";
 import { useNotify, usePanelVisible } from "../notifications/notifications";
-import { useHost } from "../rpc/host";
 import { TERMINAL_FOCUS } from "../terminal/terminal-keys";
 import { RunTabPorts } from "./run-ports";
 import { isLive, type RunConsole, type RunTab, type RunTabs, windowRuns } from "./run-tabs";
@@ -70,7 +69,6 @@ export function runTabTitle(run: RunInfo, T: RunStrings, locale: string | undefi
 
 function RunPanel({ api, tabs = windowRuns() }: RunToolWindowProps) {
   const T = useRunStrings();
-  const { client } = useHost();
   const notify = useNotify();
   const state = useStore(tabs.store);
   const [searching, setSearching] = useState(false);
@@ -88,7 +86,7 @@ function RunPanel({ api, tabs = windowRuns() }: RunToolWindowProps) {
   const fail = (title: string) => (e: unknown) =>
     notify({ level: "error", title, body: e instanceof Error ? e.message : String(e) });
 
-  if (client === undefined) {
+  if (!state.connected) {
     return (
       <div className="flex h-full items-center justify-center text-ui-muted-foreground">
         {T.noHost}

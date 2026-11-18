@@ -39,6 +39,8 @@ export interface RunTab {
 export interface RunTabsState {
   tabs: RunTab[];
   activeKey: string | undefined;
+  /** Host 에 붙었다(`connect`). 툴 윈도우는 이것으로 「연결 안 됨」 을 가린다 — 창의 Host context 를 따로 읽지 않는다. */
+  connected: boolean;
 }
 
 export type RunClient = Pick<RpcClient, "call" | "stream" | "subscribe">;
@@ -214,6 +216,7 @@ export class RunTabs {
   readonly store: StoreApi<RunTabsState> = createStore<RunTabsState>()(() => ({
     tabs: [],
     activeKey: undefined,
+    connected: false,
   }));
   private readonly consoles = new Map<string, RunConsole>();
   /** 다시 실행으로 이어받힌 앞 실행 — 늦게 온 이벤트로 탭을 다시 만들지 않는다. */
@@ -267,9 +270,13 @@ export class RunTabs {
     const stop = () => {
       closed = true;
       void unsubscribe?.().catch(() => {});
-      if (this.connected?.stop === stop) this.connected = undefined;
+      if (this.connected?.stop === stop) {
+        this.connected = undefined;
+        this.store.setState({ connected: false });
+      }
     };
     this.connected = { client, projectId, stop };
+    this.store.setState({ connected: true });
     return stop;
   }
 
@@ -374,7 +381,7 @@ export class RunTabs {
     this.consoles.clear();
     this.superseded.clear();
     this.dismissed.clear();
-    this.store.setState({ tabs: [], activeKey: undefined });
+    this.store.setState({ tabs: [], activeKey: undefined, connected: false });
   }
 
   private update(key: string, patch: Partial<RunTab>) {
