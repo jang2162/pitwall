@@ -38,6 +38,7 @@
 pub mod log;
 pub mod methods;
 mod process;
+pub mod tool;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsString;

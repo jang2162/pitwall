@@ -5874,6 +5874,7 @@ dependencies = [
  "pw-rpc",
  "pw-runtime",
  "quick-xml 0.42.0",
+ "regex",
  "schemars 1.2.3",
  "serde",
  "serde_json",

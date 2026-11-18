@@ -18,6 +18,8 @@ pw-rpc = { path = "../pw-rpc" }
 pw-runtime = { path = "../pw-runtime" }
 # 태스크 감지(M6-05)가 maven 의 effective POM 에서 플러그인 goal 을 읽는다(DTD · 엔티티를 펼치지 않는다). 다른 의존이 이미 쓰는 판.
 quick-xml = "0.42.0"
+# `run_logs` 의 `grep`(17-m6-plan M6-12 ③ — 크기 상한을 건 정규식). pw-git · pw-lang 과 같은 버전.
+regex = "1.13.1"
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

@@ -267,6 +267,8 @@ async fn blocking<T: Send + 'static>(
 /// 핸들러를 붙인다. 입력은 핸들러의 동기 구간에서 큐에 넣는다 — 세션은 요청이 온 순서대로 그 구간을 부르므로 키 입력 순서가
 /// 지켜진다(터미널과 같다).
 pub fn register(router: &mut Router, runs: Runs) {
+    // 실행 툴 ① 조회(M6-12) — MCP 툴 메서드.
+    super::tool::register(router, runs.clone());
     let (start, stop, restart, list, attach_runs, input, resize) = (
         runs.clone(),
         runs.clone(),

@@ -43499,6 +43499,556 @@
       ],
       "tier": "write"
     },
+    "run.tool.configList": {
+      "description": "This project's run configurations: usable ones (merged from the shared `.pitwall/run/<id>.toml` and the\nperson's `<id>.local.toml`), files that cannot be used and why, and tasks detected from project files (npm\nscripts, Make targets, just recipes, compose services — with the file they came from). `env` values whose name\npoints to a secret are `[redacted]`. Runs nothing and writes nothing.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "Top of the worktree (absolute path). Shared configurations (`.pitwall/run/*.toml`) are read from that worktree and\n`cwd` is relative to the project root inside it. Empty means the session's worktree, or else the main checkout.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DebugConfig": {
+            "additionalProperties": true,
+            "description": "`[debug]`. Keys other than `adapter` and `mode` (`program`, `port`, `pid` …) fill the debug adapter's launch or attach\ntemplate and are kept as written.",
+            "properties": {
+              "adapter": {
+                "default": null,
+                "description": "Debug adapter id. Without it the adapter is chosen by language.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mode": {
+                "$ref": "#/$defs/DebugMode",
+                "default": "launch"
+              }
+            },
+            "required": [
+              "adapter",
+              "mode"
+            ],
+            "type": "object"
+          },
+          "DebugMode": {
+            "description": "`launch` starts the program under the debugger; `attach` only connects to a program that is already running.",
+            "enum": [
+              "launch",
+              "attach"
+            ],
+            "type": "string"
+          },
+          "RunConfig": {
+            "description": "One run configuration: the common fields plus the kind (`type`, [`RunKindConfig`]). Doc comments of the configuration types are\nEnglish — they become the JSON Schema descriptions an agent reads (M6-13, decision M5-D39).",
+            "oneOf": [
+              {
+                "description": "A shell command line, passed verbatim to the login shell's `-c` (pipes and expansions are the shell's).",
+                "properties": {
+                  "command": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "shell",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "command"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "A `package.json` script. The package manager (npm, pnpm, yarn, bun) follows the lockfile.",
+                "properties": {
+                  "script": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "npm",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "script"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "Gradle tasks. Uses the `gradlew` wrapper when there is one.",
+                "properties": {
+                  "tasks": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": {
+                    "const": "gradle",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "tasks"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "Maven goals. Uses the `mvnw` wrapper when there is one.",
+                "properties": {
+                  "tasks": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": {
+                    "const": "maven",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "tasks"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`cargo <command> <args…>`.",
+                "properties": {
+                  "args": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "command": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "cargo",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "command",
+                  "args"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`go <command> [package] <args…>`.",
+                "properties": {
+                  "args": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "command": {
+                    "type": "string"
+                  },
+                  "package": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "const": "go",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "command",
+                  "package",
+                  "args"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`python -m <module>` or `python <script>`; exactly one of the two.",
+                "properties": {
+                  "args": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "module": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "script": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "const": "python",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "module",
+                  "script",
+                  "args"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`docker compose [-f <file>] up [services…]`, `file` passed as its path inside the project root. Stopping sends SIGINT\nfirst so compose stops the containers.",
+                "properties": {
+                  "file": {
+                    "default": null,
+                    "description": "Compose file relative to the project root. Without it compose finds its own.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "services": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": {
+                    "const": "docker-compose",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "services",
+                  "file"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`mise run <task>`.",
+                "properties": {
+                  "task": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "mise-task",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "task"
+                ],
+                "type": "object"
+              }
+            ],
+            "properties": {
+              "cwd": {
+                "default": null,
+                "description": "Working directory, relative to the project root (inside the active worktree). Defaults to the project root. A path that\nresolves outside the root (`..`, a symbolic link) makes the configuration unusable.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "debug": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DebugConfig"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "How to debug this configuration. Without it the configuration cannot be debugged."
+              },
+              "env": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "default": {},
+                "description": "Environment variables (name to value), applied over the runtime environment and `envFile`.",
+                "type": "object"
+              },
+              "envFile": {
+                "default": [],
+                "description": "`.env` files relative to the project root, applied in order. A file outside the root makes the configuration unusable.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "name": {
+                "description": "Display name (run selector, console tab).",
+                "type": "string"
+              },
+              "profiles": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/RunProfile"
+                },
+                "default": {},
+                "description": "Named overrides picked in the run selector.",
+                "type": "object"
+              }
+            },
+            "required": [
+              "name",
+              "cwd",
+              "env",
+              "envFile",
+              "profiles",
+              "debug"
+            ],
+            "type": "object"
+          },
+          "RunProfile": {
+            "description": "A profile (`[profiles.<name>]`): overrides applied over the configuration when it is picked.",
+            "properties": {
+              "args": {
+                "default": null,
+                "description": "Replaces the kind's `args` as a whole. Only for kinds with `args` (cargo, go, python).",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "env": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "default": {},
+                "description": "Applied key by key over the configuration's `env`.",
+                "type": "object"
+              }
+            },
+            "required": [
+              "env",
+              "args"
+            ],
+            "type": "object"
+          },
+          "RunToolConfig": {
+            "description": "A usable run configuration.",
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/RunConfig",
+                "description": "The merged configuration. `env` values whose name points to a secret (`TOKEN`, `PASSWORD`, `SECRET`, `KEY` …) are\nshown as `[redacted]`."
+              },
+              "files": {
+                "description": "Files that gave values (shared first).",
+                "items": {
+                  "$ref": "#/$defs/RunToolConfigFile"
+                },
+                "type": "array"
+              },
+              "id": {
+                "description": "Configuration id (the file name) — `configId` for `run_start`.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "config",
+              "files"
+            ],
+            "type": "object"
+          },
+          "RunToolConfigFile": {
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/RunToolConfigFileKind"
+              },
+              "path": {
+                "description": "Absolute path.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "path"
+            ],
+            "type": "object"
+          },
+          "RunToolConfigFileKind": {
+            "description": "Which file a configuration value came from.",
+            "oneOf": [
+              {
+                "const": "shared",
+                "description": "`.pitwall/run/<id>.toml` — committed with the repository.",
+                "type": "string"
+              },
+              {
+                "const": "local",
+                "description": "`<id>.local.toml` — the person's own file (not committed).",
+                "type": "string"
+              }
+            ]
+          },
+          "RunToolDetectProblem": {
+            "properties": {
+              "detector": {
+                "type": "string"
+              },
+              "reason": {
+                "description": "Why the detector failed or left a task out (which file · what · which line). File contents are not quoted.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "detector",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "RunToolDetectedTask": {
+            "description": "A task found in the project's files without a configuration file (npm scripts, Make targets, just recipes, compose\nservices).",
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/RunConfig",
+                "description": "The configuration it would run as. Save it with `run_config_upsert` to make it a configuration file."
+              },
+              "detector": {
+                "description": "Detector id (`npm`, `make`, `just`, `compose` …).",
+                "type": "string"
+              },
+              "key": {
+                "description": "`detected:<detector>:<name>`.",
+                "type": "string"
+              },
+              "source": {
+                "description": "The file it was found in (absolute path).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "detector",
+              "source",
+              "config"
+            ],
+            "type": "object"
+          },
+          "RunToolUnusableConfig": {
+            "description": "A configuration file that cannot be used, and why.",
+            "properties": {
+              "files": {
+                "items": {
+                  "$ref": "#/$defs/RunToolConfigFile"
+                },
+                "type": "array"
+              },
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "description": "The file's `name`, if it could be read.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason": {
+                "description": "Why (which file and what — an unknown `type`, a TOML error with its line and column, a `cwd` outside the root …).\nFile contents are not quoted.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "reason",
+              "files"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "configs": {
+            "description": "Usable configurations (by id).",
+            "items": {
+              "$ref": "#/$defs/RunToolConfig"
+            },
+            "type": "array"
+          },
+          "detectProblems": {
+            "items": {
+              "$ref": "#/$defs/RunToolDetectProblem"
+            },
+            "type": "array"
+          },
+          "detected": {
+            "description": "Detected tasks (by detector, then name).",
+            "items": {
+              "$ref": "#/$defs/RunToolDetectedTask"
+            },
+            "type": "array"
+          },
+          "problem": {
+            "description": "Why the configuration folder itself could not be read. Its configurations are not listed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unusable": {
+            "description": "Configuration files that cannot be used (by id).",
+            "items": {
+              "$ref": "#/$defs/RunToolUnusableConfig"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "configs",
+          "unusable",
+          "detected",
+          "detectProblems",
+          "problem"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "run.tool.configUpsert": {
       "description": "Create or change a run configuration — `.pitwall/run/<id>.toml` (shared, committed; the default) or `<id>.local.toml`\n(personal, `location: \"local\"`). `config` is the whole configuration of that file, checked against the run\nconfiguration schema (`type`: shell, npm, gradle, maven, cargo, go, python, docker-compose, mise-task) before anything is\nasked: `cwd` and `envFile` must stay inside the project root, and `env` takes no secrets (names with a secret word are\nrefused — use `envFile`). The person sees the file's diff and approves it in Pitwall first. Saving does not approve\nrunning: `run_start` still asks the person for a configuration an agent created or changed.",
       "kind": "unary",
@@ -43909,6 +44459,402 @@
         "owner"
       ],
       "tier": "write"
+    },
+    "run.tool.logs": {
+      "description": "Read a run's output (also of runs a person started). By default the last 200 lines; `tail` sets the count,\n`since` reads on from an offset (`nextSince` of an earlier call — poll with it for new output), `grep` keeps\nonly lines matching a regular expression. Terminal escapes are removed. The result is cut to about 192 KiB\n(`truncated`). Output is kept in memory only: the last 8 MiB while running, the last 1 MiB after the run ends,\nand only for the latest 20 finished runs of the project — older output is gone (`logStart`, `dropped`). A\n`runId` that is not a run of this project is `not found`.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "grep": {
+            "default": null,
+            "description": "Regular expression (Rust `regex` syntax, up to 1000 characters); only lines matching it. Matched against the\ntext with terminal escapes removed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "since": {
+            "default": null,
+            "description": "Log offset to read from (`nextSince` of the previous call). If that output was already dropped, reading starts\nat the first byte still kept and `truncated` is set.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tail": {
+            "default": null,
+            "description": "The last this many lines (after `grep`). Default 200 without `since`; with `since`, all lines from there. Up to\n10000.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "runId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "RunToolExit": {
+            "properties": {
+              "code": {
+                "description": "Exit code. `null` if a signal ended it.",
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "signal": {
+                "description": "The signal that ended it (for example `Terminated: 15`). `null` if it exited with a code.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "code",
+              "signal"
+            ],
+            "type": "object"
+          },
+          "RunToolState": {
+            "oneOf": [
+              {
+                "enum": [
+                  "running",
+                  "exited"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "stopping",
+                "description": "A stop was sent and the run has not ended yet.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "dropped": {
+            "description": "Bytes between `since` and `logStart` that were dropped before this call.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "exit": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunToolExit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "from": {
+            "description": "Offset of the first returned line.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lines": {
+            "description": "Number of lines in `text`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "logEnd": {
+            "description": "Log end offset.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "logStart": {
+            "description": "First log offset still kept. Output before it was dropped (the log keeps the last 8 MiB of a running run and\nthe last 1 MiB of a finished one).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "nextSince": {
+            "description": "Pass as `since` to read on from here (new output, or the rest when the result was cut).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunToolState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "description": "The lines, joined by `\\n`, with terminal escapes (colors, cursor moves) and control characters removed. A line\nstill being written (no newline yet) is included.",
+            "type": "string"
+          },
+          "truncated": {
+            "description": "Not everything asked for is here: output at `since` was dropped (`dropped`), or the result was cut to fit the\nresponse size (about 192 KiB — older lines are left out with `tail`, later ones with `since`; read on from\n`nextSince`).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "runId",
+          "state",
+          "exit",
+          "text",
+          "lines",
+          "from",
+          "nextSince",
+          "logStart",
+          "logEnd",
+          "truncated",
+          "dropped"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "run.tool.status": {
+      "description": "This project's runs: running ones and the finished ones Pitwall still keeps (the latest 20 per project) — state,\nexit code or signal, pid, working directory, start and end times, and whether a person (from the Pitwall window)\nor an agent started it. With `runId`, that run only (`not found` if it is not a run of this project).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "runId": {
+            "default": null,
+            "description": "One run. Without it, every run of the project that Pitwall still keeps.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "RunToolExit": {
+            "properties": {
+              "code": {
+                "description": "Exit code. `null` if a signal ended it.",
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "signal": {
+                "description": "The signal that ended it (for example `Terminated: 15`). `null` if it exited with a code.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "code",
+              "signal"
+            ],
+            "type": "object"
+          },
+          "RunToolLauncher": {
+            "description": "Who started a run.",
+            "oneOf": [
+              {
+                "const": "person",
+                "description": "A person, from the project window.",
+                "type": "string"
+              },
+              {
+                "const": "agent",
+                "description": "An agent, through a run tool.",
+                "type": "string"
+              }
+            ]
+          },
+          "RunToolRun": {
+            "description": "One run.",
+            "properties": {
+              "config": {
+                "description": "Configuration id, or the detected task's key.",
+                "type": "string"
+              },
+              "cwd": {
+                "description": "Working directory (absolute path).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "endedAt": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "exit": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RunToolExit"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Set once the run has ended."
+              },
+              "kind": {
+                "description": "`process` (later also `sql` and `debug`).",
+                "type": "string"
+              },
+              "launchedBy": {
+                "$ref": "#/$defs/RunToolLauncher"
+              },
+              "logEnd": {
+                "description": "Log end offset (bytes written so far).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "logStart": {
+                "description": "First log offset still kept (output before it was dropped).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "pid": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "restartOf": {
+                "description": "The run this one restarted.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "runId": {
+                "description": "`runId` for `run_logs`.",
+                "type": "string"
+              },
+              "startedAt": {
+                "description": "Start time (Unix milliseconds).",
+                "format": "int64",
+                "type": "integer"
+              },
+              "state": {
+                "$ref": "#/$defs/RunToolState"
+              },
+              "worktree": {
+                "description": "The worktree the person's window had active, if not the main checkout.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "runId",
+              "config",
+              "name",
+              "kind",
+              "launchedBy",
+              "worktree",
+              "cwd",
+              "profile",
+              "pid",
+              "state",
+              "exit",
+              "startedAt",
+              "endedAt",
+              "restartOf",
+              "logStart",
+              "logEnd"
+            ],
+            "type": "object"
+          },
+          "RunToolState": {
+            "oneOf": [
+              {
+                "enum": [
+                  "running",
+                  "exited"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "stopping",
+                "description": "A stop was sent and the run has not ended yet.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "runs": {
+            "description": "Running runs and the finished runs Pitwall still keeps (the latest 20 per project), oldest start first.",
+            "items": {
+              "$ref": "#/$defs/RunToolRun"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
     },
     "runtime.get": {
       "description": "그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.",

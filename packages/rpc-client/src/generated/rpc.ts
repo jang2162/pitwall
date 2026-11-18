@@ -1158,6 +1158,13 @@ export type UnaryMethods = {
 	 */
 	"run.tool.configDelete": { params: RunToolConfigDeleteParams; result: RunToolConfigDelete };
 	/**
+	 * This project's run configurations: usable ones (merged from the shared `.pitwall/run/<id>.toml` and the
+	 * person's `<id>.local.toml`), files that cannot be used and why, and tasks detected from project files (npm
+	 * scripts, Make targets, just recipes, compose services — with the file they came from). `env` values whose name
+	 * points to a secret are `[redacted]`. Runs nothing and writes nothing.
+	 */
+	"run.tool.configList": { params: RunToolConfigListParams; result: RunToolConfigList };
+	/**
 	 * Create or change a run configuration — `.pitwall/run/<id>.toml` (shared, committed; the default) or `<id>.local.toml`
 	 * (personal, `location: "local"`). `config` is the whole configuration of that file, checked against the run
 	 * configuration schema (`type`: shell, npm, gradle, maven, cargo, go, python, docker-compose, mise-task) before anything is
@@ -1166,6 +1173,21 @@ export type UnaryMethods = {
 	 * running: `run_start` still asks the person for a configuration an agent created or changed.
 	 */
 	"run.tool.configUpsert": { params: RunToolConfigUpsertParams; result: RunToolConfigUpsert };
+	/**
+	 * Read a run's output (also of runs a person started). By default the last 200 lines; `tail` sets the count,
+	 * `since` reads on from an offset (`nextSince` of an earlier call — poll with it for new output), `grep` keeps
+	 * only lines matching a regular expression. Terminal escapes are removed. The result is cut to about 192 KiB
+	 * (`truncated`). Output is kept in memory only: the last 8 MiB while running, the last 1 MiB after the run ends,
+	 * and only for the latest 20 finished runs of the project — older output is gone (`logStart`, `dropped`). A
+	 * `runId` that is not a run of this project is `not found`.
+	 */
+	"run.tool.logs": { params: RunToolLogsParams; result: RunToolLogs };
+	/**
+	 * This project's runs: running ones and the finished ones Pitwall still keeps (the latest 20 per project) — state,
+	 * exit code or signal, pid, working directory, start and end times, and whether a person (from the Pitwall window)
+	 * or an agent started it. With `runId`, that run only (`not found` if it is not a run of this project).
+	 */
+	"run.tool.status": { params: RunToolStatusParams; result: RunToolStatus };
 	/**
 	 * 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).
 	 * 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.
@@ -1597,7 +1619,10 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"run.stop": {"name":"run.stop","kind":"unary","tier":"exec","roles":["owner"],"params":"RunIdParams","output":"RunInfo","doc":" 실행을 중지한다 — 프로세스 세션 전체에 SIGTERM, 5초 안에 끝나지 않은 것은 SIGKILL(compose 는 SIGINT 를 먼저). 기다리지\n 않는다(끝나면 `run.exited`). 이미 끝난 실행이면 아무것도 하지 않는다.\n","mcp":null,"fileScope":false},
 	"run.tasks.refresh": {"name":"run.tasks.refresh","kind":"unary","tier":"exec","roles":["owner"],"params":"RunTasksRefreshParams","output":"RunTasksRefreshed","doc":" 사람이 「태스크 읽기」 를 눌렀다 — gradle · maven 은 빌드 스크립트를 돌려 태스크 목록을 읽고 캐시한다(Host 작업으로 진행 ·\n 취소가 보인다). 그 프로젝트 창의 연결만(아니면 permission denied), 미신뢰 프로젝트면 permission denied\n (`data.reason = \"untrusted\"`), 모르는 감지기는 invalid params, 취소되면 cancelled.\n","mcp":null,"fileScope":false},
 	"run.tool.configDelete": {"name":"run.tool.configDelete","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<RunToolConfigDeleteParams>","output":"RunToolConfigDelete","doc":" Delete a run configuration's file — the shared one, the personal one (`location`), or both (no `location`). The person\n sees what is deleted and approves it in Pitwall first. Detected tasks (`detected:…`) have no file and cannot be deleted.\n","mcp":{"group":"run","name":"run_config_delete"},"fileScope":false},
+	"run.tool.configList": {"name":"run.tool.configList","kind":"unary","tier":"read","roles":["owner"],"params":"RunToolConfigListParams","output":"RunToolConfigList","doc":" This project's run configurations: usable ones (merged from the shared `.pitwall/run/<id>.toml` and the\n person's `<id>.local.toml`), files that cannot be used and why, and tasks detected from project files (npm\n scripts, Make targets, just recipes, compose services — with the file they came from). `env` values whose name\n points to a secret are `[redacted]`. Runs nothing and writes nothing.\n","mcp":{"group":"run","name":"run_config_list"},"fileScope":false},
 	"run.tool.configUpsert": {"name":"run.tool.configUpsert","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<RunToolConfigUpsertParams>","output":"RunToolConfigUpsert","doc":" Create or change a run configuration — `.pitwall/run/<id>.toml` (shared, committed; the default) or `<id>.local.toml`\n (personal, `location: \"local\"`). `config` is the whole configuration of that file, checked against the run\n configuration schema (`type`: shell, npm, gradle, maven, cargo, go, python, docker-compose, mise-task) before anything is\n asked: `cwd` and `envFile` must stay inside the project root, and `env` takes no secrets (names with a secret word are\n refused — use `envFile`). The person sees the file's diff and approves it in Pitwall first. Saving does not approve\n running: `run_start` still asks the person for a configuration an agent created or changed.\n","mcp":{"group":"run","name":"run_config_upsert"},"fileScope":false},
+	"run.tool.logs": {"name":"run.tool.logs","kind":"unary","tier":"read","roles":["owner"],"params":"RunToolLogsParams","output":"RunToolLogs","doc":" Read a run's output (also of runs a person started). By default the last 200 lines; `tail` sets the count,\n `since` reads on from an offset (`nextSince` of an earlier call — poll with it for new output), `grep` keeps\n only lines matching a regular expression. Terminal escapes are removed. The result is cut to about 192 KiB\n (`truncated`). Output is kept in memory only: the last 8 MiB while running, the last 1 MiB after the run ends,\n and only for the latest 20 finished runs of the project — older output is gone (`logStart`, `dropped`). A\n `runId` that is not a run of this project is `not found`.\n","mcp":{"group":"run","name":"run_logs"},"fileScope":false},
+	"run.tool.status": {"name":"run.tool.status","kind":"unary","tier":"read","roles":["owner"],"params":"RunToolStatusParams","output":"RunToolStatus","doc":" This project's runs: running ones and the finished ones Pitwall still keeps (the latest 20 per project) — state,\n exit code or signal, pid, working directory, start and end times, and whether a person (from the Pitwall window)\n or an agent started it. With `runId`, that run only (`not found` if it is not a run of this project).\n","mcp":{"group":"run","name":"run_status"},"fileScope":false},
 	"runtime.get": {"name":"runtime.get","kind":"unary","tier":"read","roles":["owner"],"params":"RuntimeGetParams","output":"RuntimeInfo","doc":" 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"runtime.reload": {"name":"runtime.reload","kind":"unary","tier":"write","roles":["owner"],"params":"RuntimeReloadParams","output":"()","doc":" 「환경 다시 읽기」: 로그인 셸 환경과 디렉터리별 캐시를 잊고 `runtime.changed` 를 낸다. 셸은 다음 요청에서 다시 돈다\n (백그라운드로 미리 시작한다). 이미 띄운 프로세스(열린 터미널)의 환경은 바뀌지 않는다.\n","mcp":null,"fileScope":false},
 	"search.files": {"name":"search.files","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SearchFilesParams","output":"SearchFiles","doc":" 프로젝트의 파일을 이름 · 경로로 퍼지 매칭한다(`⌘⇧O` · Search Everywhere). 목록은 창이 `fs.watch` 로 보는 루트마다 메모리에\n 있고 변경을 따라간다(`pw_fs::index` 머리 주석). 처음 만드는 중이면 다 만들 때까지 기다린다. 빈 질의는 경로순 앞에서부터다.\n","mcp":null,"fileScope":false},
@@ -8571,6 +8596,19 @@ export type RunTasksRefreshed = {
 	error: string | null,
 };
 
+/**  A usable run configuration. */
+export type RunToolConfig = {
+	/**  Configuration id (the file name) — `configId` for `run_start`. */
+	id: string,
+	/**
+	 *  The merged configuration. `env` values whose name points to a secret (`TOKEN`, `PASSWORD`, `SECRET`, `KEY` …) are
+	 *  shown as `[redacted]`.
+	 */
+	config: RunConfig,
+	/**  Files that gave values (shared first). */
+	files: RunToolConfigFile[],
+};
+
 export type RunToolConfigDelete = {
 	id: string,
 	/**  The files deleted (absolute paths). */
@@ -8588,6 +8626,40 @@ export type RunToolConfigDeleteParams = {
 	 *  the personal file brings back the shared file's configuration.
 	 */
 	location?: RunConfigLocation | null,
+};
+
+export type RunToolConfigFile = {
+	kind: RunToolConfigFileKind,
+	/**  Absolute path. */
+	path: string,
+};
+
+/**  Which file a configuration value came from. */
+export type RunToolConfigFileKind = 
+/**  `.pitwall/run/<id>.toml` — committed with the repository. */
+"shared" | 
+/**  `<id>.local.toml` — the person's own file (not committed). */
+"local";
+
+export type RunToolConfigList = {
+	/**  Usable configurations (by id). */
+	configs: RunToolConfig[],
+	/**  Configuration files that cannot be used (by id). */
+	unusable: RunToolUnusableConfig[],
+	/**  Detected tasks (by detector, then name). */
+	detected: RunToolDetectedTask[],
+	detectProblems: RunToolDetectProblem[],
+	/**  Why the configuration folder itself could not be read. Its configurations are not listed. */
+	problem: string | null,
+};
+
+export type RunToolConfigListParams = {
+	projectId: string,
+	/**
+	 *  Top of the worktree (absolute path). Shared configurations (`.pitwall/run/*.toml`) are read from that worktree and
+	 *  `cwd` is relative to the project root inside it. Empty means the session's worktree, or else the main checkout.
+	 */
+	worktree?: string | null,
 };
 
 export type RunToolConfigUpsert = {
@@ -8621,6 +8693,151 @@ export type RunToolConfigUpsertParams = {
 	 *  personal and not committed (the main checkout's for a linked worktree).
 	 */
 	location?: RunConfigLocation,
+};
+
+export type RunToolDetectProblem = {
+	detector: string,
+	/**  Why the detector failed or left a task out (which file · what · which line). File contents are not quoted. */
+	reason: string,
+};
+
+/**
+ *  A task found in the project's files without a configuration file (npm scripts, Make targets, just recipes, compose
+ *  services).
+ */
+export type RunToolDetectedTask = {
+	/**  `detected:<detector>:<name>`. */
+	key: string,
+	/**  Detector id (`npm`, `make`, `just`, `compose` …). */
+	detector: string,
+	/**  The file it was found in (absolute path). */
+	source: string,
+	/**  The configuration it would run as. Save it with `run_config_upsert` to make it a configuration file. */
+	config: RunConfig,
+};
+
+export type RunToolExit = {
+	/**  Exit code. `null` if a signal ended it. */
+	code: number | null,
+	/**  The signal that ended it (for example `Terminated: 15`). `null` if it exited with a code. */
+	signal: string | null,
+};
+
+/**  Who started a run. */
+export type RunToolLauncher = 
+/**  A person, from the project window. */
+"person" | 
+/**  An agent, through a run tool. */
+"agent";
+
+export type RunToolLogs = {
+	runId: string,
+	state: RunToolState | null,
+	exit: RunToolExit | null,
+	/**
+	 *  The lines, joined by `\n`, with terminal escapes (colors, cursor moves) and control characters removed. A line
+	 *  still being written (no newline yet) is included.
+	 */
+	text: string,
+	/**  Number of lines in `text`. */
+	lines: number,
+	/**  Offset of the first returned line. */
+	from: number,
+	/**  Pass as `since` to read on from here (new output, or the rest when the result was cut). */
+	nextSince: number,
+	/**
+	 *  First log offset still kept. Output before it was dropped (the log keeps the last 8 MiB of a running run and
+	 *  the last 1 MiB of a finished one).
+	 */
+	logStart: number,
+	/**  Log end offset. */
+	logEnd: number,
+	/**
+	 *  Not everything asked for is here: output at `since` was dropped (`dropped`), or the result was cut to fit the
+	 *  response size (about 192 KiB — older lines are left out with `tail`, later ones with `since`; read on from
+	 *  `nextSince`).
+	 */
+	truncated: boolean,
+	/**  Bytes between `since` and `logStart` that were dropped before this call. */
+	dropped: number,
+};
+
+export type RunToolLogsParams = {
+	projectId: string,
+	runId: string,
+	/**
+	 *  The last this many lines (after `grep`). Default 200 without `since`; with `since`, all lines from there. Up to
+	 *  10000.
+	 */
+	tail?: number | null,
+	/**
+	 *  Log offset to read from (`nextSince` of the previous call). If that output was already dropped, reading starts
+	 *  at the first byte still kept and `truncated` is set.
+	 */
+	since?: number | null,
+	/**
+	 *  Regular expression (Rust `regex` syntax, up to 1000 characters); only lines matching it. Matched against the
+	 *  text with terminal escapes removed.
+	 */
+	grep?: string | null,
+};
+
+/**  One run. */
+export type RunToolRun = {
+	/**  `runId` for `run_logs`. */
+	runId: string,
+	/**  Configuration id, or the detected task's key. */
+	config: string,
+	name: string,
+	/**  `process` (later also `sql` and `debug`). */
+	kind: string,
+	launchedBy: RunToolLauncher,
+	/**  The worktree the person's window had active, if not the main checkout. */
+	worktree: string | null,
+	/**  Working directory (absolute path). */
+	cwd: string | null,
+	profile: string | null,
+	pid: number | null,
+	state: RunToolState,
+	/**  Set once the run has ended. */
+	exit: RunToolExit | null,
+	/**  Start time (Unix milliseconds). */
+	startedAt: number,
+	endedAt: number | null,
+	/**  The run this one restarted. */
+	restartOf: string | null,
+	/**  First log offset still kept (output before it was dropped). */
+	logStart: number,
+	/**  Log end offset (bytes written so far). */
+	logEnd: number,
+};
+
+export type RunToolState = "running" | 
+/**  A stop was sent and the run has not ended yet. */
+"stopping" | "exited";
+
+export type RunToolStatus = {
+	/**  Running runs and the finished runs Pitwall still keeps (the latest 20 per project), oldest start first. */
+	runs: RunToolRun[],
+};
+
+export type RunToolStatusParams = {
+	projectId: string,
+	/**  One run. Without it, every run of the project that Pitwall still keeps. */
+	runId?: string | null,
+};
+
+/**  A configuration file that cannot be used, and why. */
+export type RunToolUnusableConfig = {
+	id: string,
+	/**  The file's `name`, if it could be read. */
+	name: string | null,
+	/**
+	 *  Why (which file and what — an unknown `type`, a TOML error with its line and column, a `cwd` outside the root …).
+	 *  File contents are not quoted.
+	 */
+	reason: string,
+	files: RunToolConfigFile[],
 };
 
 export type RuntimeGetParams = {

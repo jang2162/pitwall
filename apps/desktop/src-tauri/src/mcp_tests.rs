@@ -36,6 +36,7 @@ mod plan_tiers;
 mod project;
 mod project_write;
 mod run;
+mod run_read;
 
 /// 앱 Host 가 내는 툴 전부. 이름순.
 const APP_TOOLS: &[&str] = &[
@@ -60,7 +61,10 @@ const APP_TOOLS: &[&str] = &[
     "project_open",
     "project_register",
     "run_config_delete",
+    "run_config_list",
     "run_config_upsert",
+    "run_logs",
+    "run_status",
     "settings_get",
     "symbol_search",
 ];
@@ -78,6 +82,10 @@ const HEADLESS_TOOLS: &[&str] = &[
 const PROJECT_RECORD_TOOLS: &[&str] = &[
     // 레지스트리의 레코드(루트 · 이름)와 루트의 빌드 파일 · 설정 폴더만 본다 — 워크트리마다 다르지 않다.
     "project_info",
+    // 실행은 Host 범위이고 프로젝트에 속한다(체크아웃이 아니다 — 17-m6-plan M6-P1). 실행마다 띄운 워크트리 · 작업 폴더를 싣는다.
+    // `worktree` 로 거르면 세션 워크트리가 채워져 주 체크아웃에서 띄운 실행이 말없이 빠진다.
+    "run_logs",
+    "run_status",
 ];
 
 fn names(catalog: &pw_mcp::Catalog) -> Vec<&str> {
