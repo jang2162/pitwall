@@ -16,6 +16,13 @@ use toml_edit::{Document, Item, TableLike, Value};
 use crate::source::RelPath;
 use crate::template::{CommandKind, check_command};
 
+mod debug_adapter;
+
+pub use debug_adapter::{
+    ADAPTER_HOST, AdapterStart, DapRequest, DapTransport, DebugAdapterDecl, fill_request,
+    template_slots,
+};
+
 /// 파일 안의 위치. 줄 · 열은 1부터 센다(열은 문자 단위).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pos {
@@ -85,6 +92,7 @@ pub struct Contributes {
     pub external_tools: Vec<ExternalToolDecl>,
     pub translations: Vec<TranslationDecl>,
     pub language_servers: Vec<LanguageServerDecl>,
+    pub debug_adapters: Vec<DebugAdapterDecl>,
 }
 
 /// `[contributes.themes.<id>]`. 파일 형식은 07 「3. 테마」 「형식」 행 — `id` 는 표 이름과 같아야 한다.
@@ -599,6 +607,13 @@ impl Parser<'_> {
                     for (id, entry, at) in self.entries(entries, kind, kind_span, is_segment) {
                         if let Some(decl) = self.language_server(id, entry, at) {
                             out.language_servers.push(decl);
+                        }
+                    }
+                }
+                "debug_adapters" => {
+                    for (id, entry, at) in self.entries(entries, kind, kind_span, is_segment) {
+                        if let Some(decl) = self.debug_adapter(id, entry, at) {
+                            out.debug_adapters.push(decl);
                         }
                     }
                 }

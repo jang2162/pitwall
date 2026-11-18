@@ -9,8 +9,8 @@ use serde_json::Value;
 
 use crate::builtin;
 use crate::manifest::{
-    Diagnostic, ExternalToolDecl, KeymapDecl, KeymapKind, LanguageDecl, LanguageServerDecl,
-    Manifest, PathRef, Pos, Severity, TranslationDecl, parse_manifest,
+    DebugAdapterDecl, Diagnostic, ExternalToolDecl, KeymapDecl, KeymapKind, LanguageDecl,
+    LanguageServerDecl, Manifest, PathRef, Pos, Severity, TranslationDecl, parse_manifest,
 };
 use crate::source::{EntryKind, ExtensionRoot, MANIFEST, RelPath, SourceError};
 
@@ -165,6 +165,7 @@ impl Registry {
             registry.add(&options.engine, root);
         }
         registry.check_server_languages();
+        registry.check_adapter_references();
         for d in &registry.diagnostics {
             match d.severity {
                 Severity::Error => tracing::error!(target: "pw_ext", "{d}"),
@@ -181,6 +182,7 @@ impl Registry {
             registry.add(engine, root);
         }
         registry.check_server_languages();
+        registry.check_adapter_references();
         registry
     }
 
@@ -247,6 +249,22 @@ impl Registry {
 
     pub fn language_server(&self, id: &str) -> Option<(&Extension, &LanguageServerDecl)> {
         self.language_servers().find(|(_, s)| s.id == id)
+    }
+
+    /// 디버그 어댑터 정의(17-m6-plan.md M6-16). 등록 순서(내장 확장 폴더 이름순, 한 확장 안에서는 적힌 순서)다. 내장 확장의 것만
+    /// 있다(언어 서버 정의와 같다).
+    pub fn debug_adapters(&self) -> impl Iterator<Item = (&Extension, &DebugAdapterDecl)> {
+        self.extensions.iter().flat_map(|e| {
+            e.manifest
+                .contributes
+                .debug_adapters
+                .iter()
+                .map(move |a| (e, a))
+        })
+    }
+
+    pub fn debug_adapter(&self, id: &str) -> Option<(&Extension, &DebugAdapterDecl)> {
+        self.debug_adapters().find(|(_, a)| a.id == id)
     }
 
     pub fn languages(&self) -> impl Iterator<Item = (&Extension, &LanguageDecl)> {
@@ -382,6 +400,7 @@ impl Registry {
             if !root.is_builtin() {
                 self.drop_grammars(&file, &mut manifest);
                 self.drop_language_servers(&file, &mut manifest);
+                self.drop_debug_adapters(&file, &mut manifest);
             }
             self.extensions.push(Extension {
                 manifest,
@@ -476,6 +495,12 @@ impl Registry {
                 .language_server(&s.id)
                 .map(|(e, _)| e.manifest.id.as_str());
             check("language server", &s.id, s.pos, owner);
+        }
+        for a in &c.debug_adapters {
+            let owner = self
+                .debug_adapter(&a.id)
+                .map(|(e, _)| e.manifest.id.as_str());
+            check("debug adapter", &a.id, a.pos, owner);
         }
         // 언어 태그는 대소문자를 가리지 않는다(BCP 47) — `KO` 팩이 내장 `ko` 옆에 따로 등록되지 않게. 한 매니페스트 안에서
         // 대소문자만 다른 두 표(`ko` · `KO`)도 겹침이다(TOML 은 둘을 다른 키로 본다).
@@ -641,6 +666,66 @@ impl Registry {
                 ),
             });
         }
+    }
+
+    /// 내장이 아닌 확장의 디버그 어댑터 정의도 등록하지 않는다(언어 서버와 같은 까닭 — 아무 실행 파일을 이름으로 골라 띄우게
+    /// 하지 않는다. 외부 확장의 어댑터는 M8 · v1.x — 17-m6-plan.md 「3」).
+    fn drop_debug_adapters(&mut self, file: &str, manifest: &mut Manifest) {
+        for adapter in std::mem::take(&mut manifest.contributes.debug_adapters) {
+            self.diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                file: file.to_owned(),
+                pos: adapter.pos,
+                message: format!(
+                    "debug adapter `{}`: debug adapters are loaded only from built-in extensions for now; it is not registered",
+                    adapter.id
+                ),
+            });
+        }
+    }
+
+    /// 디버그 어댑터가 가리키는 언어 · 언어 서버(`start.lsp`)가 등록돼 있는지 모두 읽은 뒤에 본다. 없는 언어는 경고하고 그
+    /// 어댑터의 목록에서 뺀다. 없는 언어 서버는 경고만 한다 — 그 어댑터는 시작할 때 「언어 서버가 떠 있지 않다」 로 거절된다.
+    fn check_adapter_references(&mut self) {
+        let known: Vec<String> = self.languages().map(|(_, l)| l.id.clone()).collect();
+        let servers: Vec<String> = self.language_servers().map(|(_, s)| s.id.clone()).collect();
+        let mut warnings = Vec::new();
+        for extension in &mut self.extensions {
+            let file = extension
+                .root
+                .display(Some(&RelPath::parse(MANIFEST).expect("constant path")));
+            for adapter in &mut extension.manifest.contributes.debug_adapters {
+                adapter.languages.retain(|language| {
+                    let found = known.contains(&language.name);
+                    if !found {
+                        warnings.push(Diagnostic {
+                            severity: Severity::Warning,
+                            file: file.clone(),
+                            pos: language.pos,
+                            message: format!(
+                                "debug adapter `{}`: language `{}` is not provided by any extension; the adapter is not used for it",
+                                adapter.id, language.name
+                            ),
+                        });
+                    }
+                    found
+                });
+                if let Some(start) = &adapter.start
+                    && !servers.contains(&start.lsp.name)
+                {
+                    warnings.push(Diagnostic {
+                        severity: Severity::Warning,
+                        file: file.clone(),
+                        pos: start.lsp.pos,
+                        message: format!(
+                            "debug adapter `{}`: language server `{}` is not provided by any extension; the adapter cannot start",
+                            adapter.id, start.lsp.name
+                        ),
+                    });
+                }
+            }
+        }
+        self.diagnostics.extend(warnings);
     }
 
     /// 언어 서버가 가리키는 언어가 등록돼 있는지 모두 읽은 뒤에 본다(다른 확장의 언어를 가리킬 수 있다). 없는 언어는 경고하고
@@ -1325,6 +1410,71 @@ mod tests {
                 "{message}"
             );
         }
+    }
+
+    const ADAPTER: &str = "[contributes.debug_adapters.my-dap]\nlanguages = [\"rust\", \"nope\"]\nstart = { lsp = \"no-ls\", command = \"c\" }\nattach = {}\n";
+
+    /// 사용자 확장의 디버그 어댑터 정의도 경고와 함께 등록하지 않는다(17-m6-plan.md M6-16 — 언어 서버와 같다).
+    #[test]
+    fn a_user_extension_debug_adapter_is_not_registered() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = ext(
+            dir.path(),
+            "dap",
+            &[("extension.toml", &manifest("dev.example.dap", "*", ADAPTER))],
+        );
+        let mut roots = builtin::roots();
+        roots.push(user);
+        let registry = Registry::from_roots(&engine(), roots);
+        assert!(registry.debug_adapter("my-dap").is_none());
+        assert!(
+            registry
+                .extensions()
+                .iter()
+                .any(|e| e.manifest.id == "dev.example.dap")
+        );
+        let file = shown(dir.path(), "dap", "extension.toml");
+        assert_eq!(
+            messages(&registry),
+            [format!(
+                "{}:5:29: warning: debug adapter `my-dap`: debug adapters are loaded only from built-in extensions for now; it is not registered",
+                file.display()
+            )]
+        );
+    }
+
+    /// 등록된 어댑터의 없는 언어는 경고하고 빼고, 없는 언어 서버(`start.lsp`)는 경고만 한다. 내장 확장에는 아직 어댑터가 없어
+    /// (M6-19 가 더한다) 등록된 확장의 정의에 직접 넣고 본다.
+    #[test]
+    fn adapter_languages_and_start_servers_are_checked_after_loading() {
+        let (parsed, diagnostics) = parse_manifest(
+            &manifest("dev.example.dap", "*", ADAPTER),
+            "/x/extension.toml",
+        );
+        assert_eq!(diagnostics, vec![]);
+        let decl = parsed.unwrap().contributes.debug_adapters.remove(0);
+        let mut registry = Registry::from_roots(&engine(), builtin::roots());
+        let before = registry.diagnostics.len();
+        registry.extensions[0]
+            .manifest
+            .contributes
+            .debug_adapters
+            .push(decl);
+        registry.check_adapter_references();
+        let (_, adapter) = registry.debug_adapter("my-dap").unwrap();
+        let languages: Vec<&str> = adapter.languages.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(languages, ["rust"]);
+        let messages: Vec<String> = registry.diagnostics[before..]
+            .iter()
+            .map(|d| d.message.clone())
+            .collect();
+        assert_eq!(
+            messages,
+            [
+                "debug adapter `my-dap`: language `nope` is not provided by any extension; the adapter is not used for it",
+                "debug adapter `my-dap`: language server `no-ls` is not provided by any extension; the adapter cannot start",
+            ]
+        );
     }
 
     const SERVER: &str =

@@ -6,7 +6,8 @@
 //! - [`registry`]: 내장과 `$DATA/extensions/` 를 읽어 테마 · 키맵 · 언어 · 외부 도구 · UI 번역 기여를 모은다. 테마 파일과
 //!   번역 파일(.ftl)은 등록할 때 읽어 검사한다. 언어의 문법 · 쿼리는 위치만 내주고([`ResolvedLanguage`]) 구문 분석
 //!   서비스(`pw-syntax`)가 처음 쓸 때 읽는다.
-//!   언어 서버 정의(`[contributes.language_servers]`)는 내장 확장의 것만 받는다 — 실행 파일 해석 · 설정은 `pw-lsp-servers`.
+//!   언어 서버 정의(`[contributes.language_servers]`)와 디버그 어댑터 정의(`[contributes.debug_adapters]`)는 내장 확장의 것만
+//!   받는다 — 실행 파일 해석 · 설정은 `pw-lsp-servers`.
 //! - [`methods`]: `ext.list` · `theme.list` · `theme.get` · `keymap.list` · `keymap.get` RPC.
 //!
 //! L2 WASM 런타임은 아직 없다 — `[wasm]` 은 읽고 검사만 한다.
@@ -19,8 +20,10 @@ pub mod source;
 pub mod template;
 
 pub use manifest::{
-    DEFAULT_INITIALIZE_TIMEOUT, Diagnostic, KeymapKind, LanguageServerDecl, LspFeature,
-    LspServerRuntime, Manifest, Pos, ResolveHint, RuntimeRequirement, Severity,
+    ADAPTER_HOST, AdapterStart, DEFAULT_INITIALIZE_TIMEOUT, DapRequest, DapTransport,
+    DebugAdapterDecl, Diagnostic, KeymapKind, LanguageServerDecl, LspFeature, LspServerRuntime,
+    Manifest, NameRef, Pos, ResolveHint, RuntimeRequirement, Severity, fill_request,
+    template_slots,
 };
 pub use registry::{
     Appearance, Extension, LoadOptions, LoadedTheme, LoadedTranslation, Registry, ResolvedFile,
