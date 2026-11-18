@@ -3733,12 +3733,22 @@ export type DemoTaskParams = {
 /**  데모 작업 스트림의 청크. 진행 알림이 여러 번, 종료 알림이 마지막에 한 번 온다. */
 export type DemoTaskUpdate = { kind: "progress"; taskId: number; progress: TaskProgress } | { kind: "finished"; taskId: number; outcome: TaskStatus };
 
-/**  파일 없이 감지된 태스크(가상 구성 — 감지기는 M6-04 · 05 가 더한다). 「구성으로 저장」 은 `config` 를 `run.config.save` 로 쓴다. */
+/**  감지기 하나의 실패 · 뺀 태스크의 까닭. 목록(`run.config.list` 의 `detectProblems`)에 남는다 — 감지 목록이 조용히 짧아지지 않게. */
+export type DetectProblem = {
+	/**  감지기 id(`npm` · `make` · `just` · `compose` …). */
+	detector: string,
+	/**  까닭(어느 파일 · 무엇 · 몇째 줄). 파일 내용은 담지 않는다. */
+	reason: string,
+};
+
+/**  파일 없이 감지된 태스크(가상 구성 — 감지기는 `crate::detect`). 「구성으로 저장」 은 `config` 를 `run.config.save` 로 쓴다. */
 export type DetectedRunTask = {
 	/**  `detected:<감지기>:<이름>` — 「사람이 본 구성」 기록(M6-11)의 열쇠. */
 	key: string,
-	/**  감지기 이름(`package.json` · `mise` …). */
+	/**  감지기 id(`npm` · `make` · `just` · `compose`, M6-05 가 `mise` · `gradle` · `maven`). */
 	detector: string,
+	/**  감지 출처 파일(절대 경로). */
+	source: string,
 	config: RunConfig,
 };
 
@@ -8272,8 +8282,10 @@ export type RunConfigList = {
 	configs: RunConfigEntry[],
 	/**  쓸 수 없는 구성과 까닭(id 순) — 모르는 `type` · 형식 오류 · 루트 밖 `cwd` 등. 버리지 않고 보인다. */
 	unusable: UnusableRunConfig[],
-	/**  감지된 태스크(M6-04 · 05 가 채운다 — 지금은 늘 비어 있다). */
+	/**  감지된 태스크(감지기 순서, 감지기 안에서는 이름순). 미신뢰 프로젝트에서도 파일만 읽는 감지기의 것은 보인다. */
 	detected: DetectedRunTask[],
+	/**  감지기마다의 실패 · 감지에서 뺀 태스크의 까닭. 실패한 감지기의 태스크는 `detected` 에 없다. */
+	detectProblems?: DetectProblem[],
 	/**  구성 폴더 자체를 읽지 못한 까닭. 그 폴더의 구성은 목록에 없다. */
 	problem: string | null,
 };

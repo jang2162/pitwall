@@ -326,6 +326,12 @@ fn local_host_parts(
                 paths: config.paths.clone(),
                 projects: projects.clone(),
             });
+            // 감지 출처(`package.json` · `Makefile` …)가 바뀌면 그 프로젝트의 감지만 다시 하고 달라졌으면 `config.changed` 를 낸다.
+            tauri::async_runtime::spawn(pw_run::detect::follow_files(
+                pw_run::detect::subscribe_files(host.bus()),
+                run_configs.seen(),
+                host.bus().clone(),
+            ));
             // git 은 전역 설정(`[git] path`) · 레지스트리를 쓰고, 쓰기를 끈 알림을 버스로 낸다.
             git.attach(pw_git::HostParts {
                 global: config.global.clone(),

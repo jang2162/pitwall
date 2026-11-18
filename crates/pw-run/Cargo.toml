@@ -27,6 +27,8 @@ toml_edit = "0.25.17"
 # 셸 띄우기 · 레지스트리 읽기를 블로킹 스레드로 보내고, 출력 · 종료를 기다린다.
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
 tracing = "0.1.44"
+# 태스크 감지(17-m6-plan M6-04)가 compose 파일을 이벤트로만 읽는다(별칭을 펼치지 않는다 — detect/compose.rs). pw-lang 과 같은 버전.
+yaml-rust2 = "0.13.0"
 
 [target."cfg(unix)".dependencies]
 # 세션의 프로세스 찾기(getsid · proc_listallpids)와 신호. 버전은 데스크톱 크레이트와 같게 둔다.

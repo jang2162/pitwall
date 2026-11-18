@@ -19,6 +19,7 @@ use serde_json::json;
 use super::RunConfig;
 use super::read::{RunConfigLayer, RunConfigPlace, UnusableRunConfig, read};
 use super::write::{RunConfigLocation, check_id, file_of, plan};
+use crate::detect::{self, DetectProblem, NoExec, Seen};
 
 #[derive(
     Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
@@ -45,7 +46,7 @@ pub struct RunConfigEntry {
     pub layers: Vec<RunConfigLayer>,
 }
 
-/// 파일 없이 감지된 태스크(가상 구성 — 감지기는 M6-04 · 05 가 더한다). 「구성으로 저장」 은 `config` 를 `run.config.save` 로 쓴다.
+/// 파일 없이 감지된 태스크(가상 구성 — 감지기는 `crate::detect`). 「구성으로 저장」 은 `config` 를 `run.config.save` 로 쓴다.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
@@ -53,8 +54,10 @@ pub struct RunConfigEntry {
 pub struct DetectedRunTask {
     /// `detected:<감지기>:<이름>` — 「사람이 본 구성」 기록(M6-11)의 열쇠.
     pub key: String,
-    /// 감지기 이름(`package.json` · `mise` …).
+    /// 감지기 id(`npm` · `make` · `just` · `compose`, M6-05 가 `mise` · `gradle` · `maven`).
     pub detector: String,
+    /// 감지 출처 파일(절대 경로).
+    pub source: String,
     pub config: RunConfig,
 }
 
@@ -67,8 +70,11 @@ pub struct RunConfigList {
     pub configs: Vec<RunConfigEntry>,
     /// 쓸 수 없는 구성과 까닭(id 순) — 모르는 `type` · 형식 오류 · 루트 밖 `cwd` 등. 버리지 않고 보인다.
     pub unusable: Vec<UnusableRunConfig>,
-    /// 감지된 태스크(M6-04 · 05 가 채운다 — 지금은 늘 비어 있다).
+    /// 감지된 태스크(감지기 순서, 감지기 안에서는 이름순). 미신뢰 프로젝트에서도 파일만 읽는 감지기의 것은 보인다.
     pub detected: Vec<DetectedRunTask>,
+    /// 감지기마다의 실패 · 감지에서 뺀 태스크의 까닭. 실패한 감지기의 태스크는 `detected` 에 없다.
+    #[serde(default)]
+    pub detect_problems: Vec<DetectProblem>,
     /// 구성 폴더 자체를 읽지 못한 까닭. 그 폴더의 구성은 목록에 없다.
     pub problem: Option<String>,
 }
@@ -166,6 +172,8 @@ pub struct HostParts {
 #[derive(Default)]
 pub struct RunConfigs {
     host: OnceLock<HostParts>,
+    /// 목록이 감지한 결과의 지문 — 파일 감시가 감지만 다시 해 달라졌을 때 알린다([`detect::follow_files`]).
+    seen: Arc<Seen>,
 }
 
 impl RunConfigs {
@@ -176,6 +184,11 @@ impl RunConfigs {
     /// 두 번째부터는 무시한다.
     pub fn attach(&self, parts: HostParts) {
         let _ = self.host.set(parts);
+    }
+
+    /// 감지 기억 — [`detect::follow_files`] 에 넘긴다.
+    pub fn seen(&self) -> Arc<Seen> {
+        Arc::clone(&self.seen)
     }
 
     fn host(&self) -> Result<&HostParts, RpcError> {
@@ -199,6 +212,13 @@ impl RunConfigs {
     pub fn list(&self, params: &RunConfigListParams) -> Result<RunConfigList, RpcError> {
         let place = self.place(&params.project_id, params.worktree.as_deref())?;
         let set = read(&place);
+        let detection = detect::detect(&place.root, &NoExec);
+        self.seen.remember(
+            &params.project_id,
+            params.worktree.as_deref(),
+            &place.root,
+            &detection,
+        );
         Ok(RunConfigList {
             configs: set
                 .configs
@@ -210,7 +230,17 @@ impl RunConfigs {
                 })
                 .collect(),
             unusable: set.unusable,
-            detected: Vec::new(),
+            detected: detection
+                .tasks
+                .into_iter()
+                .map(|t| DetectedRunTask {
+                    key: t.key(),
+                    detector: t.detector.to_owned(),
+                    source: t.source.display().to_string(),
+                    config: t.config,
+                })
+                .collect(),
+            detect_problems: detection.problems,
             problem: set.problem,
         })
     }

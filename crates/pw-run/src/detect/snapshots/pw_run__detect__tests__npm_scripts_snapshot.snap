@@ -1,0 +1,31 @@
+---
+source: crates/pw-run/src/detect/tests.rs
+expression: "render(&detect(&root, &NoExec), &root)"
+---
+detected:npm:build:prod
+  source: package.json
+  config: {"cwd":null,"debug":null,"env":{},"envFile":[],"name":"build:prod","profiles":{},"script":"build:prod","type":"npm"}
+  argv: ["pnpm", "run", "build:prod"]
+  definition: "{\"build:prod\":\"vite build --mode production\",\"postbuild:prod\":\"node scripts/size.js\"}"
+detected:npm:dev
+  source: package.json
+  config: {"cwd":null,"debug":null,"env":{},"envFile":[],"name":"dev","profiles":{},"script":"dev","type":"npm"}
+  argv: ["pnpm", "run", "dev"]
+  definition: "{\"predev\":\"node scripts/check.js\",\"dev\":\"vite --port 5173\"}"
+detected:npm:postbuild:prod
+  source: package.json
+  config: {"cwd":null,"debug":null,"env":{},"envFile":[],"name":"postbuild:prod","profiles":{},"script":"postbuild:prod","type":"npm"}
+  argv: ["pnpm", "run", "postbuild:prod"]
+  definition: "{\"postbuild:prod\":\"node scripts/size.js\"}"
+detected:npm:predev
+  source: package.json
+  config: {"cwd":null,"debug":null,"env":{},"envFile":[],"name":"predev","profiles":{},"script":"predev","type":"npm"}
+  argv: ["pnpm", "run", "predev"]
+  definition: "{\"predev\":\"node scripts/check.js\"}"
+detected:npm:test
+  source: package.json
+  config: {"cwd":null,"debug":null,"env":{},"envFile":[],"name":"test","profiles":{},"script":"test","type":"npm"}
+  argv: ["pnpm", "run", "test"]
+  definition: "{\"test\":\"vitest run\"}"
+problem[npm]: package.json: skipped 1 script(s) whose value is not a string
+problem[npm]: skipped 1 task(s) that cannot be run as a configuration (a name starting with `-` and the like)

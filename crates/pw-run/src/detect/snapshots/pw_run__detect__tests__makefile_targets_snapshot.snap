@@ -1,0 +1,35 @@
+---
+source: crates/pw-run/src/detect/tests.rs
+expression: "render(&detect(&root, &NoExec), &root)"
+---
+detected:make:build
+  source: Makefile
+  config: {"command":"make 'build'","cwd":null,"debug":null,"env":{},"envFile":[],"name":"build","profiles":{},"type":"shell"}
+  argv: ["/bin/zsh", "-l", "-c", "make 'build'"]
+  definition: "build: deps ## 빌드\n\t$(CC) $(FLAGS) -o $(OUT)/app \\\n\t  main.c"
+detected:make:clean
+  source: Makefile
+  config: {"command":"make 'clean'","cwd":null,"debug":null,"env":{},"envFile":[],"name":"clean","profiles":{},"type":"shell"}
+  argv: ["/bin/zsh", "-l", "-c", "make 'clean'"]
+  definition: "clean::\n\trm -rf $(OUT)"
+detected:make:deps
+  source: Makefile
+  config: {"command":"make 'deps'","cwd":null,"debug":null,"env":{},"envFile":[],"name":"deps","profiles":{},"type":"shell"}
+  argv: ["/bin/zsh", "-l", "-c", "make 'deps'"]
+  definition: "deps docs/site:\n\techo deps"
+detected:make:docs/site
+  source: Makefile
+  config: {"command":"make 'docs/site'","cwd":null,"debug":null,"env":{},"envFile":[],"name":"docs/site","profiles":{},"type":"shell"}
+  argv: ["/bin/zsh", "-l", "-c", "make 'docs/site'"]
+  definition: "deps docs/site:\n\techo deps"
+detected:make:test
+  source: Makefile
+  config: {"command":"make 'test'","cwd":null,"debug":null,"env":{},"envFile":[],"name":"test","profiles":{},"type":"shell"}
+  argv: ["/bin/zsh", "-l", "-c", "make 'test'"]
+  definition: "test: build\n\t./run-tests.sh"
+detected:make:win-only
+  source: Makefile
+  config: {"command":"make 'win-only'","cwd":null,"debug":null,"env":{},"envFile":[],"name":"win-only","profiles":{},"type":"shell"}
+  argv: ["/bin/zsh", "-l", "-c", "make 'win-only'"]
+  definition: "win-only: ; echo windows"
+problem[make]: Makefile: skipped 1 target(s) whose names are not safe to pass to a shell (line 40)

@@ -1,0 +1,19 @@
+---
+source: crates/pw-run/src/detect/tests.rs
+expression: "render(&detect(&root, &NoExec), &root)"
+---
+detected:compose:cache
+  source: compose.yaml
+  config: {"cwd":null,"debug":null,"env":{},"envFile":[],"file":"compose.yaml","name":"cache","profiles":{},"services":["cache"],"type":"docker-compose"}
+  argv: ["docker", "compose", "-f", "<root>/compose.yaml", "up", "cache"]
+  definition: "{\"image\":\"redis\"}"
+detected:compose:db
+  source: compose.yaml
+  config: {"cwd":null,"debug":null,"env":{},"envFile":[],"file":"compose.yaml","name":"db","profiles":{},"services":["db"],"type":"docker-compose"}
+  argv: ["docker", "compose", "-f", "<root>/compose.yaml", "up", "db"]
+  definition: "{\"image\":\"postgres:16\",\"environment\":{\"RUST_LOG\":\"info\",\"TOKEN\":q\"abc\"}}"
+detected:compose:web
+  source: compose.yaml
+  config: {"cwd":null,"debug":null,"env":{},"envFile":[],"file":"compose.yaml","name":"web","profiles":{},"services":["web"],"type":"docker-compose"}
+  argv: ["docker", "compose", "-f", "<root>/compose.yaml", "up", "web"]
+  definition: "{\"<<\":{\"build\":\".\"},\"command\":[q\"npm\",q\"run\",q\"dev\"],\"ports\":[q\"5173:5173\"]}"

@@ -40575,24 +40575,47 @@
             ],
             "type": "string"
           },
+          "DetectProblem": {
+            "description": "감지기 하나의 실패 · 뺀 태스크의 까닭. 목록(`run.config.list` 의 `detectProblems`)에 남는다 — 감지 목록이 조용히 짧아지지 않게.",
+            "properties": {
+              "detector": {
+                "description": "감지기 id(`npm` · `make` · `just` · `compose` …).",
+                "type": "string"
+              },
+              "reason": {
+                "description": "까닭(어느 파일 · 무엇 · 몇째 줄). 파일 내용은 담지 않는다.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "detector",
+              "reason"
+            ],
+            "type": "object"
+          },
           "DetectedRunTask": {
-            "description": "파일 없이 감지된 태스크(가상 구성 — 감지기는 M6-04 · 05 가 더한다). 「구성으로 저장」 은 `config` 를 `run.config.save` 로 쓴다.",
+            "description": "파일 없이 감지된 태스크(가상 구성 — 감지기는 `crate::detect`). 「구성으로 저장」 은 `config` 를 `run.config.save` 로 쓴다.",
             "properties": {
               "config": {
                 "$ref": "#/$defs/RunConfig"
               },
               "detector": {
-                "description": "감지기 이름(`package.json` · `mise` …).",
+                "description": "감지기 id(`npm` · `make` · `just` · `compose`, M6-05 가 `mise` · `gradle` · `maven`).",
                 "type": "string"
               },
               "key": {
                 "description": "`detected:<감지기>:<이름>` — 「사람이 본 구성」 기록(M6-11)의 열쇠.",
+                "type": "string"
+              },
+              "source": {
+                "description": "감지 출처 파일(절대 경로).",
                 "type": "string"
               }
             },
             "required": [
               "key",
               "detector",
+              "source",
               "config"
             ],
             "type": "object"
@@ -41010,8 +41033,16 @@
             },
             "type": "array"
           },
+          "detectProblems": {
+            "default": [],
+            "description": "감지기마다의 실패 · 감지에서 뺀 태스크의 까닭. 실패한 감지기의 태스크는 `detected` 에 없다.",
+            "items": {
+              "$ref": "#/$defs/DetectProblem"
+            },
+            "type": "array"
+          },
           "detected": {
-            "description": "감지된 태스크(M6-04 · 05 가 채운다 — 지금은 늘 비어 있다).",
+            "description": "감지된 태스크(감지기 순서, 감지기 안에서는 이름순). 미신뢰 프로젝트에서도 파일만 읽는 감지기의 것은 보인다.",
             "items": {
               "$ref": "#/$defs/DetectedRunTask"
             },
@@ -41036,6 +41067,7 @@
           "configs",
           "unusable",
           "detected",
+          "detectProblems",
           "problem"
         ],
         "type": "object"
