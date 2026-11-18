@@ -594,7 +594,13 @@ mod tests {
     #[test]
     fn an_unreadable_file_is_set_aside_not_emptied() {
         for (name, bytes) in [
-            ("over", vec![b' '; FILE_LIMIT + 1]),
+            // 상한만 넘는 올바른 JSON(뒤의 공백) — 형식 오류로 걸리지 않게.
+            ("over", {
+                let mut bytes =
+                    br#"{ "schema": 1, "files": { "a.rs": [{ "line": 1 }] } }"#.to_vec();
+                bytes.resize(FILE_LIMIT + 1, b' ');
+                bytes
+            }),
             ("broken", b"{ not json".to_vec()),
         ] {
             let tmp = tempfile::tempdir().unwrap();
