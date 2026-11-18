@@ -312,7 +312,8 @@ impl PlanBuilder {
     }
 }
 
-/// [`approve`] 를 지난 증거 — 이것이 있어야 툴이 돈다. 이 모듈 밖에서는 만들 수 없다.
+/// [`approve`] 를 지난 증거 — 이것이 있어야 툴이 돈다. 이 모듈 밖에서는 만들 수 없다. `Default` · `Deserialize` · 공개 생성자를
+/// 더하지 않는다 — 더하면 승인 없이 이 값을 만들 길이 생긴다(`exec` 머리 주석의 `compile_fail` 시험은 구조체 식만 막는다).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Approved {
     hash: String,

@@ -66,6 +66,7 @@ use pw_rpc::{ConnectionScope, RpcError, code};
 use serde::{Deserialize, Serialize};
 
 use super::agent::AgentGrant;
+use super::path::{normalize, worktree_link};
 use super::plan::Approved;
 use super::state::scope_may_write;
 
@@ -170,7 +171,8 @@ impl std::fmt::Debug for RunSpec {
     }
 }
 
-/// [`agent_run_grant`] 를 지난 허가: 승인된 계획에 실린 [`RunSpec`] 만 띄운다. 이 모듈 밖에서는 만들 수 없다.
+/// [`agent_run_grant`] 를 지난 허가: 승인된 계획에 실린 [`RunSpec`] 만 띄운다. 이 모듈 밖에서는 만들 수 없다 — `Default` ·
+/// `Deserialize` · `Clone` · 공개 생성자를 더하지 않는다.
 #[derive(Debug)]
 pub struct AgentRunGrant {
     project_id: String,
@@ -197,6 +199,10 @@ impl AgentRunGrant {
 
 /// MCP 세션이 승인을 지난 계획의 [`RunSpec`] 을 띄워도 된다는 허가(머리 주석). 계획이 띄울 것을 싣지 않았거나(`PlanBuilder::runs`
 /// 를 부르지 않은 계획 — 실행 툴이 아니다) argv 가 빈 [`RunSpec`] 이 있으면 툴의 버그로 거절한다(`INTERNAL_ERROR`).
+///
+/// **작업 폴더는 그 프로젝트 안이어야 한다**(17-m6-plan M6-10): 승인을 지난 값이어도 각 `cwd` 를 정규화(심링크 · `..` 를 푼다 —
+/// [`normalize`])한 뒤 프로젝트 루트 아래이거나, 그 프로젝트의 연결 워크트리 안에서 프로젝트 루트에 대응하는 폴더 아래가 아니면
+/// 아무것도 허가하지 않는다(`PERMISSION_DENIED`). 허가의 `cwd` 는 정규화한 경로다 — 띄우는 쪽은 그 경로로 띄운다.
 pub fn agent_run_grant(agent: &AgentGrant, approved: &Approved) -> Result<AgentRunGrant, RpcError> {
     let runs = approved.runs();
     let problem = if runs.is_empty() {
@@ -212,11 +218,36 @@ pub fn agent_run_grant(agent: &AgentGrant, approved: &Approved) -> Result<AgentR
         return Err(RpcError::new(code::INTERNAL_ERROR, problem)
             .with_data(serde_json::json!({ "projectId": agent.project_id() })));
     }
+    let project_root =
+        normalize(agent.project().root()).unwrap_or_else(|_| agent.project().root().to_path_buf());
+    let mut granted = Vec::with_capacity(runs.len());
+    for run in runs {
+        let Some(cwd) = inside_project(&project_root, &run.cwd) else {
+            return Err(RpcError::new(
+                code::PERMISSION_DENIED,
+                "a run's working directory is outside the project and its worktrees",
+            )
+            .with_data(serde_json::json!({ "projectId": agent.project_id() })));
+        };
+        granted.push(RunSpec { cwd, ..run.clone() });
+    }
     Ok(AgentRunGrant {
         project_id: agent.project_id().to_owned(),
         plan_hash: approved.hash().to_owned(),
-        runs: runs.to_vec(),
+        runs: granted,
     })
+}
+
+/// `cwd` 를 정규화한 경로가 프로젝트 루트 아래이거나 그 프로젝트의 연결 워크트리 안의 대응 루트 아래면 그 경로. 비교는 구성 요소
+/// 단위 접두사다(`registry::path` 의 규칙).
+fn inside_project(project_root: &std::path::Path, cwd: &std::path::Path) -> Option<PathBuf> {
+    let cwd = normalize(cwd).ok()?;
+    if cwd.starts_with(project_root) {
+        return Some(cwd);
+    }
+    let link = worktree_link(&cwd)?;
+    let rel = project_root.strip_prefix(&link.main_top).ok()?;
+    cwd.starts_with(link.worktree_top.join(rel)).then_some(cwd)
 }
 
 #[cfg(test)]
@@ -338,7 +369,8 @@ mod tests {
 
         fn fixture() -> Fixture {
             let tmp = tempfile::tempdir().unwrap();
-            let root = tmp.path().join("work");
+            let root = crate::registry::path::simplify(std::fs::canonicalize(tmp.path()).unwrap())
+                .join("work");
             std::fs::create_dir_all(&root).unwrap();
             let registry = Registry::new(
                 AppPaths::under(&tmp.path().join("app")),
@@ -452,6 +484,88 @@ mod tests {
                 let e = agent_run_grant(&f.grant, &approved(plan(runs))).unwrap_err();
                 assert_eq!(e.code, code::INTERNAL_ERROR);
             }
+        }
+
+        /// 승인을 지난 값이어도 작업 폴더가 프로젝트 밖이면 허가가 없다 — 밖의 폴더, `..` 로 나가는 경로, 밖을 가리키는 심링크
+        /// 모두(정규화한 뒤 본다). 안의 하위 폴더는 정규화한 경로로 허가한다.
+        #[test]
+        fn a_run_outside_the_project_is_refused_even_when_approved() {
+            let f = fixture();
+            let outside = f.root.parent().unwrap().join("outside");
+            std::fs::create_dir_all(&outside).unwrap();
+            std::fs::create_dir_all(f.root.join("app")).unwrap();
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&outside, f.root.join("escape")).unwrap();
+            let mut escapes = vec![
+                outside.clone(),
+                f.root.join("app/../../outside"),
+                f.root.parent().unwrap().join("work-sibling"),
+            ];
+            if cfg!(unix) {
+                escapes.push(f.root.join("escape"));
+                escapes.push(f.root.join("escape/deeper"));
+            }
+            for cwd in escapes {
+                let run = RunSpec {
+                    cwd: cwd.clone(),
+                    ..spec(&f.root, "x")
+                };
+                let runs = vec![spec(&f.root, "x"), run];
+                let e = agent_run_grant(&f.grant, &approved(plan(runs))).unwrap_err();
+                assert_eq!(e.code, code::PERMISSION_DENIED, "{}", cwd.display());
+            }
+            let inside = RunSpec {
+                cwd: f.root.join("app/./sub/.."),
+                ..spec(&f.root, "x")
+            };
+            let grant = agent_run_grant(&f.grant, &approved(plan(vec![inside]))).unwrap();
+            assert_eq!(grant.runs()[0].cwd, f.root.join("app"));
+        }
+
+        /// 연결 워크트리 안의 대응 루트는 프로젝트 안이다. 다른 저장소의 워크트리는 아니다.
+        #[test]
+        fn a_run_in_a_linked_worktree_of_the_project_is_granted() {
+            let f = fixture();
+            let base = f.root.parent().unwrap();
+            let wt = base.join("wt");
+            fake_worktree(&f.root, &wt);
+            let other_main = base.join("other");
+            std::fs::create_dir_all(&other_main).unwrap();
+            let other_wt = base.join("other-wt");
+            fake_worktree(&other_main, &other_wt);
+            std::fs::create_dir_all(wt.join("app")).unwrap();
+            let grant = agent_run_grant(
+                &f.grant,
+                &approved(plan(vec![RunSpec {
+                    cwd: wt.join("app"),
+                    ..spec(&f.root, "x")
+                }])),
+            )
+            .unwrap();
+            assert_eq!(grant.runs()[0].cwd, wt.join("app"));
+            let e = agent_run_grant(
+                &f.grant,
+                &approved(plan(vec![RunSpec {
+                    cwd: other_wt.clone(),
+                    ..spec(&f.root, "x")
+                }])),
+            )
+            .unwrap_err();
+            assert_eq!(e.code, code::PERMISSION_DENIED);
+        }
+
+        /// `git worktree add` 가 만드는 모양(`main` 의 `.git` 폴더 + `wt` 의 `.git` 파일).
+        fn fake_worktree(main: &std::path::Path, wt: &std::path::Path) {
+            let admin = main.join(".git/worktrees").join(wt.file_name().unwrap());
+            std::fs::create_dir_all(&admin).unwrap();
+            std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+            std::fs::create_dir_all(wt).unwrap();
+            std::fs::write(wt.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+            std::fs::write(
+                admin.join("gitdir"),
+                format!("{}\n", wt.join(".git").display()),
+            )
+            .unwrap();
         }
 
         /// 로그에 찍혀도 명령줄 원문 · env 값이 나가지 않는다.
