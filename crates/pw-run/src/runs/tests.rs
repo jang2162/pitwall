@@ -1780,3 +1780,51 @@ async fn a_failed_start_records_nothing() {
     .await;
     assert_eq!(f.projects.run_seen(&f.project, "dev").unwrap(), None);
 }
+
+/// 17-m6-plan M6-02 행(M6-03 리뷰에서 넘김): `shell` 종류는 로그인 셸(`$SHELL -l -c`)이라 그 시작 파일이 `.env` 의 `PATH` 를 다시 쓸 수
+/// 있다. macOS 의 `/etc/profile` 은 `path_helper` 로 `/etc/paths` 의 폴더를 **앞에** 둔다 — `.env` 가 앞에 둔 폴더는 남지만 뒤로
+/// 밀린다. 셸을 거치지 않는 종류(`cargo` 등 — 시험 ⑦)는 그 순서 그대로다. 이 시험은 그 차이를 못박는다(바뀌면 문서 03 「4. RPC
+/// 설계」 의 실행 줄을 고친다).
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_login_shell_may_reorder_the_env_file_path() {
+    let f = Fixture::real();
+    fs::write(
+        f.root.join(".env.local"),
+        format!("PATH={}:/usr/bin:/bin\n", f.bin.display()),
+    )
+    .unwrap();
+    f.config(
+        &f.root,
+        "dev",
+        &format!(
+            "name = \"dev\"\ntype = \"shell\"\ncommand = {}\nenv_file = [\".env.local\"]",
+            toml_str("echo \"P=$PATH\"")
+        ),
+    );
+    let mut c = f.client();
+    let run = info(
+        c.call(
+            "run.start",
+            json!({"projectId": f.project, "configId": "dev"}),
+        )
+        .await,
+    );
+    let mut a = c.attach(&run.run_id, None).await;
+    c.exit(&mut a).await;
+    let path = a
+        .text
+        .split("P=")
+        .nth(1)
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap()
+        .trim()
+        .to_owned();
+    eprintln!("login shell PATH: {path}");
+    let dirs: Vec<&str> = path.split(':').collect();
+    let ours = dirs.iter().position(|d| *d == f.bin.display().to_string());
+    assert!(ours.is_some(), "the env file's folder is gone: {path}");
+    assert_ne!(ours, Some(0), "path_helper no longer reorders: {path}");
+}
