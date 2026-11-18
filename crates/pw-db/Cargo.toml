@@ -23,6 +23,9 @@ pw-db-types = { path = "../pw-db-types" }
 # 밖이면 거절 · 일반 파일만)과 읽기(`pw_fs::read::read_whole`). pw-fs 는 pw-db 에 의존하지 않아 순환이 없다.
 pw-fs = { path = "../pw-fs" }
 pw-rpc = { path = "../pw-rpc" }
+# 실행 구성의 `sql` 종류(17-m6-plan M6-09): 구성(`pw_run::config`)을 읽고 실행 관리자(`pw_run::runs`)에 `RunKind` 로 든다. pw-run 은
+# pw-db 에 의존하지 않아 순환이 없다.
+pw-run = { path = "../pw-run" }
 pw-runtime = { path = "../pw-runtime" }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

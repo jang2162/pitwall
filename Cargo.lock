@@ -5431,6 +5431,7 @@ dependencies = [
  "pw-fs",
  "pw-git",
  "pw-rpc",
+ "pw-run",
  "pw-runtime",
  "schemars 1.2.3",
  "serde",

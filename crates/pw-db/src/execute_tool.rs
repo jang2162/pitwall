@@ -57,8 +57,8 @@ use crate::gate::{
 use crate::schema::check_text;
 use crate::script::{
     CancelOnDrop, DEFAULT_MAX_ROWS, DbScriptError, DbScriptResult, DbScriptUnlisted, ResponseRoom,
-    ScriptInput, ScriptMode, TOOL_CELL_BYTES, audit_detail, fit_rows, line_of, read_script_file,
-    run_script,
+    ScriptInput, ScriptMode, TOOL_CELL_BYTES, audit_detail, commit_outcome_unknown, fit_rows,
+    line_of, read_script_file, run_script,
 };
 use crate::session::{DbSessions, blocking, db_error};
 use crate::tool_plan::{db_plan, sql_change};
@@ -183,7 +183,11 @@ fn refuse(reason: &str, message: String, refused: Vec<DbStatementClass>, audit: 
 }
 
 /// 묻기 전의 거절(머리 주석 ③ — read-only 는 따로).
-fn refuse_before_asking(source: &str, planned: &[Statement], audit: &str) -> Result<(), RpcError> {
+pub(crate) fn refuse_before_asking(
+    source: &str,
+    planned: &[Statement],
+    audit: &str,
+) -> Result<(), RpcError> {
     let unknown: Vec<&Statement> = planned.iter().filter(|s| unclassified(s)).collect();
     if let Some(first) = unknown.first() {
         return Err(refuse(
@@ -530,19 +534,6 @@ impl DbSessions {
         fit_rows(&mut result.results, fixed);
         Ok(result)
     }
-}
-
-/// 커밋 오류가 시한 초과 · 끊김 · 중단이면 COMMIT 을 보낸 뒤라 DB 가 그것을 적용했는지 모른다. DB 가 답한 거절(제약 위반 · `busy`
-/// 등 — 연결을 닫으면 트랜잭션이 버려진다)과 트랜잭션이 되돌려졌다는 표시가 있는 오류는 커밋되지 않았다.
-fn commit_outcome_unknown(error: &DbError) -> bool {
-    !error.rolled_back
-        && matches!(
-            error.kind,
-            DbErrorKind::Timeout
-                | DbErrorKind::Disconnected
-                | DbErrorKind::Cancelled
-                | DbErrorKind::Connect
-        )
 }
 
 /// 커밋의 끝을 로그 문구로.

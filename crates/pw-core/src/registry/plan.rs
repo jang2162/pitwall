@@ -96,13 +96,36 @@ pub enum PlanChange {
     /// 쓴다). 승인 다이얼로그(M5-14)는 문장마다 등급을 보이고, 등급이 [`SqlGrade::Destructive`] 인 문장이 하나라도 있으면
     /// 연결 이름을 쳐야 허용할 수 있다. `irreversible` 이면 「되돌릴 수 없다」 를 보인다(트랜잭션 밖에서 커밋되는 문장 — MySQL 의
     /// DDL 등).
+    ///
+    /// 파일 여럿 · 트랜잭션 방식(17-m6-plan M6-09 ⑥ — 실행 구성의 `sql` 종류, M6-14 · M6-21 이 채운다): `files` 는 읽은 파일들(순서
+    /// 대로 — `sql` 글이면 비었다), 문장의 `file` 은 그 목록의 번호다. `transaction` 이 없으면 호출 하나가 트랜잭션 하나다
+    /// (`db_execute`). `keepsOnFailure` 면 「실패해도 앞 파일 · 앞 문장이 남는다」 를 보인다(`per_file` · `none`).
     Sql {
         connection: SqlTarget,
-        /// `file` 입력으로 읽은 SQL 이면 그 파일.
-        file: Option<SqlFile>,
+        /// 읽은 SQL 파일들(순서대로). `sql` 글이면 비었다.
+        files: Vec<SqlFile>,
         statements: Vec<SqlStatement>,
+        /// 트랜잭션 방식. 없으면 문장 전부가 트랜잭션 하나다.
+        transaction: Option<SqlPlanTransaction>,
+        /// 실패해도 앞 파일(`per_file`) · 앞 문장(`none`)이 남는다.
+        keeps_on_failure: bool,
         irreversible: bool,
     },
+}
+
+/// 실행 구성 `sql` 종류의 트랜잭션 방식(`pw_run::config::SqlTransaction` 과 같은 이름 · 같은 직렬화 — pw-core 는 pw-run 에
+/// 의존하지 않는다).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SqlPlanTransaction {
+    /// 모든 파일이 트랜잭션 하나.
+    All,
+    /// 파일마다 하나 — 실패하면 그 파일만 롤백된다.
+    PerFile,
+    /// 트랜잭션 없음 — 문장마다 자동 커밋.
+    None,
 }
 
 /// 문장을 보낼 연결(사람이 보는 이름과 표지).
@@ -139,6 +162,8 @@ pub struct SqlStatement {
     pub line: u32,
     pub grade: SqlGrade,
     pub text: String,
+    /// 그 문장이 든 파일([`PlanChange::Sql`] 의 `files` 번호). `sql` 글이면 `null`.
+    pub file: Option<u32>,
 }
 
 /// 문장의 위험도 등급 — `pw_db_types::RiskGrade` 와 같은 이름 · 같은 직렬화(pw-core 는 DB 크레이트에 의존하지 않는다).
@@ -602,16 +627,19 @@ mod tests {
                 production: true,
                 read_only: false,
             },
-            file: Some(SqlFile {
+            files: vec![SqlFile {
                 path: "/w/migrate.sql".into(),
                 sha256: "ab".into(),
-            }),
+            }],
             statements: vec![SqlStatement {
                 index: 0,
                 line: 3,
                 grade: SqlGrade::UnboundedWrite,
                 text: "DELETE FROM t".into(),
+                file: Some(0),
             }],
+            transaction: Some(SqlPlanTransaction::PerFile),
+            keeps_on_failure: true,
             irreversible: true,
         };
         assert_eq!(
@@ -619,8 +647,10 @@ mod tests {
             json!({
                 "kind": "sql",
                 "connection": {"name": "prod-main", "production": true, "readOnly": false},
-                "file": {"path": "/w/migrate.sql", "sha256": "ab"},
-                "statements": [{"index": 0, "line": 3, "grade": "unboundedWrite", "text": "DELETE FROM t"}],
+                "files": [{"path": "/w/migrate.sql", "sha256": "ab"}],
+                "statements": [{"index": 0, "line": 3, "grade": "unboundedWrite", "text": "DELETE FROM t", "file": 0}],
+                "transaction": "per_file",
+                "keepsOnFailure": true,
                 "irreversible": true,
             })
         );

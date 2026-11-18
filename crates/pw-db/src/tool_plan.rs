@@ -128,10 +128,13 @@ pub(crate) fn sql_change(
             production: marks.production,
             read_only: marks.read_only,
         },
-        file: file.map(|f| SqlFile {
-            path: f.path.clone(),
-            sha256: f.content_hash.clone(),
-        }),
+        files: file
+            .map(|f| SqlFile {
+                path: f.path.clone(),
+                sha256: f.content_hash.clone(),
+            })
+            .into_iter()
+            .collect(),
         statements: planned
             .iter()
             .map(|s| SqlStatement {
@@ -139,8 +142,11 @@ pub(crate) fn sql_change(
                 line: lines.line(s.range),
                 grade: sql_grade(s.grade),
                 text: s.text.clone(),
+                file: file.map(|_| 0),
             })
             .collect(),
+        transaction: None,
+        keeps_on_failure: false,
         irreversible,
     }
 }

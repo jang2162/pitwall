@@ -246,6 +246,9 @@ fn local_host_parts(
         paths.state.join("db-ssh-tunnels"),
     );
     let db_session_methods = Arc::clone(&db_sessions);
+    // 실행 구성의 `sql` 종류(`run.sql.start`, M6-09): 프로세스 없이 DB 실행 경로로, 실행 관리자의 실행 하나로 돈다.
+    let sql_run_sessions = Arc::clone(&db_sessions);
+    let sql_runs = runs.clone();
     let db_sessions_out = Arc::clone(&db_sessions);
     // MCP 상태(`mcp.sessions` · `mcp.tools.list` · `mcp.audit.list`, M5-10). 카탈로그 · 감사 로그는 Host 를 만든 뒤 붙인다.
     let mcp_status = Arc::new(pw_mcp::methods::Mcp::new(mcp_sessions));
@@ -286,6 +289,7 @@ fn local_host_parts(
         .methods(pw_db_sql::kv_command::register)
         .methods(move |router| pw_db::config::register(router, db_connection_methods))
         .methods(move |router| pw_db::register(router, db_session_methods))
+        .methods(move |router| pw_db::run_sql::register(router, sql_run_sessions, sql_runs))
         .methods(|router| pw_db::registry::register(router, db::drivers()))
         .methods(move |router| pw_db::ssh_hosts::register(router, db_ssh_host_methods))
         .methods(move |router| pw_tools::methods::register(router, tools_registry_methods))

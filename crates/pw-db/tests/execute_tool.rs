@@ -182,7 +182,7 @@ fn sql_of(required: &ApprovalRequired) -> (Value, Option<Value>, Vec<Value>, boo
     assert_eq!(change["kind"], "sql");
     (
         change["connection"].clone(),
-        Some(change["file"].clone()).filter(|f| !f.is_null()),
+        change["files"].as_array().unwrap().first().cloned(),
         change["statements"].as_array().unwrap().clone(),
         change["irreversible"].as_bool().unwrap(),
     )

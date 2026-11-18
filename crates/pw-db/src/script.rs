@@ -349,6 +349,8 @@ pub(crate) struct Ran {
     pub not_run: Option<DbScriptNotRun>,
     /// 쓰기 모드에서 응답 예산을 다 쓴 뒤에 돈 문장들.
     pub unlisted: Option<DbScriptUnlisted>,
+    /// [`Statements::stop`] 으로 멈췄다(뒤 문장을 돌리지 않았다).
+    pub stopped: bool,
 }
 
 /// 트랜잭션의 꼴(머리 주석 ④).
@@ -595,22 +597,96 @@ pub(crate) async fn run_script(
     room: &mut ResponseRoom,
 ) -> Result<Ran, DbError> {
     let mut inactivity = Inactivity::new(Budget::PAGE.inactivity);
+    begin(conn, mode == ScriptMode::ReadOnly, cancel, &mut inactivity).await?;
+    let mut options = Statements {
+        max_rows,
+        cell,
+        in_transaction: true,
+        count_rest: false,
+        stop: &|| false,
+    };
+    Ok(run_statements(
+        conn,
+        mode,
+        source,
+        planned,
+        &mut options,
+        cancel,
+        &mut inactivity,
+        room,
+        &mut |_| {},
+    )
+    .await)
+}
+
+/// 트랜잭션을 연다(비활동 타임아웃이면 서버의 문장을 멈춘다).
+async fn begin(
+    conn: &mut dyn SqlConnection,
+    read_only: bool,
+    cancel: &QueryCancel,
+    inactivity: &mut Inactivity,
+) -> Result<(), DbError> {
+    inactivity.rearm();
     let begun = cancel
-        .run(inactivity.guard(conn.begin(BeginOptions {
-            read_only: mode == ScriptMode::ReadOnly,
-        })))
+        .run(inactivity.guard(conn.begin(BeginOptions { read_only })))
         .await;
     interrupt_on_timeout(&begun, cancel).await;
-    begun?;
+    begun
+}
+
+/// [`run_statements`] 의 갈래.
+pub(crate) struct Statements<'a> {
+    pub max_rows: u32,
+    pub cell: CellLimit,
+    /// 트랜잭션 안에서 도는가. 아니면(실행 구성 `transaction = "none"` — M6-09) 문장마다 자동 커밋이고, 암묵 커밋 문장 뒤에
+    /// 트랜잭션을 다시 열지 않는다.
+    pub in_transaction: bool,
+    /// `max_rows` 를 넘는 행을 버리되 끝까지 읽어 센다(실행 콘솔의 「조회 행 수」 — 앞 몇 행만 남긴다).
+    pub count_rest: bool,
+    /// 다음 문장을 시작하기 전에 본다 — 참이면 거기서 멈춘다(실행의 중지, M6-09).
+    pub stop: &'a (dyn Fn() -> bool + Sync),
+}
+
+/// 문장 하나가 끝났다([`run_statements`] 의 관찰자 — 실행 콘솔이 문장마다 한 줄을 쓴다).
+pub(crate) enum StatementEvent<'a> {
+    Ran {
+        result: &'a DbScriptResult,
+        /// 행을 내는 문장이면 읽은 행 수 전체([`Statements::count_rest`] 일 때만).
+        rows_total: Option<u64>,
+    },
+    /// 결과를 싣지 않고 돈 문장([`DbScriptUnlisted`]).
+    RanUnlisted,
+    Failed(&'a DbScriptError),
+}
+
+/// 열린 트랜잭션(또는 자동 커밋)에서 문장을 차례로 돌린다(머리 주석 ④). 문장이 실패하거나 [`Statements::stop`] 이 참이면 멈춘다.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_statements(
+    conn: &mut dyn SqlConnection,
+    mode: ScriptMode,
+    source: &str,
+    planned: &[Planned],
+    options: &mut Statements<'_>,
+    cancel: &QueryCancel,
+    inactivity: &mut Inactivity,
+    room: &mut ResponseRoom,
+    observe: &mut (dyn FnMut(StatementEvent<'_>) + Send),
+) -> Ran {
+    let (max_rows, cell) = (options.max_rows, options.cell);
     let mut ran = Ran {
         results: Vec::new(),
         error: None,
         not_run: None,
         unlisted: None,
+        stopped: false,
     };
     let mut spent = ResponseRoom::spent();
     let lines = LineIndex::new(source);
     for (at, statement) in planned.iter().enumerate() {
+        if (options.stop)() {
+            ran.stopped = true;
+            break;
+        }
         let started = Instant::now();
         let line = lines.line(statement.range);
         let listing = ran.unlisted.is_none();
@@ -620,13 +696,15 @@ pub(crate) async fn run_script(
             statement,
             max_rows,
             cell,
+            options.count_rest,
             cancel,
-            &mut inactivity,
+            inactivity,
             budget,
         )
         .await
         {
             Ok(out) if listing => {
+                let rows_total = out.rows_total;
                 ran.results.push(DbScriptResult {
                     index: statement.index,
                     line,
@@ -637,6 +715,9 @@ pub(crate) async fn run_script(
                     truncated: out.truncated,
                     elapsed_ms: elapsed_ms(started),
                 });
+                if let Some(result) = ran.results.last() {
+                    observe(StatementEvent::Ran { result, rows_total });
+                }
                 if out.budget_spent
                     && let Some(next) = planned.get(at + 1)
                 {
@@ -671,6 +752,7 @@ pub(crate) async fn run_script(
                         .rows_affected
                         .saturating_add(out.rows_affected.unwrap_or(0));
                 }
+                observe(StatementEvent::RanUnlisted);
             }
             Err(error) => {
                 ran.error = Some(DbScriptError {
@@ -679,22 +761,21 @@ pub(crate) async fn run_script(
                     range: statement.range,
                     error,
                 });
+                if let Some(error) = &ran.error {
+                    observe(StatementEvent::Failed(error));
+                }
                 break;
             }
         }
         // 암묵 커밋 문장(MySQL 의 DDL 등)이 트랜잭션을 끝냈으면 뒤 문장을 위해 다시 연다 — 앞의 것은 이미 커밋됐다(계획이 「되돌릴
         // 수 없다」 를 보였다). 뒤 문장은 다시 한 트랜잭션에 묶여, 실패하면 거기서부터 롤백된다.
         if mode == ScriptMode::Write
+            && options.in_transaction
             && (statement.implicit_commit || statement.may_end)
             && at + 1 < planned.len()
             && conn.transaction_state() == TransactionState::Idle
         {
-            inactivity.rearm();
-            let again = cancel
-                .run(inactivity.guard(conn.begin(BeginOptions { read_only: false })))
-                .await;
-            interrupt_on_timeout(&again, cancel).await;
-            if let Err(error) = again {
+            if let Err(error) = begin(conn, false, cancel, inactivity).await {
                 let next = &planned[at + 1];
                 ran.error = Some(DbScriptError {
                     index: next.index,
@@ -702,11 +783,262 @@ pub(crate) async fn run_script(
                     range: next.range,
                     error,
                 });
+                if let Some(error) = &ran.error {
+                    observe(StatementEvent::Failed(error));
+                }
                 break;
             }
         }
     }
-    Ok(ran)
+    ran
+}
+
+/// 파일 여럿 · 트랜잭션 방식(17-m6-plan M6-09 — 실행 구성의 `sql` 종류). 방식은 구성의 것이다.
+pub use pw_run::config::SqlTransaction;
+
+/// 읽고 분류한 파일 하나([`run_files`] 의 입력).
+#[derive(Debug, Clone)]
+pub(crate) struct PlannedFile {
+    pub file: ScriptFile,
+    pub planned: Vec<Planned>,
+}
+
+/// 실행의 다스림(M6-09): 중지와 커밋 경계. 커밋을 시작한 뒤의 중지는 커밋을 끊지 않는다 — 커밋이 끝난 뒤 다음 파일 앞에서 멈춘다.
+pub(crate) trait RunControl: Send + Sync {
+    /// 중지가 왔다 — 다음 문장 · 다음 파일을 시작하지 않는다.
+    fn stopped(&self) -> bool;
+    /// 커밋해도 되면 `true`. 이미 중지가 왔으면 `false`(롤백한다).
+    fn begin_commit(&self) -> bool;
+    /// 커밋이 끝났다(성공이든 아니든).
+    fn end_commit(&self);
+}
+
+/// How one transaction of a run ended (the same words as `db_execute`'s audit: committed · rolled back · unknown).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum SqlTransactionEnd {
+    /// Committed.
+    Committed,
+    /// Rolled back: nothing of these files is kept (except what statements that commit on their own already committed).
+    RolledBack,
+    /// The commit was sent and its outcome is unknown (timeout · lost connection).
+    Unknown,
+    /// Only queries ran, in a read-only transaction that was rolled back.
+    ReadOnly,
+    /// No transaction (`transaction = "none"`): every statement that ran committed on its own.
+    AutoCommitted,
+}
+
+impl SqlTransactionEnd {
+    /// 감사 상세 · 콘솔의 낱말(`db_execute` 의 `transaction=` 과 같은 말).
+    pub fn word(self) -> &'static str {
+        match self {
+            SqlTransactionEnd::Committed => "committed",
+            SqlTransactionEnd::RolledBack => "rolledBack",
+            SqlTransactionEnd::Unknown => "unknown",
+            SqlTransactionEnd::ReadOnly => "readOnly",
+            SqlTransactionEnd::AutoCommitted => "autoCommitted",
+        }
+    }
+}
+
+/// 트랜잭션 하나(파일 범위)와 그 끝.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct FilesTransaction {
+    pub files: std::ops::Range<usize>,
+    pub end: SqlTransactionEnd,
+    /// 커밋이 실패했으면 그 오류.
+    pub commit_error: Option<DbError>,
+}
+
+/// [`run_files`] 의 관찰자가 받는 것.
+pub(crate) enum FilesEvent<'a> {
+    Statement {
+        file: usize,
+        event: StatementEvent<'a>,
+    },
+    Ended(&'a FilesTransaction),
+}
+
+/// [`run_files`] 의 끝.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) struct FilesRan {
+    pub transactions: Vec<FilesTransaction>,
+    /// 실패한 문장(파일 번호와 그 오류).
+    pub failed: Option<(usize, DbScriptError)>,
+    /// 중지로 멈췄다.
+    pub stopped: bool,
+    /// 돈 문장 수(실패한 문장 포함).
+    pub statements: u32,
+}
+
+impl FilesRan {
+    /// 마지막 트랜잭션의 끝 — 한 번도 열지 못했으면 `None`.
+    pub fn last_end(&self) -> Option<SqlTransactionEnd> {
+        self.transactions.last().map(|t| t.end)
+    }
+}
+
+/// 실행 콘솔에 남기는 조회의 앞 행 수(05-mcp.md 「`sql` 종류 실행 구성」 — 메인 판정 M6-P4).
+pub const RUN_ROWS_SHOWN: u32 = 5;
+/// 실행 콘솔의 셀 상한.
+pub const RUN_CELL_BYTES: usize = 256;
+
+/// 파일들을 트랜잭션 방식대로 돌린다(17-m6-plan M6-09 ①): `all` 은 모든 파일이 트랜잭션 하나, `per_file` 은 파일마다 하나,
+/// `none` 은 트랜잭션 없이 문장마다 자동 커밋이다. `read_only` 면(조회만 — 방식과 무관하게) 읽기 전용 트랜잭션 하나에서 돌고
+/// 롤백한다. 실패하면 늘 멈춘다 — `all` 은 모든 파일을, `per_file` 은 그 파일을 롤백하고(앞 파일은 커밋됐다), `none` 은 실패 문장
+/// 앞까지 남는다. 조회는 앞 [`RUN_ROWS_SHOWN`] 행만 남기고 끝까지 세며, 결과 행 전체는 남기지 않는다. 커밋 · 롤백 · 닫기의
+/// 시한은 `db_execute` 와 같다. 연결은 닫지 않는다(부른 쪽).
+pub(crate) async fn run_files(
+    conn: &mut dyn SqlConnection,
+    files: &[PlannedFile],
+    transaction: SqlTransaction,
+    read_only: bool,
+    cancel: &QueryCancel,
+    control: &dyn RunControl,
+    observe: &mut (dyn FnMut(FilesEvent<'_>) + Send),
+) -> FilesRan {
+    let mut inactivity = Inactivity::new(Budget::PAGE.inactivity);
+    let mut room = ResponseRoom {
+        used: 0,
+        limit: usize::MAX,
+    };
+    let in_transaction = read_only || transaction != SqlTransaction::None;
+    let groups: Vec<std::ops::Range<usize>> = if read_only || transaction == SqlTransaction::All {
+        vec![0..files.len()]
+    } else {
+        (0..files.len()).map(|i| i..i + 1).collect()
+    };
+    let mode = if read_only {
+        ScriptMode::ReadOnly
+    } else {
+        ScriptMode::Write
+    };
+    let stop = || control.stopped();
+    let mut out = FilesRan::default();
+    for group in groups {
+        if control.stopped() {
+            out.stopped = true;
+            break;
+        }
+        if in_transaction && let Err(error) = begin(conn, read_only, cancel, &mut inactivity).await
+        {
+            if let Some(first) = files[group.start].planned.first() {
+                let failed = DbScriptError {
+                    index: first.index,
+                    line: LineIndex::new(&files[group.start].file.text).line(first.range),
+                    range: first.range,
+                    error,
+                };
+                observe(FilesEvent::Statement {
+                    file: group.start,
+                    event: StatementEvent::Failed(&failed),
+                });
+                out.failed = Some((group.start, failed));
+            }
+            let ended = FilesTransaction {
+                files: group,
+                end: SqlTransactionEnd::RolledBack,
+                commit_error: None,
+            };
+            observe(FilesEvent::Ended(&ended));
+            out.transactions.push(ended);
+            break;
+        }
+        let mut broke = false;
+        for at in group.clone() {
+            let part = &files[at];
+            let mut options = Statements {
+                max_rows: RUN_ROWS_SHOWN,
+                cell: CellLimit(RUN_CELL_BYTES),
+                in_transaction,
+                count_rest: true,
+                stop: &stop,
+            };
+            let ran = run_statements(
+                conn,
+                mode,
+                &part.file.text,
+                &part.planned,
+                &mut options,
+                cancel,
+                &mut inactivity,
+                &mut room,
+                &mut |event| observe(FilesEvent::Statement { file: at, event }),
+            )
+            .await;
+            out.statements += ran.results.len() as u32 + u32::from(ran.error.is_some());
+            if let Some(error) = ran.error {
+                out.failed = Some((at, error));
+                broke = true;
+                break;
+            }
+            if ran.stopped {
+                out.stopped = true;
+                broke = true;
+                break;
+            }
+        }
+        let (end, commit_error) = if !in_transaction {
+            (SqlTransactionEnd::AutoCommitted, None)
+        } else if read_only {
+            rollback(conn).await;
+            (SqlTransactionEnd::ReadOnly, None)
+        } else if broke {
+            rollback(conn).await;
+            (SqlTransactionEnd::RolledBack, None)
+        } else if control.begin_commit() {
+            let committed = within(Budget::PAGE.connect, "commit", conn.commit()).await;
+            control.end_commit();
+            match committed {
+                Ok(()) => (SqlTransactionEnd::Committed, None),
+                Err(e) if commit_outcome_unknown(&e) => (SqlTransactionEnd::Unknown, Some(e)),
+                Err(e) => {
+                    rollback(conn).await;
+                    (SqlTransactionEnd::RolledBack, Some(e))
+                }
+            }
+        } else {
+            out.stopped = true;
+            rollback(conn).await;
+            (SqlTransactionEnd::RolledBack, None)
+        };
+        let failed_commit = commit_error.is_some();
+        let ended = FilesTransaction {
+            files: group,
+            end,
+            commit_error,
+        };
+        observe(FilesEvent::Ended(&ended));
+        out.transactions.push(ended);
+        if broke || out.stopped || failed_commit {
+            break;
+        }
+    }
+    if control.stopped() {
+        out.stopped = true;
+    }
+    out
+}
+
+async fn rollback(conn: &mut dyn SqlConnection) {
+    let _ = within(Budget::PAGE.cancel_cleanup, "rollback", conn.rollback()).await;
+}
+
+/// 커밋 오류가 시한 초과 · 끊김 · 중단이면 COMMIT 을 보낸 뒤라 DB 가 그것을 적용했는지 모른다. DB 가 답한 거절(제약 위반 · `busy`
+/// 등 — 연결을 닫으면 트랜잭션이 버려진다)과 트랜잭션이 되돌려졌다는 표시가 있는 오류는 커밋되지 않았다. `db_execute` 와 실행
+/// 구성의 `sql` 종류가 같이 쓴다(16-m5-plan M5-18b · 17-m6-plan M6-09).
+pub(crate) fn commit_outcome_unknown(error: &DbError) -> bool {
+    !error.rolled_back
+        && matches!(
+            error.kind,
+            DbErrorKind::Timeout
+                | DbErrorKind::Disconnected
+                | DbErrorKind::Cancelled
+                | DbErrorKind::Connect
+        )
 }
 
 /// The result of one statement.
@@ -717,6 +1049,8 @@ struct StatementRows {
     truncated: bool,
     /// 응답 예산을 다 썼다 — 뒤 문장은 돌리지 않는다.
     budget_spent: bool,
+    /// 읽은 행 수 전체(`count_rest` 이고 행을 내는 문장일 때).
+    rows_total: Option<u64>,
 }
 
 /// 문장 하나: 실행 → 행을 읽는 그때 응답 예산(`room`)에 더하며 `max_rows` 까지 읽고, 한 행을 더 읽어 넘는지 본다 → 넘거나 예산이
@@ -726,6 +1060,7 @@ async fn run_one(
     statement: &Planned,
     max_rows: u32,
     cell: CellLimit,
+    count_rest: bool,
     cancel: &QueryCancel,
     inactivity: &mut Inactivity,
     room: &mut ResponseRoom,
@@ -742,6 +1077,7 @@ async fn run_one(
         rows_affected: None,
         truncated: false,
         budget_spent: false,
+        rows_total: None,
     };
     // 결과 하나(열 포함)가 들어갈 자리도 없으면 행 없이 끊는다.
     let header = result_overhead(&out.columns, statement.index, statement.grade);
@@ -764,8 +1100,13 @@ async fn run_one(
         return Ok(out);
     }
     let limit = max_rows as usize;
+    let mut total = 0u64;
     loop {
-        let wanted = limit + 1 - out.rows.len();
+        let wanted = if count_rest {
+            FETCH.max_rows as usize
+        } else {
+            limit + 1 - out.rows.len()
+        };
         let batch = cancel
             .run(inactivity.guard(conn.fetch(FetchLimit {
                 max_rows: wanted.min(FETCH.max_rows as usize) as u32,
@@ -778,8 +1119,12 @@ async fn run_one(
         let mut stop = false;
         for row in batch.rows {
             if out.rows.len() == limit {
-                // `max_rows` 를 넘는 행이 있었다.
+                // `max_rows` 를 넘는 행이 있었다. 세는 갈래는 버리고 센다.
                 out.truncated = true;
+                if count_rest {
+                    total += 1;
+                    continue;
+                }
                 stop = true;
                 break;
             }
@@ -789,7 +1134,11 @@ async fn run_one(
                 stop = true;
                 break;
             }
+            total += 1;
             out.rows.push(row);
+        }
+        if count_rest {
+            out.rows_total = Some(total);
         }
         if stop {
             if batch.end.is_none() {
