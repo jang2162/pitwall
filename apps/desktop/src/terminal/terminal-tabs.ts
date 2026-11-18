@@ -3,17 +3,14 @@
 // 쥔다 — 창마다 웹뷰가 따로라 모듈 하나가 창 하나다(src/open-with/active-worktree.ts 와 같다). 다시 올라온 툴 윈도우는 xterm 의 요소를
 // 새 자리로 옮겨 붙인다.
 //
-// 렌더러는 WebGL addon 이고, 올리지 못하거나 컨텍스트를 잃으면 xterm 의 DOM 렌더러로 떨어진다(10-ui.md 「UI 스택」 의 터미널 행).
+// 화면(글꼴 · 테마 · 렌더러 · 키 경계 · 링크 · OSC 처리)은 실행 콘솔과 함께 쓰는 xterm-view.ts 다.
 
 import type { RpcClient } from "@pitwall/rpc-client";
-import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
-import { type ITheme, Terminal } from "@xterm/xterm";
+import type { ITheme, Terminal } from "@xterm/xterm";
 import { createStore, type StoreApi } from "zustand/vanilla";
 
-import { CODE_FONT } from "../editor/extensions/theme";
-import { fileLinkProvider } from "./terminal-links";
 import { type SessionState, TerminalSession } from "./terminal-session";
+import { type XtermDeps, XtermView } from "./xterm-view";
 
 export interface TerminalTab {
   id: number;
@@ -42,10 +39,10 @@ export interface TerminalDeps {
   /** 이 클릭이 링크를 여는가(⌘ · Ctrl). */
   opensLink(e: MouseEvent): boolean;
   openFile(target: { path: string; worktree?: string; line?: number; column?: number }): void;
+  /** 외부 브라우저로 연다(OSC 8 링크, xterm-view.ts). 없으면 열지 않는다. */
+  openUrl?(url: string): void;
   log?(message: string): void;
 }
-
-const LINK_CACHE_MS = 3000;
 
 /** 탭 하나의 화면과 셸. 처음 화면에 붙을 때(`attach`) xterm 을 열고, 크기를 잰 뒤 셸을 띄운다. */
 /** 새 탭을 어디서 열지. 없으면 창의 활성 워크트리 루트. */
@@ -57,13 +54,10 @@ export interface TerminalPlace {
 }
 
 export class TerminalInstance {
-  readonly term: Terminal;
+  readonly view: XtermView;
   readonly worktree: string | undefined;
   private readonly cwd: string | undefined;
-  private readonly fit = new FitAddon();
-  private opened = false;
   private session: TerminalSession | undefined;
-  private readonly linkCache = new Map<string, { at: number; ok: Promise<boolean> }>();
 
   constructor(
     private readonly deps: () => TerminalDeps | undefined,
@@ -73,20 +67,18 @@ export class TerminalInstance {
   ) {
     this.worktree = place.cwd !== undefined ? place.worktree : deps()?.worktree();
     this.cwd = place.cwd;
-    this.term = new Terminal({
-      fontFamily: CODE_FONT,
-      fontSize: 13,
-      theme,
-      scrollback: 10_000,
-      cursorBlink: true,
-      // 붙여넣기 · 드롭은 xterm 이 bracketed paste 로 감싼다(셸이 켰을 때).
-      allowProposedApi: false,
+    this.view = new XtermView(() => xtermDeps(this.deps()), theme, {
+      cwd: () => {
+        const state = this.session?.current;
+        return state?.kind === "running" ? state.cwd : undefined;
+      },
+      worktree: () => this.worktree,
     });
-    this.term.loadAddon(this.fit);
-    this.term.attachCustomKeyEventHandler(
-      (e) => !(e.type === "keydown" && (this.deps()?.takesKey(e) ?? false)),
-    );
     this.term.onData((data) => this.session?.input(data));
+  }
+
+  get term(): Terminal {
+    return this.view.term;
   }
 
   get state(): SessionState {
@@ -95,36 +87,24 @@ export class TerminalInstance {
 
   /** `container` 안에 그린다. 처음이면 xterm 을 열고 셸을 띄운다. */
   attach(container: HTMLElement): void {
-    if (!this.opened) {
-      this.opened = true;
-      this.term.open(container);
-      this.loadRenderer();
-      this.registerLinks();
-    } else if (this.term.element && this.term.element.parentElement !== container) {
-      container.appendChild(this.term.element);
-    }
+    this.view.attach(container);
     this.fitNow();
     if (!this.session) this.start();
   }
 
   /** 컨테이너 크기에 맞춘다. 보이지 않아 잴 수 없으면(0 크기) 그대로 둔다. */
   fitNow(): void {
-    if (!this.opened) return;
-    const size = this.fit.proposeDimensions();
-    if (!size || !Number.isFinite(size.cols) || !Number.isFinite(size.rows)) return;
-    if (size.cols < 2 || size.rows < 1) return;
-    if (size.cols !== this.term.cols || size.rows !== this.term.rows) {
-      this.term.resize(size.cols, size.rows);
-    }
+    if (!this.view.isOpen) return;
+    this.view.fitNow();
     this.session?.resize(this.term.cols, this.term.rows);
   }
 
   focus(): void {
-    this.term.focus();
+    this.view.focus();
   }
 
   setTheme(theme: ITheme): void {
-    this.term.options.theme = theme;
+    this.view.setTheme(theme);
   }
 
   /** 셸에 글자를 붙여 넣는다(bracketed paste — 셸이 켰으면 감싼다). */
@@ -134,7 +114,7 @@ export class TerminalInstance {
 
   dispose(): void {
     this.session?.dispose();
-    this.term.dispose();
+    this.view.dispose();
   }
 
   private start() {
@@ -154,48 +134,31 @@ export class TerminalInstance {
     });
     this.onState(this.session.current);
   }
+}
 
-  private loadRenderer() {
-    try {
-      const webgl = new WebglAddon();
-      webgl.onContextLoss(() => {
-        this.deps()?.log?.("terminal: WebGL context lost, using the DOM renderer");
-        webgl.dispose();
-      });
-      this.term.loadAddon(webgl);
-      this.deps()?.log?.("terminal: WebGL renderer");
-    } catch (e) {
-      this.deps()?.log?.(`terminal: WebGL unavailable, using the DOM renderer (${String(e)})`);
-    }
-  }
-
-  private registerLinks() {
-    this.term.registerLinkProvider(
-      fileLinkProvider(this.term, {
-        cwd: () => {
-          const state = this.session?.current;
-          return state?.kind === "running" ? state.cwd : undefined;
-        },
-        isFile: (path) => this.isFile(path),
-        opens: (event) => this.deps()?.opensLink(event) ?? false,
-        open: (target) => this.deps()?.openFile({ ...target, worktree: this.worktree }),
-      }),
-    );
-  }
-
-  private isFile(path: string): Promise<boolean> {
-    const now = performance.now();
-    const hit = this.linkCache.get(path);
-    if (hit && now - hit.at < LINK_CACHE_MS) return hit.ok;
-    const deps = this.deps();
-    if (!deps) return Promise.resolve(false);
-    const ok = deps.client
-      .call("fs.stat", { projectId: deps.projectId, worktree: this.worktree ?? null, path })
-      .then((stat) => stat.kind === "file" || stat.target === "file")
-      .catch(() => false);
-    this.linkCache.set(path, { at: now, ok });
-    return ok;
-  }
+/** 터미널의 deps → 화면(xterm-view.ts)의 deps. 실행 콘솔도 같은 꼴로 만든다. */
+export function xtermDeps(
+  deps:
+    | (Pick<
+        TerminalDeps,
+        "client" | "projectId" | "takesKey" | "opensLink" | "openFile" | "log"
+      > & {
+        openUrl?(url: string): void;
+      })
+    | undefined,
+): XtermDeps | undefined {
+  if (!deps) return undefined;
+  return {
+    stat: (path, worktree) =>
+      deps.client
+        .call("fs.stat", { projectId: deps.projectId, worktree: worktree ?? null, path })
+        .then((stat) => stat.kind === "file" || stat.target === "file"),
+    takesKey: deps.takesKey,
+    opensLink: deps.opensLink,
+    openFile: deps.openFile,
+    openUrl: deps.openUrl,
+    log: deps.log,
+  };
 }
 
 export class TerminalTabs {

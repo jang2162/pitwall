@@ -7,6 +7,7 @@
 // - 색은 테마 토큰(`terminal.*`)에서 오고 외관이 바뀌면 열린 터미널도 다시 칠한다(terminal-theme.ts).
 
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import "@xterm/xterm/css/xterm.css";
 import type { IDockviewPanelProps } from "dockview-react";
 import { Plus, X } from "lucide-react";
@@ -87,6 +88,8 @@ function TerminalPanel({
       takesKey,
       opensLink: (e) => (platform === "mac" ? e.metaKey : e.ctrlKey),
       openFile: (target) => void workspace.open(target),
+      openUrl: (url) =>
+        void openUrl(url).catch((e: unknown) => console.warn("[terminal] link not opened", e)),
       log: (message) => console.info("[terminal]", message),
     });
   }
