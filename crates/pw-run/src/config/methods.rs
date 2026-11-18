@@ -1,5 +1,5 @@
 //! `run.config.*` RPC. UI(실행 선택기 · 구성 편집 — M6-07)가 부른다. MCP 툴(M6-12 · 13)은 같은 함수([`super::read`] ·
-//! [`super::write`])를 부르는 툴 메서드를 따로 둔다.
+//! [`super::write`])를 부르는 툴 메서드를 따로 둔다(쓰기 툴은 [`super::tool`] — [`register`] 가 함께 붙인다).
 //!
 //! - 입력은 struct 이고 `worktree` 는 선택 입력이다(08-remote-mobile.md 「프로젝트와 체크아웃 (D57)」 — M7 이 `checkout` 을 깨지
 //!   않고 더한다).
@@ -191,7 +191,7 @@ impl RunConfigs {
         Arc::clone(&self.seen)
     }
 
-    fn host(&self) -> Result<&HostParts, RpcError> {
+    pub(crate) fn host(&self) -> Result<&HostParts, RpcError> {
         self.host
             .get()
             .ok_or_else(|| RpcError::internal("run configs are not attached to a host"))
@@ -373,4 +373,6 @@ pub fn register(router: &mut Router, configs: Arc<RunConfigs>) {
                 blocking(move || c.delete(&scope, &params))
             },
         );
+    // MCP 툴 메서드(M6-13 — `run_config_upsert` · `run_config_delete`).
+    super::tool::register(router, configs);
 }

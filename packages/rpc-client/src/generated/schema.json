@@ -42874,6 +42874,501 @@
       ],
       "tier": "exec"
     },
+    "run.tool.configDelete": {
+      "description": "Delete a run configuration's file — the shared one, the personal one (`location`), or both (no `location`). The person\nsees what is deleted and approves it in Pitwall first. Detected tasks (`detected:…`) have no file and cannot be deleted.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "RunConfigLocation": {
+            "description": "Which file to write: the shared, committed `run/<id>.toml` or the personal `run/<id>.local.toml`.",
+            "oneOf": [
+              {
+                "const": "shared",
+                "description": "`run/<id>.toml` of the active worktree (of the personal folder for a personal-only project).",
+                "type": "string"
+              },
+              {
+                "const": "local",
+                "description": "`run/<id>.local.toml`, the personal override (the main checkout's when a linked worktree has none).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "Run configuration id (see `run_config_list`).",
+            "type": "string"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunConfigLocation"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The file to delete: `shared` or `local`. Without it both files are deleted and the configuration is gone; deleting only\nthe personal file brings back the shared file's configuration."
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "Top of the worktree (absolute path). Empty means the session's worktree, or else the main checkout.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "id"
+        ],
+        "type": "object",
+        "x-pitwall-planned": true
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "files": {
+            "description": "The files deleted (absolute paths).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "files"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "run.tool.configUpsert": {
+      "description": "Create or change a run configuration — `.pitwall/run/<id>.toml` (shared, committed; the default) or `<id>.local.toml`\n(personal, `location: \"local\"`). `config` is the whole configuration of that file, checked against the run\nconfiguration schema (`type`: shell, npm, gradle, maven, cargo, go, python, docker-compose, mise-task) before anything is\nasked: `cwd` and `envFile` must stay inside the project root, and `env` takes no secrets (names with a secret word are\nrefused — use `envFile`). The person sees the file's diff and approves it in Pitwall first. Saving does not approve\nrunning: `run_start` still asks the person for a configuration an agent created or changed.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "DebugConfig": {
+            "additionalProperties": true,
+            "description": "`[debug]`. Keys other than `adapter` and `mode` (`program`, `port`, `pid` …) fill the debug adapter's launch or attach\ntemplate and are kept as written.",
+            "properties": {
+              "adapter": {
+                "default": null,
+                "description": "Debug adapter id. Without it the adapter is chosen by language.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mode": {
+                "$ref": "#/$defs/DebugMode",
+                "default": "launch"
+              }
+            },
+            "type": "object"
+          },
+          "DebugMode": {
+            "description": "`launch` starts the program under the debugger; `attach` only connects to a program that is already running.",
+            "enum": [
+              "launch",
+              "attach"
+            ],
+            "type": "string"
+          },
+          "RunConfig": {
+            "description": "One run configuration: the common fields plus the kind (`type`, [`RunKindConfig`]). Doc comments of the configuration types are\nEnglish — they become the JSON Schema descriptions an agent reads (M6-13, decision M5-D39).",
+            "oneOf": [
+              {
+                "description": "A shell command line, passed verbatim to the login shell's `-c` (pipes and expansions are the shell's).",
+                "properties": {
+                  "command": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "shell",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "command"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "A `package.json` script. The package manager (npm, pnpm, yarn, bun) follows the lockfile.",
+                "properties": {
+                  "script": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "npm",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "script"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "Gradle tasks. Uses the `gradlew` wrapper when there is one.",
+                "properties": {
+                  "tasks": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": {
+                    "const": "gradle",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "tasks"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "Maven goals. Uses the `mvnw` wrapper when there is one.",
+                "properties": {
+                  "tasks": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": {
+                    "const": "maven",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "tasks"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`cargo <command> <args…>`.",
+                "properties": {
+                  "args": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "command": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "cargo",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "command"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`go <command> [package] <args…>`.",
+                "properties": {
+                  "args": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "command": {
+                    "type": "string"
+                  },
+                  "package": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "const": "go",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "command"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`python -m <module>` or `python <script>`; exactly one of the two.",
+                "properties": {
+                  "args": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "module": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "script": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "const": "python",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`docker compose [-f <file>] up [services…]`, `file` passed as its path inside the project root. Stopping sends SIGINT\nfirst so compose stops the containers.",
+                "properties": {
+                  "file": {
+                    "default": null,
+                    "description": "Compose file relative to the project root. Without it compose finds its own.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "services": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": {
+                    "const": "docker-compose",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`mise run <task>`.",
+                "properties": {
+                  "task": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "mise-task",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "task"
+                ],
+                "type": "object"
+              }
+            ],
+            "properties": {
+              "cwd": {
+                "default": null,
+                "description": "Working directory, relative to the project root (inside the active worktree). Defaults to the project root. A path that\nresolves outside the root (`..`, a symbolic link) makes the configuration unusable.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "debug": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DebugConfig"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "How to debug this configuration. Without it the configuration cannot be debugged."
+              },
+              "env": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "default": {},
+                "description": "Environment variables (name to value), applied over the runtime environment and `envFile`.",
+                "type": "object"
+              },
+              "envFile": {
+                "default": [],
+                "description": "`.env` files relative to the project root, applied in order. A file outside the root makes the configuration unusable.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "name": {
+                "description": "Display name (run selector, console tab).",
+                "type": "string"
+              },
+              "profiles": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/RunProfile"
+                },
+                "default": {},
+                "description": "Named overrides picked in the run selector.",
+                "type": "object"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          },
+          "RunConfigLocation": {
+            "description": "Which file to write: the shared, committed `run/<id>.toml` or the personal `run/<id>.local.toml`.",
+            "oneOf": [
+              {
+                "const": "shared",
+                "description": "`run/<id>.toml` of the active worktree (of the personal folder for a personal-only project).",
+                "type": "string"
+              },
+              {
+                "const": "local",
+                "description": "`run/<id>.local.toml`, the personal override (the main checkout's when a linked worktree has none).",
+                "type": "string"
+              }
+            ]
+          },
+          "RunProfile": {
+            "description": "A profile (`[profiles.<name>]`): overrides applied over the configuration when it is picked.",
+            "properties": {
+              "args": {
+                "default": null,
+                "description": "Replaces the kind's `args` as a whole. Only for kinds with `args` (cargo, go, python).",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "env": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "default": {},
+                "description": "Applied key by key over the configuration's `env`.",
+                "type": "object"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "config": {
+            "$ref": "#/$defs/RunConfig",
+            "description": "The whole configuration of that file: keys left out are removed from it (comments and keys Pitwall does not know are\nkept). Keys are camelCase (`envFile`); unknown keys are refused. `env` (and a profile's `env`) must not hold secrets: a\nvariable whose name has a secret word (`API_TOKEN`, `DB_PASSWORD`) is refused — put it in a `.env` file that is not\ncommitted and list that file in `envFile`."
+          },
+          "id": {
+            "description": "Run configuration id (= file name): letters, digits, `-`, `_`, 1-64 characters.",
+            "type": "string"
+          },
+          "location": {
+            "$ref": "#/$defs/RunConfigLocation",
+            "default": "shared",
+            "description": "`shared` (the default): `.pitwall/run/<id>.toml`, committed with the project. `local`: `.pitwall/run/<id>.local.toml`,\npersonal and not committed (the main checkout's for a linked worktree)."
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "Top of the worktree (absolute path). The shared file is written in that worktree and `cwd` · `envFile` are relative to\nthe project root inside it. Empty means the session's worktree, or else the main checkout.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "id",
+          "config"
+        ],
+        "type": "object",
+        "x-pitwall-planned": true
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "changed": {
+            "description": "False when the file already had this content (nothing was written).",
+            "type": "boolean"
+          },
+          "file": {
+            "description": "The file written (absolute path).",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "unusable": {
+            "description": "Why the configuration cannot be used after this write (the shared and personal files together), if it cannot.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "file",
+          "changed",
+          "unusable"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "runtime.get": {
       "description": "그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.",
       "kind": "unary",

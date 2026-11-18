@@ -1147,6 +1147,20 @@ export type UnaryMethods = {
 	 */
 	"run.stop": { params: RunIdParams; result: RunInfo };
 	/**
+	 * Delete a run configuration's file — the shared one, the personal one (`location`), or both (no `location`). The person
+	 * sees what is deleted and approves it in Pitwall first. Detected tasks (`detected:…`) have no file and cannot be deleted.
+	 */
+	"run.tool.configDelete": { params: RunToolConfigDeleteParams; result: RunToolConfigDelete };
+	/**
+	 * Create or change a run configuration — `.pitwall/run/<id>.toml` (shared, committed; the default) or `<id>.local.toml`
+	 * (personal, `location: "local"`). `config` is the whole configuration of that file, checked against the run
+	 * configuration schema (`type`: shell, npm, gradle, maven, cargo, go, python, docker-compose, mise-task) before anything is
+	 * asked: `cwd` and `envFile` must stay inside the project root, and `env` takes no secrets (names with a secret word are
+	 * refused — use `envFile`). The person sees the file's diff and approves it in Pitwall first. Saving does not approve
+	 * running: `run_start` still asks the person for a configuration an agent created or changed.
+	 */
+	"run.tool.configUpsert": { params: RunToolConfigUpsertParams; result: RunToolConfigUpsert };
+	/**
 	 * 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).
 	 * 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.
 	 */
@@ -1575,6 +1589,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"run.restart": {"name":"run.restart","kind":"unary","tier":"exec","roles":["owner"],"params":"RunIdParams","output":"RunInfo","doc":" 다시 실행: 중지하고 프로세스 트리가 끝난 것을 본 뒤 같은 구성을 새 실행으로 띄운다(`restartOf` 가 앞 실행).\n","mcp":null,"fileScope":false},
 	"run.start": {"name":"run.start","kind":"unary","tier":"exec","roles":["owner"],"params":"RunStartParams","output":"RunInfo","doc":" 실행 구성 하나를 띄운다(PTY — 런타임 환경 위에 구성의 `env_file` · `env` · 프로필). 실행은 Host 의 것이라 이 연결이 닫혀도 돈다 — 출력은\n `run.attach`, 끝은 이벤트 `run.exited`. 그 프로젝트의 창이 아닌 연결이면 permission denied, 미신뢰 프로젝트면 띄우지 않고\n permission denied(`data.reason = \"untrusted\"`), 작업 폴더가 푼 뒤에 바뀌었거나 사라졌으면 띄우지 않고 permission\n denied(`data.reason = \"cwd_changed\"`), 없는 구성은 not found, 쓸 수 없는 구성 · 프로젝트 밖 작업 폴더 · 없는\n 프로필 · 읽지 못한 `env_file` 은 invalid params.\n","mcp":null,"fileScope":false},
 	"run.stop": {"name":"run.stop","kind":"unary","tier":"exec","roles":["owner"],"params":"RunIdParams","output":"RunInfo","doc":" 실행을 중지한다 — 프로세스 세션 전체에 SIGTERM, 5초 안에 끝나지 않은 것은 SIGKILL(compose 는 SIGINT 를 먼저). 기다리지\n 않는다(끝나면 `run.exited`). 이미 끝난 실행이면 아무것도 하지 않는다.\n","mcp":null,"fileScope":false},
+	"run.tool.configDelete": {"name":"run.tool.configDelete","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<RunToolConfigDeleteParams>","output":"RunToolConfigDelete","doc":" Delete a run configuration's file — the shared one, the personal one (`location`), or both (no `location`). The person\n sees what is deleted and approves it in Pitwall first. Detected tasks (`detected:…`) have no file and cannot be deleted.\n","mcp":{"group":"run","name":"run_config_delete"},"fileScope":false},
+	"run.tool.configUpsert": {"name":"run.tool.configUpsert","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<RunToolConfigUpsertParams>","output":"RunToolConfigUpsert","doc":" Create or change a run configuration — `.pitwall/run/<id>.toml` (shared, committed; the default) or `<id>.local.toml`\n (personal, `location: \"local\"`). `config` is the whole configuration of that file, checked against the run\n configuration schema (`type`: shell, npm, gradle, maven, cargo, go, python, docker-compose, mise-task) before anything is\n asked: `cwd` and `envFile` must stay inside the project root, and `env` takes no secrets (names with a secret word are\n refused — use `envFile`). The person sees the file's diff and approves it in Pitwall first. Saving does not approve\n running: `run_start` still asks the person for a configuration an agent created or changed.\n","mcp":{"group":"run","name":"run_config_upsert"},"fileScope":false},
 	"runtime.get": {"name":"runtime.get","kind":"unary","tier":"read","roles":["owner"],"params":"RuntimeGetParams","output":"RuntimeInfo","doc":" 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"runtime.reload": {"name":"runtime.reload","kind":"unary","tier":"write","roles":["owner"],"params":"RuntimeReloadParams","output":"()","doc":" 「환경 다시 읽기」: 로그인 셸 환경과 디렉터리별 캐시를 잊고 `runtime.changed` 를 낸다. 셸은 다음 요청에서 다시 돈다\n (백그라운드로 미리 시작한다). 이미 띄운 프로세스(열린 터미널)의 환경은 바뀌지 않는다.\n","mcp":null,"fileScope":false},
 	"search.files": {"name":"search.files","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SearchFilesParams","output":"SearchFiles","doc":" 프로젝트의 파일을 이름 · 경로로 퍼지 매칭한다(`⌘⇧O` · Search Everywhere). 목록은 창이 `fs.watch` 로 보는 루트마다 메모리에\n 있고 변경을 따라간다(`pw_fs::index` 머리 주석). 처음 만드는 중이면 다 만들 때까지 기다린다. 빈 질의는 경로순 앞에서부터다.\n","mcp":null,"fileScope":false},
@@ -8526,6 +8542,58 @@ export type RunStartParams = {
 export type RunState = "running" | 
 /**  중지를 보냈고 아직 끝나지 않았다. */
 "stopping" | "exited";
+
+export type RunToolConfigDelete = {
+	id: string,
+	/**  The files deleted (absolute paths). */
+	files: string[],
+};
+
+export type RunToolConfigDeleteParams = {
+	projectId: string,
+	/**  Top of the worktree (absolute path). Empty means the session's worktree, or else the main checkout. */
+	worktree?: string | null,
+	/**  Run configuration id (see `run_config_list`). */
+	id: string,
+	/**
+	 *  The file to delete: `shared` or `local`. Without it both files are deleted and the configuration is gone; deleting only
+	 *  the personal file brings back the shared file's configuration.
+	 */
+	location?: RunConfigLocation | null,
+};
+
+export type RunToolConfigUpsert = {
+	id: string,
+	/**  The file written (absolute path). */
+	file: string,
+	/**  False when the file already had this content (nothing was written). */
+	changed: boolean,
+	/**  Why the configuration cannot be used after this write (the shared and personal files together), if it cannot. */
+	unusable: string | null,
+};
+
+export type RunToolConfigUpsertParams = {
+	projectId: string,
+	/**
+	 *  Top of the worktree (absolute path). The shared file is written in that worktree and `cwd` · `envFile` are relative to
+	 *  the project root inside it. Empty means the session's worktree, or else the main checkout.
+	 */
+	worktree?: string | null,
+	/**  Run configuration id (= file name): letters, digits, `-`, `_`, 1-64 characters. */
+	id: string,
+	/**
+	 *  The whole configuration of that file: keys left out are removed from it (comments and keys Pitwall does not know are
+	 *  kept). Keys are camelCase (`envFile`); unknown keys are refused. `env` (and a profile's `env`) must not hold secrets: a
+	 *  variable whose name has a secret word (`API_TOKEN`, `DB_PASSWORD`) is refused — put it in a `.env` file that is not
+	 *  committed and list that file in `envFile`.
+	 */
+	config: RunConfig,
+	/**
+	 *  `shared` (the default): `.pitwall/run/<id>.toml`, committed with the project. `local`: `.pitwall/run/<id>.local.toml`,
+	 *  personal and not committed (the main checkout's for a linked worktree).
+	 */
+	location?: RunConfigLocation,
+};
 
 export type RuntimeGetParams = {
 	projectId: string,

@@ -10,7 +10,7 @@
 //! 헤드리스 목록 단언은 앱 전용 툴(git — M5-05, DB — M5-06)이 생긴 뒤로 `mcp::services` 의 `routed_by` 를 가른다 — 빼면 헤드리스
 //! 목록에 앱 전용 툴이 섞여 [`mcp_tools_are_exactly_these`] 가 실패한다(M5-05 · M5-06 이 각각 빼 보고 확인했다).
 //!
-//! 툴 행의 왕복 시험은 하위 모듈에 둔다(`git` · `db` · `code` · `project` · `project_write` — 이 파일의 병합 충돌을 줄이려고).
+//! 툴 행의 왕복 시험은 하위 모듈에 둔다(`git` · `db` · `code` · `project` · `project_write` · `run` — 이 파일의 병합 충돌을 줄이려고).
 //! 계획을 내는 툴은 `plan_tiers` 의 회귀 표에도 더한다(17-m6-plan M6-10 ⑨).
 
 use std::path::{Path, PathBuf};
@@ -35,6 +35,7 @@ mod git;
 mod plan_tiers;
 mod project;
 mod project_write;
+mod run;
 
 /// 앱 Host 가 내는 툴 전부. 이름순.
 const APP_TOOLS: &[&str] = &[
@@ -58,6 +59,8 @@ const APP_TOOLS: &[&str] = &[
     "project_list",
     "project_open",
     "project_register",
+    "run_config_delete",
+    "run_config_upsert",
     "settings_get",
     "symbol_search",
 ];

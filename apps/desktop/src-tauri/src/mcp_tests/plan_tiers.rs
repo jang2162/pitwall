@@ -28,6 +28,8 @@ const PLAN_TIERS: &[(&str, Tier, &[Tier])] = &[
     ("db_schema", Read, &[Read]),
     ("open_with_upsert", Write, &[Write]),
     ("project_register", Write, &[Write]),
+    ("run_config_delete", Write, &[Write]),
+    ("run_config_upsert", Write, &[Write]),
 ];
 
 #[test]

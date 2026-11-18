@@ -31,6 +31,8 @@ pub mod argv;
 pub mod methods;
 pub mod read;
 pub mod root;
+pub mod shown;
+pub mod tool;
 pub mod write;
 
 use std::collections::BTreeMap;
