@@ -28,7 +28,8 @@ use serde_json::json;
 use super::{LaunchedBy, Run, RunExit, RunId, RunInfo, RunLog, RunState, Runs};
 use crate::config::read::RunConfigLayer;
 use crate::config::{RunConfig, RunConfigPlace, read, shown};
-use crate::detect::{self, NoExec};
+use crate::detect::exec::CacheOnly;
+use crate::detect::{self, TaskListState};
 
 pub use text::clean_line;
 
@@ -142,6 +143,28 @@ pub struct RunToolDetectProblem {
 }
 
 #[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum RunToolTaskListState {
+    /// Not read yet — only the person can have Pitwall read it (it runs the build tool).
+    NotRead,
+    /// Read; the listed tasks are current.
+    Read,
+    /// Read before the build files changed — only the common tasks are listed until the person reads it again.
+    Stale,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RunToolTaskList {
+    pub detector: String,
+    pub state: RunToolTaskListState,
+}
+
+#[derive(
     Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
 #[serde(rename_all = "camelCase")]
@@ -153,6 +176,9 @@ pub struct RunToolConfigList {
     /// Detected tasks (by detector, then name).
     pub detected: Vec<RunToolDetectedTask>,
     pub detect_problems: Vec<RunToolDetectProblem>,
+    /// Detectors whose full task list is read only when the person asks for it in Pitwall (gradle, maven) — until then
+    /// only their common tasks are listed.
+    pub task_lists: Vec<RunToolTaskList>,
     /// Why the configuration folder itself could not be read. Its configurations are not listed.
     pub problem: Option<String>,
 }
@@ -379,7 +405,12 @@ impl Runs {
             .ok_or_else(|| RpcError::internal("runs are not attached to a host"))?;
         let place = RunConfigPlace::new(&host.paths, grant.project(), params.worktree.as_deref())?;
         let set = read(&place);
-        let detection = detect::detect(&place.root, &NoExec);
+        // 창이 아닌 연결의 `run.config.list` 와 같다(M6-05): 프로세스를 띄우는 감지(mise · gradle · maven)는 돌리지 않고 캐시만 읽는다.
+        let exec = CacheOnly::new(crate::config::methods::cache_dir(
+            &host.paths,
+            grant.project_id(),
+        ));
+        let detection = detect::detect(&place.root, &exec);
         Ok(RunToolConfigList {
             configs: set
                 .configs
@@ -416,6 +447,18 @@ impl Runs {
                 .map(|p| RunToolDetectProblem {
                     detector: p.detector,
                     reason: p.reason,
+                })
+                .collect(),
+            task_lists: detection
+                .lists
+                .into_iter()
+                .map(|l| RunToolTaskList {
+                    detector: l.detector,
+                    state: match l.state {
+                        TaskListState::NotRead => RunToolTaskListState::NotRead,
+                        TaskListState::Read => RunToolTaskListState::Read,
+                        TaskListState::Stale => RunToolTaskListState::Stale,
+                    },
                 })
                 .collect(),
             problem: set.problem,

@@ -227,7 +227,8 @@ fn trusted_exec(
     }
 }
 
-fn cache_dir(paths: &AppPaths, project_id: &str) -> Option<PathBuf> {
+/// 그 프로젝트의 감지 캐시 폴더(`$DATA/projects/<id>/`). 실행 툴 ① 의 `run_config_list` 도 이 캐시만 읽는다.
+pub(crate) fn cache_dir(paths: &AppPaths, project_id: &str) -> Option<PathBuf> {
     valid_id(project_id).then(|| paths.data.join(PROJECTS_DIR).join(project_id))
 }
 

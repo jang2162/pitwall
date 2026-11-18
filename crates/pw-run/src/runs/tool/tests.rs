@@ -48,6 +48,7 @@ impl RunKind for Scripted {
 
 struct Fixture {
     _tmp: tempfile::TempDir,
+    paths: AppPaths,
     runs: Runs,
     project: String,
     other: String,
@@ -67,7 +68,7 @@ impl Fixture {
         let runtime = Arc::new(Runtime::new(LoginShell::new(None, Duration::from_secs(1))));
         let runs = Runs::with(runtime, Arc::new(NoLaunch), limits);
         runs.attach(HostParts {
-            paths,
+            paths: paths.clone(),
             projects: projects.clone(),
             bus,
         });
@@ -88,6 +89,7 @@ impl Fixture {
         let (other, _) = make("other");
         Self {
             _tmp: tmp,
+            paths,
             runs,
             project,
             other,
@@ -630,4 +632,59 @@ fn tail_keeps_the_end_of_a_last_line_larger_than_the_budget() {
     );
     assert!(logs.text.len() > 100 * 1024, "{}", logs.text.len());
     assert_eq!(logs.next_since, logs.log_end);
+}
+
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), &target).unwrap();
+        }
+    }
+}
+
+/// 리뷰 F2: 감지는 창이 아닌 연결의 `run.config.list` 와 같다(M6-05 — `CacheOnly`): 프로세스를 띄우는 감지(mise)는 돌리지 않고
+/// 「그 프로젝트 창에서만」 까닭을 남기며, gradle 은 캐시된 목록을 보이고 그 상태(`read`)를 싣는다.
+#[test]
+fn config_list_reads_only_the_detection_cache() {
+    let f = Fixture::new();
+    let fixtures = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures"));
+    copy_dir(&fixtures.join("mise-tasks/project"), &f.root);
+    copy_dir(&fixtures.join("gradle/project"), &f.root);
+    let key = crate::detect::cache::key(&f.root, crate::detect::cache::BuildFiles::Gradle).unwrap();
+    let dir = crate::config::methods::cache_dir(&f.paths, &f.project).unwrap();
+    crate::detect::cache::store(&dir, "gradle", &key, &["fromCache".to_owned()]).unwrap();
+    let list = f
+        .runs
+        .tool_config_list(
+            &ConnectionScope::Agent,
+            &RunToolConfigListParams {
+                project_id: f.project.clone(),
+                worktree: None,
+            },
+        )
+        .unwrap();
+    assert!(
+        list.detect_problems
+            .iter()
+            .any(|p| p.detector == "mise" && p.reason == crate::detect::exec::NOT_THIS_WINDOW),
+        "{list:#?}"
+    );
+    assert!(
+        list.detected
+            .iter()
+            .any(|t| t.key == "detected:gradle:fromCache"),
+        "{list:#?}"
+    );
+    assert_eq!(
+        list.task_lists,
+        [RunToolTaskList {
+            detector: "gradle".into(),
+            state: RunToolTaskListState::Read,
+        }]
+    );
 }
