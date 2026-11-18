@@ -253,6 +253,10 @@ pub fn add_bundles<'a>(
     }
 }
 
+/// [`LspCommands::execute_command`] 의 답: 그 서버가 떠 있지 않으면 `None`, 서버의 거절은 `Err`.
+pub type CommandAnswer<'a> =
+    Pin<Box<dyn Future<Output = Option<Result<Json, String>>> + Send + 'a>>;
+
 /// 떠 있는 언어 서버에 명령을 보내는 곳. 서버 관리자(`pw-lsp`)가 구현하고 디버그 세션(M6-17)이 그 프로젝트 · 워크트리에 맞춰
 /// 붙인다.
 pub trait LspCommands: Send + Sync {
@@ -263,7 +267,7 @@ pub trait LspCommands: Send + Sync {
         server: &'a str,
         command: &'a str,
         arguments: Vec<Json>,
-    ) -> Pin<Box<dyn Future<Output = Option<Result<Json, String>>> + Send + 'a>>;
+    ) -> CommandAnswer<'a>;
 }
 
 /// [`connect_via_language_server`] 가 붙지 못한 까닭.

@@ -34,7 +34,7 @@ use pw_runtime::{Runtime, RuntimeEnv};
 use serde_json::{Map, Value as Json};
 
 pub use dap::{
-    AdapterConfig, AdapterLaunch, AdapterSetup, AdapterStartError, LspCommands,
+    AdapterConfig, AdapterLaunch, AdapterSetup, AdapterStartError, CommandAnswer, LspCommands,
     connect_via_language_server,
 };
 pub use resolve::{

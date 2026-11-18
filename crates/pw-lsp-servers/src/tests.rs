@@ -1106,11 +1106,7 @@ impl LspCommands for FakeServers {
         server: &'a str,
         command: &'a str,
         _arguments: Vec<serde_json::Value>,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Option<Result<serde_json::Value, String>>> + Send + 'a,
-        >,
-    > {
+    ) -> dap::CommandAnswer<'a> {
         self.asked
             .lock()
             .unwrap()
