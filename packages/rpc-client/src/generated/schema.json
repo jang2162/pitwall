@@ -12931,21 +12931,13 @@
             },
             "type": "array"
           },
-          "problem": {
-            "description": "If the project settings could not be read, a short notice (the list is then empty; no values are included).",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "trusted": {
             "type": "boolean"
           }
         },
         "required": [
           "connections",
-          "trusted",
-          "problem"
+          "trusted"
         ],
         "type": "object"
       },

@@ -532,20 +532,39 @@ pub(super) enum AgentApproval {
 }
 
 /// 그 프로젝트의 `[mcp.policy] production`(사람의 설정에서만 — 읽는 함수는 MCP 세션과 같은 [`mcp_policy::read_project_over`],
-/// 메인 판정 2026-11-17). 전역 설정 스토어가 없는 Host(시험 등)는 프로젝트 설정만 본다. 경고는 로그에 남긴다. 블로킹이다.
-pub(crate) fn production_policy(sessions: &DbSessions, project: &Project) -> Production {
+/// 메인 판정 2026-11-17). 전역 설정 스토어가 없는 Host(시험 등)는 프로젝트 설정만 본다. 경고는 로그에 남긴다. 프로젝트 설정의
+/// 어느 레이어든 읽지 못하면 전역으로 떨어지지 않고 [`settings_unreadable`] 로 거절한다(fail-closed — 17-m6-plan M6-01 리뷰 1).
+/// 블로킹이다.
+pub(crate) fn production_policy(
+    sessions: &DbSessions,
+    project: &Project,
+) -> Result<Production, RpcError> {
     let Ok(host) = sessions.connections.host() else {
-        return Production::Block;
+        return Ok(Production::Block);
     };
     let global = sessions.connections.settings.store().map(|s| s.snapshot());
     let global_mcp = global
         .as_ref()
         .and_then(|g| g.get("settings", mcp_policy::MCP_KEY));
-    let (policy, warnings) = mcp_policy::read_project_over(&host.paths, global_mcp, project);
+    let (policy, warnings) = mcp_policy::read_project_over(&host.paths, global_mcp, project)
+        .map_err(|e| {
+            tracing::warn!(target: "pw_db", project = %project.id, path = ?e.path, "cannot read the project's settings; refusing the agent's db call");
+            settings_unreadable(&project.id)
+        })?;
     for w in warnings {
         tracing::warn!(target: "pw_db", project = %project.id, "{w}");
     }
-    policy.production
+    Ok(policy.production)
+}
+
+/// `PERMISSION_DENIED`(`data.reason = "projectConfigUnreadable"`): 그 프로젝트의 설정 파일(정책 · DB 연결 — 어느 레이어든)을 읽지
+/// 못해 표지 · 정책을 모른다. 에이전트의 DB 호출은 돌지 않는다(MCP 세션의 거절과 같은 까닭 — `pw_mcp::marker`). 문장에는 파일
+/// 내용을 싣지 않는다.
+pub(crate) fn settings_unreadable(project_id: &str) -> RpcError {
+    RpcError::new(rpc_code::PERMISSION_DENIED, UNREADABLE_SETTINGS).with_data(json!({
+        "reason": mcp_policy::PROJECT_CONFIG_UNREADABLE,
+        "projectId": project_id,
+    }))
 }
 
 /// `PERMISSION_DENIED`(`data.reason = "notOpenedByUser"`). 문장은 「이 연결 열기」 승인을 청하는 길(`db_connection_test`)도 알린다.
@@ -939,12 +958,12 @@ fn grant_for_agent(
     sessions.connections.trust_gate(project_id, worktree)?;
     let loaded = agent_view(sessions, project_id, worktree)?;
     if loaded.connections.is_err() {
-        return Err(RpcError::internal(UNREADABLE_SETTINGS));
+        return Err(settings_unreadable(project_id));
     }
     let connection = loaded
         .get(connection_id)
         .ok_or_else(|| crate::config::not_found(connection_id))?;
-    let production = production_policy(sessions, agent.project());
+    let production = production_policy(sessions, agent.project())?;
     let mut binding = judge_for_agent(sessions, &loaded, connection, database, production, asker)?;
     binding.worktree = worktree.map(str::to_owned);
     Ok(DbGrant {

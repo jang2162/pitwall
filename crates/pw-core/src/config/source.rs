@@ -1,6 +1,6 @@
 //! 설정 파일을 찾아 읽고(마이그레이션 포함) 레이어를 병합한 스냅숏을 만든다.
 //!
-//! 한 설정 파일 id(`project`, `run/dev-server`, `settings` …)의 레이어 순서:
+//! 한 설정 파일 id(`project`, `db/local-pg`, `settings` …)의 레이어 순서:
 //! 내장 기본값 → `<id>.toml` → `<id>.local.toml` (`docs/design/03-architecture.md` 「5. 데이터 저장」 병합 순서).
 //! 병합 규칙은 [`super::merge::merge`].
 
@@ -25,8 +25,11 @@ use super::paths::AppPaths;
 pub const PROJECT_DIR: &str = ".pitwall";
 /// 프로젝트 설정 폴더 안의 마이그레이션 원본 보관 폴더(설계 D23 `.pitwall/.backup/<파일>.v<N>`).
 pub const PROJECT_BACKUP_DIR: &str = ".backup";
-/// 프로젝트 설정 폴더에서 한 단계 아래까지 읽는 하위 폴더.
-const PROJECT_SUBDIRS: &[&str] = &["run", "db"];
+/// 프로젝트 설정 폴더에서 한 단계 아래까지 읽는 하위 폴더. 실행 구성 `run/` 은 읽지 않는다 — 실행 구성은 `pw_run::config` 가
+/// 구성마다 따로 읽어 깨진 것을 「쓸 수 없음」 으로 남기고, 이 스냅숏은 파일 하나라도 깨지면 전체가 실패해(정책 · DB 연결 ·
+/// 노출을 읽는 길이 함께 닫힌다) 실행 구성 하나의 오타가 그 프로젝트의 에이전트 호출을 모두 막게 된다(17-m6-plan M6-01 리뷰 1).
+/// 그 폴더에는 정책이 없다.
+const PROJECT_SUBDIRS: &[&str] = &["db"];
 
 /// 내장 기본값 — 키를 정한 기능은 자기 기본값을 여기에 둔다. 아직 키가 없는 자리는 **예시 키**(`sample`)만 있다.
 /// - `diagnostics.crash_reports`: 크래시 리포트 전송(opt-in, 설계 D22). 데스크톱이 읽는다(`apps/desktop/src-tauri/src/diag.rs`).
@@ -718,16 +721,18 @@ mod tests {
             &pw.join("project.local.toml"),
             "schema = 1\n[sample]\nport = 2\n",
         );
-        write(&pw.join("run/dev.toml"), "schema = 1\ncommand = \"a\"\n");
+        write(&pw.join("db/dev.toml"), "schema = 1\ncommand = \"a\"\n");
         write(
-            &pw.join("run/mine.local.toml"),
+            &pw.join("db/mine.local.toml"),
             "schema = 1\ncommand = \"b\"\n",
         );
         write(&pw.join("notes.txt"), "ignored");
+        // 실행 구성(`run/`)은 이 스냅숏에 들지 않는다 — 깨져 있어도 다른 설정을 깨지 않는다.
+        write(&pw.join("run/broken.toml"), "name = \"x\n");
 
         let snap = ConfigSource::project(tmp.path()).load().unwrap();
         let ids: Vec<_> = snap.files.iter().map(|f| f.id.as_str()).collect();
-        assert_eq!(ids, ["project", "run/dev", "run/mine"]);
+        assert_eq!(ids, ["db/dev", "db/mine", "project"]);
         assert_eq!(
             snap.file("project").unwrap().value,
             json!({"name": "shared", "sample": {"greeting": "from shared", "port": 2}})
@@ -747,7 +752,7 @@ mod tests {
                 LayerOrigin::Local
             ]
         );
-        assert_eq!(snap.get("run/mine", "command"), Some(&json!("b")));
+        assert_eq!(snap.get("db/mine", "command"), Some(&json!("b")));
         assert!(snap.notices.is_empty());
     }
 
@@ -890,10 +895,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         // 알림의 경로 문자열과 비교한다 — 마디마다 join 해야 Windows 에서 구분자가 같다.
         let pw = tmp.path().join(PROJECT_DIR);
-        let file = pw.join("run").join("dev.toml");
+        let file = pw.join("db").join("dev.toml");
         write(&file, "# 개발 서버\ncommand = \"x\"\n");
         let snap = ConfigSource::project(tmp.path()).load().unwrap();
-        let backup = pw.join(".backup").join("run").join("dev.toml.v0");
+        let backup = pw.join(".backup").join("db").join("dev.toml.v0");
         assert_eq!(
             snap.notices,
             [ConfigNotice::Migrated {

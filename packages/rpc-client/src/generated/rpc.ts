@@ -3208,8 +3208,6 @@ export type DbToolConnectionList = {
 	/**  Sorted by id. */
 	connections: DbToolConnection[],
 	trusted: boolean,
-	/**  If the project settings could not be read, a short notice (the list is then empty; no values are included). */
-	problem: string | null,
 };
 
 export type DbToolConnectionListParams = {

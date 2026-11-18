@@ -541,6 +541,27 @@ impl Session {
         self.fill_worktree(&tool, &mut args, project_id.as_deref());
         if tool.project_scoped()
             && let Some(target) = project_id.as_deref()
+        {
+            let refused = match self.target_config_unreadable(target, &cancel).await {
+                Ok(refused) => refused,
+                Err(cancelled) => Some(cancelled),
+            };
+            if let Some(refusal) = refused {
+                self.audit(
+                    None,
+                    &name,
+                    &args,
+                    project_id,
+                    refusal.mark.outcome,
+                    Some(refusal.message.clone()),
+                    None,
+                    started,
+                );
+                return Ok(failed(refusal.message, refusal.mark));
+            }
+        }
+        if tool.project_scoped()
+            && let Some(target) = project_id.as_deref()
             && self.inner.project.as_ref().is_none_or(|p| p.id != target)
         {
             match self.target_exposes(&tool, target, &cancel).await {
@@ -874,11 +895,29 @@ impl Session {
                     mark: Mark::error(None),
                 },
             })?;
-        Ok(policy::of_project(
-            &services.paths,
-            &services.global,
-            &project,
-        ))
+        policy::of_project(&services.paths, &services.global, &project)
+            .map_err(|e| Refusal::denied(Reason::ProjectConfigUnreadable, e.message()))
+    }
+
+    /// 대상 프로젝트의 설정 파일을 모두 읽을 수 있는가 — 못 읽으면 그 까닭(결과 `denied` · `project_config_unreadable`). 정책을
+    /// 모르는 프로젝트에 닿는 호출은 등급과 상관없이 돌리지 않는다(fail-closed — `pw_core::config::mcp_policy` 머리 주석). 프로젝트를
+    /// 찾지 못한 것(없는 id 등)은 여기서 가르지 않는다 — 툴 · 대상 노출 판정이 제 오류를 돌려준다.
+    async fn target_config_unreadable(
+        &self,
+        project_id: &str,
+        cancel: &CancellationToken,
+    ) -> Result<Option<Refusal>, Refusal> {
+        let services = &self.inner.services;
+        let project = match self.project(project_id, cancel).await {
+            Ok(project) => project,
+            Err(CallError::Cancelled) => return Err(Refusal::cancelled()),
+            Err(_) => return Ok(None),
+        };
+        Ok(
+            policy::of_project(&services.paths, &services.global, &project)
+                .err()
+                .map(|e| Refusal::denied(Reason::ProjectConfigUnreadable, e.message())),
+        )
     }
 
     fn session_allows(&self, project_id: Option<&str>, key: &Allowance) -> bool {

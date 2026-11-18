@@ -1303,6 +1303,81 @@ async fn the_shared_project_auto_approve_has_no_effect() {
     assert_eq!(rows[1].approval.as_deref(), Some("auto"));
 }
 
+/// 17-m6-plan M6-01 리뷰 1 의 재현(fail-closed): 전역이 `read` · `write` · `exec` 자동, 사람의 `.local.toml` 이 `read` 로 좁힌다.
+/// 깨진 실행 구성 하나는 그 좁히기를 풀지 않고(묻는다), 정책을 정할 수 없게 깨진 설정 파일(`db/*.toml` · `project.toml`)이
+/// 있으면 그 프로젝트를 겨누는 호출은 `read` 까지 툴을 부르지 않고 `project_config_unreadable` 로 거절된다 — 전역으로 떨어지면
+/// 묻지 않고 돈다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_project_whose_settings_cannot_be_read_is_refused_not_widened() {
+    let f = Fixture::build(
+        "[mcp]\nauto_approve = [\"read\", \"write\", \"exec\"]\n",
+        |work| {
+            for name in ["alpha", "beta"] {
+                let dir = work.join(name).join(".pitwall");
+                std::fs::create_dir_all(dir.join("run")).unwrap();
+                std::fs::write(
+                    dir.join("project.local.toml"),
+                    "schema = 1\n[mcp]\nauto_approve = [\"read\"]\n",
+                )
+                .unwrap();
+                std::fs::write(dir.join("run/x.toml"), "name = \"x\n").unwrap();
+            }
+        },
+    );
+    let mut alpha = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let call = agent.spawn("fake_write", json!({"tag": "run file broken"}));
+    let request = alpha.opened().await;
+    alpha.answer(request.id, McpApprovalAnswer::Deny).unwrap();
+    assert_eq!(
+        mark(&within(call).await.unwrap()),
+        Mark::denied(Reason::ApprovalDenied)
+    );
+    alpha.closed(request.id).await;
+
+    let broken = [
+        (f.work("alpha").join(".pitwall/db/y.toml"), "name = \"y\n"),
+        (
+            f.work("beta").join(".pitwall/project.toml"),
+            "schema = 1\n[mcp\n",
+        ),
+    ];
+    for (path, text) in &broken {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    for (tool, project) in [
+        ("fake_write", &f.alpha),
+        ("fake_open", &f.alpha),
+        ("fake_write", &f.beta),
+    ] {
+        let result = agent
+            .call(tool, json!({"projectId": project, "tag": "config broken"}))
+            .await;
+        assert_eq!(
+            mark(&result),
+            Mark::denied(Reason::ProjectConfigUnreadable),
+            "{tool} on {project}: {}",
+            text(&result)
+        );
+        // 에이전트에게는 파일 내용이 가지 않는다.
+        assert!(!text(&result).contains("name ="), "{}", text(&result));
+    }
+    assert!(
+        alpha.quiet(),
+        "a project whose settings cannot be read was asked about"
+    );
+    assert_eq!(f.runs(), 0);
+
+    for (path, _) in &broken {
+        std::fs::remove_file(path).unwrap();
+    }
+    let call = agent.spawn("fake_write", json!({"tag": "fixed"}));
+    let request = alpha.opened().await;
+    alpha.answer(request.id, McpApprovalAnswer::Once).unwrap();
+    assert_eq!(mark(&within(call).await.unwrap()), Mark::ok());
+}
+
 /// 공유 `project.toml` 의 `[mcp.policy] approval_timeout_secs` 는 효과가 없고 경고가 남는다. 전역 · `.local.toml` 의 값은 먹는다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_shared_policy_table_has_no_effect_and_warns() {
@@ -1325,7 +1400,7 @@ async fn the_shared_policy_table_has_no_effect_and_warns() {
     let registry = f.host.registry().unwrap();
     let global = &f.host.config().unwrap().global;
     let (policy, warnings) =
-        pw_mcp::policy::read_project(&f.paths, global, &registry.get(&f.alpha).unwrap());
+        pw_mcp::policy::read_project(&f.paths, global, &registry.get(&f.alpha).unwrap()).unwrap();
     assert_eq!(policy.approval_timeout, Duration::from_secs(300));
     assert!(
         warnings
@@ -1334,7 +1409,7 @@ async fn the_shared_policy_table_has_no_effect_and_warns() {
         "{warnings:?}"
     );
     let (policy, warnings) =
-        pw_mcp::policy::read_project(&f.paths, global, &registry.get(&f.beta).unwrap());
+        pw_mcp::policy::read_project(&f.paths, global, &registry.get(&f.beta).unwrap()).unwrap();
     assert_eq!(policy.approval_timeout, Duration::from_secs(7));
     assert!(warnings.is_empty(), "{warnings:?}");
 

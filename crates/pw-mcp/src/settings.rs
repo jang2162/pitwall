@@ -447,7 +447,14 @@ fn global_view(parts: &HostParts) -> McpSettingsView {
 
 /// 그 프로젝트의 설정 파일 · 덮은 키 · 자동 승인. 프로젝트 설정은 디스크에 쓰지 않고 읽는다(`without_writes`).
 fn project_view(parts: &HostParts, project: &Project) -> McpProjectSettings {
-    let (policy, mut warnings) = policy::read_project(&parts.paths, &parts.global, project);
+    // 프로젝트 설정을 못 읽으면 자동 승인이 없다(에이전트 호출은 거절된다). 사람의 화면이라 읽지 못한 파일과 까닭을 그대로 보인다.
+    let (policy, mut warnings) = match policy::read_project(&parts.paths, &parts.global, project) {
+        Ok(read) => read,
+        Err(e) => (
+            policy::Policy::default(),
+            vec![format!("{} — {}", e.message(), e.detail)],
+        ),
+    };
     let mut files = Vec::new();
     let mut overrides = Vec::new();
     match project.config_source(&parts.paths, project.root()) {

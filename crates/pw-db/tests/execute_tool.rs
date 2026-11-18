@@ -917,7 +917,7 @@ async fn a_shared_production_ask_has_no_effect_and_a_local_one_does() {
     );
     let project = e.f.projects.get(&e.f.id).unwrap();
     let (policy, warnings) =
-        pw_core::config::mcp_policy::read_project_over(&e.f.app, None, &project);
+        pw_core::config::mcp_policy::read_project_over(&e.f.app, None, &project).unwrap();
     assert_eq!(
         policy.production,
         pw_core::config::mcp_policy::Production::Block
@@ -1034,6 +1034,54 @@ async fn redis_reads_ask_for_a_production_server_under_ask() {
         assert_eq!(kv_connects(), connects + 1, "the approved call connects");
     }
     assert_eq!(kv_connects(), first + 2);
+}
+
+/// 17-m6-plan M6-01 리뷰 1(fail-closed): 사람이 `.local.toml` 에 `production = "ask"` 를 둔 프로젝트에서 프로젝트 설정 파일
+/// (정책이 든 `project.local.toml` · 다른 DB 연결 파일)을 읽지 못하면 에이전트의 DB 호출 · 연결 목록은 전역으로 떨어지지 않고
+/// `projectConfigUnreadable` 로 거절된다 — 연결을 열지 않는다. 깨진 실행 구성(`run/`)은 막지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unreadable_project_settings_refuse_the_agent_db_calls() {
+    let e = env();
+    e.f.write_db("prod.toml", PROD);
+    e.human_opens("prod").await;
+    e.production_policy("project.local.toml", "ask");
+    let mut agent = e.agent();
+    let query = json!({ "sql": "SELECT 1" });
+    e.file(".pitwall/run/x.toml", "name = \"x\n");
+    asked(
+        &e.call(&mut agent, "db.tool.query", "prod", query.clone())
+            .await,
+    );
+    let before = e.connects();
+    for (file, text) in [
+        (".pitwall/project.local.toml", "schema = 1\n[mcp.policy\n"),
+        (".pitwall/db/other.toml", "name = \"other\n"),
+    ] {
+        let path = e.f.root.join(file);
+        let saved = std::fs::read_to_string(&path).ok();
+        e.file(file, text);
+        let err = refused(
+            &e.call(&mut agent, "db.tool.query", "prod", query.clone())
+                .await,
+            "projectConfigUnreadable",
+        );
+        assert!(
+            !err.message.contains("[mcp.policy") && !err.message.contains("other"),
+            "{err:?}"
+        );
+        refused(
+            &agent
+                .call("db.tool.connectionList", json!({ "projectId": e.f.id }))
+                .await,
+            "projectConfigUnreadable",
+        );
+        match saved {
+            Some(text) => e.file(file, text),
+            None => std::fs::remove_file(&path).unwrap(),
+        }
+    }
+    assert_eq!(e.connects(), before);
+    asked(&e.call(&mut agent, "db.tool.query", "prod", query).await);
 }
 
 /// `db_connection_list` 가 정책을 보인다: `block` 이면 `productionBlocked`, `ask` 면 쓸 수 있고 `asksApproval`.

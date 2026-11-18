@@ -139,8 +139,6 @@ pub struct DbToolConnectionList {
     /// Sorted by id.
     pub connections: Vec<DbToolConnection>,
     pub trusted: bool,
-    /// If the project settings could not be read, a short notice (the list is then empty; no values are included).
-    pub problem: Option<String>,
 }
 
 // --- db_schema ------------------------------------------------------------------------------------------------------
@@ -416,7 +414,7 @@ impl DbSessions {
         let agent = agent_grant(scope, &c.host()?.projects, &p.project_id)?;
         let loaded = agent_view(self, agent.project_id(), p.worktree.as_deref())?;
         let trusted = c.trusted(agent.project_id());
-        let production = production_policy(self, agent.project());
+        let production = production_policy(self, agent.project())?;
         let approvals = if trusted {
             Some(c.approvals(agent.project_id())?.0)
         } else {
@@ -424,13 +422,8 @@ impl DbSessions {
         };
         let list = match &loaded.connections {
             Ok(list) => list,
-            Err(_) => {
-                return Ok(DbToolConnectionList {
-                    connections: Vec::new(),
-                    trusted,
-                    problem: Some(crate::gate::UNREADABLE_SETTINGS.to_owned()),
-                });
-            }
+            // 연결 설정을 못 읽으면 표지를 모른다 — 빈 목록으로 답하지 않고 거절한다(fail-closed, 17-m6-plan M6-01 리뷰 1).
+            Err(_) => return Err(crate::gate::settings_unreadable(agent.project_id())),
         };
         let connections = list
             .iter()
@@ -492,7 +485,6 @@ impl DbSessions {
         Ok(DbToolConnectionList {
             connections,
             trusted,
-            problem: None,
         })
     }
 

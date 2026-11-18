@@ -316,13 +316,13 @@ mod tests {
         assert_eq!(next(&mut events), None);
 
         write(&file, "schema = 1\nname = \"b\"\n");
-        write(&tmp.path().join(".pitwall/run/dev.toml"), "schema = 1\n");
+        write(&tmp.path().join(".pitwall/db/dev.toml"), "schema = 1\n");
         store.reload().unwrap();
         assert_eq!(
             next(&mut events),
             Some((
                 TOPIC_CHANGED.into(),
-                json!({"changed": ["project", "run/dev"], "notices": []})
+                json!({"changed": ["db/dev", "project"], "notices": []})
             ))
         );
     }

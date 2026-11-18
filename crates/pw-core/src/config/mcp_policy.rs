@@ -14,6 +14,9 @@
 //!
 //! 판정은 **대상 프로젝트**의 것이다(프로젝트 없는 호출은 전역만). 설정은 호출마다 디스크에서 쓰지 않고 읽는다
 //! (`ConfigSource::without_writes`).
+//!
+//! **프로젝트 설정을 읽지 못하면 정책이 없다**([`ProjectConfigUnreadable`] — fail-closed): 전역으로 떨어지면 깨진 공유 파일 하나가
+//! 사람이 `.local.toml` 에 둔 좁히기를 푼다(17-m6-plan M6-01 리뷰 1).
 
 use std::time::Duration;
 
@@ -195,14 +198,63 @@ fn auto_approve(value: Option<&Value>, warnings: &mut Vec<String>) -> Vec<Tier> 
     out
 }
 
+/// 프로젝트 설정 파일(어느 레이어든 — `.pitwall/project.toml` · `db/*.toml` · `*.local.toml`, 개인 전용 폴더의 것)을 읽지 못해
+/// 그 프로젝트의 정책을 정할 수 없다. **전역으로 떨어지지 않는다**(fail-closed — 17-m6-plan M6-01 리뷰 1, 05 「권한 모델」):
+/// 공유 파일 하나가 깨져 사람이 `.local.toml` 에 둔 좁히기가 풀리면 안 된다. MCP 세션은 그 프로젝트를 겨누는 에이전트 호출을
+/// 거절하고(까닭 `project_config_unreadable`), DB 툴의 관문도 같은 거절이다([`Self::to_rpc_error`]). 사람의 화면은
+/// [`Self::detail`](파일 · 까닭)을 보인다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectConfigUnreadable {
+    pub project_id: String,
+    /// 읽지 못한 파일(알면).
+    pub path: Option<std::path::PathBuf>,
+    /// 설정 계층의 오류 글 — 파일의 줄을 실을 수 있어 **사람의 화면에만** 보인다(에이전트 · 감사 · 로그에는 싣지 않는다).
+    pub detail: String,
+}
+
+/// [`ProjectConfigUnreadable`] 의 `PERMISSION_DENIED` 오류가 싣는 `data.reason`(`pw_mcp::marker` 의 `project_config_unreadable`).
+pub const PROJECT_CONFIG_UNREADABLE: &str = "projectConfigUnreadable";
+
+impl ProjectConfigUnreadable {
+    fn new(project_id: &str, error: &super::ConfigError) -> Self {
+        Self {
+            project_id: project_id.to_owned(),
+            path: error.path().map(std::path::Path::to_path_buf),
+            detail: error.to_string(),
+        }
+    }
+
+    /// 에이전트에게 보일 문장 — 파일 내용 없이 프로젝트와 할 일만.
+    pub fn message(&self) -> String {
+        format!(
+            "cannot read the settings files of project `{}`, so its MCP policy is unknown and agent calls to it are refused; \
+             open the project in Pitwall to see which file is broken and fix it",
+            self.project_id
+        )
+    }
+
+    /// `PERMISSION_DENIED`(`data.reason = "projectConfigUnreadable"`).
+    pub fn to_rpc_error(&self) -> pw_rpc::RpcError {
+        pw_rpc::RpcError::new(pw_rpc::code::PERMISSION_DENIED, self.message()).with_data(
+            serde_json::json!({ "reason": PROJECT_CONFIG_UNREADABLE, "projectId": self.project_id }),
+        )
+    }
+}
+
+impl std::fmt::Display for ProjectConfigUnreadable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message())
+    }
+}
+
 /// 등록된 프로젝트 하나의 정책과 경고: 전역 위에 그 프로젝트 설정(프로젝트 루트)을 [`read`] 로. **디스크에 쓰지 않고** 읽는다.
-/// 프로젝트 설정을 읽지 못하면 경고를 남기고 전역만 쓴다(공유 레이어로 넓어지지 않는다). 경고를 로그에 남기는 것은 부른 쪽이다
-/// (`pw_mcp::policy::of_project` — 이 크레이트는 로그를 쓰지 않는다).
+/// 프로젝트 설정의 어느 레이어든 읽지 못하면 [`ProjectConfigUnreadable`] 이다 — 전역으로 떨어지지 않는다. 경고를 로그에 남기는
+/// 것은 부른 쪽이다(`pw_mcp::policy::of_project` — 이 크레이트는 로그를 쓰지 않는다).
 pub fn read_project(
     paths: &AppPaths,
     global: &ConfigStore,
     project: &Project,
-) -> (Policy, Vec<String>) {
+) -> Result<(Policy, Vec<String>), ProjectConfigUnreadable> {
     let global = global.snapshot();
     read_project_over(paths, global.get("settings", MCP_KEY), project)
 }
@@ -212,27 +264,17 @@ pub fn read_project_over(
     paths: &AppPaths,
     global_mcp: Option<&Value>,
     project: &Project,
-) -> (Policy, Vec<String>) {
-    let unreadable = |e: &dyn std::fmt::Display| {
-        let (policy, mut warnings) = read(global_mcp, None, None, false);
-        warnings.push(format!(
-            "cannot read the config of project `{}` for the mcp policy ({e}); using the global settings",
-            project.id
-        ));
-        (policy, warnings)
-    };
-    let source = match project.config_source(paths, project.root()) {
-        Ok(source) => source.without_writes(),
-        Err(e) => return unreadable(&e),
-    };
-    let layered = match source.load_layered() {
-        Ok(layered) => layered,
-        Err(e) => return unreadable(&e),
-    };
+) -> Result<(Policy, Vec<String>), ProjectConfigUnreadable> {
+    let unreadable = |e: &super::ConfigError| ProjectConfigUnreadable::new(&project.id, e);
+    let source = project
+        .config_source(paths, project.root())
+        .map_err(|e| unreadable(&e))?
+        .without_writes();
+    let layered = source.load_layered().map_err(|e| unreadable(&e))?;
     let full = layered.snapshot.get("project", MCP_KEY).cloned();
     if project.config_mode != ConfigMode::Repository {
         // 개인 전용 project.toml 은 사람의 설정이다.
-        return read(global_mcp, full.as_ref(), full.as_ref(), false);
+        return Ok(read(global_mcp, full.as_ref(), full.as_ref(), false));
     }
     let shared_policy = layered.layers.get("project").is_some_and(|layers| {
         layers.iter().any(|l| {
@@ -243,19 +285,18 @@ pub fn read_project_over(
                     .is_some()
         })
     });
-    let (human, broken) = match ConfigSource::without_shared(source).load() {
-        Ok(snapshot) => (snapshot.get("project", MCP_KEY).cloned(), None),
-        // 로컬 파일이 깨졌다 — 공유 레이어만 남기면 넓어지므로 전역만을 사람의 설정으로 둔다.
-        Err(e) => (None, Some(e.to_string())),
-    };
-    let (policy, mut warnings) = read(global_mcp, full.as_ref(), human.as_ref(), shared_policy);
-    if let Some(e) = broken {
-        warnings.push(format!(
-            "cannot read the local config of project `{}` for the mcp policy ({e}); using the global settings",
-            project.id
-        ));
-    }
-    (policy, warnings)
+    // 공유 레이어를 뺀 읽기는 위 읽기가 읽은 파일의 부분이라 보통 실패하지 않지만, 그 사이 파일이 바뀌었을 수 있다 — 그래도 닫는다.
+    let human = ConfigSource::without_shared(source)
+        .load()
+        .map_err(|e| unreadable(&e))?
+        .get("project", MCP_KEY)
+        .cloned();
+    Ok(read(
+        global_mcp,
+        full.as_ref(),
+        human.as_ref(),
+        shared_policy,
+    ))
 }
 
 /// 프로젝트 없는 호출의 정책과 경고: 전역 `[mcp]` 만.
@@ -308,6 +349,101 @@ mod tests {
                 .production,
             Production::Block
         );
+    }
+
+    fn project(root: &std::path::Path, mode: ConfigMode) -> Project {
+        Project {
+            id: "0123456789abcdef".into(),
+            name: "p".into(),
+            host: "local".into(),
+            roots: vec![root.display().to_string()],
+            favorite: false,
+            tags: Vec::new(),
+            config_mode: mode,
+            slug: "p".into(),
+            created_at: 0,
+            opened_at: None,
+        }
+    }
+
+    fn put(path: &std::path::Path, text: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    /// 리뷰(17-m6-plan M6-01 리뷰 1)의 재현: 전역이 `read`·`write`·`exec` 자동 · 프로덕션 `ask`, 사람의 `.local.toml` 이 `read` ·
+    /// `block` 으로 좁힌다. 깨진 실행 구성(`run/x.toml`)은 그 좁히기를 풀지 않고, 정책이 든 파일(어느 레이어든)이나 DB 연결
+    /// 파일을 못 읽으면 전역으로 떨어지지 않고 정책이 없다.
+    #[test]
+    fn an_unreadable_project_file_never_falls_back_to_the_global_policy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        let pw = root.join(".pitwall");
+        put(
+            &pw.join("project.local.toml"),
+            "schema = 1\n[mcp]\nauto_approve = [\"read\"]\n[mcp.policy]\nproduction = \"block\"\n",
+        );
+        let paths = AppPaths::under(&tmp.path().join("app"));
+        let global =
+            json!({"auto_approve": ["read", "write", "exec"], "policy": {"production": "ask"}});
+        let p = project(&root, ConfigMode::Repository);
+        let narrowed = Policy {
+            auto_approve: vec![Tier::Read],
+            approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
+            production: Production::Block,
+        };
+        assert_eq!(
+            read_project_over(&paths, Some(&global), &p).unwrap().0,
+            narrowed
+        );
+
+        // 깨진 실행 구성 하나는 정책을 바꾸지 않는다(실행 구성은 이 스냅숏에 들지 않는다).
+        put(&pw.join("run/x.toml"), "name = \"x\n");
+        assert_eq!(
+            read_project_over(&paths, Some(&global), &p).unwrap().0,
+            narrowed
+        );
+
+        for (file, text) in [
+            ("db/y.toml", "name = \"y\n"),
+            ("project.toml", "schema = 1\n[mcp\n"),
+            (
+                "project.local.toml",
+                "schema = 1\n[mcp]\nauto_approve = [\"read\"\n",
+            ),
+        ] {
+            let path = pw.join(file);
+            let before = std::fs::read_to_string(&path).ok();
+            put(&path, text);
+            let err = read_project_over(&paths, Some(&global), &p).unwrap_err();
+            assert_eq!(err.project_id, p.id, "{file}");
+            assert_eq!(err.path.as_deref(), Some(path.as_path()), "{file}");
+            // 에이전트에게 가는 글에는 파일 내용이 없다.
+            let rpc = err.to_rpc_error();
+            assert_eq!(rpc.code, pw_rpc::code::PERMISSION_DENIED);
+            assert_eq!(rpc.data.unwrap()["reason"], PROJECT_CONFIG_UNREADABLE);
+            assert!(
+                !rpc.message.contains("auto_approve") && !rpc.message.contains(file),
+                "{}",
+                rpc.message
+            );
+            match before {
+                Some(text) => put(&path, &text),
+                None => std::fs::remove_file(&path).unwrap(),
+            }
+        }
+        assert_eq!(
+            read_project_over(&paths, Some(&global), &p).unwrap().0,
+            narrowed
+        );
+
+        // 개인 전용 프로젝트도 같다.
+        let personal = project(&root, ConfigMode::Personal);
+        put(
+            &paths.personal_project_dir("p").join("project.toml"),
+            "[mcp\n",
+        );
+        assert!(read_project_over(&paths, Some(&global), &personal).is_err());
     }
 
     #[test]

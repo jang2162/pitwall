@@ -31,7 +31,8 @@ use pw_core::registry::Project;
 use pw_rpc::Tier;
 
 pub use pw_core::config::mcp_policy::{
-    AUTO_APPROVE, DEFAULT_APPROVAL_TIMEOUT, POLICY_TABLE, Policy, Production, read, read_project,
+    AUTO_APPROVE, DEFAULT_APPROVAL_TIMEOUT, POLICY_TABLE, Policy, Production,
+    ProjectConfigUnreadable, read, read_project,
 };
 
 use crate::approval::Approvals;
@@ -95,9 +96,24 @@ pub(crate) fn tier_name(tier: Tier) -> &'static str {
 }
 
 /// 등록된 프로젝트 하나의 정책: 전역 위에 그 프로젝트 설정(프로젝트 루트)을 [`read`] 로. **디스크에 쓰지 않고** 읽는다.
-/// 프로젝트 설정을 읽지 못하면 경고를 남기고 전역만 쓴다(공유 레이어로 넓어지지 않는다). 경고는 로그에 남긴다.
-pub fn of_project(paths: &AppPaths, global: &ConfigStore, project: &Project) -> Policy {
-    logged(read_project(paths, global, project))
+/// 프로젝트 설정의 어느 레이어든 읽지 못하면 정책이 없다([`ProjectConfigUnreadable`] — 전역으로 떨어지지 않는다, fail-closed).
+/// 경고와 읽지 못한 파일은 로그에 남긴다(파일 내용 · 오류 글은 남기지 않는다 — 그 줄이 비밀일 수 있다).
+pub fn of_project(
+    paths: &AppPaths,
+    global: &ConfigStore,
+    project: &Project,
+) -> Result<Policy, ProjectConfigUnreadable> {
+    match read_project(paths, global, project) {
+        Ok(read) => Ok(logged(read)),
+        Err(e) => {
+            tracing::warn!(
+                project = project.id,
+                path = ?e.path,
+                "cannot read the project's settings; refusing agent calls to it until they are fixed"
+            );
+            Err(e)
+        }
+    }
 }
 
 /// 프로젝트 없는 호출의 정책: 전역 설정만.

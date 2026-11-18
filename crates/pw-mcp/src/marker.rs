@@ -65,6 +65,10 @@ pub enum Reason {
     /// (거절) DB 툴인데 Host 가 프로덕션 · read-only 표지 기억을 상태 DB 에 쓰거나 읽지 못한다 — 돌리지 않았다(16-m5-plan 결정
     /// M5-D37 · M5-17b, fail-closed). Host 오류 코드는 `STORAGE_UNAVAILABLE` 이고 `data.reason = "markMemoryUnavailable"` 이다.
     MarkMemoryUnavailable,
+    /// (거절) 대상 프로젝트의 설정 파일(어느 레이어든 — `project.toml` · `db/*.toml` · `*.local.toml`)을 읽지 못해 그 프로젝트의
+    /// 정책을 정할 수 없다 — 전역으로 떨어지지 않고 그 프로젝트를 겨누는 호출을 모두 거절한다(fail-closed, 17-m6-plan M6-01
+    /// 리뷰 1 — `pw_core::config::mcp_policy::ProjectConfigUnreadable`, Host 의 `data.reason = "projectConfigUnreadable"`).
+    ProjectConfigUnreadable,
 }
 
 impl Reason {
@@ -86,6 +90,7 @@ impl Reason {
         Reason::RateLimited,
         Reason::AuditUnavailable,
         Reason::MarkMemoryUnavailable,
+        Reason::ProjectConfigUnreadable,
     ];
 
     /// Host RPC 의 `PERMISSION_DENIED` 오류가 싣는 `data.reason`(camelCase) ↔ 까닭 코드. 거절 까닭을 더하는 행은 [`Reason`] 과 이
@@ -97,6 +102,11 @@ impl Reason {
         ("rateLimited", Reason::RateLimited),
         // 승인(해시 확인)을 지난 뒤 · 부작용 직전에 대상이 바뀌어 돌지 않았다(16-m5-plan M5-16 — 계획 때 읽은 파일 내용 · 푼 루트).
         ("planChanged", Reason::PlanChanged),
+        // 대상 프로젝트의 설정 파일을 읽지 못했다(DB 툴의 관문 — `pw_core::config::mcp_policy::PROJECT_CONFIG_UNREADABLE`).
+        (
+            pw_core::config::mcp_policy::PROJECT_CONFIG_UNREADABLE,
+            Reason::ProjectConfigUnreadable,
+        ),
     ];
 
     /// 거절로 셀 `STORAGE_UNAVAILABLE` 오류의 `data.reason`(camelCase) ↔ 까닭 코드. 여기 없는 저장소 오류는 결과 `error` 다.
@@ -138,6 +148,7 @@ impl Reason {
             Reason::RateLimited => "rate_limited",
             Reason::AuditUnavailable => "audit_unavailable",
             Reason::MarkMemoryUnavailable => "mark_memory_unavailable",
+            Reason::ProjectConfigUnreadable => "project_config_unreadable",
         }
     }
 
@@ -268,6 +279,10 @@ mod tests {
         assert_eq!(
             Reason::of_permission_denied(Some("planChanged")),
             Reason::PlanChanged
+        );
+        assert_eq!(
+            Reason::of_permission_denied(Some("projectConfigUnreadable")),
+            Reason::ProjectConfigUnreadable
         );
         assert_eq!(
             Reason::of_permission_denied(Some("notProjectWindow")),
