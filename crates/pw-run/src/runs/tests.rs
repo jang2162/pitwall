@@ -51,7 +51,7 @@ struct FakeRun {
 }
 
 impl ProcessLauncher for Fake {
-    fn launch(&self, spec: &ProcessSpec, output: RunOutput) -> Result<Arc<dyn RunKind>, String> {
+    fn launch(&self, spec: &ProcessSpec, output: RunOutput) -> Result<Arc<dyn RunKind>, RpcError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let run = Arc::new(FakeRun {
             output,
@@ -140,9 +140,10 @@ impl Fixture {
         fs::write(
             &shell,
             format!(
-                "#!/bin/sh\nHOME='{}'; export HOME\nunset LANG LC_ALL LC_CTYPE\nPATH='{}':/usr/bin:/bin; export PATH\nSHELL=/bin/sh; export SHELL\neval \"$4\"\n",
+                "#!/bin/sh\nHOME='{}'; export HOME\nunset LANG LC_ALL LC_CTYPE\nPATH='{}':/usr/bin:/bin; export PATH\nSHELL=/bin/sh; export SHELL\n[ -f '{hook}' ] && . '{hook}'\neval \"$4\"\n",
                 home.display(),
-                bin.display()
+                bin.display(),
+                hook = tmp.path().join("login-hook.sh").display(),
             ),
         )
         .unwrap();
@@ -544,11 +545,20 @@ async fn stopping_a_run_ends_its_grandchildren() {
     assert_eq!(listed.runs[0].exit, Some(exit));
 }
 
-/// 리더가 스스로 끝나도 세션에 두고 간 프로세스는 남지 않는다(실행이 끝났는데 자식이 포트를 쥐고 남지 않게).
+/// 리더가 스스로 끝나도 세션에 두고 간 프로세스는 남지 않는다(실행이 끝났는데 자식이 포트를 쥐고 남지 않게). 그 정리는 중지와
+/// 같은 SIGTERM 이고 `exited` 는 정리가 끝난 **뒤**에 나간다 — 손자가 SIGTERM 을 받고 남긴 표지가 `exited` 를 받은 때 이미 있다
+/// (정리를 걷으면 `Pty` 의 Drop 이 SIGHUP → SIGKILL 로 대신 죽여 표지가 없다).
 #[tokio::test(flavor = "multi_thread")]
 async fn a_finished_run_leaves_no_background_process_behind() {
     let f = Fixture::real();
-    f.shell_config("bg", "(trap '' HUP; exec sleep 300) & echo BG=$!");
+    let mark = f.tmp.path().join("got-term");
+    f.shell_config(
+        "bg",
+        &format!(
+            "(trap '' HUP; trap 'touch {}; exit' TERM; while :; do sleep 0.1; done) & echo BG=$!",
+            mark.display()
+        ),
+    );
     let mut c = f.client();
     let run = info(
         c.call(
@@ -562,12 +572,17 @@ async fn a_finished_run_leaves_no_background_process_behind() {
         .await
         .expect("the run did not end");
     assert_eq!(exit.code, Some(0), "{exit:?} {:?}", a.text);
+    let terminated_first = mark.exists();
     let grandchild = background_pid(&a.text);
     let left = !gone_within(grandchild, Duration::from_millis(500));
     if left {
         kill(grandchild);
     }
-    assert!(!left, "the background sleep outlived the run");
+    assert!(!left, "the background loop outlived the run");
+    assert!(
+        terminated_first,
+        "`exited` went out before the session got SIGTERM"
+    );
 }
 
 // ---- ② SIGTERM 을 무시하면 5초 뒤 SIGKILL ---------------------------------------------------------------------------------
@@ -1073,7 +1088,11 @@ async fn started_and_exited_events_go_out_in_order() {
 #[tokio::test(flavor = "multi_thread")]
 async fn restart_waits_for_the_old_tree_then_starts_again() {
     let f = Fixture::real();
-    f.shell_config("dev", "(trap '' HUP; exec sleep 300) & echo BG=$!; wait");
+    // 손자는 SIGTERM 을 받고 1초 더 산다 — 다시 실행이 기다리지 않으면 새 실행이 뜬 때 아직 있다.
+    f.shell_config(
+        "dev",
+        "(trap '' HUP; trap 'sleep 1; exit' TERM; while :; do sleep 0.1; done) & echo BG=$!; wait",
+    );
     let mut c = f.client();
     let old = info(
         c.call(
@@ -1092,6 +1111,14 @@ async fn restart_waits_for_the_old_tree_then_starts_again() {
         kill(grandchild);
     }
     assert!(!left, "the old tree was still there when the run restarted");
+    let listed: methods::RunList = c.ok("run.list", json!({"projectId": f.project})).await;
+    let ended = listed
+        .runs
+        .iter()
+        .find(|r| r.run_id == old.run_id)
+        .and_then(|r| r.ended_at)
+        .unwrap();
+    assert!(new.started_at >= ended, "{} < {ended}", new.started_at);
     assert_eq!(new.restart_of.as_deref(), Some(old.run_id.as_str()));
     assert_ne!(new.run_id, old.run_id);
     assert_eq!(new.state, RunState::Running);
@@ -1277,7 +1304,7 @@ fn run_exit_probe() {
             ]
             .map(str::to_owned)
             .to_vec(),
-            cwd: std::env::temp_dir(),
+            cwd: fs::canonicalize(std::env::temp_dir()).unwrap(),
             env: vec![("PATH".into(), "/usr/bin:/bin".into())],
             cols: 80,
             rows: 24,
@@ -1299,11 +1326,7 @@ fn run_exit_probe() {
                     size: (80, 24),
                     restart_of: None,
                 },
-                |output| {
-                    PtyLauncher
-                        .launch(&spec, output)
-                        .map_err(RpcError::internal)
-                },
+                |output| PtyLauncher.launch(&spec, output),
             )
             .unwrap();
         let run = runs.find("p", &info.run_id).unwrap();
@@ -1361,4 +1384,268 @@ fn exiting_app_ends_runs() {
         kill(pid);
     }
     assert!(left.is_empty(), "{left:?} of {pids:?} outlived the app");
+}
+
+// ---- 리뷰 B1: 작업 폴더의 재검사는 띄우는 자리에서 ------------------------------------------------------------------------
+
+/// 로그인 셸이 도는 동안(런타임 환경을 기다리는 동안) 셸 스크립트 `hook` 을 돌린다.
+fn login_hook(f: &Fixture, hook: &str) {
+    fs::write(f.tmp.path().join("login-hook.sh"), hook).unwrap();
+}
+
+/// 에이전트 허가 하나(작업 폴더 `cwd` 에서 `marker` 를 만드는 명령).
+fn touching_spec(cwd: &Path, marker: &Path) -> RunSpec {
+    RunSpec {
+        config: "dev".into(),
+        argv: vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            format!("touch '{}'", marker.display()),
+        ],
+        cwd: cwd.to_path_buf(),
+        env: BTreeMap::new(),
+        profile: None,
+    }
+}
+
+fn assert_cwd_changed(result: Result<RunInfo, RpcError>) {
+    let e = result.expect_err("the run started");
+    assert_eq!(e.code, code::PERMISSION_DENIED, "{e:?}");
+    assert_eq!(e.data.as_ref().unwrap()["reason"], "cwd_changed", "{e:?}");
+}
+
+/// 아무것도 돌지 않았다 — 표지가 없고 목록이 비었다.
+async fn assert_nothing_ran(f: &Fixture, marker: &Path) {
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!marker.exists(), "the program ran");
+    assert!(f.runs.list(&f.project).is_empty());
+}
+
+/// 리뷰 B1 ①: 허가 뒤, 런타임 환경을 기다리는 동안 작업 폴더가 밖을 가리키는 링크로 바뀌면 띄우지 않는다(재검사가 런타임 환경 앞에만
+/// 있으면 통과해 밖에서 돈다).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cwd_swapped_while_the_environment_loads_is_refused() {
+    let f = Fixture::real();
+    let (sub, outside, marker) = (
+        f.root.join("sub"),
+        normalize(&f.tmp.path().join("outside")).unwrap(),
+        f.tmp.path().join("ran"),
+    );
+    fs::create_dir_all(&sub).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    login_hook(
+        &f,
+        &format!(
+            "mv '{sub}' '{sub}-moved'; ln -s '{}' '{sub}'\n",
+            outside.display(),
+            sub = sub.display()
+        ),
+    );
+    let grant = f.agent_grant(&f.project, touching_spec(&sub, &marker));
+    assert_cwd_changed(f.runs.start_agent(&grant, 0, agent(), None));
+    assert_nothing_ran(&f, &marker).await;
+}
+
+/// 리뷰 B1 ②: 런타임 환경을 기다리는 동안 작업 폴더가 지워지면 띄우지 않는다 — portable-pty 처럼 `$HOME` 으로 떨어지지 않는다(창의
+/// 길).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cwd_deleted_while_the_environment_loads_is_refused() {
+    let f = Fixture::real();
+    let (sub, marker) = (f.root.join("sub"), f.tmp.path().join("ran"));
+    fs::create_dir_all(&sub).unwrap();
+    f.config(
+        &f.root,
+        "dev",
+        &format!(
+            "name = \"dev\"\ntype = \"shell\"\ncwd = \"sub\"\ncommand = {}",
+            toml_str(&format!("touch '{}'", marker.display()))
+        ),
+    );
+    login_hook(&f, &format!("rm -rf '{}'\n", sub.display()));
+    let mut c = f.client();
+    let e = c
+        .error(
+            "run.start",
+            json!({"projectId": f.project, "configId": "dev"}),
+        )
+        .await;
+    assert_eq!(e.code, code::PERMISSION_DENIED, "{e:?}");
+    assert_eq!(e.data.as_ref().unwrap()["reason"], "cwd_changed", "{e:?}");
+    assert_nothing_ran(&f, &marker).await;
+}
+
+/// 리뷰 B1 · 메인 판정: 띄우기 바로 앞의 재검사와 자식의 `chdir` 사이에 링크로 바뀌어도 — 자식은 프로그램을 돌리기 전에 멈춰 있고
+/// 그 실제 작업 폴더가 쥔 폴더와 달라 끝난다.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cwd_swapped_between_the_check_and_the_spawn_is_refused() {
+    let f = Fixture::real();
+    let (sub, outside, marker) = (
+        f.root.join("sub"),
+        normalize(&f.tmp.path().join("outside")).unwrap(),
+        f.tmp.path().join("ran"),
+    );
+    fs::create_dir_all(&sub).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    let (from, to) = (sub.clone(), outside.clone());
+    process::hooks::on_spawn(&sub, move || {
+        fs::rename(&from, from.with_extension("moved")).unwrap();
+        std::os::unix::fs::symlink(&to, &from).unwrap();
+    });
+    let grant = f.agent_grant(&f.project, touching_spec(&sub, &marker));
+    assert_cwd_changed(f.runs.start_agent(&grant, 0, agent(), None));
+    assert_nothing_ran(&f, &marker).await;
+}
+
+/// 같은 틈에 폴더가 지워지면 portable-pty 는 `$HOME` 에서 띄운다 — 띄운 뒤의 확인이 그것을 잡아 끝낸다.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cwd_deleted_between_the_check_and_the_spawn_does_not_fall_back_to_home() {
+    let f = Fixture::real();
+    let (sub, marker) = (f.root.join("sub"), f.tmp.path().join("ran"));
+    fs::create_dir_all(&sub).unwrap();
+    let gone = sub.clone();
+    process::hooks::on_spawn(&sub, move || fs::remove_dir_all(&gone).unwrap());
+    let grant = f.agent_grant(&f.project, touching_spec(&sub, &marker));
+    assert_cwd_changed(f.runs.start_agent(&grant, 0, agent(), None));
+    assert_nothing_ran(&f, &marker).await;
+}
+
+/// 정상 길: 감싼 셸은 같은 pid 로 프로그램을 `exec` 한다 — 실행의 pid 가 프로그램의 pid 이고 작업 폴더가 그 폴더다.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_held_shell_becomes_the_program() {
+    let f = Fixture::real();
+    let sub = f.root.join("sub");
+    fs::create_dir_all(&sub).unwrap();
+    let spec = RunSpec {
+        argv: vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "echo PID=$$ CWD=$(pwd -P)".into(),
+        ],
+        ..touching_spec(&sub, Path::new("/nonexistent"))
+    };
+    let grant = f.agent_grant(&f.project, spec);
+    let run = f.runs.start_agent(&grant, 0, agent(), None).unwrap();
+    let mut c = f.client();
+    let mut a = c.attach(&run.run_id, None).await;
+    assert_eq!(c.exit(&mut a).await.code, Some(0), "{:?}", a.text);
+    let expected = format!("PID={} CWD={}", run.pid.unwrap(), sub.display());
+    assert!(a.text.contains(&expected), "{:?} vs {expected}", a.text);
+}
+
+// ---- 리뷰 F1 · F2 · R2 ---------------------------------------------------------------------------------------------------
+
+/// 리뷰 F1: 띄우는 동안 온 중지(창 닫기 · `run.stop`)도 종류에 닿는다 — 실행이 영영 `stopping` 에 머물지 않는다.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stop_that_arrives_while_starting_still_stops_the_run() {
+    let f = Fixture::fake(RunLimits::default());
+    let (runs, project) = (f.runs.clone(), f.project.clone());
+    let stopped = Arc::new(Mutex::new(None::<Arc<FakeRun>>));
+    let kept = Arc::clone(&stopped);
+    let info = f
+        .runs
+        .start_kind(
+            NewRun {
+                project_id: f.project.clone(),
+                config: "slow".into(),
+                name: "slow".into(),
+                launched_by: LaunchedBy::Window { window: None },
+                worktree: None,
+                cwd: None,
+                profile: None,
+                relaunch: Relaunch::None,
+                size: (80, 24),
+                restart_of: None,
+            },
+            move |output| {
+                // 종류가 서기 전에 창이 닫혔다.
+                runs.stop_project(&project);
+                let run = Arc::new(FakeRun {
+                    output,
+                    stops: AtomicUsize::new(0),
+                    inputs: Mutex::default(),
+                });
+                *lock(&kept) = Some(Arc::clone(&run));
+                Ok(run as Arc<dyn RunKind>)
+            },
+        )
+        .unwrap();
+    let run = lock(&stopped).clone().unwrap();
+    assert_eq!(run.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        f.runs.find(&f.project, &info.run_id).unwrap().state(),
+        RunState::Exited
+    );
+}
+
+/// 리뷰 F2: 빈 줄만 쓰는 실행도 색인까지 합쳐 실행 하나의 상한 · Host 계량기 안이다.
+#[tokio::test(flavor = "multi_thread")]
+async fn blank_lines_stay_within_the_running_cap() {
+    let f = Fixture::fake(RunLimits::default());
+    f.shell_config("blank", "true");
+    let run = f.start("blank");
+    let (_, fake) = f.fake_launcher().last();
+    let newlines = vec![b'\n'; 1024 * KIB];
+    for _ in 0..16 {
+        fake.output.write(&newlines);
+    }
+    assert!(
+        f.runs.log_bytes() <= 8 * 1024 * KIB,
+        "{}",
+        f.runs.log_bytes()
+    );
+    let memory = f
+        .runs
+        .find(&f.project, &run.run_id)
+        .unwrap()
+        .with_log(RunLog::memory);
+    assert_eq!(memory, f.runs.log_bytes());
+}
+
+/// 리뷰 R2: 실행이 띄운 자식이 `setsid` 로 세션을 떠나도 중지가 닿는다 — 끝내기를 시작할 때 세션의 자손을 찾고, 리더가 죽어 그
+/// 자식이 init 으로 넘어간 뒤에도(SIGTERM 을 무시해 5초를 버틴다) SIGKILL 이 간다. 세션만 보면 남아 실패한다.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_child_that_left_the_session_is_stopped_too() {
+    let f = Fixture::real();
+    f.shell_config(
+        "escape",
+        "perl -MPOSIX -e '$|=1; POSIX::setsid() or die; $SIG{TERM}=q(IGNORE); print qq(ESC=$$\\n); sleep 300' & wait",
+    );
+    let mut c = f.client();
+    let run = info(
+        c.call(
+            "run.start",
+            json!({"projectId": f.project, "configId": "escape"}),
+        )
+        .await,
+    );
+    let mut a = c.attach(&run.run_id, None).await;
+    c.read_until(&mut a, "ESC=").await;
+    c.read_until(&mut a, "\n").await;
+    let escaped: u32 = a
+        .text
+        .split("ESC=")
+        .nth(1)
+        .unwrap()
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .parse()
+        .unwrap();
+    // SAFETY: getsid(2) 는 메모리를 건드리지 않는다.
+    let own_session = unsafe { libc::getsid(libc::pid_t::try_from(escaped).unwrap()) };
+    assert_eq!(
+        own_session,
+        libc::pid_t::try_from(escaped).unwrap(),
+        "perl left the session"
+    );
+    c.ok::<RunInfo>("run.stop", json!({"runId": run.run_id}))
+        .await;
+    tokio::time::timeout(Duration::from_secs(15), c.exit(&mut a))
+        .await
+        .unwrap();
+    let left = !gone_within(escaped, Duration::from_millis(500));
+    if left {
+        kill(escaped);
+    }
+    assert!(!left, "the child that left the session outlived the stop");
 }

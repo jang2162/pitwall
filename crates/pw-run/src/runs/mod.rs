@@ -171,7 +171,7 @@ pub struct RunInfo {
     /// 종류: `process`(M6-02) · `sql`(M6-09) · `debug`(M6-17).
     pub kind: String,
     pub launched_by: LaunchedBy,
-    /// 띄운 활성 워크트리 꼭대기. 주 체크아웃이면 `null`.
+    /// 창이 고른 활성 워크트리 꼭대기. 주 체크아웃 · 에이전트가 띄운 실행이면 `null`(에이전트 실행의 작업 폴더는 `cwd`).
     pub worktree: Option<String>,
     /// 작업 폴더(정규화한 절대 경로) — 콘솔의 상대 경로 링크 기준(M6-06 ②).
     pub cwd: Option<String>,
@@ -601,7 +601,7 @@ impl Runs {
         if !host.projects.is_trusted(project_id) {
             return Err(untrusted(project_id));
         }
-        let cwd = granted_cwd(project_id, &spec.cwd)?;
+        let cwd = granted_cwd(&spec.cwd)?;
         let runtime = self.inner.runtime.env(project_id, &cwd);
         let mut env = crate::shell::child_env(&runtime.env);
         overlay(&mut env, &spec.env);
@@ -641,9 +641,8 @@ impl Runs {
         };
         let launcher = Arc::clone(&self.inner.launcher);
         self.start_kind(new, move |output| {
-            launcher.launch(&spec, output).map_err(|reason| {
-                tracing::warn!(target: "pw_run", argc = spec.argv.len(), cwd = %spec.cwd.display(), %reason, "cannot start the run");
-                RpcError::internal(reason)
+            launcher.launch(&spec, output).inspect_err(|e| {
+                tracing::warn!(target: "pw_run", argc = spec.argv.len(), cwd = %spec.cwd.display(), error = %e.message, "cannot start the run");
             })
         })
     }
@@ -726,7 +725,12 @@ impl Runs {
                 return Err(e);
             }
         };
-        let _ = run.control.set(kind);
+        let _ = run.control.set(Arc::clone(&kind));
+        // 띄우는 동안 온 중지(`run.stop` · 창 닫기)는 종류가 없어 상태만 바꿨다 — 여기서 보낸다. 그 사이 `stop_run` 이 종류를 보고
+        // 이미 보냈을 수도 있다(두 번 불려도 된다 — `RunKind::stop`).
+        if run.state() == RunState::Stopping {
+            kind.stop();
+        }
         let info = run.info();
         tracing::info!(target: "pw_run", run = %id, project = %info.project_id, config = %info.config, pid = ?info.pid, launched_by = ?info.launched_by, "run started");
         {
@@ -989,18 +993,22 @@ fn stop_run(run: &Run) {
     run.bump();
 }
 
-/// 에이전트 허가의 작업 폴더를 띄우기 직전에 다시 본다(머리 주석 「띄우기」, ⑦): 지금 정규화한 경로가 허가의 경로(판정 때 정규화한
-/// 것)와 같고 폴더여야 한다. 그 사이 한 구성 요소가 심링크로 바뀌었으면 정규화가 다른 곳을 가리켜 거절한다.
-fn granted_cwd(project_id: &str, cwd: &Path) -> Result<PathBuf, RpcError> {
+/// 에이전트 허가의 작업 폴더를 먼저 본다 — 런타임 환경(로그인 셸 · mise)을 기다리기 전에 일찍 거절하는 자리다. 지금 정규화한
+/// 경로가 허가의 경로(판정 때 정규화한 것)와 같고 폴더여야 한다. 띄우기 바로 앞과 띄운 뒤의 재검사는 `process` 가 한다(그 머리 주석
+/// 「작업 폴더」) — 여기를 지난 뒤 바뀐 것도 그쪽에서 거절한다.
+fn granted_cwd(cwd: &Path) -> Result<PathBuf, RpcError> {
     let now = normalize(cwd).ok();
     if now.as_deref() == Some(cwd) && cwd.is_dir() {
         return Ok(cwd.to_path_buf());
     }
-    Err(RpcError::new(
-        code::PERMISSION_DENIED,
-        "the run's working directory changed since it was approved",
-    )
-    .with_data(json!({ "reason": "cwd_changed", "projectId": project_id })))
+    Err(cwd_changed(
+        "the run's working directory changed since it was approved".to_owned(),
+    ))
+}
+
+/// 작업 폴더가 판정 뒤에 바뀌었다(`PERMISSION_DENIED`, `data.reason = "cwd_changed"`) — 아무것도 돌지 않았다.
+pub fn cwd_changed(message: String) -> RpcError {
+    RpcError::new(code::PERMISSION_DENIED, message).with_data(json!({ "reason": "cwd_changed" }))
 }
 
 /// 구성의 env(+ 고른 프로필의 env). `env_file`(`.env`)은 M6-03 이 이 자리에서 읽어 앞에 얹는다(덮는 순서: 런타임 환경 →
@@ -1070,7 +1078,8 @@ fn nonce() -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
-    let mixed = (nanos as u64) ^ (u64::from(std::process::id()) << 32);
+    #[allow(clippy::cast_possible_truncation)] // 아래 32비트만 쓴다.
+    let mixed = (nanos as u64) ^ u64::from(std::process::id()).rotate_left(16);
     format!("{:08x}", mixed & 0xffff_ffff)
 }
 

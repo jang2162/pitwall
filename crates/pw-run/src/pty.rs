@@ -97,6 +97,17 @@ impl Ending {
             }
         }
     }
+
+    /// 터미널은 세션만, 실행은 세션과 그 자손(`crate::tree` 머리 주석).
+    #[cfg(unix)]
+    fn reach(self) -> crate::tree::Reach {
+        match self {
+            Self::Hangup => crate::tree::Reach::Session,
+            Self::Terminate { .. } | Self::InterruptThenTerminate { .. } => {
+                crate::tree::Reach::SessionAndChildren
+            }
+        }
+    }
 }
 
 /// 셸 · 프로그램이 끝난 꼴.
@@ -303,7 +314,7 @@ impl Pty {
             let held = Arc::clone(&input);
             let ended = self.ended.clone();
             let spawned = thread("pty-terminate", move || {
-                crate::tree::end_sessions(&[leader], &ending.steps());
+                crate::tree::end_sessions(&[leader], &ending.steps(), ending.reach());
                 drop(lock(&held).take());
                 forget_leader(leader);
                 ended.send_replace(true);
