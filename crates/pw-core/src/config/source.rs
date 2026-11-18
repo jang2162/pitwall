@@ -111,7 +111,8 @@ pub enum LayerOrigin {
     Builtin,
     /// `<id>.toml` — 커밋되는 공유 설정(전역이면 그냥 설정 파일).
     Shared,
-    /// `<id>.local.toml` — 개인 덮어쓰기. 워크트리면 메인 체크아웃의 것일 수 있다.
+    /// `<id>.local.toml` — 개인 덮어쓰기. 워크트리면 메인 체크아웃의 것일 수 있다. 저장소 안의 것이 git 추적 파일이거나 그
+    /// 판정을 못 하면 이 레이어가 아니라 [`Self::Shared`] 다([`ConfigNotice::TrackedLocal`] · [`ConfigNotice::UnverifiedLocal`]).
     Local,
 }
 
@@ -139,6 +140,13 @@ pub enum ConfigNotice {
     },
     /// 가리키는 파일이 없는 심링크라 건너뛰었다(dotfiles 가 아직 동기화되지 않은 경우 등).
     BrokenLink { path: String },
+    /// 저장소 안의 개인 파일(`*.local.toml`)이 git 이 추적하는(커밋되는) 파일이라 사람의 설정으로 받지 않고 공유 레이어로 읽었다
+    /// — 넓히는 값(`[mcp.policy]` · 자동 승인 · 노출 · 미신뢰 프로젝트의 실행 파일)은 먹지 않는다([`super::tracked`]).
+    /// 워크트리면 메인 체크아웃의 개인 파일을 대신 읽는다. 사람의 설정으로 쓰려면 추적을 푼다(`git rm --cached`).
+    TrackedLocal { path: String },
+    /// 저장소 안의 개인 파일이 git 추적 파일인지 판정하지 못해(관리 폴더 · 인덱스를 읽지 못함) 공유 레이어로 읽었다(fail-closed).
+    /// `reason` 은 사람이 읽을 까닭이다(파일 내용은 없다).
+    UnverifiedLocal { path: String, reason: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -349,11 +357,17 @@ impl ConfigSource {
     /// 개인 덮어쓰기 `<id>.local.toml` 을 고칠 때 쓸 파일 — [`Self::load`] 가 그 id 의 local 레이어로 읽는 파일이다. 폴백은 파일
     /// 단위다: 이 폴더에 그 파일이 있으면 그것, 없고 폴백 폴더(메인 체크아웃)에 있으면 그것. 둘 다 없으면 새로 만들 자리 — 폴백이
     /// 있으면(연결 워크트리) 메인 체크아웃 쪽이다(그 프로젝트의 모든 워크트리가 읽는 개인 파일). `id` 는 `project` · `db/pg` 꼴.
+    ///
+    /// 이 폴더의 그 파일이 git 추적 파일이면(또는 판정을 못 하면) 개인 레이어가 아니므로 폴백 폴더의 자리다. 폴백이 없으면 그
+    /// 파일을 돌려주고 [`Self::prepare_local_write`] 가 거절한다.
     pub fn local_file(&self, id: &str) -> PathBuf {
         let name = format!("{id}.local.toml");
         let exists = |dir: &Path| fs::symlink_metadata(dir.join(&name)).is_ok();
         if exists(&self.primary.dir) {
-            return self.primary.dir.join(&name);
+            let own = self.primary.dir.join(&name);
+            if self.local_fallback.is_none() || self.tracking(&self.primary, &own).is_personal() {
+                return own;
+            }
         }
         match &self.local_fallback {
             Some(fallback) => fallback.dir.join(&name),
@@ -384,7 +398,57 @@ impl ConfigSource {
                 message: "is not a personal file of this project, not writing it".to_owned(),
             })?;
         super::write::prepare_repository_local(checkout, file)?;
-        Ok(super::write::Links::Refuse)
+        // 추적 파일에 쓴 사람의 값은 개인 레이어가 아니라 먹지 않고, 다음 커밋에 실린다.
+        match super::tracked::tracking(checkout, file) {
+            super::tracked::Tracking::Untracked => Ok(super::write::Links::Refuse),
+            super::tracked::Tracking::Tracked => Err(super::write::WriteError::Refused {
+                path: file.to_path_buf(),
+                message:
+                    "is tracked by git, so it is a committed file and not a personal setting; \
+                          run `git rm --cached` on it first"
+                        .to_owned(),
+            }),
+            super::tracked::Tracking::Unknown(reason) => Err(super::write::WriteError::Refused {
+                path: file.to_path_buf(),
+                message: format!(
+                    "cannot tell whether git tracks it ({reason}), so it is not written as a personal setting"
+                ),
+            }),
+        }
+    }
+
+    /// 이 설정의 폴더(또는 폴백 폴더) `scan` 안의 개인 파일 `file` 의 추적 판정. 저장소 밖 설정(개인 전용 · 전역)은 늘 사람의 것이다.
+    fn tracking(&self, scan: &ScanDir, file: &Path) -> super::tracked::Tracking {
+        match scan.dir.parent() {
+            Some(checkout) if self.repository => super::tracked::tracking(checkout, file),
+            _ => super::tracked::Tracking::Untracked,
+        }
+    }
+
+    /// 개인 파일 `found` 를 사람의 레이어로 받는가. 받지 않으면 그 까닭을 알림으로 남긴다.
+    fn takes_as_personal(
+        &self,
+        scan: &ScanDir,
+        found: &Found,
+        notices: &mut Vec<ConfigNotice>,
+    ) -> bool {
+        let path = scan.dir.join(&found.rel);
+        match self.tracking(scan, &path) {
+            super::tracked::Tracking::Untracked => true,
+            super::tracked::Tracking::Tracked => {
+                notices.push(ConfigNotice::TrackedLocal {
+                    path: path.display().to_string(),
+                });
+                false
+            }
+            super::tracked::Tracking::Unknown(reason) => {
+                notices.push(ConfigNotice::UnverifiedLocal {
+                    path: path.display().to_string(),
+                    reason,
+                });
+                false
+            }
+        }
     }
 
     /// 감시할 폴더와 재귀 여부. 없는 폴더는 생기는 것을 보도록 가장 가까운 있는 조상을 비재귀로 본다.
@@ -426,19 +490,26 @@ impl ConfigSource {
     ) -> Result<ConfigSnapshot, ConfigError> {
         let mut entries: BTreeMap<String, Entry<'_>> = BTreeMap::new();
         let mut broken = Vec::new();
+        let mut judged = Vec::new();
         for found in list(&self.primary.dir, self.subdirs, &mut broken)? {
             let entry = entries.entry(found.id.clone()).or_default();
-            if found.local {
+            if !found.local {
+                entry.shared = Some((found, &self.primary));
+            } else if self.takes_as_personal(&self.primary, &found, &mut judged) {
                 entry.local = Some((found, &self.primary));
             } else {
-                entry.shared = Some((found, &self.primary));
+                // 커밋되는 개인 파일 — 공유 레이어로(좁히기만). 폴백 폴더의 사람 파일이 개인 레이어가 된다.
+                entry.committed_local = Some((found, &self.primary));
             }
         }
         if let Some(fallback) = &self.local_fallback {
             for found in list(&fallback.dir, self.subdirs, &mut broken)? {
                 if found.local {
                     let entry = entries.entry(found.id.clone()).or_default();
-                    if entry.local.is_none() {
+                    // 메인 체크아웃의 추적 파일은 그 체크아웃의 커밋된 파일이다 — 워크트리에는 자기 사본이 있다. 읽지 않는다.
+                    if entry.local.is_none()
+                        && self.takes_as_personal(fallback, &found, &mut judged)
+                    {
                         entry.local = Some((found, fallback));
                     }
                 }
@@ -454,6 +525,7 @@ impl ConfigSource {
             .extend(broken.into_iter().map(|p| ConfigNotice::BrokenLink {
                 path: p.display().to_string(),
             }));
+        snapshot.notices.extend(judged);
         for (id, entry) in entries {
             let mut value = Map::new();
             let mut layers = Vec::new();
@@ -469,6 +541,7 @@ impl ConfigSource {
             let migrator = self.schemas.get(kind);
             for (origin, found) in [
                 (LayerOrigin::Shared, entry.shared),
+                (LayerOrigin::Shared, entry.committed_local),
                 (LayerOrigin::Local, entry.local),
             ] {
                 let Some((found, scan)) = found else { continue };
@@ -589,6 +662,8 @@ impl ConfigSource {
 #[derive(Default)]
 struct Entry<'a> {
     shared: Option<(Found, &'a ScanDir)>,
+    /// 이 폴더의 `<id>.local.toml` 이 git 추적 파일(또는 판정 못 함)이라 공유 레이어로 읽는 것.
+    committed_local: Option<(Found, &'a ScanDir)>,
     local: Option<(Found, &'a ScanDir)>,
 }
 
@@ -940,6 +1015,192 @@ mod tests {
             "# hand written\n[mcp]\npreset = \"read-only\"\n"
         );
         assert!(!pw.join(PROJECT_BACKUP_DIR).exists());
+    }
+
+    fn origins_and_paths(snap: &ConfigSnapshot) -> Vec<(LayerOrigin, Option<String>)> {
+        snap.file("project")
+            .unwrap()
+            .layers
+            .iter()
+            .map(|l| (l.origin, l.path.clone()))
+            .collect()
+    }
+
+    /// git 이 추적하는(커밋되는) `.local.toml` 은 개인 레이어가 아니라 공유 레이어다 — 공유 레이어를 뺀 읽기(사람의 설정)에 들지 않고,
+    /// 알림이 남는다. 추적을 풀면 개인 레이어다. 인덱스를 읽지 못하면(판정 못 함) 공유 레이어다(fail-closed).
+    #[test]
+    fn a_tracked_local_file_is_read_as_the_shared_layer() {
+        use super::super::tracked::tests::{git, repo};
+        let tmp = tempfile::tempdir().unwrap();
+        let root = repo(&tmp.path().join("repo"));
+        let pw = root.join(PROJECT_DIR);
+        let local = pw.join("project.local.toml");
+        write(&local, "schema = 1\n[a]\nlocal = 2\n");
+        let local_path = local.display().to_string();
+        let source = ConfigSource::project(&root).without_writes();
+
+        // 추적하지 않는 개인 파일은 개인 레이어다.
+        let snap = source.load().unwrap();
+        assert_eq!(
+            origins_and_paths(&snap).last().unwrap(),
+            &(LayerOrigin::Local, Some(local_path.clone()))
+        );
+        assert!(snap.notices.is_empty(), "{:?}", snap.notices);
+
+        git(&root, &["add", "-f", ".pitwall/project.local.toml"]);
+        let snap = source.load().unwrap();
+        assert_eq!(
+            origins_and_paths(&snap).last().unwrap(),
+            &(LayerOrigin::Shared, Some(local_path.clone()))
+        );
+        // 값은 병합된다(좁히는 쪽은 공유 레이어 규칙이 정한다).
+        assert_eq!(snap.get("project", "a.local"), Some(&json!(2)));
+        assert_eq!(
+            snap.notices,
+            [ConfigNotice::TrackedLocal {
+                path: local_path.clone()
+            }]
+        );
+        let human = source.clone().without_shared().load().unwrap();
+        assert_eq!(human.get("project", "a"), None);
+        // 쓰기 자리는 그 파일이지만 쓰기 준비가 거절한다(커밋된 파일에 사람의 값을 쓰지 않는다).
+        assert_eq!(source.local_file("project"), local);
+        let refused = ConfigSource::project(&root).prepare_local_write(&local);
+        assert!(
+            matches!(&refused, Err(super::super::write::WriteError::Refused { message, .. })
+                if message.contains("tracked by git")),
+            "{refused:?}"
+        );
+
+        // 인덱스가 깨지면 판정을 못 한다 — 그래도 개인 레이어가 아니다.
+        let index = root.join(".git/index");
+        let saved = fs::read(&index).unwrap();
+        fs::write(&index, b"DIRC broken").unwrap();
+        let snap = source.load().unwrap();
+        assert_eq!(
+            origins_and_paths(&snap).last().unwrap().0,
+            LayerOrigin::Shared
+        );
+        assert!(
+            matches!(&snap.notices[..], [ConfigNotice::UnverifiedLocal { path, .. }] if *path == local_path),
+            "{:?}",
+            snap.notices
+        );
+        assert!(
+            ConfigSource::project(&root)
+                .prepare_local_write(&local)
+                .is_err()
+        );
+        fs::write(&index, saved).unwrap();
+
+        git(
+            &root,
+            &["rm", "-q", "--cached", ".pitwall/project.local.toml"],
+        );
+        let snap = source.load().unwrap();
+        assert_eq!(
+            origins_and_paths(&snap).last().unwrap().0,
+            LayerOrigin::Local
+        );
+        assert!(
+            ConfigSource::project(&root)
+                .prepare_local_write(&local)
+                .is_ok()
+        );
+    }
+
+    /// 브랜치에 커밋된 `.local.toml` 이 그 브랜치의 워크트리에서 메인 체크아웃의 사람 파일을 가리지 않는다(파일 단위 폴백 — 추적
+    /// 파일은 공유 레이어로 읽고 개인 레이어는 메인의 것). 워크트리의 (추적하지 않는) 개인 파일은 그 워크트리에서만 쓰이고 메인
+    /// 체크아웃의 읽기에 들지 않는다.
+    #[test]
+    fn a_committed_local_file_in_a_worktree_does_not_replace_the_main_personal_file() {
+        use super::super::tracked::tests::{git, repo};
+        let tmp = tempfile::tempdir().unwrap();
+        let main = repo(&tmp.path().join("main"));
+        let wt = tmp.path().join("wt");
+        git(
+            &main,
+            &["worktree", "add", "-q", "-b", "evil", wt.to_str().unwrap()],
+        );
+        let wt_local = wt.join(PROJECT_DIR).join("project.local.toml");
+        write(&wt_local, "schema = 1\n[a]\nfrom = \"commit\"\n");
+        git(&wt, &["add", "-f", ".pitwall/project.local.toml"]);
+        git(&wt, &["commit", "-q", "-m", "commit a local file"]);
+        let main_local = main.join(PROJECT_DIR).join("project.local.toml");
+        write(&main_local, "schema = 1\n[a]\nfrom = \"human\"\n");
+
+        let source = ConfigSource::project(&wt).without_writes();
+        let snap = source.load().unwrap();
+        let canonical = |p: &Path| {
+            fs::canonicalize(p.parent().unwrap())
+                .unwrap()
+                .join(p.file_name().unwrap())
+        };
+        let origins: Vec<_> = origins_and_paths(&snap)
+            .into_iter()
+            .map(|(o, p)| (o, p.map(|p| canonical(Path::new(&p)))))
+            .collect();
+        assert_eq!(
+            origins[1..],
+            [
+                (
+                    LayerOrigin::Shared,
+                    Some(canonical(&wt.join(".pitwall/project.toml")))
+                ),
+                (LayerOrigin::Shared, Some(canonical(&wt_local))),
+                (LayerOrigin::Local, Some(canonical(&main_local))),
+            ]
+        );
+        assert_eq!(snap.get("project", "a.from"), Some(&json!("human")));
+        let human = source.clone().without_shared().load().unwrap();
+        assert_eq!(human.get("project", "a.from"), Some(&json!("human")));
+        // 고칠 개인 파일도 메인 체크아웃의 것이다.
+        assert_eq!(
+            canonical(&source.local_file("project")),
+            canonical(&main_local)
+        );
+
+        // 워크트리의 추적하지 않는 개인 파일은 그 워크트리에서만 — 메인 체크아웃의 읽기에는 없다.
+        let wt2 = tmp.path().join("wt2");
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "other",
+                wt2.to_str().unwrap(),
+            ],
+        );
+        let wt2_local = wt2.join(PROJECT_DIR).join("project.local.toml");
+        write(&wt2_local, "schema = 1\n[a]\nfrom = \"wt2\"\n");
+        let wt2_snap = ConfigSource::project(&wt2).without_writes().load().unwrap();
+        assert_eq!(wt2_snap.get("project", "a.from"), Some(&json!("wt2")));
+        let main_snap = ConfigSource::project(&main)
+            .without_writes()
+            .load()
+            .unwrap();
+        assert_eq!(main_snap.get("project", "a.from"), Some(&json!("human")));
+        assert!(
+            origins_and_paths(&main_snap)
+                .iter()
+                .all(|(_, p)| !p.as_deref().is_some_and(|p| p.contains("/wt2/"))),
+            "{:?}",
+            origins_and_paths(&main_snap)
+        );
+
+        // 메인 체크아웃의 개인 파일이 메인에서 추적되면(커밋된 파일) 워크트리의 폴백으로도 읽지 않는다.
+        git(&main, &["add", "-f", ".pitwall/project.local.toml"]);
+        let snap = source.load().unwrap();
+        assert!(
+            origins_and_paths(&snap)
+                .iter()
+                .all(|(o, _)| *o != LayerOrigin::Local),
+            "{:?}",
+            origins_and_paths(&snap)
+        );
+        assert_eq!(snap.get("project", "a.from"), Some(&json!("commit")));
     }
 
     #[test]

@@ -578,6 +578,90 @@ mod tests {
         );
     }
 
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let mut c = std::process::Command::new("git");
+        for (name, _) in std::env::vars_os() {
+            if name.to_string_lossy().starts_with("GIT_") {
+                c.env_remove(name);
+            }
+        }
+        let out = c
+            .current_dir(dir)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", dir.join(".no-gitconfig"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// git 이 추적하는(커밋된) `.local.toml` 은 사람의 설정이 아니다 — 노출을 넓히지 못한다(17-m6-plan m6-localpolicy). 추적을
+    /// 풀면 사람의 설정이라 넓힌다.
+    #[test]
+    fn a_committed_local_file_cannot_widen_the_exposure() {
+        use pw_core::bus::{DEFAULT_CAPACITY, EventBus, Scope};
+        use pw_core::config::LayerOrigin;
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(&tmp.path().join("app"));
+        std::fs::create_dir_all(&paths.config).unwrap();
+        std::fs::write(
+            paths.config.join("settings.toml"),
+            "schema = 1\n[mcp]\npreset = \"read-only\"\n",
+        )
+        .unwrap();
+        let global = ConfigStore::open(
+            ConfigSource::global(&paths),
+            EventBus::new(DEFAULT_CAPACITY),
+            Scope::Host,
+        );
+        let root = std::fs::canonicalize(tmp.path()).unwrap().join("proj");
+        let local = root.join(".pitwall/project.local.toml");
+        std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+        std::fs::write(&local, "schema = 1\n[mcp]\npreset = \"full\"\n").unwrap();
+        git(&root, &["init", "-q"]);
+        git(&root, &["add", "-f", ".pitwall/project.local.toml"]);
+        let project = Project {
+            id: "0123456789abcdef".into(),
+            name: "p".into(),
+            host: "local".into(),
+            roots: vec![root.display().to_string()],
+            favorite: false,
+            tags: Vec::new(),
+            config_mode: ConfigMode::Repository,
+            slug: "p".into(),
+            created_at: 0,
+            opened_at: None,
+        };
+        let write_tool = Tool::fake("settings_set", Tier::Write);
+        // 재현의 전제: 그 파일을 읽기는 한다(공유 레이어로).
+        let layered = ConfigSource::project(&root)
+            .without_writes()
+            .load_layered()
+            .unwrap();
+        assert_eq!(
+            layered
+                .snapshot
+                .file("project")
+                .unwrap()
+                .layers
+                .last()
+                .unwrap()
+                .origin,
+            LayerOrigin::Shared
+        );
+        assert!(!of_project(&paths, &global, &project).enabled(&write_tool));
+
+        git(
+            &root,
+            &["rm", "-q", "--cached", ".pitwall/project.local.toml"],
+        );
+        assert!(of_project(&paths, &global, &project).enabled(&write_tool));
+    }
+
     #[test]
     fn bad_values_fall_back_to_the_narrowest_preset_and_are_reported() {
         let (exposure, warnings) = Exposure::from_layers(

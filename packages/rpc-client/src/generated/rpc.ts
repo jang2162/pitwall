@@ -1886,7 +1886,18 @@ export type ConfigNotice =
 /**  앱보다 새 버전이라 읽기 전용으로 열었다(업데이트 안내 대상). */
 { kind: "futureSchema"; path: string; found: number; supported: number } | 
 /**  가리키는 파일이 없는 심링크라 건너뛰었다(dotfiles 가 아직 동기화되지 않은 경우 등). */
-{ kind: "brokenLink"; path: string };
+{ kind: "brokenLink"; path: string } | 
+/**
+ *  저장소 안의 개인 파일(`*.local.toml`)이 git 이 추적하는(커밋되는) 파일이라 사람의 설정으로 받지 않고 공유 레이어로 읽었다
+ *  — 넓히는 값(`[mcp.policy]` · 자동 승인 · 노출 · 미신뢰 프로젝트의 실행 파일)은 먹지 않는다([`super::tracked`]).
+ *  워크트리면 메인 체크아웃의 개인 파일을 대신 읽는다. 사람의 설정으로 쓰려면 추적을 푼다(`git rm --cached`).
+ */
+{ kind: "trackedLocal"; path: string } | 
+/**
+ *  저장소 안의 개인 파일이 git 추적 파일인지 판정하지 못해(관리 폴더 · 인덱스를 읽지 못함) 공유 레이어로 읽었다(fail-closed).
+ *  `reason` 은 사람이 읽을 까닭이다(파일 내용은 없다).
+ */
+{ kind: "unverifiedLocal"; path: string; reason: string };
 
 /**  해석된 앱 디렉터리(`docs/design/03-architecture.md` 「5-0. 파일 위치 — XDG 규칙」). UTF-8 이 아닌 경로는 손실 변환된다. */
 export type ConfigPathsInfo = {
@@ -6290,7 +6301,10 @@ export type LaunchProblem =
 export type LayerOrigin = "builtin" | 
 /**  `<id>.toml` — 커밋되는 공유 설정(전역이면 그냥 설정 파일). */
 "shared" | 
-/**  `<id>.local.toml` — 개인 덮어쓰기. 워크트리면 메인 체크아웃의 것일 수 있다. */
+/**
+ *  `<id>.local.toml` — 개인 덮어쓰기. 워크트리면 메인 체크아웃의 것일 수 있다. 저장소 안의 것이 git 추적 파일이거나 그
+ *  판정을 못 하면 이 레이어가 아니라 [`Self::Shared`] 다([`ConfigNotice::TrackedLocal`] · [`ConfigNotice::UnverifiedLocal`]).
+ */
 "local";
 
 /**  읽은 범위의 줄바꿈. */

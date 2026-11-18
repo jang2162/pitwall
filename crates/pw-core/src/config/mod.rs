@@ -9,6 +9,7 @@
 //! - [`ConfigStore`]: 현재 스냅숏 · 다시 읽기 · 파일 감시 · 이벤트.
 //! - [`methods`]: 읽기 전용 RPC(`config.paths`, `config.get`).
 //! - [`tool`]: 설정 조회 MCP 툴 메서드(`settings_get` — 디스크에 쓰지 않고 읽는다).
+//! - [`tracked`]: 저장소 안의 개인 파일(`*.local.toml`)이 git 추적 파일인가 — 추적 파일은 사람의 레이어로 받지 않는다.
 //! - [`write`]: 전역 `settings.toml` 의 한 키 쓰기(언어 설정 · 설정 창의 DB 페이지).
 //! - [`mcp_policy`]: MCP 승인 정책(`[mcp] auto_approve` · `[mcp.policy]` — 사람의 설정에서만)의 읽기. MCP 세션과 DB 툴의 관문이 함께 쓴다.
 
@@ -22,6 +23,7 @@ pub mod robust;
 mod source;
 mod store;
 pub mod tool;
+pub mod tracked;
 pub mod write;
 
 pub use paths::{AppPaths, OsFamily, PathEnv, PathError};

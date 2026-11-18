@@ -509,6 +509,44 @@
                   "path"
                 ],
                 "type": "object"
+              },
+              {
+                "description": "저장소 안의 개인 파일(`*.local.toml`)이 git 이 추적하는(커밋되는) 파일이라 사람의 설정으로 받지 않고 공유 레이어로 읽었다\n— 넓히는 값(`[mcp.policy]` · 자동 승인 · 노출 · 미신뢰 프로젝트의 실행 파일)은 먹지 않는다([`super::tracked`]).\n워크트리면 메인 체크아웃의 개인 파일을 대신 읽는다. 사람의 설정으로 쓰려면 추적을 푼다(`git rm --cached`).",
+                "properties": {
+                  "kind": {
+                    "const": "trackedLocal",
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "path"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "저장소 안의 개인 파일이 git 추적 파일인지 판정하지 못해(관리 폴더 · 인덱스를 읽지 못함) 공유 레이어로 읽었다(fail-closed).\n`reason` 은 사람이 읽을 까닭이다(파일 내용은 없다).",
+                "properties": {
+                  "kind": {
+                    "const": "unverifiedLocal",
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "path",
+                  "reason"
+                ],
+                "type": "object"
               }
             ]
           },
@@ -550,7 +588,7 @@
               },
               {
                 "const": "local",
-                "description": "`<id>.local.toml` — 개인 덮어쓰기. 워크트리면 메인 체크아웃의 것일 수 있다.",
+                "description": "`<id>.local.toml` — 개인 덮어쓰기. 워크트리면 메인 체크아웃의 것일 수 있다. 저장소 안의 것이 git 추적 파일이거나 그\n판정을 못 하면 이 레이어가 아니라 [`Self::Shared`] 다([`ConfigNotice::TrackedLocal`] · [`ConfigNotice::UnverifiedLocal`]).",
                 "type": "string"
               }
             ]
@@ -1755,7 +1793,7 @@
               },
               {
                 "const": "local",
-                "description": "`<id>.local.toml` — 개인 덮어쓰기. 워크트리면 메인 체크아웃의 것일 수 있다.",
+                "description": "`<id>.local.toml` — 개인 덮어쓰기. 워크트리면 메인 체크아웃의 것일 수 있다. 저장소 안의 것이 git 추적 파일이거나 그\n판정을 못 하면 이 레이어가 아니라 [`Self::Shared`] 다([`ConfigNotice::TrackedLocal`] · [`ConfigNotice::UnverifiedLocal`]).",
                 "type": "string"
               }
             ]
@@ -2518,7 +2556,7 @@
               },
               {
                 "const": "local",
-                "description": "`<id>.local.toml` — 개인 덮어쓰기. 워크트리면 메인 체크아웃의 것일 수 있다.",
+                "description": "`<id>.local.toml` — 개인 덮어쓰기. 워크트리면 메인 체크아웃의 것일 수 있다. 저장소 안의 것이 git 추적 파일이거나 그\n판정을 못 하면 이 레이어가 아니라 [`Self::Shared`] 다([`ConfigNotice::TrackedLocal`] · [`ConfigNotice::UnverifiedLocal`]).",
                 "type": "string"
               }
             ]
@@ -3896,7 +3934,7 @@
               },
               {
                 "const": "local",
-                "description": "`<id>.local.toml` — 개인 덮어쓰기. 워크트리면 메인 체크아웃의 것일 수 있다.",
+                "description": "`<id>.local.toml` — 개인 덮어쓰기. 워크트리면 메인 체크아웃의 것일 수 있다. 저장소 안의 것이 git 추적 파일이거나 그\n판정을 못 하면 이 레이어가 아니라 [`Self::Shared`] 다([`ConfigNotice::TrackedLocal`] · [`ConfigNotice::UnverifiedLocal`]).",
                 "type": "string"
               }
             ]
@@ -40635,7 +40673,7 @@
               },
               {
                 "const": "local",
-                "description": "`<id>.local.toml` — 개인 덮어쓰기. 워크트리면 메인 체크아웃의 것일 수 있다.",
+                "description": "`<id>.local.toml` — 개인 덮어쓰기. 워크트리면 메인 체크아웃의 것일 수 있다. 저장소 안의 것이 git 추적 파일이거나 그\n판정을 못 하면 이 레이어가 아니라 [`Self::Shared`] 다([`ConfigNotice::TrackedLocal`] · [`ConfigNotice::UnverifiedLocal`]).",
                 "type": "string"
               }
             ]

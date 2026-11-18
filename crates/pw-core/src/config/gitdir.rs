@@ -200,6 +200,65 @@ fn read_pointer(file: &Path, prefix: &str) -> Option<String> {
     Some(line.strip_prefix(prefix)?.trim().to_owned())
 }
 
+/// 작업 트리 꼭대기 `top`(그 바로 아래에 `.git` 이 있다)의 관리 폴더(인덱스가 있는 곳)와 공통 폴더(`config` 가 있는 곳), 둘 다 실제
+/// 경로. 추적 파일 판정([`super::tracked`])이 쓴다. 판정하지 못하면 까닭 — 부른 쪽은 「모름」 으로 다룬다(fail-closed).
+///
+/// - `.git` 폴더: 그 폴더가 둘 다다. 그 `config` 의 `core.worktree` 가 이 폴더가 아닌 곳을 가리키면 인덱스의 경로가 다른 작업 트리
+///   기준이라 받지 않는다.
+/// - `.git` 파일: [`git_file`] 의 검사 그대로 — 연결 워크트리(bare 저장소의 것 포함)는 관리 폴더와 공통 폴더, 서브모듈 ·
+///   `--separate-git-dir` 는 가리키는 폴더가 둘 다다. 위조로 보이는 것은 받지 않는다.
+pub(crate) fn repository_dirs(top: &Path) -> Result<(PathBuf, PathBuf), String> {
+    let dot_git = top.join(".git");
+    let meta = fs::metadata(&dot_git).map_err(|e| format!("{}: {e}", dot_git.display()))?;
+    if meta.is_dir() {
+        let gitdir =
+            fs::canonicalize(&dot_git).map_err(|e| format!("{}: {e}", dot_git.display()))?;
+        let config = read_config_or_empty(&gitdir.join("config"))?;
+        return match core_worktree(&config) {
+            Ok(None) => Ok((gitdir.clone(), gitdir)),
+            Ok(Some(worktree)) => {
+                let here = fs::canonicalize(top).ok();
+                if fs::canonicalize(resolve_from(&gitdir, &worktree)).ok() == here && here.is_some()
+                {
+                    Ok((gitdir.clone(), gitdir))
+                } else {
+                    Err(format!(
+                        "{}: core.worktree points to another folder",
+                        gitdir.display()
+                    ))
+                }
+            }
+            Err(Unreadable) => Err(format!(
+                "{}: cannot read core.worktree",
+                gitdir.join("config").display()
+            )),
+        };
+    }
+    match git_file(top) {
+        GitFile::Worktree { gitdir, common } => Ok((gitdir, common)),
+        GitFile::NotWorktree => {
+            let pointer = read_pointer(&dot_git, "gitdir:")
+                .ok_or_else(|| format!("{}: not a gitdir pointer", dot_git.display()))?;
+            let gitdir = fs::canonicalize(resolve_from(top, pointer))
+                .map_err(|e| format!("{}: {e}", dot_git.display()))?;
+            Ok((gitdir.clone(), gitdir))
+        }
+        GitFile::Invalid => Err(format!(
+            "{}: does not point to a git directory of this folder",
+            dot_git.display()
+        )),
+    }
+}
+
+/// git 의 `config` 파일 — 없으면 빈 설정이다(git 도 기본값으로 읽는다). 그 밖의 읽기 실패는 까닭.
+pub(crate) fn read_config_or_empty(path: &Path) -> Result<String, String> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
+}
+
 fn resolve_from(base: &Path, path: impl AsRef<Path>) -> PathBuf {
     let path = path.as_ref();
     if path.is_absolute() {

@@ -167,6 +167,42 @@ fn each_value_names_the_layer_it_came_from() {
     assert!(entry(&global, "mcp.tools.\"project_*\"").is_none());
 }
 
+/// git 이 추적하는(커밋된) `.local.toml` 의 값과 파일은 개인이 아니라 공유 레이어로 보인다.
+#[test]
+fn a_committed_local_file_is_the_shared_layer() {
+    use crate::config::tracked::tests::git;
+    let f = fixture(ConfigMode::Repository);
+    let pw = f.root.join(PROJECT_DIR);
+    write(&pw.join("project.toml"), "schema = 1\n");
+    write(
+        &pw.join("project.local.toml"),
+        "schema = 1\n[mcp]\npreset = \"full\"\n",
+    );
+    git(&f.root, &["init", "-q"]);
+    let layer_of_file = |result: &SettingsGetToolResult| {
+        result
+            .files
+            .iter()
+            .find(|file| file.path.ends_with("project.local.toml"))
+            .unwrap()
+            .layer
+    };
+    let result = f.get(true, None);
+    assert_eq!(
+        value_and_layer(&result, "mcp.preset"),
+        (json!("full"), SettingLayer::Personal)
+    );
+    assert_eq!(layer_of_file(&result), SettingLayer::Personal);
+
+    git(&f.root, &["add", "-f", ".pitwall/project.local.toml"]);
+    let result = f.get(true, None);
+    assert_eq!(
+        value_and_layer(&result, "mcp.preset"),
+        (json!("full"), SettingLayer::Shared)
+    );
+    assert_eq!(layer_of_file(&result), SettingLayer::Shared);
+}
+
 /// 개인 전용 프로젝트의 `project.toml` 은 커밋되지 않는 개인 설정이다.
 #[test]
 fn a_personal_project_file_is_the_personal_layer() {

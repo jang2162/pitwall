@@ -6,7 +6,8 @@
 //! **설정**(결정 M5-D31): `[mcp] auto_approve`(등급 목록)는 전역 → 대상 프로젝트로 덮어 읽되 **커밋되는 공유 설정
 //! (`.pitwall/project.toml`)은 넓히지 못한다** — 공유 레이어까지 읽은 값과 공유 레이어를 뺀 값에 둘 다 있는 등급만 자동이다
 //! (`pw_mcp::exposure::Exposure::narrowed_by` 와 같은 원리). `[mcp.policy]` 표는 **사람의 설정(전역 · `.pitwall/*.local.toml` ·
-//! 개인 전용 `project.toml`)에서만** 읽는다 — 공유 설정의 그 표는 효과가 없고 경고를 남긴다. 키는 둘이다:
+//! 개인 전용 `project.toml`)에서만** 읽는다 — 공유 설정의 그 표는 효과가 없고 경고를 남긴다. **git 이 추적하는 `.local.toml`**
+//! (커밋된 개인 파일)은 사람의 설정이 아니다 — 설정 계층이 공유 레이어로 읽는다(`super::tracked`, 판정 못 하면 역시). 키는 둘이다:
 //!
 //! - `approval_timeout_secs`(기본 300) — 사람의 답을 기다리는 시간.
 //! - `production`(`"block"` 기본 · `"ask"`) — 프로덕션 표지가 있는 DB 대상(16-m5-plan 「프로덕션 태그 연결의 판정」). `ask` 면
@@ -283,6 +284,23 @@ pub fn read_project_over(
             detail: format!("{path}: a symbolic link whose target does not exist"),
         });
     }
+    // git 이 추적하는(또는 판정 못 한) 개인 파일은 설정 계층이 공유 레이어로 읽었다 — 넓히지 못한다. 사람의 화면에 알린다.
+    let committed_local: Vec<String> = layered
+        .snapshot
+        .notices
+        .iter()
+        .filter_map(|n| match n {
+            super::ConfigNotice::TrackedLocal { path } => Some(format!(
+                "{path} is tracked by git, so it is read as shared settings: it can only narrow \
+                 mcp.auto_approve and its mcp.policy has no effect; untrack it (`git rm --cached`) to use it as your own"
+            )),
+            super::ConfigNotice::UnverifiedLocal { path, reason } => Some(format!(
+                "cannot tell whether git tracks {path} ({reason}), so it is read as shared settings: it can only \
+                 narrow mcp.auto_approve and its mcp.policy has no effect"
+            )),
+            _ => None,
+        })
+        .collect();
     let full = layered.snapshot.get("project", MCP_KEY).cloned();
     if project.config_mode != ConfigMode::Repository {
         // 개인 전용 project.toml 은 사람의 설정이다.
@@ -303,12 +321,9 @@ pub fn read_project_over(
         .map_err(|e| unreadable(&e))?
         .get("project", MCP_KEY)
         .cloned();
-    Ok(read(
-        global_mcp,
-        full.as_ref(),
-        human.as_ref(),
-        shared_policy,
-    ))
+    let (policy, mut warnings) = read(global_mcp, full.as_ref(), human.as_ref(), shared_policy);
+    warnings.extend(committed_local);
+    Ok((policy, warnings))
 }
 
 /// 프로젝트 없는 호출의 정책과 경고: 전역 `[mcp]` 만.
@@ -487,6 +502,62 @@ mod tests {
             "[mcp\n",
         );
         assert!(read_project_over(&paths, Some(&global), &personal).is_err());
+    }
+
+    /// git 이 추적하는(커밋된) `.local.toml` 은 사람의 설정이 아니다 — 자동 승인을 넓히지 못하고 `[mcp.policy]` 가 먹지 않으며 사람의
+    /// 화면에 경고가 간다. 좁히기는 먹는다(공유 레이어 규칙). 추적을 풀면 사람의 설정이다.
+    #[test]
+    fn a_committed_local_file_cannot_widen_the_policy() {
+        use super::super::tracked::tests::{git, put, repo};
+        let tmp = tempfile::tempdir().unwrap();
+        let root = repo(&tmp.path().join("proj"));
+        let paths = AppPaths::under(&tmp.path().join("app"));
+        let p = project(&root, ConfigMode::Repository);
+        let local = ".pitwall/project.local.toml";
+        put(
+            &root.join(local),
+            "schema = 1\n[mcp]\nauto_approve = [\"read\", \"write\", \"exec\"]\n[mcp.policy]\nproduction = \"ask\"\n",
+        );
+        git(&root, &["add", "-f", local]);
+        git(&root, &["commit", "-q", "-m", "widen"]);
+
+        let (policy, warnings) = read_project_over(&paths, None, &p).unwrap();
+        assert_eq!(policy, Policy::default());
+        assert!(
+            warnings.iter().any(|w| w.contains("tracked by git")),
+            "{warnings:?}"
+        );
+        // 전역이 넓혀 둔 것은 그대로 — 커밋된 개인 파일은 좁히기만 한다.
+        let global = json!({"auto_approve": ["read", "write"]});
+        assert_eq!(
+            read_project_over(&paths, Some(&global), &p)
+                .unwrap()
+                .0
+                .auto_approve,
+            [Tier::Read, Tier::Write]
+        );
+        put(
+            &root.join(local),
+            "schema = 1\n[mcp]\nauto_approve = [\"read\"]\n",
+        );
+        assert_eq!(
+            read_project_over(&paths, Some(&global), &p)
+                .unwrap()
+                .0
+                .auto_approve,
+            [Tier::Read]
+        );
+
+        // 추적을 풀면 사람의 파일이다 — 넓힌다.
+        put(
+            &root.join(local),
+            "schema = 1\n[mcp]\nauto_approve = [\"read\", \"write\", \"exec\"]\n[mcp.policy]\nproduction = \"ask\"\n",
+        );
+        git(&root, &["rm", "-q", "--cached", local]);
+        let (policy, warnings) = read_project_over(&paths, None, &p).unwrap();
+        assert_eq!(policy.auto_approve, [Tier::Read, Tier::Write, Tier::Exec]);
+        assert_eq!(policy.production, Production::Ask);
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 
     #[test]

@@ -83,6 +83,17 @@ fn log_notice(scope: &str, notice: &ConfigNotice) {
         ConfigNotice::BrokenLink { path } => {
             tracing::warn!(scope, path, "config symlink points nowhere; skipped")
         }
+        ConfigNotice::TrackedLocal { path } => tracing::warn!(
+            scope,
+            path,
+            "personal config file is tracked by git; read as shared settings that cannot widen"
+        ),
+        ConfigNotice::UnverifiedLocal { path, reason } => tracing::warn!(
+            scope,
+            path,
+            reason = %summarize(reason),
+            "cannot tell whether git tracks the personal config file; read as shared settings that cannot widen"
+        ),
     }
 }
 

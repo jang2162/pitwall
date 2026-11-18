@@ -603,6 +603,97 @@ fn an_untrusted_project_does_not_read_the_shared_layer() {
     assert_eq!(js_setup.config.env["EVIL"], "1");
 }
 
+fn git(dir: &Path, args: &[&str]) {
+    let mut c = std::process::Command::new("git");
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("GIT_") {
+            c.env_remove(name);
+        }
+    }
+    let out = c
+        .current_dir(dir)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", dir.join(".no-gitconfig"))
+        .env("GIT_AUTHOR_NAME", "Pitwall Test")
+        .env("GIT_AUTHOR_EMAIL", "test@pitwall.invalid")
+        .env("GIT_COMMITTER_NAME", "Pitwall Test")
+        .env("GIT_COMMITTER_EMAIL", "test@pitwall.invalid")
+        .args(["-c", "commit.gpgsign=false"])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// 미신뢰 클론에 **커밋된** `.pitwall/project.local.toml` 은 사람의 개인 파일이 아니다 — 언어 서버 · 디버그 어댑터의 실행 파일 ·
+/// 인자 · 환경을 정하지 못한다(17-m6-plan m6-localpolicy). 고치기 전에는 미신뢰 읽기가 공유 레이어만 빼고 그 파일을 개인 레이어로
+/// 읽어 저장소가 고른 실행 파일을 띄웠다. 추적을 풀면(사람이 그 파일을 자기 것으로 삼으면) 개인 파일이라 읽는다.
+#[test]
+fn an_untrusted_clone_cannot_pick_a_server_through_a_committed_local_file() {
+    let f = Fixture::new("schema = 1\n");
+    let evil = executable(&f.tmp.path().join("evil/ra"), "true");
+    let evil_dap = executable(&f.tmp.path().join("evil/codelldb"), "true");
+    let committed = format!(
+        "schema = 1\n[lsp.rust-analyzer]\npath = \"{}\"\nargs = [\"--evil\"]\n[dap.codelldb]\npath = \"{}\"\nargs = [\"--evil\"]\nenv = {{ EVIL = \"1\" }}\n",
+        evil.display(),
+        evil_dap.display()
+    );
+    // 클론한 저장소: 개인 파일이 강제로 커밋되어 있다.
+    let upstream = f.tmp.path().join("upstream");
+    let file = upstream.join(".pitwall/project.local.toml");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, &committed).unwrap();
+    git(&upstream, &["init", "-q"]);
+    git(&upstream, &["add", "-f", ".pitwall/project.local.toml"]);
+    git(
+        &upstream,
+        &["commit", "-q", "-m", "pick the language server"],
+    );
+    let clone = f.tmp.path().join("project");
+    git(
+        f.tmp.path(),
+        &[
+            "clone",
+            "-q",
+            upstream.to_str().unwrap(),
+            clone.to_str().unwrap(),
+        ],
+    );
+    let (id, _) = f.project(&[], false);
+
+    let list = f.list(&id);
+    assert!(!list.trusted);
+    let ra = server(&list, "rust-analyzer");
+    assert!(
+        matches!(ra.resolution, LspResolution::NotInstalled { .. }),
+        "an untrusted clone picked the language server: {:?}",
+        ra.resolution
+    );
+    assert_eq!(ra.args, Vec::<String>::new());
+    let view = f.servers.view(&id, None).unwrap();
+    let lldb = adapter_def("codelldb");
+    let setup = f
+        .servers
+        .adapter_setup_in(&view, "dev.example.dap", &lldb, &view.root.clone());
+    assert_eq!(setup.config.path, None);
+    assert_eq!(setup.config.args, Vec::<String>::new());
+    assert!(!setup.config.env.contains_key("EVIL"));
+
+    // 사람이 추적을 풀면 그 파일은 사람의 개인 파일이다.
+    git(
+        &clone,
+        &["rm", "-q", "--cached", ".pitwall/project.local.toml"],
+    );
+    let list = f.list(&id);
+    let ra = server(&list, "rust-analyzer");
+    assert_eq!(ra.resolution.path(), Some(evil.as_path()));
+    assert_eq!(ra.args, ["--evil"]);
+}
+
 /// 설정 경로로 찾은 결과.
 fn found_at(path: &Path) -> LspResolution {
     LspResolution::Found {
