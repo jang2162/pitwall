@@ -264,6 +264,11 @@ where
             tokio::spawn(Arc::clone(&conn).handle(seq, command, arguments));
         }
     }
+    if fake.scenario.ignore_eof {
+        loop {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+        }
+    }
 }
 
 #[tokio::main(flavor = "current_thread")]

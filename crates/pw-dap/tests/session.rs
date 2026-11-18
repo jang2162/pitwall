@@ -168,9 +168,13 @@ async fn a_frame_over_the_limits_kills_the_adapter() {
         ),
     ] {
         let p = project();
-        let scenario = Scenario::default()
-            .reply("threads", Reply::silent())
-            .on("threads", vec![Action::Raw { text: raw }]);
+        // 연결이 닫혀도 스스로 끝나지 않는 어댑터 — 그룹이 비는 것은 우리가 죽였기 때문이다.
+        let scenario = Scenario {
+            ignore_eof: true,
+            ..Scenario::default()
+        }
+        .reply("threads", Reply::silent())
+        .on("threads", vec![Action::Raw { text: raw }]);
         // 끝내기의 물러남(`exit_grace`)을 길게 둔다 — 그래도 2 s 안에 그룹이 비면 위반 그 자리에서 죽인 것이다(리뷰 R1).
         let timeouts = Timeouts {
             exit_grace: Duration::from_secs(30),

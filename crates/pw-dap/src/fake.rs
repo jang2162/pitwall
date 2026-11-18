@@ -62,6 +62,9 @@ pub struct Scenario {
     /// 프로세스가 소켓 자리를 먼저 차지한 경우의 흉내. 자식의 pid 는 `{"listener": n}` 줄로 남는다.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub listen_elsewhere: bool,
+    /// stdin 의 끝(클라이언트가 연결을 닫음)에도 끝나지 않고 죽을 때까지 돈다 — 「곧바로 죽인다」 를 가르는 시험.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ignore_eof: bool,
 }
 
 /// 요청 하나의 답.
