@@ -10,7 +10,7 @@
 //! 넘어가도 계속 본다. 닿지 않는 것은 끝내기를 시작하기 **전에** 이미 부모를 떠난 것(두 번 fork 한 데몬)이다 — macOS 에는 cgroup 이
 //! 없다.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use libc::pid_t;
@@ -34,7 +34,7 @@ pub fn terminate_sessions(leaders: &[pid_t], grace: Duration) {
 /// 시간 안에 다 끝나면 멈춘다. 모든 단계 뒤에 남은 것에는 SIGKILL 을 보낸다. 끝날 때까지 블로킹한다. 실행(`crate::runs`)의 중지는
 /// `[(SIGTERM, 5 s)]`, compose 는 그 앞에 `(SIGINT, …)` 이고, 터미널은 `[(SIGHUP, 300 ms)]` 다.
 pub fn end_sessions(leaders: &[pid_t], steps: &[(libc::c_int, Duration)], reach: Reach) {
-    let mut known = BTreeSet::new();
+    let mut known = BTreeMap::new();
     for &(signal, grace) in steps {
         let targets = targets(leaders, reach, &mut known);
         signal_all(leaders, &targets, signal);
@@ -55,7 +55,7 @@ pub fn end_sessions(leaders: &[pid_t], steps: &[(libc::c_int, Duration)], reach:
     signal_all(leaders, &left, libc::SIGKILL);
 }
 
-fn targets_left(leaders: &[pid_t], reach: Reach, known: &mut BTreeSet<pid_t>) -> bool {
+fn targets_left(leaders: &[pid_t], reach: Reach, known: &mut BTreeMap<pid_t, Option<u64>>) -> bool {
     !targets(leaders, reach, known).is_empty()
 }
 
@@ -73,7 +73,11 @@ fn signal_all(leaders: &[pid_t], targets: &[pid_t], signal: libc::c_int) {
 
 /// 끝낼 프로세스: 세션 `leaders` 의 것(좀비가 아닌 것, `getsid` 가 읽히는 것), [`Reach::SessionAndChildren`] 이면 그 자손과 앞서
 /// 찾은 것(`known`) 가운데 아직 있는 것.
-fn targets(leaders: &[pid_t], reach: Reach, known: &mut BTreeSet<pid_t>) -> Vec<pid_t> {
+fn targets(
+    leaders: &[pid_t],
+    reach: Reach,
+    known: &mut BTreeMap<pid_t, Option<u64>>,
+) -> Vec<pid_t> {
     let all = all_pids();
     let mut found: BTreeSet<pid_t> = all
         .iter()
@@ -98,13 +102,13 @@ fn targets(leaders: &[pid_t], reach: Reach, known: &mut BTreeSet<pid_t>) -> Vec<
                 break;
             }
         }
-        found.extend(
-            known
-                .iter()
-                .copied()
-                .filter(|&pid| session_of(pid).is_some()),
-        );
-        known.extend(found.iter().copied());
+        // 앞서 찾은 것은 같은 프로세스일 때만 — 끝난 뒤 그 pid 가 남에게 다시 나갔으면 시작 시각이 다르다(리뷰 R4).
+        found.extend(known.iter().filter_map(|(&pid, &started)| {
+            (session_of(pid).is_some() && start_time(pid) == started).then_some(pid)
+        }));
+        for &pid in &found {
+            known.entry(pid).or_insert_with(|| start_time(pid));
+        }
     }
     found.into_iter().collect()
 }
@@ -146,6 +150,12 @@ fn all_pids() -> Vec<pid_t> {
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn all_pids() -> Vec<pid_t> {
     Vec::new()
+}
+
+/// 프로세스가 시작한 시각(같은 pid 가 다른 프로세스로 다시 쓰였는지 가른다). 읽지 못하면 `None`.
+#[cfg(target_os = "macos")]
+pub fn start_time(pid: pid_t) -> Option<u64> {
+    bsd_info(pid).map(|info| info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
 }
 
 /// 부모 pid. 읽지 못하면 `None`.
@@ -195,7 +205,13 @@ fn bsd_info(pid: pid_t) -> Option<libc::proc_bsdinfo> {
 
 #[cfg(target_os = "linux")]
 pub fn parent_of(pid: pid_t) -> Option<pid_t> {
-    proc_stat(pid)?.1.parse().ok()
+    proc_stat(pid)?.get(1)?.parse().ok()
+}
+
+/// `/proc/<pid>/stat` 의 22번째 칸(부팅 뒤 클럭 틱).
+#[cfg(target_os = "linux")]
+pub fn start_time(pid: pid_t) -> Option<u64> {
+    proc_stat(pid)?.get(19)?.parse().ok()
 }
 
 #[cfg(target_os = "linux")]
@@ -211,17 +227,26 @@ pub fn dir_identity(meta: &std::fs::Metadata) -> (u64, u64) {
     (meta.dev(), meta.ino())
 }
 
-/// `/proc/<pid>/stat` 의 (상태, 부모 pid). 이름(`(…)`)에 공백 · 괄호가 있을 수 있어 마지막 `)` 뒤를 읽는다.
+/// `/proc/<pid>/stat` 의 셋째 칸부터(상태 · 부모 pid …). 이름(`(…)`)에 공백 · 괄호가 있을 수 있어 마지막 `)` 뒤를 읽는다.
 #[cfg(target_os = "linux")]
-fn proc_stat(pid: pid_t) -> Option<(String, String)> {
+fn proc_stat(pid: pid_t) -> Option<Vec<String>> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let mut fields = stat[stat.rfind(')')? + 1..].split_whitespace();
-    Some((fields.next()?.to_owned(), fields.next()?.to_owned()))
+    Some(
+        stat[stat.rfind(')')? + 1..]
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect(),
+    )
 }
 
 /// 정보를 읽지 못하는 OS: 자손을 따라가지 못하고 작업 폴더를 다시 보지 못한다.
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn parent_of(_pid: pid_t) -> Option<pid_t> {
+    None
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub fn start_time(_pid: pid_t) -> Option<u64> {
     None
 }
 
@@ -245,7 +270,8 @@ mod tests {
         let me = pid_t::try_from(std::process::id()).unwrap();
         assert!(all_pids().contains(&me));
         let sid = session_of(me).unwrap();
-        assert!(targets(&[sid], Reach::Session, &mut BTreeSet::new()).contains(&me));
+        assert!(targets(&[sid], Reach::Session, &mut BTreeMap::new()).contains(&me));
+        assert!(start_time(me).is_some_and(|t| t > 0));
         assert!(parent_of(me).is_some_and(|parent| parent > 0));
         let cwd = std::fs::metadata(std::env::current_dir().unwrap()).unwrap();
         assert_eq!(cwd_identity(me), Some(dir_identity(&cwd)));

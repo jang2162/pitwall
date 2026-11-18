@@ -1781,13 +1781,12 @@ async fn a_failed_start_records_nothing() {
     assert_eq!(f.projects.run_seen(&f.project, "dev").unwrap(), None);
 }
 
-/// 17-m6-plan M6-02 행(M6-03 리뷰에서 넘김): `shell` 종류는 로그인 셸(`$SHELL -l -c`)이라 그 시작 파일이 `.env` 의 `PATH` 를 다시 쓸 수
-/// 있다. macOS 의 `/etc/profile` 은 `path_helper` 로 `/etc/paths` 의 폴더를 **앞에** 둔다 — `.env` 가 앞에 둔 폴더는 남지만 뒤로
-/// 밀린다. 셸을 거치지 않는 종류(`cargo` 등 — 시험 ⑦)는 그 순서 그대로다. 이 시험은 그 차이를 못박는다(바뀌면 문서 03 「4. RPC
-/// 설계」 의 실행 줄을 고친다).
-#[cfg(target_os = "macos")]
+/// 리뷰 F1(17-m6-plan M6-02 행 — M6-03 리뷰에서 넘김): `shell` 종류는 로그인 셸(`$SHELL -l -c`)이라 그 시작 파일이 PATH 를 다시
+/// 세운다(macOS `/etc/profile` 의 `path_helper` 는 `/etc/paths` 를 앞에, Debian 의 `/etc/profile` 은 통째로). 실행의 PATH(런타임
+/// 환경 + `.env`)는 시작 파일 뒤에도 **맨 앞**이다 — 사람이 `.env` 에 둔 도구가 이긴다. 그 일에 쓴 env 이름은 프로그램에 남지 않는다.
+/// 앞에 다시 두는 줄을 걷으면 macOS 에서는 맨 뒤로, Debian 에서는 아예 빠져 실패한다.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_login_shell_may_reorder_the_env_file_path() {
+async fn a_login_shell_keeps_the_run_path_first() {
     let f = Fixture::real();
     fs::write(
         f.root.join(".env.local"),
@@ -1799,7 +1798,7 @@ async fn a_login_shell_may_reorder_the_env_file_path() {
         "dev",
         &format!(
             "name = \"dev\"\ntype = \"shell\"\ncommand = {}\nenv_file = [\".env.local\"]",
-            toml_str("echo \"P=$PATH\"")
+            toml_str("echo \"P=$PATH\"; echo \"LEFT=${PITWALL_RUN_PATH-none}\"")
         ),
     );
     let mut c = f.client();
@@ -1822,9 +1821,96 @@ async fn a_login_shell_may_reorder_the_env_file_path() {
         .unwrap()
         .trim()
         .to_owned();
-    eprintln!("login shell PATH: {path}");
-    let dirs: Vec<&str> = path.split(':').collect();
-    let ours = dirs.iter().position(|d| *d == f.bin.display().to_string());
-    assert!(ours.is_some(), "the env file's folder is gone: {path}");
-    assert_ne!(ours, Some(0), "path_helper no longer reorders: {path}");
+    let first = path.split(':').next().unwrap_or_default();
+    assert_eq!(first, f.bin.display().to_string(), "{path}");
+    assert!(a.text.contains("LEFT=none"), "{:?}", a.text);
+}
+
+// ---- 재확인 리뷰 ---------------------------------------------------------------------------------------------------------
+
+/// 재확인 B1: 고정한 뒤 폴더를 지우고 같은 파일 시스템에 새 폴더를 만들어 링크로 잇는다 — ext4 는 지운 폴더의 inode 번호를 곧바로 다시
+/// 주므로, 번호만 쥐면 새 폴더(프로젝트 밖)가 같은 번호로 확인을 지난다. 고정한 폴더의 핸들을 확인이 끝날 때까지 쥐어 번호가 다시 나가지
+/// 않는다. 시험은 「밖에서 돌지 않았다」 만 본다(번호가 재사용되지 않은 회는 원래도 막힌다 — Linux 에서 구분한다).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cwd_replaced_by_a_new_folder_with_the_same_inode_is_refused() {
+    for round in 0..5 {
+        let f = Fixture::real();
+        let (sub, marker) = (f.root.join("sub"), f.tmp.path().join("ran"));
+        fs::create_dir_all(&sub).unwrap();
+        let (gone, outside) = (sub.clone(), f.tmp.path().join("outside"));
+        process::hooks::on_spawn(&sub, move || {
+            fs::remove_dir(&gone).unwrap();
+            fs::create_dir(&outside).unwrap();
+            std::os::unix::fs::symlink(&outside, &gone).unwrap();
+        });
+        let grant = f.agent_grant(&f.project, touching_spec(&sub, &marker));
+        let result = f.runs.start_agent(&grant, 0, agent(), None);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            !marker.exists(),
+            "round {round}: the program ran outside the project"
+        );
+        assert_cwd_changed(result);
+    }
+}
+
+/// 재확인 R5: 띄우는 동안 온 중지(창 닫기)는 프로그램을 풀지 않는다 — 감싼 셸을 끝내고 실행은 취소된다.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stop_during_the_start_never_releases_the_program() {
+    let f = Fixture::real();
+    let marker = f.tmp.path().join("ran");
+    let (runs, project) = (f.runs.clone(), f.project.clone());
+    process::hooks::on_spawn(&f.root, move || runs.stop_project(&project));
+    let grant = f.agent_grant(&f.project, touching_spec(&f.root, &marker));
+    let e = f.runs.start_agent(&grant, 0, agent(), None).unwrap_err();
+    assert_eq!(e.code, code::CANCELLED, "{e:?}");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!marker.exists(), "the program ran after the stop");
+    assert!(f.runs.list(&f.project).is_empty());
+}
+
+/// 재확인 R6: 미신뢰 프로젝트는 `.env` 를 읽기 전에 거절한다 — 읽을 수 없는 `env_file` 이 있어도 `untrusted` 다(M6-03 의 「신뢰
+/// 먼저」).
+#[tokio::test(flavor = "multi_thread")]
+async fn trust_is_checked_before_the_env_files_are_read() {
+    let f = Fixture::fake(RunLimits::default());
+    let (untrusted, root) = f.project("cloned", false);
+    f.config(
+        &root,
+        "dev",
+        "name = \"dev\"\ntype = \"shell\"\ncommand = \"true\"\nenv_file = [\".env.missing\"]",
+    );
+    let mut c = f.client_in(ConnectionScope::Project(untrusted.clone()));
+    let e = c
+        .error(
+            "run.start",
+            json!({"projectId": untrusted, "configId": "dev"}),
+        )
+        .await;
+    assert_eq!(e.data.as_ref().unwrap()["reason"], "untrusted", "{e:?}");
+}
+
+/// 재확인 R6: 창의 「다시 실행」 도 띄운 값으로 기록한다 — `.env` 를 바꾼 뒤 다시 실행하면 기록이 바뀐다.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_window_restart_records_the_configuration_as_seen() {
+    let f = Fixture::fake(RunLimits::default());
+    fs::write(f.root.join(".env.local"), "TOKEN=one\n").unwrap();
+    f.config(
+        &f.root,
+        "dev",
+        "name = \"dev\"\ntype = \"shell\"\ncommand = \"true\"\nenv_file = [\".env.local\"]",
+    );
+    let mut c = f.client();
+    let run: RunInfo = c
+        .ok(
+            "run.start",
+            json!({"projectId": f.project, "configId": "dev"}),
+        )
+        .await;
+    let first = f.projects.run_seen(&f.project, "dev").unwrap().unwrap();
+    fs::write(f.root.join(".env.local"), "TOKEN=two\n").unwrap();
+    c.ok::<RunInfo>("run.restart", json!({"runId": run.run_id}))
+        .await;
+    let again = f.projects.run_seen(&f.project, "dev").unwrap().unwrap();
+    assert_ne!(again.hash, first.hash);
 }

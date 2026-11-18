@@ -336,50 +336,6 @@ impl Pty {
         self.ended.send_replace(true);
     }
 
-    /// 에코를 끈 채 `bytes` 를 PTY 에 곧바로 쓰고 에코를 되돌린다 — 그 입력은 출력에 비치지 않는다(실행의 감싼 셸을 풀어 주는 줄,
-    /// `crate::runs` 의 `process`). 쓰기 스레드를 거치지 않으므로 큐에 앞선 입력이 없을 때만 쓴다.
-    #[cfg(unix)]
-    pub fn send_unechoed(&self, bytes: &[u8]) -> Result<(), String> {
-        let master = lock(&self.master);
-        let fd = master
-            .as_raw_fd()
-            .ok_or_else(|| "the pty has no file descriptor".to_owned())?;
-        // SAFETY: 모두 0 인 termios 는 올바른 값이고, tcgetattr 이 채운다.
-        let mut saved: libc::termios = unsafe { std::mem::zeroed() };
-        // SAFETY: 열린 fd 와 termios 하나를 넘긴다.
-        if unsafe { libc::tcgetattr(fd, &raw mut saved) } != 0 {
-            return Err(format!(
-                "cannot read the pty settings: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        let mut quiet = saved;
-        quiet.c_lflag &= !libc::ECHO;
-        // SAFETY: 위와 같다.
-        unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw const quiet) };
-        let mut rest = bytes;
-        let mut result = Ok(());
-        while !rest.is_empty() {
-            // SAFETY: 버퍼와 그 길이를 함께 넘긴다.
-            let n = unsafe { libc::write(fd, rest.as_ptr().cast(), rest.len()) };
-            match usize::try_from(n) {
-                Ok(n) => rest = &rest[n..],
-                Err(_) if std::io::Error::last_os_error().kind() == ErrorKind::Interrupted => {}
-                Err(_) => {
-                    result = Err(format!(
-                        "cannot write to the pty: {}",
-                        std::io::Error::last_os_error()
-                    ));
-                    break;
-                }
-            }
-        }
-        // 에코는 입력이 들어올 때 처리되므로 쓰기가 돌아온 뒤 되돌려도 그 입력은 비치지 않는다.
-        // SAFETY: 위와 같다.
-        unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw const saved) };
-        result
-    }
-
     /// 출력을 닫는다 — 읽기 스레드는 남은 출력을 [`DRAIN_AFTER_CLOSE`] 까지 읽어 버리고 끝난다. [`Ending::Hangup`] 밖의 끝내기
     /// 뒤에 세션이 끝났는데 EOF 가 오지 않을 때(세션을 떠난 데몬이 PTY 를 쥐고 있다) 쓴다.
     pub fn close_output(&self) {

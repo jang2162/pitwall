@@ -378,6 +378,11 @@ impl RunOutput {
         }
     }
 
+    /// 띄우는 동안 중지가 왔는가(`run.stop` · 창 닫기 — 종류는 프로그램을 풀지 않고 끝낼 수 있다).
+    pub fn stop_requested(&self) -> bool {
+        self.run.state() == RunState::Stopping
+    }
+
     /// 끝났다. 처음 한 번만 듣는다.
     pub fn exited(&self, exit: RunExit) {
         {
@@ -553,8 +558,15 @@ impl Runs {
             },
         )
         .map_err(RpcError::invalid_params)?;
-        let env = crate::shell::child_env(&run_env.apply(&runtime.env));
+        let mut env = crate::shell::child_env(&run_env.apply(&runtime.env));
         let argv_seen = argv.clone();
+        let mut argv = argv;
+        keep_path_first(&mut argv, &mut env, &login_shell);
+        // 정의 본문(npm script)은 띄우기 전에 읽는다 — 띄운 값으로 해시한다(`seen` 머리 주석 「다시 읽지 않는다」, 리뷰 R7).
+        let definition = what
+            .seen
+            .as_ref()
+            .and_then(|_| npm_definition(&loaded.id, config, &place.root, &cwd));
         let new = NewRun {
             project_id: project.id.clone(),
             config: loaded.id.clone(),
@@ -581,6 +593,7 @@ impl Runs {
                 &argv_seen,
                 &cwd,
                 &run_env,
+                definition.as_deref(),
             );
         }
         Ok(info)
@@ -600,6 +613,7 @@ impl Runs {
         argv: &[String],
         cwd: &Path,
         env: &RunEnv,
+        definition: Option<&str>,
     ) {
         let Ok(host) = self.inner.host() else {
             return;
@@ -612,15 +626,6 @@ impl Runs {
             .env
             .get("HOME")
             .map(PathBuf::from);
-        let definition = match &config.kind {
-            crate::config::RunKindConfig::Npm { script } => {
-                crate::detect::npm::script_definition(root, cwd, script)
-                    .inspect_err(|why| tracing::debug!(target: "pw_run", key, %why, "cannot read the npm script definition"))
-                    .ok()
-                    .flatten()
-            }
-            _ => None,
-        };
         let parts = crate::seen::SeenParts {
             key,
             root,
@@ -629,7 +634,7 @@ impl Runs {
             cwd,
             home: home.as_deref(),
             env,
-            definition: definition.as_deref(),
+            definition,
         };
         match crate::seen::hash(&parts) {
             Ok(hash) => {
@@ -682,7 +687,13 @@ impl Runs {
         let cwd = granted_cwd(&spec.cwd)?;
         let runtime = self.inner.runtime.env(project_id, &cwd);
         // 승인된 값 그대로 얹는다 — `.env` 를 다시 읽지 않는다(M6-10).
-        let env = crate::shell::child_env(&crate::env::apply(&runtime.env, &spec.env));
+        let mut env = crate::shell::child_env(&crate::env::apply(&runtime.env, &spec.env));
+        let mut argv = spec.argv.clone();
+        keep_path_first(
+            &mut argv,
+            &mut env,
+            &crate::shell::default_argv(&runtime.env),
+        );
         let new = NewRun {
             project_id: project_id.to_owned(),
             config: spec.config.clone(),
@@ -695,7 +706,7 @@ impl Runs {
             size,
             restart_of,
         };
-        self.start_process(new, spec.argv.clone(), env)
+        self.start_process(new, argv, env)
     }
 
     fn start_process(
@@ -1091,6 +1102,58 @@ fn granted_cwd(cwd: &Path) -> Result<PathBuf, RpcError> {
 /// 작업 폴더가 판정 뒤에 바뀌었다(`PERMISSION_DENIED`, `data.reason = "cwd_changed"`) — 아무것도 돌지 않았다.
 pub fn cwd_changed(message: String) -> RpcError {
     RpcError::new(code::PERMISSION_DENIED, message).with_data(json!({ "reason": "cwd_changed" }))
+}
+
+/// 로그인 셸이 시작 파일 뒤에 실행의 PATH 를 다시 앞에 두게 하는 env 이름(값은 argv 가 아니라 env 로 — `ps` 에 원문이 남지 않게).
+pub const PATH_FRONT_VAR: &str = "PITWALL_RUN_PATH";
+
+/// `shell` 종류(`<로그인 셸> -c <명령>` — `config::argv`)는 로그인 셸의 시작 파일(macOS `/etc/profile` 의 `path_helper`, Debian 의
+/// `/etc/profile`)이 PATH 를 다시 세워 런타임 제공자 · `.env` 가 앞에 둔 폴더를 뒤로 밀거나 지운다. 명령 앞에 「실행의 PATH 를 다시
+/// 맨 앞에, 시작 파일이 더한 것은 그 뒤에」 를 붙인다 — 사람이 `.env` · `mise.toml` 로 고른 도구가 이긴다(리뷰 F1). 그 env 이름은
+/// 명령 전에 지운다. 로그인 셸 `-c` 꼴이 아닌 argv(셸을 거치지 않는 종류)는 그대로 둔다 — 그 순서는 이미 그대로다.
+fn keep_path_first(
+    argv: &mut [String],
+    env: &mut Vec<(OsString, OsString)>,
+    login_shell: &[String],
+) {
+    if cfg!(not(unix)) || login_shell.is_empty() {
+        return;
+    }
+    let shaped = argv.len() == login_shell.len() + 2
+        && argv.starts_with(login_shell)
+        && argv[login_shell.len()] == "-c";
+    let Some(path) = env
+        .iter()
+        .find(|(name, _)| name == "PATH")
+        .map(|(_, value)| value.clone())
+    else {
+        return;
+    };
+    if !shaped {
+        return;
+    }
+    let command = argv.last_mut().expect("shaped argv has a command");
+    *command = format!(
+        "PATH=\"${PATH_FRONT_VAR}${{PATH:+:$PATH}}\"; export PATH; unset {PATH_FRONT_VAR}\n{command}"
+    );
+    env.retain(|(name, _)| name != PATH_FRONT_VAR);
+    env.push((PATH_FRONT_VAR.into(), path));
+}
+
+/// npm 종류의 정의 본문(`package.json` 의 그 script — `seen` 의 해시 재료). 읽지 못하면 `None`(해시가 「본 적 없음」 이 된다).
+fn npm_definition(
+    key: &str,
+    config: &crate::config::RunConfig,
+    root: &Path,
+    cwd: &Path,
+) -> Option<String> {
+    let crate::config::RunKindConfig::Npm { script } = &config.kind else {
+        return None;
+    };
+    crate::detect::npm::script_definition(root, cwd, script)
+        .inspect_err(|why| tracing::debug!(target: "pw_run", key, %why, "cannot read the npm script definition"))
+        .ok()
+        .flatten()
 }
 
 fn size_of(cols: Option<u16>, rows: Option<u16>) -> Result<(u16, u16), RpcError> {

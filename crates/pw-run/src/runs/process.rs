@@ -13,19 +13,28 @@
 //! 핸들로 띄울 수는 없다: portable-pty 는 작업 폴더를 경로로만 받고(`CommandBuilder::cwd`) 자식의 `pre_exec` 를 열지 않아
 //! `fchdir` 를 넣을 자리가 없고, macOS 는 `chdir("/dev/fd/N")` 가 `ENOTDIR` 이다. 그래서 두 번 본다:
 //!
-//! 1. **띄우기 바로 앞** — 폴더를 열어 그 핸들의 실제 경로(macOS `F_GETPATH`, Linux `/proc/self/fd`)가 정규화한 경로와 같은지 보고,
-//!    그 폴더의 (장치, inode)를 쥔다([`pin`]).
-//! 2. **띄운 뒤, 프로그램이 돌기 전** — 프로그램을 `/bin/sh -c 'IFS= read -r _ && exec "$@"'` 로 감싸 띄운다. 띄우기가 돌아오면
-//!    자식은 이미 `chdir` · `exec` 를 마쳤고 셸은 PTY 에서 한 줄을 기다린다. 그동안 그 프로세스의 실제 작업 폴더(macOS
-//!    `proc_pidinfo`, Linux `/proc/<pid>/cwd`)의 (장치, inode)가 쥔 것과 같은지 본다. 같으면 에코를 끈 채 줄바꿈 하나를 넣어
-//!    그 자리에서 프로그램을 `exec` 하게 하고(같은 pid — 그 줄은 출력에 남지 않는다), 다르면(바꿔치기 · `$HOME` 으로 떨어짐)
-//!    SIGKILL 로 끝내고 실패한다 — 사람의 프로그램은 한 줄도 돌지 않는다. `kill -STOP $$` 로 멈췄다 SIGCONT 로 잇는 길은 쓰지
-//!    않는다 — macOS 에서 수백 번에 한 번 SIGCONT 뒤에도 깨지 않고 잠든 채 남았다(실측).
+//! 1. **띄우기 바로 앞** — 폴더를 열어 그 핸들의 실제 경로(macOS `F_GETPATH`, Linux `/proc/self/fd`)가 정규화한 경로와 같은지
+//!    본다([`pin`]). 그 핸들은 2 의 확인이 끝날 때까지 쥔다 — 열린 핸들이 있는 동안 그 폴더의 inode 는 풀리지 않아, 폴더를 지우고
+//!    새로 만든 폴더가 같은 inode 번호를 받는 일(ext4 는 곧바로 다시 준다)이 없다.
+//! 2. **띄운 뒤, 프로그램이 돌기 전** — 프로그램을 `/bin/sh -c 'command read -r _ < "$1" && shift && exec "$@"' pitwall-run <문>`
+//!    으로 감싸 띄운다. 문([`Gate`])은 0700 임시 폴더의 FIFO 이고 Host 가 미리 읽기 · 쓰기로 열어 둔다. 띄우기가 돌아오면 자식은
+//!    이미 `chdir` · `exec` 를 마쳤고 셸은 문에서 한 줄을 기다린다. 그 프로세스의 실제 작업 폴더(macOS `proc_pidinfo`, Linux
+//!    `/proc/<pid>/cwd`)의 (장치, inode)가 쥔 핸들의 것(`fstat`)과 같으면 문에 줄바꿈 하나를 써 그 자리에서 프로그램을
+//!    `exec` 하게 하고(같은 pid), 다르면(바꿔치기 · `$HOME` 으로 떨어짐) SIGKILL 로 끝내고 문을 닫아 실패한다 — 문이 쓰이지 않고
+//!    닫히면 `read` 가 EOF 로 끝나 `exec` 하지 않는다. 문은 PTY 가 아니라 출력에 아무것도 비치지 않고 터미널 설정도 건드리지
+//!    않는다. 앞서 쓴 두 길은 버렸다 — `kill -STOP $$` → SIGCONT 는 macOS 에서 수백 번에 한 번 깨지 않고 잠든 채 남았고, PTY 에
+//!    에코를 끈 줄을 넣는 것은 Linux 에서 줄이 출력에 비쳤다(line discipline 이 에코를 되돌린 뒤에 처리한다).
+//!
+//! 감싼 셸은 프로그램의 env 로 돈다 — `command read` 라 env 로 온 같은 이름의 함수(`BASH_FUNC_read%%`)는 쓰이지 않지만,
+//! `SHELLOPTS=xtrace` 와 `PS4='$(…)'` 같은 셸 변수는 셸 안에서 코드를 돌릴 수 있다. 그 env 를 정한 쪽(구성 · `.env` — 승인 계획에
+//! 보인다)은 `NODE_OPTIONS` 로도 같은 일을 하므로 새 권한은 아니다. 「사람의 프로그램은 돌지 않는다」 는 그 프로그램에 대한 말이다.
 //!
 //! macOS · Linux 밖의 유닉스는 프로세스의 작업 폴더를 읽지 못해 1 만 한다.
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -33,7 +42,9 @@ use pw_rpc::RpcError;
 
 use crate::pty::{CHUNK, Ending, Pty, Spec};
 
-use super::{RunExit, RunKind, RunOutput, cwd_changed};
+#[cfg(unix)]
+use super::cwd_changed;
+use super::{RunExit, RunKind, RunOutput};
 
 /// [`RunKind::kind`].
 pub const KIND: &str = "process";
@@ -80,7 +91,7 @@ pub trait ProcessLauncher: Send + Sync + 'static {
 
 /// 프로그램을 감싸는 셸 글(머리 주석 「작업 폴더」 2). `$0` 다음이 프로그램의 argv 다.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-const HOLD: &str = "IFS= read -r _ && exec \"$@\"";
+const HOLD: &str = "command read -r _ < \"$1\" && shift && exec \"$@\"";
 
 /// PTY 로 띄운다.
 pub struct PtyLauncher;
@@ -91,12 +102,15 @@ impl ProcessLauncher for PtyLauncher {
             .map_err(|_| RpcError::internal("runs must be started inside the async runtime"))?;
         #[cfg(unix)]
         let pinned = pin(&spec.cwd)?;
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        let gate = Gate::new()?;
         #[cfg(all(test, unix))]
         hooks::before_spawn(&spec.cwd);
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         let argv: Vec<OsString> = ["/bin/sh", "-c", HOLD, "pitwall-run"]
             .into_iter()
             .map(OsString::from)
+            .chain(std::iter::once(gate.path.clone().into_os_string()))
             .chain(spec.argv.iter().map(OsString::from))
             .collect();
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -112,22 +126,25 @@ impl ProcessLauncher for PtyLauncher {
             .map_err(RpcError::internal)?,
         );
         #[cfg(any(target_os = "macos", target_os = "linux"))]
-        release(&pty, &spec.cwd, pinned)?;
-        #[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
-        let _ = pinned;
+        let gate = release(&pty, &spec.cwd, &pinned, gate, &output)?;
+        // 확인이 끝났다 — 이제 폴더 핸들을 놓는다(머리 주석 「작업 폴더」 1).
+        #[cfg(unix)]
+        drop(pinned);
         let process = Arc::new(ProcessRun {
             pid: pty.pid(),
             pty: Mutex::new(Some(Arc::clone(&pty))),
             ending: spec.ending,
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            gate: Mutex::new(Some(gate)),
         });
         runtime.spawn(pump(pty, Arc::clone(&process), output));
         Ok(process)
     }
 }
 
-/// 머리 주석 「작업 폴더」 1: `cwd` 를 열어 그 실제 경로가 `cwd` 그대로인지 보고 그 폴더의 (장치, inode)를 준다.
+/// 머리 주석 「작업 폴더」 1: `cwd` 를 열어 그 실제 경로가 `cwd` 그대로인지 본다. 돌려준 핸들은 확인이 끝날 때까지 쥔다.
 #[cfg(unix)]
-fn pin(cwd: &Path) -> Result<(u64, u64), RpcError> {
+fn pin(cwd: &Path) -> Result<std::fs::File, RpcError> {
     use std::os::unix::fs::OpenOptionsExt as _;
     let dir = std::fs::OpenOptions::new()
         .read(true)
@@ -140,10 +157,53 @@ fn pin(cwd: &Path) -> Result<(u64, u64), RpcError> {
             "the run's working directory changed since it was resolved".to_owned(),
         ));
     }
-    let meta = dir
-        .metadata()
-        .map_err(|e| cwd_changed(format!("the run's working directory cannot be read: {e}")))?;
-    Ok(crate::tree::dir_identity(&meta))
+    Ok(dir)
+}
+
+/// 감싼 셸을 풀어 주는 문(머리 주석 「작업 폴더」 2): 0700 임시 폴더 안의 FIFO 를 Host 가 읽기 · 쓰기로 열어 둔 것. 열어 둔 쓰는
+/// 쪽이 있어 셸의 `< "$1"` 이 막히지 않고, 쓴 줄은 셸이 열기 전이어도 남는다. 버리면 쓰는 쪽이 없어져 기다리던 `read` 는 EOF 로
+/// 끝난다. 실행이 끝날 때까지 쥔다 — 셸이 문을 열기 전에 닫으면 쓴 줄이 사라진다.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+struct Gate {
+    path: PathBuf,
+    fifo: std::fs::File,
+    _dir: tempfile::TempDir,
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+impl Gate {
+    fn new() -> Result<Self, RpcError> {
+        use std::os::unix::ffi::OsStrExt as _;
+        let dir = tempfile::Builder::new()
+            .prefix("pitwall-run-")
+            .tempdir()
+            .map_err(|e| RpcError::internal(format!("cannot make the run's start gate: {e}")))?;
+        let path = dir.path().join("gate");
+        let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())
+            .map_err(|e| RpcError::internal(e.to_string()))?;
+        // SAFETY: NUL 로 끝나는 경로를 넘긴다.
+        if unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) } != 0 {
+            return Err(RpcError::internal(format!(
+                "cannot make the run's start gate: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+        let fifo = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .map_err(|e| RpcError::internal(format!("cannot open the run's start gate: {e}")))?;
+        Ok(Self {
+            path,
+            fifo,
+            _dir: dir,
+        })
+    }
+
+    fn open(&self) -> std::io::Result<()> {
+        use std::io::Write as _;
+        (&self.fifo).write_all(b"\n")
+    }
 }
 
 /// 열린 폴더의 실제 경로.
@@ -172,24 +232,45 @@ fn real_path(_dir: &std::fs::File, cwd: &Path) -> Option<PathBuf> {
     std::fs::canonicalize(cwd).ok()
 }
 
-/// 머리 주석 「작업 폴더」 2: 감싼 셸의 작업 폴더가 `pinned` 인지 보고 한 줄을 넣어 프로그램을 돌린다. 아니면 끝내고 실패한다.
+/// 머리 주석 「작업 폴더」 2: 감싼 셸의 작업 폴더가 쥔 폴더(`pinned` 의 `fstat`)인지 보고 문을 열어 프로그램을 돌린다. 아니면
+/// 끝내고 실패한다. 띄우는 동안 중지가 왔으면(창 닫기 · `run.stop`) 프로그램을 풀지 않고 끝낸다.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn release(pty: &Pty, cwd: &Path, pinned: (u64, u64)) -> Result<(), RpcError> {
+fn release(
+    pty: &Pty,
+    cwd: &Path,
+    pinned: &std::fs::File,
+    gate: Gate,
+    output: &RunOutput,
+) -> Result<Gate, RpcError> {
     let Some(pid) = pty.pid().and_then(|p| libc::pid_t::try_from(p).ok()) else {
         pty.terminate();
         return Err(RpcError::internal("the run has no process id"));
     };
-    if crate::tree::cwd_identity(pid) != Some(pinned) {
+    let expected = pinned
+        .metadata()
+        .map(|meta| crate::tree::dir_identity(&meta))
+        .ok();
+    if expected.is_none() || crate::tree::cwd_identity(pid) != expected {
         kill_now(pty, pid);
         tracing::warn!(target: "pw_run", cwd = %cwd.display(), "the run's process landed in another working directory; ended it");
         return Err(cwd_changed(
             "the run's working directory changed while it was being started".to_owned(),
         ));
     }
-    pty.send_unechoed(b"\n").map_err(|e| {
+    if output.stop_requested() {
         kill_now(pty, pid);
-        RpcError::internal(e)
-    })
+        return Err(RpcError::new(
+            pw_rpc::code::CANCELLED,
+            "the run was stopped while it was starting",
+        ));
+    }
+    if let Err(e) = gate.open() {
+        kill_now(pty, pid);
+        return Err(RpcError::internal(format!(
+            "cannot start the run's program: {e}"
+        )));
+    }
+    Ok(gate)
 }
 
 /// 기다리는 셸을 곧바로 끝낸다(프로그램을 `exec` 하지 않는다).
@@ -235,6 +316,9 @@ struct ProcessRun {
     /// 끝나면 비운다 — 끝난 실행이 목록에 남는 동안 PTY 의 fd 를 쥐지 않게.
     pty: Mutex<Option<Arc<Pty>>>,
     ending: Ending,
+    /// 감싼 셸이 문을 열기 전에 닫지 않게 실행이 끝날 때까지 쥔다.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    gate: Mutex<Option<Gate>>,
 }
 
 impl ProcessRun {
@@ -308,6 +392,12 @@ async fn pump(pty: Arc<Pty>, process: Arc<ProcessRun>, output: RunOutput) {
     pty.close_output();
     process
         .pty
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take();
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    process
+        .gate
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .take();
