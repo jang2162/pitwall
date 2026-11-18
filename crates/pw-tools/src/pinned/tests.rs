@@ -18,7 +18,7 @@ fn builtin_problems(pinned: &Pinned) -> Vec<String> {
 fn the_builtin_pinned_table_covers_every_bundled_package() {
     let pinned = Pinned::builtin();
     assert_eq!(builtin_problems(&pinned), Vec::<String>::new());
-    // 번들 여섯이 모두 고정 표에 행을 가진다.
+    // 번들 패키지가 모두 고정 표에 행을 가진다.
     for name in &pinned.bundled {
         assert!(
             pinned.artifacts.iter().any(|a| &a.package == name),
@@ -29,7 +29,11 @@ fn the_builtin_pinned_table_covers_every_bundled_package() {
         pinned.bundled,
         [
             "basedpyright",
+            "codelldb",
+            "debugpy",
+            "java-debug-adapter",
             "jdtls",
+            "js-debug-adapter",
             "kotlin-lsp",
             "ruff",
             "rust-analyzer",
@@ -42,10 +46,19 @@ fn the_builtin_pinned_table_covers_every_bundled_package() {
 #[test]
 fn removing_or_breaking_a_pinned_row_is_caught() {
     let pinned = Pinned::builtin();
-    // 행마다 하나씩 지워 본다 — 어느 것을 지워도 잡힌다.
+    // 행마다 하나씩 지워 본다 — 어느 것을 지워도 잡힌다. 같은 배포의 `any` 휠이 있는 PyPI 대상 휠(debugpy 의 `cp313-…`)은
+    // 빠져도 설치가 되므로 뺀다 — pip 은 해시 파일에 없는 후보를 거르고 `any` 휠로 내려간다(그 대상의 네이티브 가속만 빠진다).
     for i in 0..pinned.artifacts.len() {
         let mut p = pinned.clone();
         let removed = p.artifacts.remove(i);
+        if removed.target != "any"
+            && removed.hash_from == "pypi"
+            && pinned.artifacts.iter().any(|a| {
+                a.target == "any" && a.package == removed.package && a.dist == removed.dist
+            })
+        {
+            continue;
+        }
         let problems = builtin_problems(&p);
         assert!(
             !problems.is_empty(),
@@ -256,5 +269,56 @@ fn bundled_debug_adapters_need_pinned_hashes() {
     assert_eq!(
         check(&pinned, &index.version, &packages, &overrides),
         Vec::<String>::new()
+    );
+}
+
+/// 결정 D71: 번들 java-debug 의 판에 `[[patched]]` 행이 없거나 행이 어긋나면 검사가 실패한다(`mise run lint`).
+#[test]
+fn a_missing_or_broken_patched_row_is_caught() {
+    let pinned = Pinned::builtin();
+    assert_eq!(pinned.patched.len(), 1);
+
+    let mut p = pinned.clone();
+    p.patched.clear();
+    assert!(
+        builtin_problems(&p)
+            .iter()
+            .any(|e| e.contains("no [[patched]] row for patch java-debug-loopback")),
+        "{:?}",
+        builtin_problems(&p)
+    );
+
+    let mut p = pinned.clone();
+    p.patched[0].version = "0.58.0".into();
+    let problems = builtin_problems(&p);
+    assert!(
+        problems
+            .iter()
+            .any(|e| e.contains("is not a bundled package version")),
+        "{problems:?}"
+    );
+
+    let mut p = pinned.clone();
+    p.patched[0].patch = "other".into();
+    assert!(
+        builtin_problems(&p)
+            .iter()
+            .any(|e| e.contains("unknown patch other"))
+    );
+
+    let mut p = pinned.clone();
+    p.patched[0].patched_sha256 = p.patched[0].sha256.clone();
+    assert!(
+        builtin_problems(&p)
+            .iter()
+            .any(|e| e.contains("has the original hash"))
+    );
+
+    let mut p = pinned.clone();
+    p.patched[0].file = "../escape.jar".into();
+    assert!(
+        builtin_problems(&p)
+            .iter()
+            .any(|e| e.contains("not a plain relative path"))
     );
 }

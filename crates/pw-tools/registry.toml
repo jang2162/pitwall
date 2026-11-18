@@ -5,7 +5,11 @@
 # 기본 번들 패키지(결정 M4-D1 ~ D5). 내장 스냅숏에 묶이고 아래에 해시를 고정한다. 바꾸면 bump 를 다시 돌린다.
 bundled = [
   "basedpyright",
+  "codelldb",
+  "debugpy",
+  "java-debug-adapter",
   "jdtls",
+  "js-debug-adapter",
   "kotlin-lsp",
   "ruff",
   "rust-analyzer",
@@ -103,6 +107,440 @@ dist = "nodejs-wheel-binaries"
 dist_version = "24.19.0"
 
 [[artifact]]
+package = "codelldb"
+version = "v1.12.3"
+target = "darwin_arm64"
+name = "codelldb-darwin-arm64.vsix"
+url = "https://github.com/vadimcn/vscode-lldb/releases/download/v1.12.3/codelldb-darwin-arm64.vsix"
+sha256 = "2f114a990e1b368dd1dbd33c80c0e719767af2d228391ec0df0571c957f9ac91"
+size = 45390048
+hash_from = "github-api"
+
+[[artifact]]
+package = "codelldb"
+version = "v1.12.3"
+target = "darwin_x64"
+name = "codelldb-darwin-x64.vsix"
+url = "https://github.com/vadimcn/vscode-lldb/releases/download/v1.12.3/codelldb-darwin-x64.vsix"
+sha256 = "e25cc716b94c62c07fec268ff2785d2b797245b160502baef8b9c970a0c4d8e8"
+size = 47735596
+hash_from = "github-api"
+
+[[artifact]]
+package = "codelldb"
+version = "v1.12.3"
+target = "linux_arm64_gnu"
+name = "codelldb-linux-arm64.vsix"
+url = "https://github.com/vadimcn/vscode-lldb/releases/download/v1.12.3/codelldb-linux-arm64.vsix"
+sha256 = "0887f67d440554617894266f80706b700907c36b95e6e49d23b95a0e05318101"
+size = 54544514
+hash_from = "github-api"
+
+[[artifact]]
+package = "codelldb"
+version = "v1.12.3"
+target = "linux_x64_gnu"
+name = "codelldb-linux-x64.vsix"
+url = "https://github.com/vadimcn/vscode-lldb/releases/download/v1.12.3/codelldb-linux-x64.vsix"
+sha256 = "1cd7f386598022b51a5b93b9ffa23e812b23f519cfe1833384ec4bef4bfd1be1"
+size = 55571094
+hash_from = "github-api"
+
+[[artifact]]
+package = "codelldb"
+version = "v1.12.3"
+target = "win_x64"
+name = "codelldb-win32-x64.vsix"
+url = "https://github.com/vadimcn/vscode-lldb/releases/download/v1.12.3/codelldb-win32-x64.vsix"
+sha256 = "a916e509308dac817732f63ca604a8b93ed29cd16f38a2fa9f0b64ed58e8f51a"
+size = 50943475
+hash_from = "github-api"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "any"
+name = "debugpy-1.8.22-py2.py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/56/3d/c7dc9f35bc9e22cdb53679f844bee40fd5cff871862f60595869a433400d/debugpy-1.8.22-py2.py3-none-any.whl"
+sha256 = "a9e9d3550e15ca479c59333e90845029190531f0cacfedab3b815a57bd913947"
+size = 5374857
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "darwin_arm64"
+name = "debugpy-1.8.22-cp311-cp311-macosx_15_0_universal2.whl"
+url = "https://files.pythonhosted.org/packages/26/4a/8c24c588088c622df6dacdc0110e9cc81b44781fe7a408113441e76aa955/debugpy-1.8.22-cp311-cp311-macosx_15_0_universal2.whl"
+sha256 = "66e4ac3d6e7026e83e7d93d7ee2f51dd4a4e8dff673578d424e60796893e5b2c"
+size = 2217799
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "darwin_arm64"
+name = "debugpy-1.8.22-cp312-cp312-macosx_15_0_universal2.whl"
+url = "https://files.pythonhosted.org/packages/73/21/5c7f5c66eaeee57c9dadb0bbff22efddc8d99cdbd3d036c806175f1828cc/debugpy-1.8.22-cp312-cp312-macosx_15_0_universal2.whl"
+sha256 = "4ad076f4f66cb8acb79e4384d48b1ea60a0b1957aa0b1112d4887ea3a4df60e0"
+size = 2499375
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "darwin_arm64"
+name = "debugpy-1.8.22-cp313-cp313-macosx_15_0_universal2.whl"
+url = "https://files.pythonhosted.org/packages/6b/f4/fee6d40f5865aa84e1100c9df1a0f2cf8991776b61f11f433ff277df4415/debugpy-1.8.22-cp313-cp313-macosx_15_0_universal2.whl"
+sha256 = "c21dd7e1ec22556bb41dc3bf6b86c603e440ec889c4acb27d7206354b2106c54"
+size = 2493531
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "darwin_arm64"
+name = "debugpy-1.8.22-cp314-cp314-macosx_15_0_universal2.whl"
+url = "https://files.pythonhosted.org/packages/ea/95/d97240bb68b86db8d0a07602be068aae9e50f17063d696a4c6f619975311/debugpy-1.8.22-cp314-cp314-macosx_15_0_universal2.whl"
+sha256 = "e6744ac1850c73c2ba7b29a126cf9ab74efd1831190720e8fee17ef5389c8f5d"
+size = 2493148
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "darwin_arm64"
+name = "debugpy-1.8.22-cp315-cp315-macosx_15_0_universal2.whl"
+url = "https://files.pythonhosted.org/packages/24/71/580df4aed96c9b23c9cbb049907d8ac1347050afdb8f450df20649d51578/debugpy-1.8.22-cp315-cp315-macosx_15_0_universal2.whl"
+sha256 = "a9eca6ab09a61534e923064400081e016f7e1d8430cc6e8b7a9cecd2f59e2b07"
+size = 2493380
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "darwin_x64"
+name = "debugpy-1.8.22-cp310-cp310-macosx_15_0_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/1a/e9/ced401ba1088e1d2b3228dbbcae33e15aa8c08a1368433bedebfa8efcb02/debugpy-1.8.22-cp310-cp310-macosx_15_0_x86_64.whl"
+sha256 = "fa47099176d1d612bef69e9f74658a5687a9f05bd80fb5710f99959bace85735"
+size = 2128369
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "darwin_x64"
+name = "debugpy-1.8.22-cp311-cp311-macosx_15_0_universal2.whl"
+url = "https://files.pythonhosted.org/packages/26/4a/8c24c588088c622df6dacdc0110e9cc81b44781fe7a408113441e76aa955/debugpy-1.8.22-cp311-cp311-macosx_15_0_universal2.whl"
+sha256 = "66e4ac3d6e7026e83e7d93d7ee2f51dd4a4e8dff673578d424e60796893e5b2c"
+size = 2217799
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "darwin_x64"
+name = "debugpy-1.8.22-cp312-cp312-macosx_15_0_universal2.whl"
+url = "https://files.pythonhosted.org/packages/73/21/5c7f5c66eaeee57c9dadb0bbff22efddc8d99cdbd3d036c806175f1828cc/debugpy-1.8.22-cp312-cp312-macosx_15_0_universal2.whl"
+sha256 = "4ad076f4f66cb8acb79e4384d48b1ea60a0b1957aa0b1112d4887ea3a4df60e0"
+size = 2499375
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "darwin_x64"
+name = "debugpy-1.8.22-cp313-cp313-macosx_15_0_universal2.whl"
+url = "https://files.pythonhosted.org/packages/6b/f4/fee6d40f5865aa84e1100c9df1a0f2cf8991776b61f11f433ff277df4415/debugpy-1.8.22-cp313-cp313-macosx_15_0_universal2.whl"
+sha256 = "c21dd7e1ec22556bb41dc3bf6b86c603e440ec889c4acb27d7206354b2106c54"
+size = 2493531
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "darwin_x64"
+name = "debugpy-1.8.22-cp314-cp314-macosx_15_0_universal2.whl"
+url = "https://files.pythonhosted.org/packages/ea/95/d97240bb68b86db8d0a07602be068aae9e50f17063d696a4c6f619975311/debugpy-1.8.22-cp314-cp314-macosx_15_0_universal2.whl"
+sha256 = "e6744ac1850c73c2ba7b29a126cf9ab74efd1831190720e8fee17ef5389c8f5d"
+size = 2493148
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "darwin_x64"
+name = "debugpy-1.8.22-cp315-cp315-macosx_15_0_universal2.whl"
+url = "https://files.pythonhosted.org/packages/24/71/580df4aed96c9b23c9cbb049907d8ac1347050afdb8f450df20649d51578/debugpy-1.8.22-cp315-cp315-macosx_15_0_universal2.whl"
+sha256 = "a9eca6ab09a61534e923064400081e016f7e1d8430cc6e8b7a9cecd2f59e2b07"
+size = 2493380
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "darwin_x64"
+name = "debugpy-1.8.22-cp39-cp39-macosx_15_0_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/56/32/77bc723226faef74520ab8e4408171af6bdcba22055706e75d8341e98ade/debugpy-1.8.22-cp39-cp39-macosx_15_0_x86_64.whl"
+sha256 = "cba7b99573ee41f9510c6deeff1cdd0c333748b9dd63d5016413dd57ba9a4593"
+size = 2129548
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "linux_x64_gnu"
+name = "debugpy-1.8.22-cp310-cp310-manylinux_2_34_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/4f/97/5c8e839a7f73e92cd4a733408bb85bb764e829e52a9fb097f99d6e2cbbc0/debugpy-1.8.22-cp310-cp310-manylinux_2_34_x86_64.whl"
+sha256 = "7bf29e0d8ce80b100d37fb333e1b193b790d962739f3067796c2b03ffdc9afee"
+size = 3022081
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "linux_x64_gnu"
+name = "debugpy-1.8.22-cp311-cp311-manylinux_2_34_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/c7/14/1c9ff33eba51da70a8dfe2277cc13153bb3ffec79282b9acfcdbe1641d30/debugpy-1.8.22-cp311-cp311-manylinux_2_34_x86_64.whl"
+sha256 = "192b73e8d53bbd60225220c0943627bf249ac93d0ea3090e23c45f3e0ceb6a35"
+size = 3074375
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "linux_x64_gnu"
+name = "debugpy-1.8.22-cp312-cp312-manylinux_2_34_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/7e/ec/7389798843643ea5bc6a08480ba1b855377c70e2ed90189c0a03594e401e/debugpy-1.8.22-cp312-cp312-manylinux_2_34_x86_64.whl"
+sha256 = "8a697acec45dbc70d17fb5d9f4f61989fc294d273c69de487fd10cb35fdd75eb"
+size = 4000941
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "linux_x64_gnu"
+name = "debugpy-1.8.22-cp313-cp313-manylinux_2_34_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/bc/4f/8df91270afbf61fc5ab202951f28451194a7eb093704b26da11cb0ecd308/debugpy-1.8.22-cp313-cp313-manylinux_2_34_x86_64.whl"
+sha256 = "c1ffb9953708b648ecf6acd2e5ad2c002bf68785ed618197dd4463a2a7226f39"
+size = 3994351
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "linux_x64_gnu"
+name = "debugpy-1.8.22-cp314-cp314-manylinux_2_34_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/70/9e/994fe1fb23dd4a5a8d059a0dc95da4b0821907200a61c2d5a4fdc21b6cf8/debugpy-1.8.22-cp314-cp314-manylinux_2_34_x86_64.whl"
+sha256 = "0c1104233340196e5cbf5514e7dfdbb98968e730cfd7fdd6f3d72a082be838a9"
+size = 3961025
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "linux_x64_gnu"
+name = "debugpy-1.8.22-cp315-cp315-manylinux_2_34_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/b0/10/a323945b0966e560c40fe48470d2847bfc7692a8f550d7086e9a28f5b623/debugpy-1.8.22-cp315-cp315-manylinux_2_34_x86_64.whl"
+sha256 = "b7dbde1fb822d100802d505b2aed6d0813b1a0a2015d495cb8798b2215d5d1e5"
+size = 3975456
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "linux_x64_gnu"
+name = "debugpy-1.8.22-cp39-cp39-manylinux_2_34_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/f5/5e/6fe2267e8d0fc4c780a02d6263f590063b186b0c660bb0279e7139bfb2a0/debugpy-1.8.22-cp39-cp39-manylinux_2_34_x86_64.whl"
+sha256 = "3b7c328cb47b4e2f2b40801936daf8150f88dcb4ffef5080ff119270f0d23626"
+size = 3016545
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "win_x64"
+name = "debugpy-1.8.22-cp310-cp310-win_amd64.whl"
+url = "https://files.pythonhosted.org/packages/82/7f/633160132b80b424c6816391f239682435c6b77cdd58288d04b3443b9f80/debugpy-1.8.22-cp310-cp310-win_amd64.whl"
+sha256 = "1bd0c6df3c68c0a3f71db8baa3780a953abb65537ec4b3bc6b935ad5b3b3d45c"
+size = 5353598
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "win_x64"
+name = "debugpy-1.8.22-cp311-cp311-win_amd64.whl"
+url = "https://files.pythonhosted.org/packages/32/1a/c086b883a4561017bfdd83c1bc70bf2b05ab6540ff767dedf207cadab938/debugpy-1.8.22-cp311-cp311-win_amd64.whl"
+sha256 = "1e76339d5510bc17e9181dba9577508afcb21aad5728f1a55ef74d7d97d255f3"
+size = 5277955
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "win_x64"
+name = "debugpy-1.8.22-cp312-cp312-win_amd64.whl"
+url = "https://files.pythonhosted.org/packages/4b/fe/e7d3b72874cdd327bda295d1995a01e426857ae9cbaaba74fd997bc3afbc/debugpy-1.8.22-cp312-cp312-win_amd64.whl"
+sha256 = "371a4ba4a5975eb958393903f3254cf983da7b1c7c178b3f987ee427f42515e3"
+size = 5398304
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "win_x64"
+name = "debugpy-1.8.22-cp313-cp313-win_amd64.whl"
+url = "https://files.pythonhosted.org/packages/d0/f5/c2b3e8260388d7b76bc4e5a3a29648a0ca47dca6a2721d6549ff2d944eee/debugpy-1.8.22-cp313-cp313-win_amd64.whl"
+sha256 = "f49b1d6cecf326b63c06d7f517e4a6642777f758c58cb799e7bc5a6dd74721c2"
+size = 5400362
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "win_x64"
+name = "debugpy-1.8.22-cp314-cp314-win_amd64.whl"
+url = "https://files.pythonhosted.org/packages/94/53/5b4d91f7fffb9393ac907133201d1da0c070d57e463ee8e2ec1db3cb63b6/debugpy-1.8.22-cp314-cp314-win_amd64.whl"
+sha256 = "d593a330297332ec435f3965c448b6d500e03f33675cf2063178bc76377a788e"
+size = 5397429
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "win_x64"
+name = "debugpy-1.8.22-cp315-cp315-win_amd64.whl"
+url = "https://files.pythonhosted.org/packages/7b/14/4fe9f46a9c825c8cbc6dc4aebc2a885b0bceb37ce2a37699c170482e7a40/debugpy-1.8.22-cp315-cp315-win_amd64.whl"
+sha256 = "b17a4896520f1c6da09ce76ec8215df0b85b0b6f3617526a4c65c2315340875a"
+size = 5397869
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "debugpy"
+version = "1.8.22"
+target = "win_x64"
+name = "debugpy-1.8.22-cp39-cp39-win_amd64.whl"
+url = "https://files.pythonhosted.org/packages/de/d8/691f9a3b10388ed63c6c13b64bae5d556bbb78615e34c293595afe5f2a88/debugpy-1.8.22-cp39-cp39-win_amd64.whl"
+sha256 = "92fc425308a08f601f3c69afb4719767f9b898276f44b97e6942a713c4c32740"
+size = 5354332
+hash_from = "pypi"
+dist = "debugpy"
+dist_version = "1.8.22"
+
+[[artifact]]
+package = "java-debug-adapter"
+version = "0.59.0"
+target = "darwin_arm64"
+name = "vscjava.vscode-java-debug-0.59.0.vsix"
+url = "https://open-vsx.org/api/vscjava/vscode-java-debug/0.59.0/file/vscjava.vscode-java-debug-0.59.0.vsix"
+sha256 = "87627e24dbb5b01137decc0265f043cb08adad22af3c195f1ba39898dafb1588"
+size = 3479669
+hash_from = "download"
+
+[[artifact]]
+package = "java-debug-adapter"
+version = "0.59.0"
+target = "darwin_x64"
+name = "vscjava.vscode-java-debug-0.59.0.vsix"
+url = "https://open-vsx.org/api/vscjava/vscode-java-debug/0.59.0/file/vscjava.vscode-java-debug-0.59.0.vsix"
+sha256 = "87627e24dbb5b01137decc0265f043cb08adad22af3c195f1ba39898dafb1588"
+size = 3479669
+hash_from = "download"
+
+[[artifact]]
+package = "java-debug-adapter"
+version = "0.59.0"
+target = "linux_arm64_gnu"
+name = "vscjava.vscode-java-debug-0.59.0.vsix"
+url = "https://open-vsx.org/api/vscjava/vscode-java-debug/0.59.0/file/vscjava.vscode-java-debug-0.59.0.vsix"
+sha256 = "87627e24dbb5b01137decc0265f043cb08adad22af3c195f1ba39898dafb1588"
+size = 3479669
+hash_from = "download"
+
+[[artifact]]
+package = "java-debug-adapter"
+version = "0.59.0"
+target = "linux_x64_gnu"
+name = "vscjava.vscode-java-debug-0.59.0.vsix"
+url = "https://open-vsx.org/api/vscjava/vscode-java-debug/0.59.0/file/vscjava.vscode-java-debug-0.59.0.vsix"
+sha256 = "87627e24dbb5b01137decc0265f043cb08adad22af3c195f1ba39898dafb1588"
+size = 3479669
+hash_from = "download"
+
+[[artifact]]
+package = "java-debug-adapter"
+version = "0.59.0"
+target = "linux_x64_musl"
+name = "vscjava.vscode-java-debug-0.59.0.vsix"
+url = "https://open-vsx.org/api/vscjava/vscode-java-debug/0.59.0/file/vscjava.vscode-java-debug-0.59.0.vsix"
+sha256 = "87627e24dbb5b01137decc0265f043cb08adad22af3c195f1ba39898dafb1588"
+size = 3479669
+hash_from = "download"
+
+[[artifact]]
+package = "java-debug-adapter"
+version = "0.59.0"
+target = "win_x64"
+name = "vscjava.vscode-java-debug-0.59.0.vsix"
+url = "https://open-vsx.org/api/vscjava/vscode-java-debug/0.59.0/file/vscjava.vscode-java-debug-0.59.0.vsix"
+sha256 = "87627e24dbb5b01137decc0265f043cb08adad22af3c195f1ba39898dafb1588"
+size = 3479669
+hash_from = "download"
+
+[[artifact]]
 package = "jdtls"
 version = "v1.63.0"
 target = "darwin_arm64"
@@ -221,6 +659,66 @@ url = "https://repo1.maven.org/maven2/org/projectlombok/lombok/1.18.48/lombok-1.
 sha256 = "85477a4655ebb2c074a9099cfb749be454449fee564d4282610df1b85f7c508b"
 size = 2055065
 hash_from = "download"
+
+[[artifact]]
+package = "js-debug-adapter"
+version = "v1.140.0"
+target = "darwin_arm64"
+name = "js-debug-dap-v1.140.0.tar.gz"
+url = "https://github.com/microsoft/vscode-js-debug/releases/download/v1.140.0/js-debug-dap-v1.140.0.tar.gz"
+sha256 = "27dab92937ec1ab35821ae955aac867544fe06a1b6307229049f2d789af10968"
+size = 1249709
+hash_from = "github-api"
+
+[[artifact]]
+package = "js-debug-adapter"
+version = "v1.140.0"
+target = "darwin_x64"
+name = "js-debug-dap-v1.140.0.tar.gz"
+url = "https://github.com/microsoft/vscode-js-debug/releases/download/v1.140.0/js-debug-dap-v1.140.0.tar.gz"
+sha256 = "27dab92937ec1ab35821ae955aac867544fe06a1b6307229049f2d789af10968"
+size = 1249709
+hash_from = "github-api"
+
+[[artifact]]
+package = "js-debug-adapter"
+version = "v1.140.0"
+target = "linux_arm64_gnu"
+name = "js-debug-dap-v1.140.0.tar.gz"
+url = "https://github.com/microsoft/vscode-js-debug/releases/download/v1.140.0/js-debug-dap-v1.140.0.tar.gz"
+sha256 = "27dab92937ec1ab35821ae955aac867544fe06a1b6307229049f2d789af10968"
+size = 1249709
+hash_from = "github-api"
+
+[[artifact]]
+package = "js-debug-adapter"
+version = "v1.140.0"
+target = "linux_x64_gnu"
+name = "js-debug-dap-v1.140.0.tar.gz"
+url = "https://github.com/microsoft/vscode-js-debug/releases/download/v1.140.0/js-debug-dap-v1.140.0.tar.gz"
+sha256 = "27dab92937ec1ab35821ae955aac867544fe06a1b6307229049f2d789af10968"
+size = 1249709
+hash_from = "github-api"
+
+[[artifact]]
+package = "js-debug-adapter"
+version = "v1.140.0"
+target = "linux_x64_musl"
+name = "js-debug-dap-v1.140.0.tar.gz"
+url = "https://github.com/microsoft/vscode-js-debug/releases/download/v1.140.0/js-debug-dap-v1.140.0.tar.gz"
+sha256 = "27dab92937ec1ab35821ae955aac867544fe06a1b6307229049f2d789af10968"
+size = 1249709
+hash_from = "github-api"
+
+[[artifact]]
+package = "js-debug-adapter"
+version = "v1.140.0"
+target = "win_x64"
+name = "js-debug-dap-v1.140.0.tar.gz"
+url = "https://github.com/microsoft/vscode-js-debug/releases/download/v1.140.0/js-debug-dap-v1.140.0.tar.gz"
+sha256 = "27dab92937ec1ab35821ae955aac867544fe06a1b6307229049f2d789af10968"
+size = 1249709
+hash_from = "github-api"
 
 [[artifact]]
 package = "kotlin-lsp"
@@ -417,3 +915,11 @@ hash_from = "download"
 integrity = "sha512-Ph7Ql+xkUJvMamnkh1h+aKP6HxLR7lrWIYkPn9/LZBkJdJZgtIj7OoVhkDYtQ7zFPTPmqZHOVXaUKGyz9M2q1Q=="
 dist = "typescript-language-server"
 dist_version = "6.0.2"
+
+[[patched]]
+package = "java-debug-adapter"
+version = "0.59.0"
+file = "extension/server/com.microsoft.java.debug.plugin-0.53.2.jar"
+patch = "java-debug-loopback"
+sha256 = "69128bebd6c46d3a9daeeb77a3bbe877423c2f66eb773fd1ae5375658ce0c9bf"
+patched_sha256 = "9e503f4f8896edb070b9b7241d6e59392a1ed05c4eddd962a04d7ebc3d8f29f4"

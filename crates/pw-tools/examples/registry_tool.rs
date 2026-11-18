@@ -6,6 +6,9 @@
 //!   인자가 없으면 이 크레이트의 파일을 디스크에서 읽는다(빌드에 묶인 것이 아니라 지금 것을).
 //! - `stats <registry.json> <판>`: 대상마다 지원 · 지원하지 않음(까닭별) 수.
 //! - `unzip <registry.json.zip> <registry.json>`: 앱과 같은 코드(`pw_tools::source::unzip_registry`)로 꺼낸다.
+//! - `zip-entry <zip> <항목> <out>`: zip(vsix · jar)의 항목 하나를 꺼낸다(`scripts/java-debug-patch.mjs`).
+//! - `patch-jar <패치> <in.jar> <out.jar>`: 설치기와 같은 코드(`pw_tools::patches::patch_jar`)로 jar 를 바꾸고 두 해시를 JSON 으로
+//!   낸다(결정 D71). 바이너리에 묶인 클래스를 쓰므로 `patches/` 를 고친 뒤 다시 빌드된 이 도구로 부른다.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -59,9 +62,26 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some("zip-entry") if args.len() == 4 => {
+            let zip = std::fs::read(&args[1]).unwrap_or_else(|e| {
+                eprintln!("{}: {e}", args[1]);
+                std::process::exit(2)
+            });
+            match pw_tools::patches::read_entry(&zip, &args[2]) {
+                Ok(bytes) => {
+                    std::fs::write(&args[3], bytes).unwrap();
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Some("patch-jar") if args.len() == 4 => patch_jar(&args[1], &args[2], &args[3]),
         _ => {
             eprintln!(
-                "usage: registry_tool plan <snapshot.json> | check [<registry.toml> <snapshot.json>] | stats <registry.json> <version> | unzip <zip> <out>"
+                "usage: registry_tool plan <snapshot.json> | check [<registry.toml> <snapshot.json>] | stats <registry.json> <version> | unzip <zip> <out> | zip-entry <zip> <entry> <out> | patch-jar <patch> <in.jar> <out.jar>"
             );
             ExitCode::from(2)
         }
@@ -159,4 +179,32 @@ fn stats(registry_json: &Path, version: &str) -> ExitCode {
         );
     }
     ExitCode::SUCCESS
+}
+
+fn patch_jar(patch: &str, input: &str, output: &str) -> ExitCode {
+    let Some(set) = pw_tools::patches::by_name(patch) else {
+        eprintln!("unknown patch {patch}");
+        return ExitCode::from(2);
+    };
+    let bytes = std::fs::read(input).unwrap_or_else(|e| {
+        eprintln!("{input}: {e}");
+        std::process::exit(2)
+    });
+    match pw_tools::patches::patch_jar(&bytes, set) {
+        Ok(out) => {
+            std::fs::write(output, &out).unwrap();
+            println!(
+                "{}",
+                json!({
+                    "sha256": pw_tools::patches::sha256_hex(&bytes),
+                    "patched_sha256": pw_tools::patches::sha256_hex(&out),
+                })
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::FAILURE
+        }
+    }
 }

@@ -1,0 +1,11 @@
+--- a/JavaDebugServer.java
++++ b/JavaDebugServer.java
+@@ -34,7 +34,7 @@
+ 
+     private JavaDebugServer() {
+         try {
+-            this.serverSocket = new ServerSocket(0, 1);
++            this.serverSocket = new ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress());
+         } catch (IOException e) {
+             logger.log(Level.SEVERE, String.format("Failed to create Java Debug Server: %s", e.toString()), e);
+         }

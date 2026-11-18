@@ -23,6 +23,28 @@ pub struct Pinned {
     pub bundled: Vec<String>,
     #[serde(default, rename = "artifact")]
     pub artifacts: Vec<Artifact>,
+    /// 받은 배포물 안 jar 를 Pitwall 이 고친 결과의 고정 해시(결정 D71 — [`crate::patches`]). `scripts/java-debug-patch.mjs build`
+    /// 가 쓰고 `bump` 는 그대로 옮긴다.
+    #[serde(default, rename = "patched")]
+    pub patched: Vec<PatchedFile>,
+}
+
+/// 패치 하나의 고정 해시(설치 폴더 안 파일 하나).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PatchedFile {
+    /// Mason 패키지 이름.
+    pub package: String,
+    /// 그 패키지의 판.
+    pub version: String,
+    /// 설치 폴더 기준 경로(`/` 구분) — 받은 보관 파일을 푼 자리.
+    pub file: String,
+    /// [`crate::patches::PatchSet::name`].
+    pub patch: String,
+    /// 바꾸기 전 파일의 SHA-256(받은 배포물 그대로).
+    pub sha256: String,
+    /// 바꾼 뒤 파일의 SHA-256 — 설치기가 대조한다.
+    pub patched_sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +99,13 @@ impl Pinned {
     /// 바이너리에 묶인 것. 묶을 때 시험이 읽히는 것을 보므로 실패하지 않는다.
     pub fn builtin() -> Pinned {
         Pinned::parse(PINNED_TOML).expect("crates/pw-tools/registry.toml parses (see tests)")
+    }
+
+    /// 그 패키지 · 판의 패치 고정 해시.
+    pub fn patched_for(&self, package: &str, version: &str) -> Option<&PatchedFile> {
+        self.patched
+            .iter()
+            .find(|p| p.package == package && p.version == version)
     }
 
     pub fn is_bundled(&self, name: &str) -> bool {
@@ -347,7 +376,73 @@ pub fn check(
             problems.push(format!("artifact {} ({}) is not https", a.name, a.target));
         }
     }
+    check_patched(pinned, &versions, &mut problems);
     problems
+}
+
+/// 패치(결정 D71): 번들 패키지에 패치가 있으면 고정 판마다 `[[patched]]` 행이 있고, 행은 아는 패치 · 그 패키지 · 번들 판을
+/// 가리키며 두 해시가 SHA-256 이다. 보지 않는 것: 해시가 실제 결과와 맞는가(`scripts/java-debug-patch.mjs check` 가 다시 만들어
+/// 견주고, 설치기가 설치 때 대조한다).
+fn check_patched(
+    pinned: &Pinned,
+    versions: &BTreeSet<(String, String)>,
+    problems: &mut Vec<String>,
+) {
+    for set in crate::patches::ALL {
+        for (package, version) in versions.iter().filter(|(p, _)| p == set.package) {
+            if pinned.patched_for(package, version).is_none() {
+                problems.push(format!(
+                    "{package} {version}: no [[patched]] row for patch {} — the installer refuses to install it",
+                    set.name
+                ));
+            }
+        }
+    }
+    for p in &pinned.patched {
+        match crate::patches::by_name(&p.patch) {
+            None => problems.push(format!(
+                "[[patched]] {}: unknown patch {}",
+                p.package, p.patch
+            )),
+            Some(set) if set.package != p.package => problems.push(format!(
+                "[[patched]] {}: patch {} is for {}",
+                p.package, p.patch, set.package
+            )),
+            Some(_) => {}
+        }
+        if !versions.contains(&(p.package.clone(), p.version.clone())) {
+            problems.push(format!(
+                "[[patched]] {} {} is not a bundled package version",
+                p.package, p.version
+            ));
+        }
+        for (what, h) in [("sha256", &p.sha256), ("patched_sha256", &p.patched_sha256)] {
+            if !is_sha256(h) {
+                problems.push(format!(
+                    "[[patched]] {} {}: {what} is not a lowercase SHA-256",
+                    p.package, p.version
+                ));
+            }
+        }
+        if p.sha256 == p.patched_sha256 {
+            problems.push(format!(
+                "[[patched]] {} {}: the patched file has the original hash",
+                p.package, p.version
+            ));
+        }
+        if p.file.is_empty()
+            || p.file.starts_with('/')
+            || p.file.contains('\\')
+            || p.file
+                .split('/')
+                .any(|seg| seg.is_empty() || seg == "." || seg == "..")
+        {
+            problems.push(format!(
+                "[[patched]] {} {}: file {} is not a plain relative path",
+                p.package, p.version, p.file
+            ));
+        }
+    }
 }
 
 #[cfg(test)]

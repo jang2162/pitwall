@@ -29,6 +29,147 @@
       }
     },
     {
+      "name": "codelldb",
+      "description": "A native debugger based on LLDB.",
+      "homepage": "https://github.com/vadimcn/vscode-lldb",
+      "licenses": [
+        "MIT"
+      ],
+      "languages": [
+        "C",
+        "C++",
+        "Rust",
+        "Zig"
+      ],
+      "categories": [
+        "DAP"
+      ],
+      "source": {
+        "id": "pkg:github/vadimcn/vscode-lldb@v1.12.3",
+        "asset": [
+          {
+            "target": "darwin_x64",
+            "file": "codelldb-darwin-x64.vsix",
+            "bin": "exec:extension/adapter/codelldb"
+          },
+          {
+            "target": "darwin_arm64",
+            "file": "codelldb-darwin-arm64.vsix",
+            "bin": "exec:extension/adapter/codelldb"
+          },
+          {
+            "target": "linux_x64_gnu",
+            "file": "codelldb-linux-x64.vsix",
+            "bin": "exec:extension/adapter/codelldb"
+          },
+          {
+            "target": "linux_arm64_gnu",
+            "file": "codelldb-linux-arm64.vsix",
+            "bin": "exec:extension/adapter/codelldb"
+          },
+          {
+            "target": "linux_arm_gnu",
+            "file": "codelldb-linux-armhf.vsix",
+            "bin": "exec:extension/adapter/codelldb"
+          },
+          {
+            "target": "win_x64",
+            "file": "codelldb-win32-x64.vsix",
+            "bin": "extension/adapter/codelldb.exe"
+          }
+        ],
+        "version_overrides": [
+          {
+            "constraint": "semver:<=v1.10.0",
+            "id": "pkg:github/vadimcn/vscode-lldb@v1.10.0",
+            "asset": [
+              {
+                "target": "darwin_x64",
+                "file": "codelldb-x86_64-darwin.vsix",
+                "bin": "exec:extension/adapter/codelldb"
+              },
+              {
+                "target": "darwin_arm64",
+                "file": "codelldb-aarch64-darwin.vsix",
+                "bin": "exec:extension/adapter/codelldb"
+              },
+              {
+                "target": "linux_x64_gnu",
+                "file": "codelldb-x86_64-linux.vsix",
+                "bin": "exec:extension/adapter/codelldb"
+              },
+              {
+                "target": "linux_arm64_gnu",
+                "file": "codelldb-aarch64-linux.vsix",
+                "bin": "exec:extension/adapter/codelldb"
+              },
+              {
+                "target": "linux_arm_gnu",
+                "file": "codelldb-arm-linux.vsix",
+                "bin": "exec:extension/adapter/codelldb"
+              },
+              {
+                "target": "win_x64",
+                "file": "codelldb-x86_64-windows.vsix",
+                "bin": "extension/adapter/codelldb.exe"
+              }
+            ]
+          }
+        ]
+      },
+      "bin": {
+        "codelldb": "{{source.asset.bin}}"
+      },
+      "opt": {
+        "lldb/": "extension/lldb/"
+      }
+    },
+    {
+      "name": "debugpy",
+      "description": "An implementation of the Debug Adapter Protocol for Python.",
+      "homepage": "https://github.com/microsoft/debugpy",
+      "licenses": [
+        "MIT"
+      ],
+      "languages": [
+        "Python"
+      ],
+      "categories": [
+        "DAP"
+      ],
+      "source": {
+        "id": "pkg:pypi/debugpy@1.8.22"
+      },
+      "bin": {
+        "debugpy": "pyvenv:debugpy",
+        "debugpy-adapter": "pyvenv:debugpy.adapter"
+      }
+    },
+    {
+      "name": "java-debug-adapter",
+      "description": "The debug server implementation for Java. It conforms to the debugger adapter protocol.",
+      "homepage": "https://github.com/microsoft/java-debug",
+      "licenses": [
+        "EPL-1.0"
+      ],
+      "languages": [
+        "Java"
+      ],
+      "categories": [
+        "DAP"
+      ],
+      "source": {
+        "id": "pkg:openvsx/vscjava/vscode-java-debug@0.59.0",
+        "download": {
+          "file": "vscjava.vscode-java-debug-{{version}}.vsix"
+        }
+      },
+      "share": {
+        "java-debug-adapter/": "extension/server/",
+        "java-debug-adapter/com.microsoft.java.debug.plugin.jar": "extension/server/com.microsoft.java.debug.plugin-0.53.2.jar"
+      }
+    },
+    {
       "name": "jdtls",
       "description": "Java language server.",
       "homepage": "https://github.com/eclipse/eclipse.jdt.ls",
@@ -87,6 +228,41 @@
       },
       "neovim": {
         "lspconfig": "jdtls"
+      }
+    },
+    {
+      "name": "js-debug-adapter",
+      "description": "The VS Code JavaScript debugger.",
+      "homepage": "https://github.com/microsoft/vscode-js-debug",
+      "licenses": [
+        "MIT"
+      ],
+      "languages": [
+        "JavaScript",
+        "TypeScript"
+      ],
+      "categories": [
+        "DAP"
+      ],
+      "source": {
+        "id": "pkg:github/microsoft/vscode-js-debug@v1.140.0",
+        "asset": {
+          "file": "js-debug-dap-{{version}}.tar.gz"
+        },
+        "bin": "node:js-debug/src/dapDebugServer.js",
+        "version_overrides": [
+          {
+            "constraint": "semver:<=v1.76.1",
+            "id": "pkg:github/microsoft/vscode-js-debug@v1.76.1",
+            "build": {
+              "run": "npm install --ignore-scripts --legacy-peer-deps\nnpm run compile\nnpm exec -- gulp vsDebugServerBundle\nnpm install --production --ignore-scripts --legacy-peer-deps\n"
+            },
+            "bin": "node:out/src/vsDebugServer.js"
+          }
+        ]
+      },
+      "bin": {
+        "js-debug-adapter": "{{source.bin}}"
       }
     },
     {

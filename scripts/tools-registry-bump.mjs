@@ -235,9 +235,9 @@ function wheelTarget(filename) {
     if (p.startsWith("musllinux") && p.endsWith("x86_64")) out.add("linux_x64_musl");
     if (p === "win_amd64") out.add("win_x64");
   }
-  // abi3 · none 이 아닌 CPython 전용 ABI 는 고르지 않는다(번들 패키지는 쓰지 않는다 — 생기면 여기서 멈춘다).
-  if (abi !== "none" && abi !== "abi3" && out.size > 0)
-    fail(`${filename}: CPython-specific wheel, not handled`);
+  // CPython 전용 ABI 휠(debugpy 의 `cp313-cp313-…`)도 그 대상의 행으로 둔다 — `--require-hashes` 의 해시 파일에 그 대상의 휠 해시를
+  // 모두 적으면 pip 이 venv 의 python 에 맞는 휠을 고르고 그 해시를 대조한다. 맞는 것이 없으면 같은 배포의 `any` 휠로 내려간다.
+  void abi;
   return [...out];
 }
 
@@ -369,7 +369,16 @@ async function pypiArtifacts(pkg, version, specs) {
 
 const q = (s) => JSON.stringify(s);
 
+/**
+ * 지금 registry.toml 의 [[patched]] 행(글 그대로). bump 는 이 행을 만들지 않고 옮긴다 — `scripts/java-debug-patch.mjs build` 가
+ * 쓴다(결정 D71). 패키지 판이 바뀌면 `registry_tool check` 가 그 행이 옛 판이라고 알린다.
+ */
+export function patchedBlocks(text) {
+  return [...text.matchAll(/^\[\[patched\]\]\n(?:^(?!\[).*\n?)*/gm)].map((m) => m[0].trimEnd());
+}
+
 function writeToml(registry, bundled, artifacts) {
+  const patched = patchedBlocks(readFileSync(TOML, "utf8"));
   const order = (a) =>
     [a.package, a.target === "any" ? "" : a.target, a.dist ?? "", a.name].join("\0");
   artifacts.sort((a, b) => (order(a) < order(b) ? -1 : order(a) > order(b) ? 1 : 0));
@@ -405,6 +414,7 @@ json_sha256 = ${q(registry.json_sha256)}
       out += `${key} = ${typeof a[key] === "number" ? a[key] : q(a[key])}\n`;
     }
   }
+  for (const block of patched) out += `\n${block}\n`;
   writeFileSync(TOML, out);
   // 커밋 훅의 포매터(oxfmt)와 같은 꼴로 둔다 — 안 그러면 다음 bump 마다 형식만 바뀐 diff 가 남는다.
   run("pnpm", ["exec", "oxfmt", TOML]);

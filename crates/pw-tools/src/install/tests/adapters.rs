@@ -29,15 +29,35 @@ fn java_debug_pkg() -> Value {
     })
 }
 
+const JAR_FILE: &str = "extension/server/com.microsoft.java.debug.plugin-0.53.2.jar";
+
 fn vsix() -> Vec<u8> {
     zip(&[
         Entry::File("extension/package.json", b"{}".to_vec(), 0o644),
-        Entry::File(
-            "extension/server/com.microsoft.java.debug.plugin-0.53.2.jar",
-            b"jar".to_vec(),
-            0o644,
-        ),
+        Entry::File(JAR_FILE, crate::patches::tests::upstream_like_jar(), 0o644),
     ])
+}
+
+/// 그 jar 의 패치 고정 행(결정 D71) — 설치기와 같은 함수로 계산한 결과 해시.
+fn patched_row() -> crate::pinned::PatchedFile {
+    let jar = crate::patches::tests::upstream_like_jar();
+    let out = crate::patches::patch_jar(&jar, &crate::patches::JAVA_DEBUG_LOOPBACK).unwrap();
+    crate::pinned::PatchedFile {
+        package: "java-debug-adapter".into(),
+        version: "0.59.0".into(),
+        file: JAR_FILE.into(),
+        patch: "java-debug-loopback".into(),
+        sha256: sha256_hex(&jar),
+        patched_sha256: sha256_hex(&out),
+    }
+}
+
+fn java_debug_registry(body: &[u8]) -> Arc<ToolsRegistry> {
+    registry_patched(
+        vec![java_debug_pkg()],
+        &[vsix_row(body)],
+        vec![patched_row()],
+    )
 }
 
 fn vsix_row(body: &[u8]) -> Row {
@@ -88,7 +108,10 @@ async fn an_openvsx_download_must_match_its_pinned_hash() {
 
     let mut wrong = vsix_row(&body);
     wrong.sha256 = "f".repeat(64);
-    let (installer, layout) = openvsx_installer(&fx, registry(vec![java_debug_pkg()], &[wrong]));
+    let (installer, layout) = openvsx_installer(
+        &fx,
+        registry_patched(vec![java_debug_pkg()], &[wrong], vec![patched_row()]),
+    );
     fx.consent(&installer, "java-debug-adapter");
     let err = installer
         .install(&settings_grant(), "java-debug-adapter", None, None, false)
@@ -102,8 +125,7 @@ async fn an_openvsx_download_must_match_its_pinned_hash() {
     assert!(!layout.version_dir("java-debug-adapter", "0.59.0").exists());
     assert_eq!(layout.read_record("java-debug-adapter").unwrap(), None);
 
-    let (installer, layout) =
-        openvsx_installer(&fx, registry(vec![java_debug_pkg()], &[vsix_row(&body)]));
+    let (installer, layout) = openvsx_installer(&fx, java_debug_registry(&body));
     fx.consent(&installer, "java-debug-adapter");
     let result = installer
         .install(&settings_grant(), "java-debug-adapter", None, None, false)
@@ -133,11 +155,66 @@ async fn an_openvsx_download_must_match_its_pinned_hash() {
         Located::Absent
     );
     assert_eq!(locator.locate_share("absent-package", JAR), Located::Absent);
+    // 설치된 jar 는 패치한 것이고(결정 D71) 옆에 수정 고지가 있다.
+    assert_eq!(
+        sha256_hex(&std::fs::read(&jar).unwrap()),
+        patched_row().patched_sha256
+    );
+    let notice =
+        std::fs::read_to_string(dir.join("extension/server/NOTICE-pitwall-java-debug.txt"))
+            .unwrap();
+    assert!(notice.contains("Eclipse Public License v1.0"), "{notice}");
     std::fs::remove_file(&jar).unwrap();
     assert!(matches!(
         locator.locate_share("java-debug-adapter", JAR),
         Located::Broken { .. }
     ));
+}
+
+/// 결정 D71: java-debug 는 패치한 jar 로만 설치된다 — 그 판의 고정 행이 없거나, 받은 jar · 바꾼 결과의 해시가 행과 다르면 설치
+/// 전체가 실패하고(단계 `patch`) 그 판의 폴더 · 기록이 남지 않는다. 원본 jar 로 설치를 끝내는 길이 없다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn java_debug_installs_only_with_its_pinned_patch() {
+    let fx = Fx::new().await;
+    let body = vsix();
+    fx.server.route(VSIX_PATH, Reply::Body(body.clone()));
+    let no_row = registry(vec![java_debug_pkg()], &[vsix_row(&body)]);
+    let mut bad_result = patched_row();
+    bad_result.patched_sha256 = "e".repeat(64);
+    let mut bad_input = patched_row();
+    bad_input.sha256 = "d".repeat(64);
+    for (what, reg) in [
+        ("no row", no_row),
+        (
+            "result",
+            registry_patched(vec![java_debug_pkg()], &[vsix_row(&body)], vec![bad_result]),
+        ),
+        (
+            "input",
+            registry_patched(vec![java_debug_pkg()], &[vsix_row(&body)], vec![bad_input]),
+        ),
+    ] {
+        let (installer, layout) = openvsx_installer(&fx, reg);
+        fx.consent(&installer, "java-debug-adapter");
+        let err = installer
+            .install(&settings_grant(), "java-debug-adapter", None, None, false)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            code_and_stage(&err),
+            (code::INSTALL_FAILED, Some("patch".to_owned())),
+            "{what}: {err:?}"
+        );
+        assert!(
+            !layout.version_dir("java-debug-adapter", "0.59.0").exists(),
+            "{what}"
+        );
+        assert_eq!(
+            layout.read_record("java-debug-adapter").unwrap(),
+            None,
+            "{what}"
+        );
+    }
 }
 
 /// 받은 것 속의 링크가 설치 폴더 밖을 가리키는 `share` 는 찾지 않는다.
@@ -146,8 +223,7 @@ async fn a_share_that_leaves_the_install_folder_is_not_located() {
     let fx = Fx::new().await;
     let body = vsix();
     fx.server.route(VSIX_PATH, Reply::Body(body.clone()));
-    let (installer, layout) =
-        openvsx_installer(&fx, registry(vec![java_debug_pkg()], &[vsix_row(&body)]));
+    let (installer, layout) = openvsx_installer(&fx, java_debug_registry(&body));
     fx.consent(&installer, "java-debug-adapter");
     installer
         .install(&settings_grant(), "java-debug-adapter", None, None, false)

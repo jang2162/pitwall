@@ -7,6 +7,7 @@
 //! - [`purl`] · [`expr`] · [`target`]: `source.id` · `{{ … }}` 표현식 · 설치 대상.
 //! - [`overrides`]: `overrides/<패키지>.toml` — registry 정의 위에 Pitwall 이 받을 판 · 주소 · `bin` 을 덮어 고정하는 틀.
 //! - [`source`] · [`fetch`]: 산출물 받기(HTTPS 만 · 상한) · 해시 확인 · `$CACHE/registry/<판>/` 캐시 · 「최신」 모드.
+//! - [`patches`]: 받은 jar 를 Pitwall 이 고친 클래스로 바꾸는 패치(결정 D71 — java-debug 를 127.0.0.1 에만).
 //! - [`registry`] · [`methods`]: Host 의 상태와 `tools.registry.*` RPC.
 //!
 //! 설치 쪽(15-m4-plan.md M4-04 · 결정 M4-D17 · D18):
@@ -20,6 +21,7 @@ pub mod install;
 pub mod methods;
 pub mod overrides;
 pub mod package;
+pub mod patches;
 pub mod pinned;
 pub mod purl;
 pub mod registry;

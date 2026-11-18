@@ -743,6 +743,14 @@ impl ToolsInstaller {
             }
         };
 
+        // 패치(결정 D71 — java-debug 를 127.0.0.1 에만). 받은 jar 를 바꾸고 결과를 고정 해시와 대조한다 — 다르거나 고정 행이
+        // 없으면 설치가 실패한다(원본을 쓰지 않는다).
+        if let Some(line) = apply_patch(&dir, &name, &version, self.registry.pinned())
+            .map_err(|e| failed("patch", &name, e))?
+        {
+            self.log(&name, &line);
+        }
+
         // 덮어쓰기 정의의 런처(jdtls — 15-m4-plan.md M4-18). 실행 파일을 고르기 전에 둔다.
         let launchers = self
             .registry
@@ -1658,6 +1666,79 @@ fn check_pinned(
 }
 
 /// 위임 실행 파일(`node:` · `pyvenv:`)의 런처 자리(설치 폴더 기준). Windows 는 그 `.cmd` 다.
+/// 그 패키지에 패치([`crate::patches`])가 있으면 설치 폴더의 파일을 바꾼다. 패치가 없으면 `None`, 바꿨으면 로그 줄.
+///
+/// 실패(설치 전체가 실패한다): 그 판의 `[[patched]]` 행이 없다(「최신」 모드의 다른 판 등), 파일이 없거나 평범한 파일이 아니다,
+/// 받은 파일의 해시가 행과 다르다, 바꾼 결과의 해시가 행과 다르다. 바꾼 jar 옆에 수정 고지(EPL-1.0)를 쓴다.
+pub(crate) fn apply_patch(
+    dir: &Path,
+    name: &str,
+    version: &str,
+    pinned: &crate::pinned::Pinned,
+) -> Result<Option<String>, String> {
+    let Some(set) = crate::patches::for_package(name) else {
+        return Ok(None);
+    };
+    let Some(row) = pinned
+        .patched_for(name, version)
+        .filter(|r| r.patch == set.name)
+    else {
+        return Err(format!(
+            "{name} {version} has no pinned result for the patch {} — Pitwall installs it only patched",
+            set.name
+        ));
+    };
+    if row
+        .file
+        .split('/')
+        .any(|s| s.is_empty() || s == "." || s == "..")
+        || row.file.starts_with('/')
+    {
+        return Err(format!(
+            "patch file {} is not a plain relative path",
+            row.file
+        ));
+    }
+    let path = dir.join(&row.file);
+    let meta = fs::symlink_metadata(&path).map_err(|e| format!("{}: {e}", row.file))?;
+    if !meta.is_file() {
+        return Err(format!("{} is not a plain file", row.file));
+    }
+    let input = fs::read(&path).map_err(|e| format!("{}: {e}", row.file))?;
+    let got = crate::patches::sha256_hex(&input);
+    if got != row.sha256 {
+        return Err(format!(
+            "{} has SHA-256 {got}, the patch is for {}",
+            row.file, row.sha256
+        ));
+    }
+    let output = crate::patches::patch_jar(&input, set)?;
+    let patched = crate::patches::sha256_hex(&output);
+    if patched != row.patched_sha256 {
+        return Err(format!(
+            "the patched {} has SHA-256 {patched}, the pinned result is {}",
+            row.file, row.patched_sha256
+        ));
+    }
+    let tmp = path.with_file_name(format!(
+        "{}.pitwall-patch",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("patched")
+    ));
+    fs::write(&tmp, &output).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", row.file))?;
+    let notice = path
+        .parent()
+        .map(|p| p.join(set.notice_name))
+        .ok_or_else(|| format!("{} has no folder", row.file))?;
+    fs::write(&notice, set.notice).map_err(|e| format!("{}: {e}", notice.display()))?;
+    Ok(Some(format!(
+        "patched {} with {} ({} -> {patched})",
+        row.file, set.name, row.sha256
+    )))
+}
+
 fn launcher_path(bin: &str) -> String {
     let rel = format!("{LAUNCHER_DIR}/{bin}");
     if cfg!(windows) {

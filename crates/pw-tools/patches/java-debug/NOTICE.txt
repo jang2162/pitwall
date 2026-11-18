@@ -1,0 +1,30 @@
+Modified by Pitwall: com.microsoft.java.debug.plugin-0.53.2.jar
+
+This jar is the Java Debug Server plugin from vscjava.vscode-java-debug 0.59.0
+(Open VSX), which is the work of Microsoft Corporation and others, made
+available under the Eclipse Public License v1.0
+(http://www.eclipse.org/legal/epl-v10.html).
+
+Pitwall changed one file, and nothing else:
+
+  File:    com/microsoft/java/debug/plugin/internal/JavaDebugServer.java
+           (microsoft/java-debug, tag 0.53.2,
+           commit 54058b9eb466576a7a77c9303963ca88967ec58b)
+  Change:  the constructor opens its server socket with
+             new ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress())
+           instead of
+             new ServerSocket(0, 1)
+  Why:     the upstream server listens on every network address, accepts
+           connections with no authentication for as long as the language
+           server runs, and serves the debug protocol's `launch` request, so
+           another machine on the same network could run programs as the
+           user. Bound to the loopback address, only this machine can connect.
+
+The classes JavaDebugServer, JavaDebugServer$1 and JavaDebugServer$2 were
+compiled from the changed source; every other entry of the jar is the
+original. The changed source, the patch and the build script are in the
+Pitwall repository under crates/pw-tools/patches/java-debug/ and
+scripts/java-debug-patch.mjs.
+
+The source code of the Java Debug Server is available at
+https://github.com/microsoft/java-debug.

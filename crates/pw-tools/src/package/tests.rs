@@ -74,6 +74,9 @@ fn every_package_of_the_pinned_registry_parses_and_the_bundled_ones_are_supporte
                     matches!(r, Err(ToolUnsupported::Expression { .. })),
                     "{r:?}"
                 );
+            } else if name == "codelldb" && target == ToolTarget::LinuxX64Musl {
+                // codelldb 는 musl 자산을 올리지 않는다.
+                assert!(matches!(r, Err(ToolUnsupported::Target)), "{r:?}");
             } else {
                 assert!(r.is_ok(), "{name} on {target}: {r:?}");
             }

@@ -168,8 +168,8 @@ async fn live_tools_install_typescript_language_server() {
     assert_eq!(out.trim(), result.version);
 }
 
-// ---- 디버거(17-m6-plan.md M6-16 — 실제로 한 번 받아 본다). 번들에 들고 고정 해시를 더하는 것은 M6-19 다 — 그때 `checksum` 을
-// `Pinned` 로 바꾼다. 로컬: `cargo nextest run -p pw-tools --run-ignored only -E 'test(/^live_tools_install_dap_/)'`.
+// ---- 디버거(17-m6-plan.md M6-16 · M6-19 — 기본 번들이라 고정 해시로 받는다). 로컬:
+// `cargo nextest run -p pw-tools --run-ignored only -E 'test(/^live_tools_install_dap_/)'`.
 
 fn located(installer: &ToolsInstaller, package: &str, bin: &str) -> std::path::PathBuf {
     match installer.locator().unwrap().locate(package, bin) {
@@ -210,7 +210,7 @@ fn first_output(path: &Path, args: &[&str], wait: std::time::Duration) -> String
 #[ignore = "live: downloads codelldb from GitHub"]
 async fn live_tools_install_dap_codelldb() {
     let tmp = tempfile::tempdir().unwrap();
-    let (installer, _) = install_checked("codelldb", tmp.path(), ToolChecksum::None).await;
+    let (installer, _) = install_checked("codelldb", tmp.path(), ToolChecksum::Pinned).await;
     let path = located(&installer, "codelldb", "codelldb");
     let out = first_output(&path, &["--help"], std::time::Duration::from_secs(3));
     assert!(out.to_lowercase().contains("port"), "{out}");
@@ -220,7 +220,8 @@ async fn live_tools_install_dap_codelldb() {
 #[ignore = "live: downloads js-debug from GitHub, runs it with node on PATH"]
 async fn live_tools_install_dap_js_debug_adapter() {
     let tmp = tempfile::tempdir().unwrap();
-    let (installer, _) = install_checked("js-debug-adapter", tmp.path(), ToolChecksum::None).await;
+    let (installer, _) =
+        install_checked("js-debug-adapter", tmp.path(), ToolChecksum::Pinned).await;
     let path = located(&installer, "js-debug-adapter", "js-debug-adapter");
     let out = first_output(
         &path,
@@ -234,7 +235,7 @@ async fn live_tools_install_dap_js_debug_adapter() {
 #[ignore = "live: installs debugpy with pip into its own venv"]
 async fn live_tools_install_dap_debugpy() {
     let tmp = tempfile::tempdir().unwrap();
-    let (installer, _) = install_checked("debugpy", tmp.path(), ToolChecksum::None).await;
+    let (installer, _) = install_checked("debugpy", tmp.path(), ToolChecksum::Pinned).await;
     let path = located(&installer, "debugpy", "debugpy-adapter");
     let out = run(&path, &["--help"]);
     assert!(out.contains("--port"), "{out}");
@@ -245,7 +246,7 @@ async fn live_tools_install_dap_debugpy() {
 async fn live_tools_install_dap_java_debug_adapter() {
     let tmp = tempfile::tempdir().unwrap();
     let (installer, _) =
-        install_checked("java-debug-adapter", tmp.path(), ToolChecksum::None).await;
+        install_checked("java-debug-adapter", tmp.path(), ToolChecksum::Pinned).await;
     let jar = match installer.locator().unwrap().locate_share(
         "java-debug-adapter",
         "java-debug-adapter/com.microsoft.java.debug.plugin.jar",
@@ -253,9 +254,17 @@ async fn live_tools_install_dap_java_debug_adapter() {
         Located::Installed { path, .. } => path,
         other => panic!("{other:?}"),
     };
-    assert!(
-        std::fs::metadata(&jar).unwrap().len() > 100_000,
+    // 설치된 jar 는 127.0.0.1 에만 묶도록 패치한 것이다(결정 D71) — 고정 결과 해시와 같고 옆에 수정 고지가 있다.
+    let pinned = pw_tools::Pinned::builtin();
+    let row = pinned.patched_for("java-debug-adapter", "0.59.0").unwrap();
+    assert_eq!(
+        pw_tools::fetch::sha256_hex(&std::fs::read(&jar).unwrap()),
+        row.patched_sha256,
         "{}",
         jar.display()
+    );
+    assert!(
+        jar.with_file_name("NOTICE-pitwall-java-debug.txt")
+            .is_file()
     );
 }

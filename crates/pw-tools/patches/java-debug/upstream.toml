@@ -1,0 +1,28 @@
+# java-debug 를 127.0.0.1 에만 묶는 패치의 출처(06-roadmap.md 결정 D71, 17-m6-plan.md M6-19). `scripts/java-debug-patch.mjs` 가
+# 읽는다 — 순서와 규칙은 CONTRIBUTING.md 「도구 registry」 의 java-debug 문단.
+#
+# 이 폴더의 파일:
+# - JavaDebugServer.java: 아래 커밋의 `source` 에 loopback.patch 를 적용한 것(EPL-1.0 — 원본 머리 주석 그대로)
+# - loopback.patch: 한 줄만 바꾸는 diff. 스크립트가 거꾸로 적용해 원본 해시(`source_sha256`)가 나오는지 본다
+# - classes/: JavaDebugServer.java 를 아래 JDK · javac 인자로 컴파일한 클래스. 설치기가 바이너리에 묶어 jar 안의 같은 이름을
+#   바꾼다(crates/pw-tools/src/patches.rs). `check` 가 다시 컴파일해 바이트가 같은지 본다
+# - NOTICE.txt: 설치된 jar 옆에 쓰는 EPL-1.0 수정 고지
+
+repository = "https://github.com/microsoft/java-debug"
+tag = "0.53.2"
+commit = "54058b9eb466576a7a77c9303963ca88967ec58b"
+source = "com.microsoft.java.debug.plugin/src/main/java/com/microsoft/java/debug/plugin/internal/JavaDebugServer.java"
+source_sha256 = "f70a6678899e0f5f13fc4d64381c2479d32cbf51ddf6462d6553a0a2863c608d"
+
+# 컴파일. 상류 jar 의 클래스가 major 65(Java 21)라 `--release 21` 로 맞춘다. JDK 는 mise 의 `java-debug-patch` 태스크가 고정한다
+# (mise.toml) — 판이 다르면 javac 출력이 달라질 수 있어 스크립트가 `javac -version` 을 이 값과 견준다.
+javac_version = "25.0.5"
+javac_args = ["--release", "21", "-g", "-encoding", "UTF-8", "-implicit:none", "-proc:none"]
+
+# 바꿀 jar: registry 고정 표의 이 패키지 · 판 산출물(vsix)을 풀어 그 안의 jar 를 쓴다. 클래스 경로에는 그 jar 와 그 안의
+# `classpath_in_jar` 를 둔다(JavaDebugServer 가 쓰는 Configuration · ProtocolServer 가 그 안에 있다).
+package = "java-debug-adapter"
+version = "0.59.0"
+vsix_entry = "extension/server/com.microsoft.java.debug.plugin-0.53.2.jar"
+classpath_in_jar = ["lib/com.microsoft.java.debug.core-0.53.2.jar"]
+class_prefix = "com/microsoft/java/debug/plugin/internal/"

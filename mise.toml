@@ -60,6 +60,8 @@ run = [
   "node --test scripts/db-ssh.test.mjs",
   # 도구 registry 판 올림 스크립트(scripts/tools-registry-bump.mjs)의 리다이렉트 검사 — 네트워크 없이 가짜 fetch 로 돈다.
   "node --test scripts/tools-registry-bump.test.mjs",
+  # java-debug 패치 스크립트(scripts/java-debug-patch.mjs)의 diff 읽기 · 한 줄 규칙 · registry.toml 의 [[patched]] 행 — JDK · 네트워크 없이.
+  "node --test scripts/java-debug-patch.test.mjs",
 ]
 
 # 실 DB 시험(live_*)을 DB 마다 따로 돌리고 실행 개수를 하한(scripts/db-live.toml)과 견준다 — CI 의 `db-live` 잡과 같은 명령이다.
@@ -86,6 +88,15 @@ description = "release 에서만 판정하는 시간 상한 시험(검색 취소
 depends = ["install-deps"]
 run = "cargo nextest run --release -p pw-fs -p pw-syntax -p pw-git -p pw-db-sql -p pw-db --no-tests=fail -j 1 --run-ignored all -E 'test(/^search::tests::stopping_/) | test(=search::tests::the_stream_sends_files_then_done_and_ends_soon_after_cancel) | test(=tests::list_of_10000_entries_is_fast_in_release) | test(=a_5000_line_rust_file_highlights_within_budget) | test(=tests::watch::terminal_git_actions_raise_the_matching_events_and_the_reads_follow) | test(=tests::watch::a_branch_made_in_the_main_checkout_reaches_a_linked_worktree) | test(=tests::watch::the_status_bar_follows_a_terminal_checkout_on_one_shared_watch) | test(=split::tests::a_1mib_script_of_10000_statements_splits_within_50ms) | test(=split::tests::a_long_delimiter_keeps_the_split_linear) | test(=first_rows_chunk_of_100k_arrives_within_50ms) | test(=the_config_recheck_cost_does_not_grow_with_connection_files)'"
 
+# java-debug 를 127.0.0.1 에만 묶는 패치(06-roadmap.md 결정 D71)를 만들거나(`-- build`) 다시 만들어 견준다(`-- check`). 순서와 규칙은
+# CONTRIBUTING.md 「도구 registry」 의 java-debug 문단. JDK 는 이 태스크만 받는다(`tools`) — 저장소의 다른 태스크 · 개발자 기기의
+# 기본 도구에 JDK 를 더하지 않는다. javac 판이 바뀌면 클래스 바이트가 달라질 수 있어 판까지 고정한다(upstream.toml 의
+# `javac_version` 과 같게).
+[tasks.java-debug-patch]
+description = "java-debug loopback 패치(결정 D71) 만들기 · 다시 만들어 견주기 — build | check(JDK · 네트워크)"
+tools = { java = "temurin-25.0.5+8.0.LTS" }
+run = "node scripts/java-debug-patch.mjs"
+
 [tasks.lint]
 description = "fmt 검사 + clippy + oxlint + tsc + actionlint + 생성물 최신 여부"
 depends = ["install-deps"]
@@ -105,6 +116,9 @@ run = [
   # 도구 registry 의 고정 표(crates/pw-tools/registry.toml)가 내장 스냅숏의 기본 번들 패키지를 (판, 대상, 파일)마다 해시로
   # 덮는지(결정 M4-D17). 네트워크 없이 돈다. 고치려면 `node scripts/tools-registry-bump.mjs bump <태그>`.
   "cargo run -q -p pw-tools --example registry_tool -- check",
+  # java-debug 패치(결정 D71)가 바인드 주소 한 줄만 바꾸고 나머지가 상류 고정 커밋과 같은지 — 네트워크 · JDK 없이. 클래스를 다시
+  # 컴파일해 견주는 것은 `mise run java-debug-patch -- check`(CI `dap-live` 잡).
+  "node scripts/java-debug-patch.mjs check-source",
   # 데스크톱의 기본 feature 가 측정용 가짜 DB 드라이버(perf-fake-db)를 켜지 않는지 — 위 clippy · 시험은 --all-features 라 못 잡는다.
   "node scripts/perf-m3.mjs check-default",
 ]

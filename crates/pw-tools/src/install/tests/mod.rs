@@ -154,6 +154,22 @@ pub fn registry(packages: Vec<Value>, rows: &[Row]) -> Arc<ToolsRegistry> {
     registry_with_overrides(packages, rows, &[])
 }
 
+/// 패치 고정 행(결정 D71)을 함께 둔 registry.
+pub fn registry_patched(
+    packages: Vec<Value>,
+    rows: &[Row],
+    patched: Vec<crate::pinned::PatchedFile>,
+) -> Arc<ToolsRegistry> {
+    let json = json!({"registry": "test", "packages": packages}).to_string();
+    let mut pinned = pinned_toml(rows);
+    pinned.patched = patched;
+    Arc::new(ToolsRegistry::with_parts(
+        pinned,
+        Overrides::default(),
+        Index::from_snapshot_json(&json).unwrap(),
+    ))
+}
+
 /// 덮어쓰기 정의 `(패키지 이름, TOML 글)` 를 함께 둔 registry.
 pub fn registry_with_overrides(
     packages: Vec<Value>,

@@ -68,6 +68,7 @@ impl Fixture {
             },
             bundled: Pinned::builtin().bundled,
             artifacts: Vec::new(),
+            patched: Vec::new(),
         };
         let clock = Arc::clone(&self.clock);
         let r = ToolsRegistry::with_parts(pinned, Overrides::default(), Index::snapshot())
@@ -326,7 +327,7 @@ async fn without_network_or_cache_the_snapshot_answers_for_the_bundled_servers()
     );
     let status = status_of(&r);
     assert_eq!(status.origin, RegistryOrigin::Snapshot);
-    assert_eq!(status.supported + status.unsupported, 6);
+    assert_eq!(status.supported + status.unsupported, 10);
     for name in Pinned::builtin().bundled {
         let detail = get_in(&r, &name).unwrap();
         assert!(detail.summary.bundled, "{name}");
@@ -336,7 +337,12 @@ async fn without_network_or_cache_the_snapshot_answers_for_the_bundled_servers()
             let resolved = detail
                 .resolved
                 .unwrap_or_else(|| panic!("{name}: {:?}", detail.summary.unsupported));
-            assert!(!resolved.bin.is_empty(), "{name}");
+            // java-debug 는 실행 파일 없이 jdtls 에 싣는 jar(share)뿐이다.
+            if name == "java-debug-adapter" {
+                assert!(!resolved.share.is_empty(), "{name}");
+            } else {
+                assert!(!resolved.bin.is_empty(), "{name}");
+            }
         }
     }
     // 이 기기의 번들 서버는 받을 파일과 고정 해시가 짝지어 나온다(실제 고정 표 — 스냅숏과 같은 판).
