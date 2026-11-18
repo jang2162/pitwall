@@ -810,6 +810,21 @@ pub(crate) trait RunControl: Send + Sync {
     fn begin_commit(&self) -> bool;
     /// 커밋이 끝났다(성공이든 아니든).
     fn end_commit(&self);
+    /// 트랜잭션 없이(`none`) 첫 문장을 보내기 직전 — 그 문장부터는 보내는 대로 커밋된다. 돌려도 되면 `true`, 중지가 왔거나 부른
+    /// 쪽의 「되돌릴 수 없는 지점」 을 세우지 못했으면(그 호출이 이미 취소됐다) `false` — 아무 문장도 보내지 않는다.
+    fn begin_irreversible(&self) -> bool;
+    /// 시험이 끼워 넣는 자리: 모든 문장을 마치고 커밋할지 정하기 직전(`DbSessions::test_hooks` 의 `before_commit`).
+    fn before_commit(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(async {})
+    }
+    /// 시험이 끼워 넣는 자리: 커밋하기로 정한 뒤 · 커밋을 보내기 직전(`after_commit_point`).
+    fn after_commit_point(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(async {})
+    }
 }
 
 /// How one transaction of a run ended (the same words as `db_execute`'s audit: committed · rolled back · unknown).
@@ -850,6 +865,10 @@ pub(crate) struct FilesTransaction {
     pub end: SqlTransactionEnd,
     /// 커밋이 실패했으면 그 오류.
     pub commit_error: Option<DbError>,
+    /// 이 트랜잭션에서 돈(실패 포함) 마지막 암묵 커밋 문장(파일 번호 · 줄) — MySQL · MariaDB 의 DDL 등, `db_execute` 의
+    /// `irreversible` 과 같은 판정(`implicit_commit || may_end`). 롤백돼도 그 문장까지(실패한 암묵 커밋 문장은 그 앞까지)는
+    /// 커밋돼 남았다.
+    pub implicit_commit_at: Option<(usize, u32)>,
 }
 
 /// [`run_files`] 의 관찰자가 받는 것.
@@ -917,6 +936,12 @@ pub(crate) async fn run_files(
     };
     let stop = || control.stopped();
     let mut out = FilesRan::default();
+    // 트랜잭션 없이 돌면 첫 문장부터 보내는 대로 커밋된다 — 그 앞에서 「되돌릴 수 없는 지점」 을 세운다(에이전트 호출의 취소가
+    // 그 뒤에는 실행을 버리지 않고 끝 · 감사로 정확히 남는다 — 16-m5-plan M5-18b).
+    if !in_transaction && !control.begin_irreversible() {
+        out.stopped = true;
+        return out;
+    }
     for group in groups {
         if control.stopped() {
             out.stopped = true;
@@ -941,12 +966,14 @@ pub(crate) async fn run_files(
                 files: group,
                 end: SqlTransactionEnd::RolledBack,
                 commit_error: None,
+                implicit_commit_at: None,
             };
             observe(FilesEvent::Ended(&ended));
             out.transactions.push(ended);
             break;
         }
         let mut broke = false;
+        let mut implicit_commit_at = None;
         for at in group.clone() {
             let part = &files[at];
             let mut options = Statements {
@@ -965,7 +992,24 @@ pub(crate) async fn run_files(
                 cancel,
                 &mut inactivity,
                 &mut room,
-                &mut |event| observe(FilesEvent::Statement { file: at, event }),
+                &mut |event| {
+                    // 돈(실패 포함) 암묵 커밋 문장을 적어 둔다 — 롤백해도 그 앞은 남는다(MySQL 은 실패한 DDL 도 앞을 커밋한다).
+                    let (index, line) = match &event {
+                        StatementEvent::Ran { result, .. } => (Some(result.index), result.line),
+                        StatementEvent::Failed(error) => (Some(error.index), error.line),
+                        StatementEvent::RanUnlisted => (None, 0),
+                    };
+                    if in_transaction
+                        && mode == ScriptMode::Write
+                        && part
+                            .planned
+                            .iter()
+                            .any(|s| Some(s.index) == index && (s.implicit_commit || s.may_end))
+                    {
+                        implicit_commit_at = Some((at, line));
+                    }
+                    observe(FilesEvent::Statement { file: at, event });
+                },
             )
             .await;
             out.statements += ran.results.len() as u32 + u32::from(ran.error.is_some());
@@ -988,7 +1032,11 @@ pub(crate) async fn run_files(
         } else if broke {
             rollback(conn).await;
             (SqlTransactionEnd::RolledBack, None)
-        } else if control.begin_commit() {
+        } else if {
+            control.before_commit().await;
+            control.begin_commit()
+        } {
+            control.after_commit_point().await;
             let committed = within(Budget::PAGE.connect, "commit", conn.commit()).await;
             control.end_commit();
             match committed {
@@ -1009,6 +1057,11 @@ pub(crate) async fn run_files(
             files: group,
             end,
             commit_error,
+            implicit_commit_at: if end == SqlTransactionEnd::Committed {
+                None
+            } else {
+                implicit_commit_at
+            },
         };
         observe(FilesEvent::Ended(&ended));
         out.transactions.push(ended);

@@ -894,6 +894,9 @@ pub struct DbSessions {
     /// 시험이 실행 길의 정해진 자리에 끼워 넣는 동작([`TestHooks`]). 앱에서는 늘 비어 있다.
     #[doc(hidden)]
     pub test_hooks: TestHooks,
+    /// 실행 구성 `sql` 종류의 창 확인 순번(17-m6-plan M6-09 — (프로젝트, 구성 열쇠)마다). 확인 해시에 섞고, 확인을 쓴 실행이
+    /// 관문을 지나면 올린다 — 낸 확인은 한 번만 쓰인다(SQL 콘솔의 `confirm_epoch` 와 같다, `crate::run_sql`).
+    pub(crate) sql_run_confirms: Mutex<HashMap<String, u64>>,
     next_id: AtomicU64,
 }
 
@@ -984,6 +987,7 @@ impl DbSessions {
             opened: crate::gate::OpenedMemory::default(),
             approved: crate::gate::ApprovedMemory::default(),
             test_hooks: TestHooks::default(),
+            sql_run_confirms: Mutex::default(),
             next_id: AtomicU64::new(1),
         }
     }

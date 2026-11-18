@@ -5,12 +5,12 @@
 # pg · mysql · mariadb 를 2, 그 리뷰 회차가 MySQL 장애 조치 함수 시험으로 mysql · mariadb 를 1 올렸다, M5-19 가 Redis 조회 툴
 # `db_kv_scan` · `db_kv_get` 의 왕복 · 보낸 명령(MONITOR) 시험으로 redis 를 5, 그 리뷰 회차가 큰 원소 시험으로 2, 재검토 회차가 큰 첫 필드 시험으로 1 올렸다, M5-18 이 `db_execute` 의 INSERT 왕복 · 롤백과 PG 의 트랜잭션 밖 문장 · MySQL 의 암묵
 # 커밋 시험으로 pg · mysql · mariadb 를 2 올렸다, M5-17 이 `db_connection_test` 의 「이 연결 열기」 왕복으로 pg 를 1, M5-17b 가 표지 기억의 영속(다시 켠 뒤의 거절 · 사람이 푼 뒤의 왕복)으로 pg 를 1 올렸다, M6-09 가 실행 구성 `sql` 종류의
-# `per_file` 로 pg · mysql · mariadb 를 1, PG `none` 의 `CREATE INDEX CONCURRENTLY` 로 pg 를 1 더 올렸다).
+# `per_file` 로 pg · mysql · mariadb 를 1, PG `none` 의 `CREATE INDEX CONCURRENTLY` 로 pg 를 1 더, 그 리뷰 회차가 암묵 커밋 뒤의 콘솔 글로 mysql · mariadb 를 1 더 올렸다).
 # 준비 확인을 포함한 필터 전체는 하한과 상관없이 늘 1개 이상이어야 한다(`--no-tests=fail`) — 0개면 그 단계가 실패한다.
 # 줄을 지우거나 값을 내리면 리뷰에서 거절한다(14 「공유 부품의 주인」).
 
 pg = 30
-mysql = 25
-mariadb = 25
+mysql = 26
+mariadb = 26
 redis = 30
 ssh_tunnel = 6

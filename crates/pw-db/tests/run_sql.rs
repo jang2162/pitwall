@@ -13,12 +13,12 @@ use common::{Conn, Fixture};
 use pw_core::registry::plan::PlanChange;
 use pw_db::DbSessions;
 use pw_db::gate::{code, db_grant};
-use pw_db::run_sql::SqlRunTarget;
+use pw_db::run_sql::{NoReturn, SqlRunTarget};
 use pw_db::script::SqlTransaction;
-use pw_db_driver::fake::{FakeCall, FakeDriver, FakeResponse};
+use pw_db_driver::fake::{FakeCall, FakeDriver, FakeEnding, FakeResponse};
 use pw_db_types::{DbError, DbErrorKind, SqlDialect};
 use pw_rpc::{ConnectionScope, RpcError, code as rpc_code};
-use pw_run::runs::{RunState, Runs};
+use pw_run::runs::{LaunchedBy, RunState, Runs};
 use serde_json::{Value, json};
 
 const DEV: &str = "schema = 1\nname = \"Local PG\"\ndriver = \"postgres\"\nhost = \"localhost\"\ndatabase = \"app\"\n";
@@ -26,9 +26,12 @@ const RO: &str = "schema = 1\nname = \"replica\"\ndriver = \"postgres\"\nhost = 
 const PROD: &str = "schema = 1\nname = \"Prod\"\ndriver = \"postgres\"\nhost = \"prod.example\"\ndatabase = \"app\"\nproduction = true\n";
 const LITE: &str = "schema = 1\nname = \"lite\"\ndriver = \"sqlite\"\npath = \"app.db\"\n";
 
+const MY: &str = "schema = 1\nname = \"my\"\ndriver = \"mysql\"\nhost = \"db.example\"\ndatabase = \"app\"\nuser = \"app\"\n";
+
 struct Env {
     f: Fixture,
     pg: FakeDriver,
+    my: FakeDriver,
     runs: Runs,
     sessions: Arc<DbSessions>,
 }
@@ -39,8 +42,10 @@ fn env_with(trusted: bool) -> Env {
         SqlDialect::Postgres,
         FakeDriver::full_capabilities(),
     );
+    let my = FakeDriver::named_with("mysql", SqlDialect::Mysql, FakeDriver::full_capabilities());
     let mut drivers = pw_db::DriverRegistry::new();
     drivers.register(Arc::new(pg.clone())).unwrap();
+    drivers.register(Arc::new(my.clone())).unwrap();
     drivers
         .register(Arc::new(pw_db_driver_sqlite::SqliteDriver::new()))
         .unwrap();
@@ -60,10 +65,12 @@ fn env_with(trusted: bool) -> Env {
     // 쓰기는 행 없는 문장으로 답한다(기본 응답은 행을 내는 조회다).
     for verb in ["INSERT", "UPDATE", "DELETE", "CREATE"] {
         pg.respond(verb, FakeResponse::write(1));
+        my.respond(verb, FakeResponse::write(1));
     }
     Env {
         f,
         pg,
+        my,
         runs,
         sessions: held.unwrap(),
     }
@@ -291,10 +298,10 @@ async fn the_confirmation_is_bound_to_the_file_contents() {
     };
     let first = e.sessions.plan_sql_run(&grant, &target(&e)).await.unwrap();
     let same = e.sessions.plan_sql_run(&grant, &target(&e)).await.unwrap();
-    assert_eq!(first.confirm_hash(), same.confirm_hash());
+    assert_eq!(first.confirm_hash(0), same.confirm_hash(0));
     e.write("db/a.sql", "DELETE FROM t WHERE id = 1; \n");
     let changed = e.sessions.plan_sql_run(&grant, &target(&e)).await.unwrap();
-    assert_ne!(first.confirm_hash(), changed.confirm_hash());
+    assert_ne!(first.confirm_hash(0), changed.confirm_hash(0));
 }
 
 /// 프로덕션 연결의 파괴 등급은 연결 이름을 쳐야 돈다(SQL 콘솔과 같다).
@@ -596,4 +603,259 @@ async fn per_file_on_real_sqlite() {
     e.config("count", "lite", &["db/count.sql"], "all");
     let (_, counted) = e.run_confirmed(&mut w, "count").await;
     assert!(counted.contains("| 1        |"), "{counted}");
+}
+
+// --- 리뷰 회차(M6-09 리뷰 1 ~ 5) ---------------------------------------------------------------------------------
+
+/// 확인의 답(`confirmed`)을 3001 의 `data` 에서.
+fn confirmation(asked: &RpcError) -> Value {
+    let request = &asked.data.as_ref().unwrap()["request"];
+    json!({ "grade": request["grade"], "statementsHash": request["statementsHash"] })
+}
+
+/// 리뷰 1: 창의 확인은 SQL 콘솔과 같이 한 번만 쓰인다 — 같은 확인을 다시 실으면 다시 묻는다(연결하지 않는다).
+#[tokio::test]
+async fn a_confirmation_is_spent_once() {
+    let e = env();
+    e.write("db/fix.sql", "DELETE FROM t WHERE id = 1;\n");
+    e.config("fix", "dev", &["db/fix.sql"], "all");
+    let mut w = e.f.window();
+    let asked = e.start(&mut w, "fix", None).await.expect_err("asks");
+    let confirmed = confirmation(&asked);
+    let info = e
+        .start(&mut w, "fix", Some(confirmed.clone()))
+        .await
+        .unwrap();
+    e.finished(&info).await;
+    let connects = e.pg.count(&FakeCall::Connect);
+    let again = e
+        .start(&mut w, "fix", Some(confirmed))
+        .await
+        .expect_err("the same confirmation does not run twice");
+    assert_eq!(again.code, code::CONFIRM_REQUIRED);
+    assert_eq!(again.data.unwrap()["request"]["rejected"], "hashMismatch");
+    assert_eq!(e.pg.count(&FakeCall::Connect), connects);
+    assert_eq!(e.pg.committed(), ["DELETE FROM t WHERE id = 1"]);
+}
+
+/// 리뷰 1: 확인은 연결의 푼 대상과 표지에도 묶인다 — 확인 뒤 연결 설정이 다른 서버를 가리키거나 프로덕션 표지가 붙으면 그
+/// 확인으로 돌지 않는다.
+#[tokio::test]
+async fn a_confirmation_is_bound_to_the_connection_target_and_marks() {
+    for (from, to) in [
+        ("host = \"localhost\"", "host = \"other.example\""),
+        (
+            "database = \"app\"\n",
+            "database = \"app\"\nproduction = true\n",
+        ),
+    ] {
+        let e = env();
+        e.write("db/fix.sql", "UPDATE t SET a = 1 WHERE id = 1;\n");
+        e.config("fix", "dev", &["db/fix.sql"], "all");
+        let mut w = e.f.window();
+        let asked = e.start(&mut w, "fix", None).await.expect_err("asks");
+        e.f.edit_db("dev.toml", from, to);
+        let again = e
+            .start(&mut w, "fix", Some(confirmation(&asked)))
+            .await
+            .expect_err("asks again");
+        assert_eq!(again.code, code::CONFIRM_REQUIRED, "{to}");
+        assert_eq!(
+            again.data.unwrap()["request"]["rejected"],
+            "hashMismatch",
+            "{to}"
+        );
+        assert_eq!(e.pg.count(&FakeCall::Connect), 0, "{to}");
+    }
+}
+
+/// 리뷰 2: 트랜잭션이 없는(`none`) 실행은 첫 문장을 보내기 직전에 「되돌릴 수 없는 지점」 을 세운다 — 서지 못하면(그 호출이 이미
+/// 취소됐다) 아무 문장도 보내지 않는다. `all` 은 커밋 앞에서 세운다(문장들이 돈 뒤).
+#[tokio::test]
+async fn no_transaction_passes_the_point_of_no_return_before_the_first_statement() {
+    let inserts = |pg: &FakeDriver| {
+        pg.calls()
+            .iter()
+            .filter(|c| matches!(c, FakeCall::Execute(sql) if sql.starts_with("INSERT")))
+            .count()
+    };
+    for (mode, passes, sent_before) in [("none", true, 0), ("none", false, 0), ("all", true, 2)] {
+        let e = env();
+        e.write(
+            "db/seed.sql",
+            "INSERT INTO a VALUES (1);\nINSERT INTO b VALUES (2);\n",
+        );
+        let grant = db_grant(&ConnectionScope::Project(e.f.id.clone()), &e.f.id).unwrap();
+        let target = SqlRunTarget {
+            project_id: e.f.id.clone(),
+            worktree: None,
+            config: "seed".into(),
+            name: "seed".into(),
+            connection: "dev".into(),
+            files: vec!["db/seed.sql".into()],
+            transaction: if mode == "none" {
+                SqlTransaction::None
+            } else {
+                SqlTransaction::All
+            },
+        };
+        let plan = e.sessions.plan_sql_run(&grant, &target).await.unwrap();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (pg, at) = (e.pg.clone(), Arc::clone(&seen));
+        let point: NoReturn = Arc::new(move || {
+            at.lock().unwrap().push(inserts(&pg));
+            passes
+        });
+        let started = e
+            .sessions
+            .start_sql_run_with(
+                &e.runs,
+                &grant,
+                plan,
+                LaunchedBy::Window { window: None },
+                Some(point),
+            )
+            .await
+            .unwrap();
+        let summary = tokio::time::timeout(Duration::from_secs(5), started.done)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            seen.lock().unwrap().first(),
+            Some(&sent_before),
+            "{mode} {passes}"
+        );
+        if passes {
+            assert_eq!(inserts(&e.pg), 2, "{mode}");
+            assert!(!summary.stopped);
+        } else {
+            assert_eq!(inserts(&e.pg), 0, "nothing was sent");
+            assert!(summary.stopped);
+            assert!(e.pg.committed().is_empty());
+        }
+    }
+}
+
+/// 리뷰 3: 마지막 문장이 끝난 뒤 · 커밋 전에 중지가 오면 커밋하지 않고 롤백한다(끼워 넣는 자리 `before_commit` 에서 중지한다).
+#[tokio::test]
+async fn a_stop_just_before_the_commit_rolls_back() {
+    let e = env();
+    e.write("db/seed.sql", SEED);
+    e.config("seed", "dev", &["db/seed.sql"], "all");
+    let (runs, project) = (e.runs.clone(), e.f.id.clone());
+    e.sessions.test_hooks.set_before_commit(Box::new(move || {
+        runs.stop_project(&project);
+        Box::pin(async {})
+    }));
+    let mut w = e.f.window();
+    let (info, console) = e.run_confirmed(&mut w, "seed").await;
+    assert!(e.pg.committed().is_empty(), "{console}");
+    assert!(console.contains("rolled back: db/seed.sql"), "{console}");
+    assert!(console.ends_with("stopped: 1 statement\r\n"), "{console}");
+    let run = e
+        .runs
+        .find(&e.f.id, info["runId"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(run.info().exit.unwrap().code, Some(1));
+}
+
+/// 리뷰 3: 커밋을 시작한 뒤의 중지는 커밋을 끊지 않는다 — 그 파일은 커밋되고 다음 파일 앞에서 멈춘다(`per_file`).
+#[tokio::test]
+async fn a_stop_during_the_commit_lets_it_finish_and_stops_before_the_next_file() {
+    let e = env();
+    e.write("db/seed.sql", SEED);
+    e.write("db/fixtures.sql", "INSERT INTO b VALUES (1);\n");
+    e.config(
+        "seed",
+        "dev",
+        &["db/seed.sql", "db/fixtures.sql"],
+        "per_file",
+    );
+    let (runs, project) = (e.runs.clone(), e.f.id.clone());
+    e.sessions
+        .test_hooks
+        .set_after_commit_point(Box::new(move || {
+            runs.stop_project(&project);
+            Box::pin(async {})
+        }));
+    let mut w = e.f.window();
+    let (_, console) = e.run_confirmed(&mut w, "seed").await;
+    assert_eq!(e.pg.committed(), ["INSERT INTO a VALUES (1)"], "{console}");
+    assert!(console.contains("committed: db/seed.sql"), "{console}");
+    assert!(console.contains("not run: db/fixtures.sql"), "{console}");
+    assert!(console.ends_with("stopped: 1 statement\r\n"), "{console}");
+}
+
+/// 리뷰 4: MySQL · MariaDB 의 암묵 커밋(DDL) 뒤 실패하면 「아무것도 남지 않는다」 고 쓰지 않는다 — 그 문장까지는 커밋돼 남았다.
+#[tokio::test]
+async fn an_implicit_commit_is_not_reported_as_rolled_back_whole() {
+    let e = env();
+    e.f.write_db("my.toml", MY);
+    e.my.respond(
+        "CREATE",
+        FakeResponse::write(0).ending(FakeEnding::ImplicitCommit),
+    );
+    e.my.respond(
+        "bad",
+        FakeResponse::error(DbError::new(
+            DbErrorKind::Server,
+            "Table 'bad' doesn't exist",
+        )),
+    );
+    e.write(
+        "db/schema.sql",
+        "INSERT INTO a VALUES (1);\nCREATE TABLE t (id INT);\n",
+    );
+    e.write(
+        "db/fixtures.sql",
+        "INSERT INTO t VALUES (1);\nINSERT INTO bad VALUES (2);\n",
+    );
+    e.config("seed", "my", &["db/schema.sql", "db/fixtures.sql"], "all");
+    let mut w = e.f.window();
+    let (_, console) = e.run_confirmed(&mut w, "seed").await;
+    assert!(
+        e.my.committed()
+            .contains(&"INSERT INTO a VALUES (1)".to_owned()),
+        "{:?}",
+        e.my.committed()
+    );
+    // 암묵 커밋 뒤 문장이 새 트랜잭션에 묶여 롤백되는 것은 가짜 드라이버가 흉내 내지 않는다(그 연결의 트랜잭션 상태를
+    // 따라가지 않는다) — 실 MySQL · MariaDB 의 `live_mysql_sql_run_all_after_an_implicit_commit_says_what_is_kept` 가 본다.
+    assert!(
+        console.contains("rolled back after an implicit commit: db/schema.sql, db/fixtures.sql — the statement at db/schema.sql:2"),
+        "{console}"
+    );
+    assert!(!console.contains("nothing of"), "{console}");
+}
+
+/// 리뷰 5: 파일 수(64)와 합계 크기(5 MiB)를 넘는 구성은 띄우기 전에 거절한다(연결하지 않는다).
+#[tokio::test]
+async fn too_many_or_too_large_files_are_refused_before_starting() {
+    let e = env();
+    let many: Vec<String> = (0..65).map(|i| format!("db/{i}.sql")).collect();
+    for f in &many {
+        e.write(f, "SELECT 1;\n");
+    }
+    let refs: Vec<&str> = many.iter().map(String::as_str).collect();
+    e.config("many", "dev", &refs, "all");
+    let mut w = e.f.window();
+    let refused = e.start(&mut w, "many", None).await.expect_err("refused");
+    assert_eq!(refused.code, rpc_code::INVALID_PARAMS, "{refused:?}");
+
+    let big = format!("-- {}\nSELECT 1;\n", "x".repeat(3 * 1024 * 1024));
+    e.write("db/big1.sql", &big);
+    e.write("db/big2.sql", &big);
+    e.config("big", "dev", &["db/big1.sql", "db/big2.sql"], "all");
+    let refused = e.start(&mut w, "big", None).await.expect_err("refused");
+    assert_eq!(
+        (refused.code, reason(&refused)),
+        (rpc_code::INVALID_PARAMS, Some("tooLarge")),
+        "{refused:?}"
+    );
+    assert_eq!(e.pg.count(&FakeCall::Connect), 0);
+    // 하나만이면(3 MiB) 돈다.
+    e.config("one", "dev", &["db/big1.sql"], "all");
+    let info = e.start(&mut w, "one", None).await.unwrap();
+    e.finished(&info).await;
 }

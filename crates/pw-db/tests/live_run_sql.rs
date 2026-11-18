@@ -207,3 +207,54 @@ async fn live_mysql_sql_run_per_file_keeps_the_files_before_a_failure() {
     )
     .await;
 }
+
+/// MySQL · MariaDB `all`: 첫 파일의 `CREATE TABLE`(암묵 커밋) 뒤 둘째 파일이 실패하면, 콘솔은 「아무것도 남지 않는다」 가 아니라
+/// 암묵 커밋 문장까지 남았다고 쓴다 — 표는 남고, 그 뒤 넣은 행은 롤백된다.
+#[cfg(pw_live_mysql)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_mysql_sql_run_all_after_an_implicit_commit_says_what_is_kept() {
+    let table = "m6_09_implicit_probe";
+    let (f, mut w, runs) = host(
+        LiveDb::Mysql,
+        Arc::new(pw_db_driver_mysql::MysqlDriver::new()),
+    )
+    .await;
+    config(
+        &f,
+        "drop",
+        &[("db/drop.sql", format!("DROP TABLE IF EXISTS {table};\n"))],
+        "all",
+    );
+    run(&f, &mut w, &runs, "drop").await;
+    config(
+        &f,
+        "seed",
+        &[
+            (
+                "db/schema.sql",
+                format!(
+                    "CREATE TABLE {table} (id INT PRIMARY KEY);\nINSERT INTO {table} (id) VALUES (1);\n"
+                ),
+            ),
+            (
+                "db/fixtures.sql",
+                format!(
+                    "INSERT INTO {table} (id) VALUES (2);\nINSERT INTO {table} (id) VALUES (1);\n"
+                ),
+            ),
+        ],
+        "all",
+    );
+    let console = run(&f, &mut w, &runs, "seed").await;
+    assert!(
+        console.contains("rolled back after an implicit commit: db/schema.sql, db/fixtures.sql — the statement at db/schema.sql:1"),
+        "{console}"
+    );
+    assert!(!console.contains("nothing of"), "{console}");
+    assert_eq!(
+        count(&f, &mut w, &runs, table).await,
+        0,
+        "the table stays, the rows after it do not"
+    );
+    run(&f, &mut w, &runs, "drop").await;
+}

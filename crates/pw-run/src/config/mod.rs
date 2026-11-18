@@ -141,14 +141,18 @@ pub enum RunKindConfig {
     Sql {
         /// Connection id (`.pitwall/db/<id>.toml`).
         connection: String,
-        /// SQL files relative to the project root, run in this order. A file outside the root makes the configuration
-        /// unusable.
+        /// SQL files relative to the project root, run in this order (at most 64, together at most 5 MiB). A file outside the
+        /// root makes the configuration unusable.
         files: Vec<String>,
         /// How the files are grouped into transactions. A failing statement always stops the run.
         #[serde(default)]
         transaction: SqlTransaction,
     },
 }
+
+/// `sql` 구성의 파일 수 상한(17-m6-plan M6-09 ①). 합계 크기 상한(5 MiB — `db_query` · `db_execute` 의 `file` 하나와 같다)은 실행할
+/// 때 읽으며 본다(`pw_db::run_sql::MAX_TOTAL_BYTES`).
+pub const SQL_MAX_FILES: usize = 64;
 
 /// How an `sql` configuration's files are grouped into transactions.
 #[derive(
@@ -434,6 +438,9 @@ fn validate_kind(kind: &RunKindConfig, root: &std::path::Path) -> Result<(), Str
             no_nul("connection", connection)?;
             if files.is_empty() {
                 return Err("files is empty".to_owned());
+            }
+            if files.len() > SQL_MAX_FILES {
+                return Err(format!("files has more than {SQL_MAX_FILES} entries"));
             }
             for (i, file) in files.iter().enumerate() {
                 root::inside(root, file).map_err(|why| format!("files[{i}] {why}"))?;

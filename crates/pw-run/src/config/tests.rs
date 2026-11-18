@@ -1308,6 +1308,7 @@ fn an_sql_config_reads_its_fields_and_has_no_argv() {
         "files = ['../outside.sql']",
         "files = ['db/a.sql', '../../x.sql']",
         "files = ['a.sql']\ntransaction = 'nested'",
+        &format!("files = [{}]", vec!["'a.sql'"; 65].join(", ")),
     ] {
         assert!(sql(refused).is_some(), "`{refused}` was accepted");
     }

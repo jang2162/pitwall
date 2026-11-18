@@ -11,11 +11,12 @@
 //!    「사람이 연 연결」 로 기록된다). 그 프로젝트 창만(`db_grant`), 미신뢰 프로젝트는 구성 · 파일을 읽기 전에 거절한다(연결하지
 //!    않는다). read-only 연결의 조회 밖 문장은 거절(`readOnlyConnection`), 조회가 아닌 문장이 하나라도 있으면 SQL 콘솔과 같은 위험
 //!    확인(`3001` — `data` 는 [`RunSqlConfirmRequired`], 창은 `db/safety/risk-confirm.tsx` 를 그대로 띄운다 · 프로덕션 연결의 파괴
-//!    등급이면 연결 이름 치기). **확인은 읽은 내용의 해시에 묶인다**([`SqlRunPlan::confirm_hash`] — 연결 · 방언 · 방식 · 파일마다
-//!    경로 · 내용 해시 · 문장 원문): 확인 뒤 파일이 바뀌면 돌리지 않고 다시 묻는다.
+//!    등급이면 연결 이름 치기). **확인은 한 번만 쓰이고 읽은 내용 · 연결에 묶인다**([`SqlRunPlan::confirm_hash`] — 구성의 확인
+//!    순번 · 연결 id · 푼 대상 · 표지 · 방언 · 방식 · 파일마다 경로 · 내용 해시 · 문장 원문): 확인 뒤 파일이나 연결 설정이 바뀌면, 또
+//!    같은 확인을 다시 실으면 돌리지 않고 다시 묻는다. 파일은 64개 · 합계 [`MAX_TOTAL_BYTES`](5 MiB)까지.
 //! 4. **에이전트의 길**(M6-14 가 채운다): `agent_grant` → `crate::gate::db_grant_for_agent` → [`DbSessions::plan_sql_run`] →
 //!    [`SqlRunPlan::refuse_before_asking`](`db_execute` 와 같은 거절) → [`SqlRunPlan::plan_change`] 로 승인 → [`DbSessions::start_sql_run`]
-//!    (커밋 경계에 그 호출의 `PointOfNoReturn`) → [`SqlRunStarted::done`] 을 기다려 요약을 돌려준다. 감사 상세는
+//!    (커밋 경계에 — `none` 이면 첫 문장 앞에 — 그 호출의 `PointOfNoReturn`) → [`SqlRunStarted::done`] 을 기다려 요약을 돌려준다. 감사 상세는
 //!    [`SqlRunPlan::audit_detail`] 에 끝([`SqlRunSummary::audit`] — `transaction=`)을 붙인 것이다. SQL 원문 · 값은 남지 않는다.
 //! 5. **실행 관리자에 든다**(M6-02 ⑥ — `pw_run::runs::RunKind`): `RunId` · 상태 · 로그가 프로세스 실행과 같고, 콘솔에 문장마다
 //!    한 줄([`console`]), 중지는 그 연결의 인터럽트(`QueryCancel`)다. 커밋을 시작한 뒤의 중지는 커밋을 끊지 않는다 — 커밋이 끝난 뒤
@@ -45,6 +46,10 @@ use crate::script::{
 };
 use crate::session::{DbSessions, blocking, db_error};
 use crate::tool_plan::sql_grade;
+
+/// 한 실행이 읽는 파일 합계의 상한(바이트) — `db_query` · `db_execute` 의 `file` 하나와 같은 5 MiB(결정 D33,
+/// `crate::script::MAX_FILE_BYTES`). 파일 수의 상한은 `pw_run::config::SQL_MAX_FILES`(64). 넘으면 띄우기 전에 거절한다.
+pub const MAX_TOTAL_BYTES: u64 = crate::script::MAX_FILE_BYTES;
 
 /// 콘솔 크기(줄 바꿈만 쓰므로 뜻이 없다 — 실행 관리자의 칸).
 const SIZE: (u16, u16) = (120, 30);
@@ -100,6 +105,10 @@ pub struct SqlRunPlan {
     connection_name: String,
     /// 창의 증거면 연결 설정의 병합 표지, 에이전트의 증거면 그 대상에서 본 가장 엄한 것(결정 M5-D37).
     marks: DbMarks,
+    /// 창의 증거면 연결 설정의 푼 대상(`DbTarget` — 호스트 · 포트 · DB · 사용자 · 터널 · SQLite 경로). 확인 해시가 덮는다 — 확인
+    /// 뒤 연결 설정이 다른 서버를 가리키면 그 확인으로 돌지 않는다. 에이전트의 증거면 `None`(승인 해시가 대상을 덮는다 —
+    /// `crate::tool_plan::db_plan`).
+    target_key: Option<String>,
     files: Vec<PlannedFile>,
 }
 
@@ -180,16 +189,23 @@ impl SqlRunPlan {
         }
     }
 
-    /// 확인 해시(머리 주석 ③): 연결 id · 방언 · 트랜잭션 방식 · 파일마다 경로와 읽은 바이트의 해시 · 문장 원문 · 효과. 길이를 앞에
-    /// 붙여 경계가 섞이지 않는다. 같은 파일 내용 · 같은 구성이면 같다 — 파일 하나의 한 글자만 바뀌어도 다르다.
-    pub fn confirm_hash(&self) -> String {
+    /// 확인 해시(머리 주석 ③): 확인 순번(`epoch` — 한 번 쓰면 오른다) · 연결 id · 연결의 푼 대상 · 표지(프로덕션 · 읽기 전용) ·
+    /// 방언 · 트랜잭션 방식 · 파일마다 경로와 읽은 바이트의 해시 · 문장 원문 · 효과. 길이를 앞에 붙여 경계가 섞이지 않는다. 같은 순번 ·
+    /// 같은 연결 설정 · 같은 파일 내용이면 같다 — 파일 하나의 한 글자, 연결의 호스트, 표지 하나만 바뀌어도 다르다.
+    pub fn confirm_hash(&self, epoch: u64) -> String {
         let mut hasher = Sha256::new();
         let mut part = |bytes: &[u8]| {
             hasher.update((bytes.len() as u64).to_le_bytes());
             hasher.update(bytes);
         };
-        part(b"pitwall.run.sql.confirm.v1");
+        part(b"pitwall.run.sql.confirm.v2");
+        part(&epoch.to_le_bytes());
         part(self.target.connection.as_bytes());
+        part(self.target_key.as_deref().unwrap_or("").as_bytes());
+        part(&[
+            u8::from(self.marks.production),
+            u8::from(self.marks.read_only),
+        ]);
         part(format!("{:?}", self.dialect).as_bytes());
         part(self.target.transaction.name().as_bytes());
         for file in &self.files {
@@ -294,19 +310,24 @@ impl SqlRunPlan {
 
     /// 창의 판정(머리 주석 ③): 돌려도 되면 `Ok`. read-only 연결의 조회 밖 문장은 거절, 조회가 아닌 문장이 하나라도 있으면 확인을
     /// 청한다(`3001`) — `confirmed` 가 지금 읽은 내용의 해시와 같고 등급이 그 이상이며, 프로덕션 연결의 파괴 등급이면 친 이름이
-    /// 연결 이름과 같을 때만 지난다.
-    pub fn judge_window(&self, confirmed: Option<&DbConfirmed>) -> Result<(), RpcError> {
+    /// 연결 이름과 같을 때만 지난다. `epoch` 는 그 구성의 확인 순번이다. 확인을 써서 지났으면 `Ok(true)` — 부른 쪽이 순번을 올려
+    /// 그 확인을 버린다(한 번만 쓰인다).
+    pub fn judge_window(
+        &self,
+        confirmed: Option<&DbConfirmed>,
+        epoch: u64,
+    ) -> Result<bool, RpcError> {
         refuse_reading_changes(&self.global())?;
         self.refuse_transaction_control()?;
         if self.marks.read_only {
-            return self.refuse_on_read_only();
+            return self.refuse_on_read_only().map(|()| false);
         }
         let grade = self.grade();
         let effects = self.effects();
         if self.query_only() && effects.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
-        let hash = self.confirm_hash();
+        let hash = self.confirm_hash(epoch);
         let name_required = self.marks.production && grade == RiskGrade::Destructive;
         let rejected = match confirmed {
             None => None,
@@ -317,7 +338,7 @@ impl SqlRunPlan {
             {
                 Some("nameMismatch")
             }
-            Some(_) => return Ok(()),
+            Some(_) => return Ok(true),
         };
         let (sql, statements) = self.joined();
         let data = RunSqlConfirmRequired {
@@ -512,6 +533,9 @@ pub struct SqlRunSummary {
 pub struct SqlRunTransaction {
     pub files: Vec<String>,
     pub end: SqlTransactionEnd,
+    /// `<file>:<line>` of the last statement that committed on its own (MySQL · MariaDB DDL) in a transaction that did not
+    /// commit: the statements up to it are kept even though the transaction was rolled back.
+    pub implicit_commit_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
@@ -554,7 +578,7 @@ impl DbSessions {
                 .map(|_| ())
         })
         .await?;
-        let (kind, name, marks) = if grant.is_agent() {
+        let (kind, name, marks, target_key) = if grant.is_agent() {
             if grant.agent_connection_id() != Some(target.connection.as_str()) {
                 return Err(RpcError::internal(
                     "the agent db grant is for another connection",
@@ -564,6 +588,7 @@ impl DbSessions {
                 grant.agent_driver(),
                 grant.agent_connection_name().unwrap_or("?").to_owned(),
                 grant.agent_marks().unwrap_or_default(),
+                None,
             )
         } else {
             let (s, project, worktree, id) = (
@@ -584,10 +609,12 @@ impl DbSessions {
                 let config = found
                     .config
                     .map_err(|_| RpcError::invalid_params(crate::gate::invalid_settings(&id)))?;
+                let target = crate::gate::DbTarget::of(&config, &loaded.root);
                 Ok((
                     Some(config.driver),
                     config.name.clone(),
                     DbMarks::of(&config),
+                    Some(format!("{target:?}")),
                 ))
             })
             .await?
@@ -620,10 +647,28 @@ impl DbSessions {
         );
         let read = blocking(move || {
             let projects = &s.connections.host()?.projects;
-            paths
-                .iter()
-                .map(|path| read_script_file(projects, &project, worktree.as_deref(), path))
-                .collect::<Result<Vec<_>, _>>()
+            // 파일 수(`pw_run::config::SQL_MAX_FILES`)는 구성 검증이, 합계 크기는 여기서 읽는 그때 본다 — 넘으면 띄우기 전에 거절.
+            if paths.len() > pw_run::config::SQL_MAX_FILES {
+                return Err(RpcError::invalid_params(format!(
+                    "an sql configuration runs at most {} files",
+                    pw_run::config::SQL_MAX_FILES
+                )));
+            }
+            let mut total = 0u64;
+            let mut read = Vec::with_capacity(paths.len());
+            for path in &paths {
+                let file = read_script_file(projects, &project, worktree.as_deref(), path)?;
+                total += file.text.len() as u64;
+                if total > MAX_TOTAL_BYTES {
+                    return Err(RpcError::invalid_params(format!(
+                        "the files of this sql configuration are larger than {MAX_TOTAL_BYTES} bytes together (at `{}`)",
+                        file.path
+                    ))
+                    .with_data(serde_json::json!({ "reason": "tooLarge" })));
+                }
+                read.push(file);
+            }
+            Ok(read)
         })
         .await?;
         let files = on_classifier_thread(move || {
@@ -654,13 +699,15 @@ impl DbSessions {
             dialect,
             connection_name: name,
             marks,
+            target_key,
             files,
         })
     }
 
     /// 판정(창: [`SqlRunPlan::judge_window`], 에이전트: 승인)을 지난 계획을 실행 관리자의 실행 하나로 돌린다(머리 주석 ⑤). 연결을
     /// 먼저 연다 — 열지 못하면(비밀 · 확인 · 드라이버 오류, 에이전트 증거의 재확인) 실행은 생기지 않고 그 오류다. `no_return` 은
-    /// 에이전트 호출의 「되돌릴 수 없는 지점」 이다 — 첫 커밋 앞에서 세운다(서지 못하면 커밋하지 않고 롤백한다).
+    /// 에이전트 호출의 「되돌릴 수 없는 지점」 이다 — 첫 커밋 앞에서 세운다(서지 못하면 커밋하지 않고 롤백한다). 트랜잭션이
+    /// 없는 실행(`none`)은 첫 문장을 보내기 직전에 세운다(서지 못하면 아무 문장도 보내지 않는다).
     pub async fn start_sql_run(
         self: &Arc<Self>,
         runs: &Runs,
@@ -668,6 +715,21 @@ impl DbSessions {
         plan: SqlRunPlan,
         launched_by: LaunchedBy,
         no_return: Option<PointOfNoReturn>,
+    ) -> Result<SqlRunStarted, RpcError> {
+        let no_return = no_return.map(|point| Arc::new(move || point.pass()) as NoReturn);
+        self.start_sql_run_with(runs, grant, plan, launched_by, no_return)
+            .await
+    }
+
+    /// [`Self::start_sql_run`] 인데 「되돌릴 수 없는 지점」 을 함수로 받는다(시험이 그 자리를 본다).
+    #[doc(hidden)]
+    pub async fn start_sql_run_with(
+        self: &Arc<Self>,
+        runs: &Runs,
+        grant: &DbGrant,
+        plan: SqlRunPlan,
+        launched_by: LaunchedBy,
+        no_return: Option<NoReturn>,
     ) -> Result<SqlRunStarted, RpcError> {
         let target = plan.target.clone();
         let read_only = plan.read_only_run();
@@ -710,6 +772,7 @@ impl DbSessions {
             phase: Mutex::new(Phase::Running),
             cancel: cancel.clone(),
             no_return,
+            hooks: Mutex::new(Some(self.test_hooks.take_commit_hooks())),
         });
         let (done_tx, done) = tokio::sync::oneshot::channel();
         let new = NewRun {
@@ -794,6 +857,10 @@ async fn drive(
                     &paths[transaction.files.clone()],
                     transaction.end,
                     transaction.commit_error.as_ref(),
+                    transaction
+                        .implicit_commit_at
+                        .map(|(at, line)| format!("{}:{line}", paths[at]))
+                        .as_deref(),
                 ),
             };
             output.write(line.as_bytes());
@@ -839,6 +906,9 @@ fn summarize(plan: &SqlRunPlan, ran: &FilesRan) -> SqlRunSummary {
             .map(|t| SqlRunTransaction {
                 files: t.files.clone().map(path).collect(),
                 end: t.end,
+                implicit_commit_at: t
+                    .implicit_commit_at
+                    .map(|(at, line)| format!("{}:{line}", path(at))),
             })
             .collect(),
         failed: ran.failed.as_ref().map(|(at, e)| SqlRunFailure {
@@ -861,8 +931,13 @@ fn summarize(plan: &SqlRunPlan, ran: &FilesRan) -> SqlRunSummary {
 struct SqlRunControl {
     phase: Mutex<Phase>,
     cancel: QueryCancel,
-    no_return: Option<PointOfNoReturn>,
+    no_return: Option<NoReturn>,
+    /// 시험이 커밋 앞뒤에 끼워 넣는 동작(`DbSessions::test_hooks` — 앱에서는 비어 있다).
+    hooks: Mutex<Option<crate::session::CommitHooks>>,
 }
+
+/// 「되돌릴 수 없는 지점」 을 세우는 것 — 에이전트 호출의 `PointOfNoReturn::pass`(시험은 직접 준 함수).
+pub type NoReturn = Arc<dyn Fn() -> bool + Send + Sync>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -914,13 +989,53 @@ impl RunControl for SqlRunControl {
         }
         // 에이전트 호출이면 RPC 의 표지를 먼저 세운다 — 못 세웠으면 취소가 먼저 왔다(커밋하지 않는다).
         if let Some(point) = &self.no_return
-            && !point.pass()
+            && !point()
         {
             *phase = Phase::Stopped;
             return false;
         }
         *phase = Phase::Committing;
         true
+    }
+
+    fn begin_irreversible(&self) -> bool {
+        let mut phase = crate::session::lock(&self.phase);
+        if *phase != Phase::Running {
+            return false;
+        }
+        if let Some(point) = &self.no_return
+            && !point()
+        {
+            *phase = Phase::Stopped;
+            return false;
+        }
+        true
+    }
+
+    fn before_commit(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        let hook = crate::session::lock(&self.hooks)
+            .as_mut()
+            .and_then(|h| h.before_commit.take());
+        Box::pin(async move {
+            if let Some(hook) = hook {
+                hook().await;
+            }
+        })
+    }
+
+    fn after_commit_point(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        let hook = crate::session::lock(&self.hooks)
+            .as_mut()
+            .and_then(|h| h.after_commit_point.take());
+        Box::pin(async move {
+            if let Some(hook) = hook {
+                hook().await;
+            }
+        })
     }
 
     fn end_commit(&self) {
@@ -1038,6 +1153,7 @@ pub mod console {
         files: &[String],
         end: SqlTransactionEnd,
         commit_error: Option<&DbError>,
+        implicit_commit_at: Option<&str>,
     ) -> String {
         let list = files.join(", ");
         let why = commit_error
@@ -1045,6 +1161,13 @@ pub mod console {
             .unwrap_or_default();
         match end {
             SqlTransactionEnd::Committed => format!("committed: {list}{NL}"),
+            // 암묵 커밋 문장(MySQL · MariaDB 의 DDL)이 돌았으면 그 앞은 이미 커밋됐다 — 「아무것도 남지 않는다」 고 쓰지 않는다
+            // (`db_execute` 의 `irreversible` 과 같은 판정).
+            SqlTransactionEnd::RolledBack if implicit_commit_at.is_some() => format!(
+                "rolled back after an implicit commit: {list} — the statement at {} committed the statements before it on \
+                 its own, so they are kept; the rest was rolled back{why}{NL}",
+                implicit_commit_at.unwrap_or_default()
+            ),
             SqlTransactionEnd::RolledBack => {
                 format!(
                     "rolled back: {list} — nothing of {} is kept{why}{NL}",
@@ -1206,7 +1329,16 @@ async fn start_from_window(
     })
     .await?;
     let plan = sessions.plan_sql_run(&grant, &target).await?;
-    plan.judge_window(params.confirmed.as_ref())?;
+    // 확인은 한 번만 쓰인다: 순번을 읽어 판정하고, 확인을 써서 지났으면 같은 잠금 안에서 올린다 — 같은 확인을 함께 실은 두
+    // 호출 가운데 하나만 지난다(뒤 호출은 `hashMismatch` 로 다시 묻는다).
+    {
+        let key = format!("{}\u{0}{}", target.project_id, target.config);
+        let mut epochs = crate::session::lock(&sessions.sql_run_confirms);
+        let epoch = epochs.get(&key).copied().unwrap_or(0);
+        if plan.judge_window(params.confirmed.as_ref(), epoch)? {
+            epochs.insert(key, epoch.wrapping_add(1));
+        }
+    }
     let started = sessions
         .start_sql_run(runs, &grant, plan, LaunchedBy::Window { window }, None)
         .await?;
