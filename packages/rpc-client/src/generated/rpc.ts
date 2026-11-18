@@ -8897,8 +8897,8 @@ file?: string | null } |
 /**  Connection id (`.pitwall/db/<id>.toml`). */
 connection: string; 
 /**
- *  SQL files relative to the project root, run in this order. A file outside the root makes the configuration
- *  unusable.
+ *  SQL files relative to the project root, run in this order (at most 64, together at most 5 MiB). A file outside the
+ *  root makes the configuration unusable.
  */
 files: string[]; 
 /**  How the files are grouped into transactions. A failing statement always stops the run. */

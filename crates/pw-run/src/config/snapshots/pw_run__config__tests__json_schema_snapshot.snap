@@ -275,7 +275,7 @@ expression: "serde_json::to_string_pretty(&json_schema()).unwrap()"
           "type": "string"
         },
         "files": {
-          "description": "SQL files relative to the project root, run in this order. A file outside the root makes the configuration\nunusable.",
+          "description": "SQL files relative to the project root, run in this order (at most 64, together at most 5 MiB). A file outside the\nroot makes the configuration unusable.",
           "type": "array",
           "items": {
             "type": "string"
