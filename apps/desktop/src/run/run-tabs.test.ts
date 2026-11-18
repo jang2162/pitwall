@@ -23,6 +23,7 @@ function deps(): RunDeps {
     opensLink: (e) => e.metaKey,
     openFile: (target) => opened.push(target),
     openUrl: (url) => urls.push(url),
+    linkHint: (url, differs) => (differs ? `differs ${url}` : `opens ${url}`),
     exitedLine: (exit) => `[exit ${exit.code}]`,
     droppedLine: (bytes) => `[dropped ${bytes}]`,
     failedLine: (message) => `[failed ${message}]`,
@@ -123,7 +124,61 @@ describe("escape sequences from the program", () => {
   });
 });
 
+describe("OSC 8 links in a run console", () => {
+  /** 콘솔을 화면에 붙이고 `text` 를 쓴다. */
+  async function shown(text: string) {
+    tabs.upsert(runInfo({ runId: "r1" }));
+    const container = document.createElement("div");
+    document.body.append(container);
+    tabs.console("r1")!.attach(container);
+    await write("r1", text);
+    return tabs.console("r1")!.term;
+  }
+
+  it("go through the console's own handler: ⌘ + http(s) only, and the real address on hover", async () => {
+    const term = await shown("\x1b]8;;https://evil.example/x\x07docs\x1b]8;;\x07 and more");
+    const handler = term.options.linkHandler;
+    expect(handler).toBeTruthy();
+    // 보이는 글 「docs」(1~4칸) 뒤의 주소는 다른 곳이다.
+    const range: IBufferRange = { start: { x: 1, y: 1 }, end: { x: 4, y: 1 } };
+    handler!.activate(click(false), "https://evil.example/x", range);
+    expect(urls).toEqual([]);
+    handler!.hover?.(click(false), "https://evil.example/x", range);
+    expect(term.element!.title).toBe("differs https://evil.example/x");
+    handler!.leave?.(click(false), "https://evil.example/x", range);
+    expect(term.element!.hasAttribute("title")).toBe(false);
+    handler!.activate(click(), "https://evil.example/x", range);
+    expect(urls).toEqual(["https://evil.example/x"]);
+  });
+
+  it("say plainly where a link goes when its text is the address", async () => {
+    const term = await shown("\x1b]8;;https://example.com/\x07example.com\x1b]8;;\x07");
+    const range: IBufferRange = { start: { x: 1, y: 1 }, end: { x: 11, y: 1 } };
+    term.options.linkHandler!.hover?.(click(false), "https://example.com/", range);
+    expect(term.element!.title).toBe("opens https://example.com/");
+  });
+});
+
 describe("run tabs", () => {
+  it("keep a closed tab closed after a reload even when it was rerun", async () => {
+    // 리뷰 재현: A → 다시 실행 B(restartOf A) → B 가 끝난 뒤 탭을 닫고 창을 다시 불러온다. 목록은 [A, B] 시작 순이다.
+    const a = runInfo({ runId: "A", state: "exited", exit: { code: 0, signal: null } });
+    const b = runInfo({ runId: "B", restartOf: "A" });
+    host.results["run.restart"] = () => b;
+    tabs.upsert(runInfo({ runId: "A" }));
+    await tabs.restart("A");
+    tabs.upsert({ ...b, state: "exited", exit: { code: 0, signal: null } });
+    tabs.close("A");
+    expect(tabs.store.getState().tabs).toEqual([]);
+    host.runs = [a, { ...b, state: "exited", exit: { code: 0, signal: null } }];
+    const again = new RunTabs();
+    again.setDeps(deps());
+    again.connect(host.client, "p1");
+    await settle();
+    expect(again.store.getState().tabs.map((t) => [t.key, t.run.runId])).toEqual([]);
+    again.disposeAll();
+  });
+
   it("open a tab for a run an agent started without taking the active tab", async () => {
     tabs.connect(host.client, "p1");
     await settle();

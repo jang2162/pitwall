@@ -41,6 +41,8 @@ export interface TerminalDeps {
   openFile(target: { path: string; worktree?: string; line?: number; column?: number }): void;
   /** 외부 브라우저로 연다(OSC 8 링크, xterm-view.ts). 없으면 열지 않는다. */
   openUrl?(url: string): void;
+  /** OSC 8 링크의 풍선 도움말(xterm-view.ts). */
+  linkHint?(url: string, differs: boolean): string;
   log?(message: string): void;
 }
 
@@ -144,6 +146,7 @@ export function xtermDeps(
         "client" | "projectId" | "takesKey" | "opensLink" | "openFile" | "log"
       > & {
         openUrl?(url: string): void;
+        linkHint?(url: string, differs: boolean): string;
       })
     | undefined,
 ): XtermDeps | undefined {
@@ -157,6 +160,7 @@ export function xtermDeps(
     opensLink: deps.opensLink,
     openFile: deps.openFile,
     openUrl: deps.openUrl,
+    linkHint: deps.linkHint,
     log: deps.log,
   };
 }

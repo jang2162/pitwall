@@ -9,6 +9,7 @@ import { useStore } from "zustand";
 
 import { useEditorWorkspace } from "../editor/editor-workspace";
 import { useKeymap } from "../keymap/keymap-provider";
+import { useProjectStrings } from "../layout/strings";
 import { useHost } from "../rpc/host";
 import { STATUS_SLOTS, useStatusBarItem } from "../status-bar/status-bar";
 import { useTheme } from "../theme/theme-switcher";
@@ -50,6 +51,7 @@ export function RunFeature({
   tabs?: RunTabs;
 }) {
   const T = useRunStrings();
+  const terminalStrings = useProjectStrings().terminal;
   const { client } = useHost();
   const { platform, takesKey } = useKeymap();
   const workspace = useEditorWorkspace();
@@ -68,6 +70,7 @@ export function RunFeature({
       exitedLine: T.exitedLine,
       droppedLine: T.droppedLine,
       failedLine: T.attachFailed,
+      linkHint: terminalStrings.linkHint,
       log: (message) => console.info("[run]", message),
     });
   }

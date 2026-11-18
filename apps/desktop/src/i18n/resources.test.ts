@@ -105,6 +105,7 @@ describe("built-in translations", () => {
     callAll(toolsStrings(t));
     callAll(mcpStrings(t));
     callAll(runStrings(t));
+    for (const differs of [true, false]) projectStrings(t).terminal.linkHint("https://a/", differs);
     for (const state of ["running", "stopping", "exited"] as const) runStrings(t).state(state);
     for (const exit of [
       { code: 0, signal: null },

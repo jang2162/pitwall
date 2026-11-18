@@ -9,12 +9,19 @@
 // - OSC 52(클립보드 쓰기 · 읽기): xterm 본체는 clipboard addon 없이는 처리하지 않는다 — 그 addon 을 올리지 않는다.
 // - OSC 0 · 2(창 제목): `onTitleChange` 를 듣지 않는다 — 창 · 탭 제목이 바뀌지 않는다.
 // - OSC 8(하이퍼링크): xterm 의 기본 처리(브라우저 `confirm` 뒤 `window.open`)를 쓰지 않는다. ⌘ · Ctrl+클릭이고 `http(s)` 일 때만
-//   외부 브라우저로 연다(`openUrl`). `file:` · `javascript:` 등은 열지 않는다.
+//   외부 브라우저로 연다(`openUrl`). `file:` · `javascript:` 등은 열지 않는다. OSC 8 은 보이는 글과 여는 주소가 따로라(`문서` 라는
+//   글 뒤에 다른 주소) 마우스를 올리면 실제 주소를 풍선 도움말로 보이고, 보이는 글이 주소와 다르면 그렇다고 적는다(`linkHint`).
 // - 창 조작 · 보고(CSI t)는 xterm 의 `windowOptions` 기본값(모두 꺼짐)이다.
 
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { type ILinkHandler, type ILinkProvider, type ITheme, Terminal } from "@xterm/xterm";
+import {
+  type IBufferRange,
+  type ILinkHandler,
+  type ILinkProvider,
+  type ITheme,
+  Terminal,
+} from "@xterm/xterm";
 
 import { CODE_FONT } from "../editor/extensions/theme";
 import { fileLinkProvider } from "./terminal-links";
@@ -30,6 +37,8 @@ export interface XtermDeps {
   openFile(target: { path: string; worktree?: string; line?: number; column?: number }): void;
   /** 외부 브라우저로 연다(OSC 8 의 `http(s)` 링크). 없으면 열지 않는다. */
   openUrl?(url: string): void;
+  /** OSC 8 링크에 마우스를 올렸을 때의 풍선 도움말(UI 언어). `differs` 면 보이는 글이 그 주소가 아니다. */
+  linkHint?(url: string, differs: boolean): string;
   log?(message: string): void;
 }
 
@@ -53,12 +62,53 @@ export function isWebUrl(text: string): boolean {
 }
 
 /** OSC 8 의 처리: ⌘ · Ctrl+클릭이고 `http(s)` 일 때만 연다. */
-export function oscLinkHandler(deps: () => XtermDeps | undefined): ILinkHandler {
+/** 링크에 보이는 글이 그 주소를 그대로 보이는가 — 같은 글이거나, 스킴 · 끝 `/` 만 뺀 글이면 같다고 본다. */
+export function showsUrl(visible: string, url: string): boolean {
+  const bare = (t: string) =>
+    t
+      .trim()
+      .replace(/^https?:\/\//i, "")
+      .replace(/\/+$/, "")
+      .toLowerCase();
+  return bare(visible) === bare(url);
+}
+
+/** 링크 범위(1부터, 끝 포함)에 보이는 글. */
+export function rangeText(term: Pick<Terminal, "buffer">, range: IBufferRange): string {
+  let text = "";
+  for (let y = range.start.y; y <= range.end.y; y++) {
+    const line = term.buffer.active.getLine(y - 1);
+    if (!line) continue;
+    const from = y === range.start.y ? range.start.x - 1 : 0;
+    const to = y === range.end.y ? range.end.x : undefined;
+    text += line.translateToString(false, from, to);
+  }
+  return text;
+}
+
+/**
+ * OSC 8 의 처리: ⌘ · Ctrl+클릭이고 `http(s)` 일 때만 연다. 마우스를 올리면 `show` 로 실제 주소(보이는 글과 다르면 그 표시까지)를
+ * 보이고, 떠나면 `show(undefined)`.
+ */
+export function oscLinkHandler(
+  deps: () => XtermDeps | undefined,
+  term?: Pick<Terminal, "buffer">,
+  show: (hint: string | undefined) => void = () => {},
+): ILinkHandler {
   return {
     activate(event, text) {
       const d = deps();
       if (!d || !d.opensLink(event) || !isWebUrl(text)) return;
       d.openUrl?.(text);
+    },
+    hover(_event, text, range) {
+      const d = deps();
+      if (!d?.linkHint || !isWebUrl(text)) return;
+      const visible = term ? rangeText(term, range) : text;
+      show(d.linkHint(text, !showsUrl(visible, text)));
+    },
+    leave() {
+      show(undefined);
     },
     allowNonHttpProtocols: false,
   };
@@ -90,7 +140,14 @@ export class XtermView {
       cursorBlink: options.cursorBlink ?? true,
       // 붙여넣기 · 드롭은 xterm 이 bracketed paste 로 감싼다(셸이 켰을 때).
       allowProposedApi: options.allowProposedApi ?? false,
-      linkHandler: oscLinkHandler(deps),
+      linkHandler: null,
+    });
+    // 처리기는 화면(버퍼 · 요소)을 읽으므로 xterm 을 만든 뒤에 건다.
+    this.term.options.linkHandler = oscLinkHandler(deps, this.term, (hint) => {
+      const element = this.term.element;
+      if (!element) return;
+      if (hint === undefined) element.removeAttribute("title");
+      else element.title = hint;
     });
     this.term.loadAddon(this.fit);
     this.links = fileLinkProvider(this.term, {

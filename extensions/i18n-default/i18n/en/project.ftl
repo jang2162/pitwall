@@ -519,6 +519,10 @@ terminal-copy-failed = Could not copy the terminal selection
 terminal-paste-failed = Could not paste the clipboard into the terminal
 # A path has a control character, or the shell is unknown (its quoting rules are unknown)
 terminal-drop-refused = Did not paste the dropped paths: the terminal’s shell cannot take one of them safely
+# Tooltip of an OSC 8 hyperlink in the terminal or a run console. $url: the address it opens
+terminal-link-hint = { $url } — ⌘/Ctrl+click to open
+# Same, when the text shown is not that address (the program may hide another address behind it)
+terminal-link-hint-differs = The text shown is not this link’s address. Opens { $url } — ⌘/Ctrl+click to open
 action-terminal-new-tab = Terminal: New Tab
 action-terminal-close-tab = Terminal: Close Tab
 action-terminal-rename-tab = Terminal: Rename Tab

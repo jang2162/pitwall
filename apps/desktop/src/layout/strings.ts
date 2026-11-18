@@ -428,6 +428,9 @@ export function projectStrings(t: Translate) {
       copyFailed: t("terminal-copy-failed"),
       pasteFailed: t("terminal-paste-failed"),
       dropRefused: t("terminal-drop-refused"),
+      /** OSC 8 링크의 풍선 도움말 — 터미널 · 실행 콘솔(terminal/xterm-view.ts). */
+      linkHint: (url: string, differs: boolean) =>
+        t(differs ? "terminal-link-hint-differs" : "terminal-link-hint", { url }),
       actions: {
         newTab: t("action-terminal-new-tab"),
         closeTab: t("action-terminal-close-tab"),

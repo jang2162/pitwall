@@ -90,6 +90,7 @@ function TerminalPanel({
       openFile: (target) => void workspace.open(target),
       openUrl: (url) =>
         void openUrl(url).catch((e: unknown) => console.warn("[terminal] link not opened", e)),
+      linkHint: T.linkHint,
       log: (message) => console.info("[terminal]", message),
     });
   }

@@ -276,6 +276,19 @@ it("asks before closing the window with runs left, Cancel focused first", async 
   await act(async () => (document.activeElement as HTMLButtonElement).click());
   await expect(answer).resolves.toBe(false);
 
+  // Esc(바깥 누르기와 같은 닫기)도 [취소]다 — 실행을 끄는 쪽으로 가지 않는다.
+  await act(async () => {
+    answer = guard!();
+  });
+  await settle();
+  await act(async () =>
+    document.activeElement!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }),
+    ),
+  );
+  await expect(answer).resolves.toBe(false);
+  expect(document.querySelector("[data-testid=run-close-dialog]")).toBeNull();
+
   // 「끝내고 닫기」 는 닫기를 막지 않는다(끝내기는 창이 사라질 때 Host 가 한다).
   await act(async () => {
     answer = guard!();

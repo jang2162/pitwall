@@ -54,6 +54,7 @@ export interface RunDeps {
   opensLink(e: MouseEvent): boolean;
   openFile(target: { path: string; worktree?: string; line?: number; column?: number }): void;
   openUrl?(url: string): void;
+  linkHint?(url: string, differs: boolean): string;
   exitedLine(exit: RunExit): string;
   droppedLine(bytes: number): string;
   failedLine(message: string): string;
@@ -222,6 +223,8 @@ export class RunTabs {
   /** 다시 실행으로 이어받힌 앞 실행 — 늦게 온 이벤트로 탭을 다시 만들지 않는다. */
   private readonly superseded = new Set<string>();
   private dismissed = new Set<string>();
+  /** 탭마다 그 탭이 거친 실행(처음 실행 → 다시 실행 …). 닫을 때 사슬 전부를 닫은 것으로 둔다. */
+  private readonly chains = new Map<string, string[]>();
   private deps: RunDeps | undefined;
   private theme: ITheme = {};
   private connected: { client: RunClient; projectId: string; stop(): void } | undefined;
@@ -283,6 +286,11 @@ export class RunTabs {
   /** 실행 하나의 새 소식(목록 · 이벤트 · `run.start` · `run.restart` 의 결과). 같은 실행이 여러 번 와도 된다. */
   upsert(run: RunInfo): void {
     if (this.superseded.has(run.runId) || this.dismissed.has(run.runId)) return;
+    // 닫은 탭의 사슬을 잇는 끝난 실행(다시 불러온 목록에서 앞 실행이 먼저 온 경우 등)도 닫은 것이다. 지금 도는 다시 실행은 새 탭으로 보인다.
+    if (run.restartOf && this.dismissed.has(run.restartOf) && !isLive(run)) {
+      this.dismissed.add(run.runId);
+      return;
+    }
     if (this.deps && run.projectId !== this.deps.projectId) return;
     const { tabs, activeKey } = this.store.getState();
     const same = tabs.find((t) => t.run.runId === run.runId);
@@ -295,6 +303,7 @@ export class RunTabs {
     const before = run.restartOf ? tabs.find((t) => t.run.runId === run.restartOf) : undefined;
     if (before) {
       this.superseded.add(before.run.runId);
+      this.chains.get(before.key)?.push(run.runId);
       this.update(before.key, { run });
       this.consoles.get(before.key)?.restarted();
       return;
@@ -306,6 +315,7 @@ export class RunTabs {
       this.theme,
     );
     this.consoles.set(key, runConsole);
+    this.chains.set(key, [run.runId]);
     // 사람이 이 창에서 띄운 것은 앞으로, 에이전트가 띄운 것은 활성 탭이 없을 때만.
     const activate = activeKey === undefined || run.launchedBy.kind === "window";
     this.store.setState({
@@ -365,7 +375,8 @@ export class RunTabs {
     if (!tab || !runConsole || isLive(tab.run)) return;
     this.consoles.delete(key);
     runConsole.dispose();
-    this.dismissed.add(tab.run.runId);
+    for (const id of this.chains.get(key) ?? [tab.run.runId]) this.dismissed.add(id);
+    this.chains.delete(key);
     if (this.deps) saveDismissed(this.deps.projectId, this.dismissed);
     const { tabs, activeKey } = this.store.getState();
     const at = tabs.findIndex((t) => t.key === key);
@@ -381,6 +392,7 @@ export class RunTabs {
     this.consoles.clear();
     this.superseded.clear();
     this.dismissed.clear();
+    this.chains.clear();
     this.store.setState({ tabs: [], activeKey: undefined, connected: false });
   }
 
