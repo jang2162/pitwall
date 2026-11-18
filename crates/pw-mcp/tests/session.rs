@@ -781,6 +781,79 @@ async fn shared_project_config_cannot_widen_exposure() {
     cancel.cancel();
 }
 
+fn git(dir: &Path, args: &[&str]) {
+    let mut c = std::process::Command::new("git");
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("GIT_") {
+            c.env_remove(name);
+        }
+    }
+    let out = c
+        .current_dir(dir)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", dir.join(".no-gitconfig"))
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// 사람 레이어 상한은 git 인덱스만 바뀌어도 다시 판정한다(17-m6-plan M6-12 ⑥ — m6-localpolicy 리뷰 R1). `git add -f` 로 개인
+/// 파일이 추적되면(`.pitwall` 은 그대로) 같은 세션의 다음 목록 · 호출부터 그 파일이 넓힌 툴이 없다. (`git rm --cached` 로 풀어도
+/// 그 내용이 객체 DB 에 남아 「받아 온 내용」 이라 넓히지 않는다 — `pw_core::config::tracked`.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_index_change_alone_rejudges_the_session_exposure() {
+    let f = Fixture::new();
+    std::fs::create_dir_all(&f.paths.config).unwrap();
+    std::fs::write(
+        f.paths.config.join("settings.toml"),
+        "schema = 1\n[mcp]\npreset = \"read-only\"\n",
+    )
+    .unwrap();
+    f.host.config().unwrap().global.reload().unwrap();
+    let alpha = f.work("alpha");
+    git(&alpha, &["init", "-q"]);
+    let pitwall = alpha.join(".pitwall");
+    std::fs::create_dir_all(&pitwall).unwrap();
+    std::fs::write(
+        pitwall.join("project.local.toml"),
+        "schema = 1\n[mcp.tools]\nmcptest_write = true\n",
+    )
+    .unwrap();
+    let (client, _, cancel) = f
+        .connect(SessionRequest {
+            project: None,
+            cwd: Some(alpha.clone()),
+        })
+        .await;
+    let widened = [
+        "mcptest_write",
+        "project_info",
+        "project_list",
+        "settings_get",
+    ];
+    assert_eq!(tool_names(&client).await, widened);
+
+    git(&alpha, &["add", "-f", ".pitwall/project.local.toml"]);
+    assert_eq!(
+        tool_names(&client).await,
+        ["project_info", "project_list", "settings_get"],
+        "a committed local file is not the person's setting"
+    );
+    let refused = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("mcptest_write"))
+        .await;
+    assert!(refused.is_err(), "{refused:?}");
+
+    client.cancel().await.unwrap();
+    cancel.cancel();
+}
+
 /// 2026-07-28 클라이언트는 구독(`subscriptions/listen`)을 열지 않으면 `tools/list_changed` 를 받지 않는다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stateless_client_without_a_subscription_gets_no_list_changed() {

@@ -280,6 +280,8 @@ struct Inner {
     client: HostClient,
     project: Option<SessionProject>,
     exposure: watch::Receiver<Arc<Exposure>>,
+    /// 노출을 지금 다시 읽어 `exposure` 에 넣는다([`ExposureFeed::refresh`]).
+    refresh_exposure: Arc<dyn Fn() + Send + Sync>,
     id: String,
     /// 세션이 끝나면 취소된다([`serve`] 가 취소한다). 설정 감시 · 버스 구독 · list_changed 태스크가 여기에 묶인다.
     cancel: CancellationToken,
@@ -431,7 +433,10 @@ impl Session {
         let project_config = resolved
             .as_ref()
             .and_then(|r| ProjectConfig::open(&services.paths, r, &cancel));
-        let exposure = exposure_feed(
+        let ExposureFeed {
+            receiver: exposure,
+            refresh: refresh_exposure,
+        } = exposure_feed(
             services.global.clone(),
             &services.bus,
             project_config,
@@ -455,6 +460,7 @@ impl Session {
                 client,
                 project,
                 exposure,
+                refresh_exposure,
                 id,
                 client_info: Mutex::new(None),
                 audit,
@@ -465,8 +471,11 @@ impl Session {
         })
     }
 
-    /// 지금 보이는 툴.
+    /// 지금 보이는 툴. 목록 · 호출마다 노출을 다시 읽는다 — 사람 레이어 상한(공유 레이어를 뺀 읽기)은 git 인덱스로 개인 파일인지를
+    /// 가르는데, 인덱스만 바뀐 경우(`git add -f` · `git rm --cached`)는 `.pitwall` 감시의 `config.changed` 가 오지 않는다
+    /// (17-m6-plan M6-12 ⑥ — m6-localpolicy 리뷰 R1). 바뀌었으면 `exposure` 에도 넣어 `tools/list_changed` 가 나간다.
     fn visible(&self) -> Vec<&Tool> {
+        (self.inner.refresh_exposure)();
         let exposure = Arc::clone(&self.inner.exposure.borrow());
         self.inner
             .services
@@ -1667,13 +1676,20 @@ impl ProjectConfig {
     }
 }
 
-/// 전역 · 프로젝트 설정의 `[mcp]` 를 읽고, `config.changed`(전역은 앱 버스, 프로젝트는 세션 버스)가 오면 다시 읽는다.
+/// [`exposure_feed`] 의 결과: 노출의 수신자와, 지금 다시 읽어 넣는 함수.
+struct ExposureFeed {
+    receiver: watch::Receiver<Arc<Exposure>>,
+    refresh: Arc<dyn Fn() + Send + Sync>,
+}
+
+/// 전역 · 프로젝트 설정의 `[mcp]` 를 읽고, `config.changed`(전역은 앱 버스, 프로젝트는 세션 버스)가 오면 다시 읽는다. 이벤트 없이
+/// 바뀌는 것(git 인덱스)은 [`ExposureFeed::refresh`] 를 부르는 쪽(목록 · 호출)이 다시 읽는다.
 fn exposure_feed(
     global: ConfigStore,
     bus: &EventBus,
     project: Option<ProjectConfig>,
     cancel: CancellationToken,
-) -> watch::Receiver<Arc<Exposure>> {
+) -> ExposureFeed {
     let mut global_events = bus.subscribe(Filter::all().scope(Scope::Host).topics([TOPIC_CHANGED]));
     let mut project_events = project
         .as_ref()
@@ -1688,6 +1704,19 @@ fn exposure_feed(
         ))
     };
     let (tx, rx) = watch::channel(read());
+    // 값이 같으면 수신자를 깨우지 않는다.
+    let refresh = Arc::new(move || {
+        let next = read();
+        tx.send_if_modified(|current| {
+            if **current == *next {
+                false
+            } else {
+                *current = next;
+                true
+            }
+        });
+    });
+    let refresh_on_event = Arc::clone(&refresh);
     tokio::spawn(async move {
         loop {
             let project_changed = async {
@@ -1701,19 +1730,13 @@ fn exposure_feed(
                 received = global_events.recv() => if received.is_none() { return },
                 received = project_changed => if received.is_none() { return },
             }
-            // 값이 같으면 수신자를 깨우지 않는다.
-            let next = read();
-            tx.send_if_modified(|current| {
-                if **current == *next {
-                    false
-                } else {
-                    *current = next;
-                    true
-                }
-            });
+            refresh_on_event();
         }
     });
-    rx
+    ExposureFeed {
+        receiver: rx,
+        refresh,
+    }
 }
 
 /// 입력 스키마에 [`WORKTREE`] 가 있는가.
