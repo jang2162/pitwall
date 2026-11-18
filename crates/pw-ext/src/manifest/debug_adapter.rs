@@ -5,8 +5,10 @@
 //!
 //! 자리 표지: `{이름}`(소문자 · 숫자 · `_`, 소문자로 시작). 틀(`launch` · `attach`)의 자리는 실행 구성 `[debug]` 의 값으로 채우고
 //! ([`fill_request`]), `args` 의 자리는 `{port}` · `{host}`(tcp) · `{socket}`(socket) 셋뿐이다 — 포트 · 소켓 경로는 Pitwall 이
-//! 고르고 주소는 늘 [`ADAPTER_HOST`] 다(17-m6-plan 메인 판정 M6-P7 — 같은 기기의 다른 프로세스가 그 포트에 붙어 대상 안에서 코드를
-//! 돌리지 못하게. 소켓은 Pitwall 의 0700 임시 디렉터리 안 경로, Windows 는 named pipe 이름이다 — 연결은 `pw-dap`, M6-15).
+//! 고르고 주소는 늘 [`ADAPTER_HOST`] 다 — `tcp` 어댑터는 `args` 에 `{port}` 와 `{host}` 가 둘 다 있어야 한다(17-m6-plan 메인 판정
+//! M6-P7). loopback 묶기는 **다른 기기**가 그 포트에 붙어 대상 안에서 코드를 돌리지 못하게 할 뿐이고, 같은 기기의 다른 사용자는
+//! 막지 못한다 — 소켓 경로를 받는 어댑터는 `socket` 으로 정의한다(Pitwall 의 0700 임시 디렉터리 안 경로, Windows 는 named pipe
+//! 이름 — 연결과 상대 확인은 `pw-dap`, M6-15 리뷰 F1 · F2).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -376,6 +378,11 @@ impl Parser<'_> {
                 DapTransport::Stdio | DapTransport::Tcp if used.contains("socket") => {
                     Some("`{socket}` is only for a `socket` adapter")
                 }
+                // 어댑터가 묶는 주소를 Pitwall 이 정한다 — `{host}` 가 없으면 어댑터가 어느 주소(모든 주소일 수도)에 묶는지 모른다.
+                // `pw-dap` 의 `Transport::Tcp` 도 같은 꼴을 거절한다(`LaunchError::HostNotBound`).
+                DapTransport::Tcp if !used.contains("host") => Some(
+                    "a `tcp` adapter must be bound to 127.0.0.1 — write \"{host}\" where the address goes",
+                ),
                 _ => None,
             };
             if let Some(problem) = problem {

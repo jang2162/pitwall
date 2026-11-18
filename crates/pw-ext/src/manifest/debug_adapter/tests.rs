@@ -131,7 +131,7 @@ fn warns_and_ignores_unknown_debug_adapter_keys() {
 /// 형식 오류. 오류가 하나라도 있으면 매니페스트가 없고, 진단은 그 값(또는 표 머리)의 줄 · 열을 가리킨다. 한 잘못에 오류 하나다.
 #[test]
 fn debug_adapter_format_errors_point_at_the_value() {
-    let cases: [(&str, &str); 21] = [
+    let cases: [(&str, &str); 22] = [
         (
             "languages = [\"rust\"]\nlaunch = {}",
             "7:29: error: debug adapter `a`: missing `command` (or `start` for an adapter a language server opens)",
@@ -155,6 +155,11 @@ fn debug_adapter_format_errors_point_at_the_value() {
         (
             "languages = [\"rust\"]\ncommand = \"x\"\ntransport = \"tcp\"\nargs = [\"--stdio\"]\nlaunch = {}",
             "11:8: error: debug adapter `a`: a `tcp` adapter takes its port in `args` — write \"{port}\" where the port goes",
+        ),
+        (
+            // 포트만 있고 주소 자리가 없다 — 어댑터가 어느 주소에 묶는지 정하지 못하므로 거절(`pw-dap` 의 `HostNotBound` 와 같은 규칙).
+            "languages = [\"rust\"]\ncommand = \"x\"\ntransport = \"tcp\"\nargs = [\"--port\", \"{port}\"]\nlaunch = {}",
+            "11:8: error: debug adapter `a`: a `tcp` adapter must be bound to 127.0.0.1 — write \"{host}\" where the address goes",
         ),
         (
             "languages = [\"rust\"]\ncommand = \"x\"\ntransport = \"tcp\"\nlaunch = {}",
