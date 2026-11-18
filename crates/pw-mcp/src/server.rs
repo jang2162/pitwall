@@ -474,8 +474,12 @@ impl Session {
     /// 지금 보이는 툴. 목록 · 호출마다 노출을 다시 읽는다 — 사람 레이어 상한(공유 레이어를 뺀 읽기)은 git 인덱스로 개인 파일인지를
     /// 가르는데, 인덱스만 바뀐 경우(`git add -f` · `git rm --cached`)는 `.pitwall` 감시의 `config.changed` 가 오지 않는다
     /// (17-m6-plan M6-12 ⑥ — m6-localpolicy 리뷰 R1). 바뀌었으면 `exposure` 에도 넣어 `tools/list_changed` 가 나간다.
-    fn visible(&self) -> Vec<&Tool> {
-        (self.inner.refresh_exposure)();
+    ///
+    /// 다시 읽기는 설정 파일 · git 인덱스 · 객체 DB 를 읽으므로 블로킹 스레드에서 한다(async 워커를 막지 않게). 블로킹 풀이 그
+    /// 일을 거두면(런타임이 끝나는 중) 마지막 값으로 판정한다.
+    async fn visible(&self) -> Vec<&Tool> {
+        let refresh = Arc::clone(&self.inner.refresh_exposure);
+        let _ = tokio::task::spawn_blocking(move || refresh()).await;
         let exposure = Arc::clone(&self.inner.exposure.borrow());
         self.inner
             .services
@@ -520,7 +524,12 @@ impl Session {
         if args.remove(APPROVAL_KEY).is_some() {
             tracing::warn!(tool = name, "dropped an approval key the agent sent");
         }
-        let tool = self.visible().into_iter().find(|t| t.name == name).cloned();
+        let tool = self
+            .visible()
+            .await
+            .into_iter()
+            .find(|t| t.name == name)
+            .cloned();
         let Some(tool) = tool else {
             self.audit(
                 None,
@@ -1495,7 +1504,12 @@ impl ServerHandler for Session {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         Ok(ListToolsResult {
-            tools: self.visible().into_iter().map(|t| self.to_mcp(t)).collect(),
+            tools: self
+                .visible()
+                .await
+                .into_iter()
+                .map(|t| self.to_mcp(t))
+                .collect(),
             ..Default::default()
         })
     }
@@ -1730,7 +1744,9 @@ fn exposure_feed(
                 received = global_events.recv() => if received.is_none() { return },
                 received = project_changed => if received.is_none() { return },
             }
-            refresh_on_event();
+            // 설정 · 인덱스 읽기는 블로킹 스레드에서(`Session::visible` 과 같다).
+            let refresh = Arc::clone(&refresh_on_event);
+            let _ = tokio::task::spawn_blocking(move || refresh()).await;
         }
     });
     ExposureFeed {

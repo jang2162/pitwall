@@ -564,3 +564,70 @@ fn config_list_shows_configs_unusable_files_and_detected_tasks() {
         "{json}"
     );
 }
+
+/// 리뷰 F1: 이름에 비밀 단어가 없는 env 값 안의 URL 비밀번호도 가린다(`DATABASE_URL`) — 구성 · 프로필 · `[debug]` 아래 `env`.
+/// 비밀 이름이 아닌 다른 값 · 명령 · 인자는 그대로다. `GIT_CONFIG_KEY_<n>` 은 비밀 이름이 아니다(`shown::is_secret_name`).
+#[test]
+fn config_list_masks_url_passwords_in_env_values() {
+    let f = Fixture::new();
+    let run = f.root.join(".pitwall/run");
+    fs::create_dir_all(&run).unwrap();
+    fs::write(
+        run.join("db.toml"),
+        "schema = 1\nname = \"DB\"\ntype = \"shell\"\ncommand = \"psql postgres://cmd:cmd-pass-1@h/db\"\n\
+         [env]\nDATABASE_URL = \"postgres://app:url-pass-789@db.local:5432/app\"\nGIT_CONFIG_KEY_0 = \"core.pager\"\n\
+         HOME_URL = \"https://example.com/x\"\n\
+         [profiles.ci.env]\nCACHE = \"redis://:prof-pass-321@cache:6379\"\n\
+         [debug]\nadapter = \"js-debug\"\n[debug.env]\nREMOTE = \"amqp://u:dbg-pass-654@mq\"\n\
+         [debug.target.env]\nDEEP = \"x://u:deep-pass-111@h\"\n",
+    )
+    .unwrap();
+    let list = f
+        .runs
+        .tool_config_list(
+            &ConnectionScope::Agent,
+            &RunToolConfigListParams {
+                project_id: f.project.clone(),
+                worktree: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(list.configs.len(), 1, "{list:#?}");
+    let db = &list.configs[0].config;
+    assert!(
+        db.env["DATABASE_URL"].starts_with("postgres://app:")
+            && db.env["DATABASE_URL"].ends_with("@db.local:5432/app"),
+        "{}",
+        db.env["DATABASE_URL"]
+    );
+    assert_eq!(db.env["GIT_CONFIG_KEY_0"], "core.pager");
+    assert_eq!(db.env["HOME_URL"], "https://example.com/x");
+    let json = serde_json::to_string(&list).unwrap();
+    for secret in [
+        "url-pass-789",
+        "prof-pass-321",
+        "dbg-pass-654",
+        "deep-pass-111",
+    ] {
+        assert!(!json.contains(secret), "{secret} leaked: {json}");
+    }
+    assert!(json.contains("cmd-pass-1"), "commands are shown as written");
+}
+
+/// 리뷰 R-a: `tail` 모드에서 마지막 줄 하나가 상한보다 크면 빈 글이 아니라 그 줄의 끝(최신)을 잘라 싣는다.
+#[test]
+fn tail_keeps_the_end_of_a_last_line_larger_than_the_budget() {
+    let f = Fixture::new();
+    let (run, output) = f.person_run();
+    output.write(format!("before\n{}END\n", "z".repeat(400 * 1024)).as_bytes());
+    let logs = f.logs(f.params(&run)).unwrap();
+    assert!(serde_json::to_vec(&logs).unwrap().len() <= 256 * 1024);
+    assert!(logs.truncated);
+    assert_eq!(logs.lines, 1);
+    assert!(
+        logs.text.ends_with("zzzEND"),
+        "the newest end of the line is kept"
+    );
+    assert!(logs.text.len() > 100 * 1024, "{}", logs.text.len());
+    assert_eq!(logs.next_since, logs.log_end);
+}

@@ -8,8 +8,8 @@
 //!   결정 D69 가 막는 것은 다루기(`run_stop` · `run_restart`)다.
 //! - **띄운 자리**: 사람(창)인지 에이전트인지만 보인다. 에이전트 세션 id · 클라이언트 이름은 싣지 않는다 — 에이전트는 다른 세션의
 //!   정보를 읽지 못한다(16-m5-plan M5-10 — `mcp.sessions` 는 에이전트 범위 연결을 거절한다).
-//! - **구성의 env 값**: 키 이름이 비밀을 가리키는 값(`pw_core::secret::is_secret_key`)은 `[redacted]` 로 가린다 — `settings_get` 과
-//!   같은 규칙. 개인 전용 폴더(앱 설정 폴더)의 `.local.toml` 은 에이전트가 파일 툴로 읽을 수 없는 자리다.
+//! - **구성의 env 값**: 키 이름이 비밀을 가리키는 값은 `[redacted]`, 그 밖의 값은 URL 비밀번호 자리를 가린다([`redacted`] —
+//!   판정은 `pw_run::config::shown`). 개인 전용 폴더(앱 설정 폴더)의 `.local.toml` 은 에이전트가 파일 툴로 읽을 수 없는 자리다.
 //! - **로그**: 프로그램이 찍은 출력이라 내용은 가리지 않는다. 터미널 제어(ANSI 이스케이프 · 제어 문자)만 걷는다([`text`]). 응답은
 //!   [`LOG_BUDGET`] 안에서 자른다(세션 상한 256 KiB 아래 — 결정 M5-D34). 오프셋은 링 버퍼의 바이트 오프셋(`run.attach` 의 `since`
 //!   와 같다)이다.
@@ -21,14 +21,13 @@ mod text;
 use std::collections::BTreeMap;
 
 use pw_core::registry::agent::agent_grant;
-use pw_core::secret::is_secret_key;
 use pw_rpc::{ConnectionScope, Router, RpcError, code, rpc_method};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::{LaunchedBy, Run, RunExit, RunId, RunInfo, RunLog, RunState, Runs};
 use crate::config::read::RunConfigLayer;
-use crate::config::{RunConfig, RunConfigPlace, read};
+use crate::config::{RunConfig, RunConfigPlace, read, shown};
 use crate::detect::{self, NoExec};
 
 pub use text::clean_line;
@@ -93,7 +92,8 @@ pub struct RunToolConfig {
     /// Configuration id (the file name) — `configId` for `run_start`.
     pub id: String,
     /// The merged configuration. `env` values whose name points to a secret (`TOKEN`, `PASSWORD`, `SECRET`, `KEY` …) are
-    /// shown as `[redacted]`.
+    /// shown as `[redacted]`, and the password in a URL inside any other `env` value (`postgres://user:pass@host`) is
+    /// masked. Commands and arguments are shown as written.
     pub config: RunConfig,
     /// Files that gave values (shared first).
     pub files: Vec<RunToolConfigFile>,
@@ -314,7 +314,7 @@ rpc_method! {
     /// This project's run configurations: usable ones (merged from the shared `.pitwall/run/<id>.toml` and the
     /// person's `<id>.local.toml`), files that cannot be used and why, and tasks detected from project files (npm
     /// scripts, Make targets, just recipes, compose services — with the file they came from). `env` values whose name
-    /// points to a secret are `[redacted]`. Runs nothing and writes nothing.
+    /// points to a secret are `[redacted]` and URL passwords in `env` values are masked. Runs nothing and writes nothing.
     pub RunToolConfigListMethod: "run.tool.configList" {
         params: RunToolConfigListParams,
         result: RunToolConfigList,
@@ -464,18 +464,64 @@ fn files(layers: &[RunConfigLayer]) -> Vec<RunToolConfigFile> {
         .collect()
 }
 
-/// 이름이 비밀을 가리키는 env 값을 가린다(구성 · 프로필).
+/// env 값을 가린다(구성 · 프로필 · `[debug]` 아래 어느 깊이든 `env` 표) — 이름이 비밀 단어면 `[redacted]`
+/// (`shown::is_secret_name` — `GIT_CONFIG_KEY_<n>` 은 아니다), 아니면 값 안의 URL 비밀번호 자리만(`shown::url_password_masked`).
+/// 에이전트에게 주는 조회 결과라 승인 화면과 같은 판정을 쓰되 비밀 이름의 값은 해시도 싣지 않는다. 명령 · 인자는 가리지 않는다.
 pub fn redacted(mut config: RunConfig) -> RunConfig {
+    fn value(name: &str, value: &str) -> String {
+        if shown::is_secret_name(name) {
+            REDACTED.to_owned()
+        } else {
+            shown::url_password_masked(value)
+        }
+    }
     fn mask(env: &mut BTreeMap<String, String>) {
-        for (name, value) in env.iter_mut() {
-            if is_secret_key(name) {
-                *value = REDACTED.to_owned();
+        for (name, v) in env.iter_mut() {
+            *v = value(name, v);
+        }
+    }
+    /// `[debug]` 의 어댑터 템플릿 값: 키가 `env` 인 표의 글자 값.
+    fn mask_debug(v: &mut serde_json::Value) {
+        match v {
+            serde_json::Value::Object(map) => {
+                for (key, child) in map.iter_mut() {
+                    if key == "env"
+                        && let serde_json::Value::Object(env) = child
+                    {
+                        for (name, entry) in env.iter_mut() {
+                            if let serde_json::Value::String(text) = entry {
+                                *text = value(name, text);
+                            } else {
+                                mask_debug(entry);
+                            }
+                        }
+                    } else {
+                        mask_debug(child);
+                    }
+                }
             }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(mask_debug),
+            _ => {}
         }
     }
     mask(&mut config.env);
     for profile in config.profiles.values_mut() {
         mask(&mut profile.env);
+    }
+    if let Some(debug) = config.debug.as_mut() {
+        for (key, child) in debug.settings.iter_mut() {
+            if key == "env"
+                && let serde_json::Value::Object(env) = child
+            {
+                for (name, entry) in env.iter_mut() {
+                    if let serde_json::Value::String(text) = entry {
+                        *text = value(name, text);
+                    }
+                }
+            } else {
+                mask_debug(child);
+            }
+        }
     }
     config
 }
