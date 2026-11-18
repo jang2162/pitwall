@@ -218,6 +218,7 @@ mod tests {
             "mcp.ftl",
             "menu.ftl",
             "project.ftl",
+            "run.ftl",
             "welcome.ftl",
         ];
         assert_eq!(
