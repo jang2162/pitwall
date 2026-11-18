@@ -41,6 +41,26 @@ impl Toolchains for HostileProject {
     }
 }
 
+/// 고정 판 전체(`tests/fixtures/registry.json.zip` — 고정 해시와 같은지 본다)를 정의로, 고정 표 · 덮어쓰기는 앱과 같다.
+fn pinned_full_registry() -> ToolsRegistry {
+    let zip = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/registry.json.zip"
+    ))
+    .unwrap();
+    let pinned = pw_tools::Pinned::builtin();
+    assert_eq!(pw_tools::fetch::sha256_hex(&zip), pinned.registry.sha256);
+    let json = pw_tools::source::unzip_registry(&zip).unwrap();
+    let index = pw_tools::Index::from_registry_json(
+        &json,
+        &pinned.registry.version,
+        pw_tools::RegistryOrigin::Cache,
+        None,
+    )
+    .unwrap();
+    ToolsRegistry::with_parts(pinned, pw_tools::Overrides::builtin(), index)
+}
+
 async fn install(
     name: &str,
     root: &Path,
@@ -48,7 +68,20 @@ async fn install(
     Arc<ToolsInstaller>,
     pw_tools::install::methods::ToolInstallResult,
 ) {
-    let installer = Arc::new(ToolsInstaller::new(Arc::new(ToolsRegistry::new())));
+    install_checked(name, root, ToolChecksum::Pinned).await
+}
+
+/// `checksum`: 확인 다이얼로그가 보일 체크섬 상태(번들 밖 패키지는 `None`).
+async fn install_checked(
+    name: &str,
+    root: &Path,
+    checksum: ToolChecksum,
+) -> (
+    Arc<ToolsInstaller>,
+    pw_tools::install::methods::ToolInstallResult,
+) {
+    // 번들 밖 패키지(디버거 — M6-19 전)는 내장 스냅숏에 없다 — 고정 판 전체(시험 고정물)를 쓴다. 번들 패키지는 같은 정의다.
+    let installer = Arc::new(ToolsInstaller::new(Arc::new(pinned_full_registry())));
     installer.attach(InstallerHost {
         tools_dir: root.join("data/tools"),
         state_dir: root.join("state"),
@@ -69,9 +102,8 @@ async fn install(
     assert_eq!(err.code, code::CONFIRM_REQUIRED);
     let ask: ToolConfirmRequired = serde_json::from_value(err.data.unwrap()).unwrap();
     assert_eq!(
-        ask.checksum,
-        ToolChecksum::Pinned,
-        "a bundled package has pinned hashes"
+        ask.checksum, checksum,
+        "{name}: the checksum the dialog shows"
     );
     let confirmed = ToolConfirmed {
         version: ask.version,
@@ -134,4 +166,96 @@ async fn live_tools_install_typescript_language_server() {
     };
     let out = run(&path, &["--version"]);
     assert_eq!(out.trim(), result.version);
+}
+
+// ---- 디버거(17-m6-plan.md M6-16 — 실제로 한 번 받아 본다). 번들에 들고 고정 해시를 더하는 것은 M6-19 다 — 그때 `checksum` 을
+// `Pinned` 로 바꾼다. 로컬: `cargo nextest run -p pw-tools --run-ignored only -E 'test(/^live_tools_install_dap_/)'`.
+
+fn located(installer: &ToolsInstaller, package: &str, bin: &str) -> std::path::PathBuf {
+    match installer.locator().unwrap().locate(package, bin) {
+        Located::Installed { path, .. } => path,
+        other => panic!("{package} {bin}: {other:?}"),
+    }
+}
+
+/// 띄운 뒤 `wait` 만큼 기다려 표준 출력 · 오류의 처음을 읽고 끝낸다(포트를 열고 기다리는 어댑터).
+fn first_output(path: &Path, args: &[&str], wait: std::time::Duration) -> String {
+    use std::io::Read as _;
+    let mut child = std::process::Command::new(path)
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    std::thread::sleep(wait);
+    let _ = child.kill();
+    let _ = child.wait();
+    let mut out = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut out)
+        .unwrap();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut out)
+        .unwrap();
+    out
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "live: downloads codelldb from GitHub"]
+async fn live_tools_install_dap_codelldb() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (installer, _) = install_checked("codelldb", tmp.path(), ToolChecksum::None).await;
+    let path = located(&installer, "codelldb", "codelldb");
+    let out = first_output(&path, &["--help"], std::time::Duration::from_secs(3));
+    assert!(out.to_lowercase().contains("port"), "{out}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "live: downloads js-debug from GitHub, runs it with node on PATH"]
+async fn live_tools_install_dap_js_debug_adapter() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (installer, _) = install_checked("js-debug-adapter", tmp.path(), ToolChecksum::None).await;
+    let path = located(&installer, "js-debug-adapter", "js-debug-adapter");
+    let out = first_output(
+        &path,
+        &["0", "127.0.0.1"],
+        std::time::Duration::from_secs(5),
+    );
+    assert!(out.contains("127.0.0.1"), "{out}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "live: installs debugpy with pip into its own venv"]
+async fn live_tools_install_dap_debugpy() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (installer, _) = install_checked("debugpy", tmp.path(), ToolChecksum::None).await;
+    let path = located(&installer, "debugpy", "debugpy-adapter");
+    let out = run(&path, &["--help"]);
+    assert!(out.contains("--port"), "{out}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "live: downloads java-debug from Open VSX"]
+async fn live_tools_install_dap_java_debug_adapter() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (installer, _) =
+        install_checked("java-debug-adapter", tmp.path(), ToolChecksum::None).await;
+    let jar = match installer.locator().unwrap().locate_share(
+        "java-debug-adapter",
+        "java-debug-adapter/com.microsoft.java.debug.plugin.jar",
+    ) {
+        Located::Installed { path, .. } => path,
+        other => panic!("{other:?}"),
+    };
+    assert!(
+        std::fs::metadata(&jar).unwrap().len() > 100_000,
+        "{}",
+        jar.display()
+    );
 }

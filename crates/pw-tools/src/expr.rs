@@ -1,6 +1,7 @@
 //! Mason 패키지 정의 안의 표현식 `{{ … }}` (15-m4-plan.md M4-03 ⑤).
 //!
-//! 기본 번들 패키지가 쓰는 것만 안다: 값 `version` · `source.asset.<필드…>` · `source.download.<필드…>`(값이 문자열일 때)와
+//! 기본 번들 패키지가 쓰는 것만 안다: 값 `version` · `source.asset.<필드…>` · `source.download.<필드…>` · `source.bin`(값이
+//! 문자열일 때 — `source.bin` 은 js-debug-adapter, 17-m6-plan.md M6-16)과
 //! 필터 `strip_prefix "<글>"`. 그 밖의 것(모르는 필터 · 함수 호출 `take_if_not(…)` · `||` · `{{{` 오타 · 닫히지 않은 `{{`)은
 //! 오류다 — 부르는 쪽이 그 패키지(대상별 항목이면 그 대상)를 「지원하지 않음」 으로 둔다. 추측해 채우지 않는다.
 
@@ -9,7 +10,7 @@ use serde_json::Value;
 /// 표현식 하나(`{{`·`}}` 안)의 상한(바이트).
 const MAX_EXPRESSION_BYTES: usize = 256;
 
-/// 값을 찾는 곳. `source` 는 `{"asset": …, "download": …}` 꼴의 객체다(고른 대상 항목 — 없으면 키가 없다).
+/// 값을 찾는 곳. `source` 는 `{"asset": …, "download": …, "bin": …}` 꼴의 객체다(고른 대상 항목 — 없으면 키가 없다).
 pub struct Context<'a> {
     pub version: &'a str,
     pub source: &'a Value,
@@ -99,7 +100,7 @@ fn lookup(path: &str, ctx: &Context<'_>) -> Option<String> {
         return None;
     }
     let first = parts.next()?;
-    if first != "asset" && first != "download" {
+    if first != "asset" && first != "download" && first != "bin" {
         return None;
     }
     let mut v = ctx.source.get(first)?;

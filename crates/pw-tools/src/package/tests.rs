@@ -61,7 +61,7 @@ fn every_package_of_the_pinned_registry_parses_and_the_bundled_ones_are_supporte
             stats.supported, stats.unsupported, stats.by_reason
         );
         assert_eq!(stats.supported + stats.unsupported, index.packages().len());
-        // M4 가 설치하지 않는 purl(cargo · golang · openvsx …)과 빌드 패키지는 늘 있다.
+        // 설치하지 않는 purl(cargo · golang …)과 빌드 패키지는 늘 있다.
         assert!(stats.by_reason["purlType"] > 0);
         assert!(stats.by_reason["build"] > 0);
         assert!(stats.supported > stats.unsupported);
@@ -283,6 +283,162 @@ fn bundled_asset_and_download_names_per_target() {
     );
 }
 
+fn pypi_def(bin: &str) -> serde_json::Value {
+    json!({
+        "name": "dbg", "description": "d", "homepage": "https://example.com",
+        "licenses": ["MIT"], "languages": [], "categories": ["DAP"],
+        "source": {"id": "pkg:pypi/debugpy@1.8.22"},
+        "bin": {"dbg": bin},
+    })
+}
+
+/// 완료 기준 ③: 위임 넷(`exec:` · `node:` · `pyvenv:` 과 `openvsx` 의 받기)의 표. 설치 폴더 밖(`..` · 절대 경로)을 가리키는 위임,
+/// pypi 가 아닌 패키지의 `pyvenv:`, 파이썬 모듈이 아닌 `pyvenv:` 은 거절한다.
+#[test]
+fn delegated_bins_resolve_inside_the_install_folder() {
+    let github = |bin: &str| pkg(github_def(bin)).resolve(Some(ToolTarget::DarwinArm64), None);
+    let pypi = |bin: &str| pkg(pypi_def(bin)).resolve(Some(ToolTarget::DarwinArm64), None);
+    let ok = |r: Result<ResolvedTool, ToolUnsupported>, key: &str| -> ToolBin {
+        r.unwrap_or_else(|e| panic!("{e}")).bin[key].clone()
+    };
+    assert_eq!(
+        ok(github("exec:extension/adapter/codelldb"), "demo"),
+        ToolBin::Exec("extension/adapter/codelldb".into())
+    );
+    assert_eq!(
+        ok(github("node:js-debug/src/dapDebugServer.js"), "demo"),
+        ToolBin::Node("js-debug/src/dapDebugServer.js".into())
+    );
+    assert_eq!(
+        ok(pypi("pyvenv:debugpy.adapter"), "dbg"),
+        ToolBin::Pyvenv("debugpy.adapter".into())
+    );
+    let invalid = |r: Result<ResolvedTool, ToolUnsupported>| {
+        matches!(r, Err(ToolUnsupported::InvalidDefinition { .. }))
+    };
+    for bin in [
+        "exec:../x",
+        "exec:/usr/bin/lldb",
+        "exec:a/../../x",
+        "node:/usr/lib/node_modules/x.js",
+        "node:../x.js",
+        "node:C:/x.js",
+    ] {
+        let r = github(bin);
+        assert!(invalid(r.clone()), "{bin}: {r:?}");
+    }
+    for bin in ["pyvenv:-c", "pyvenv:debugpy;rm", "pyvenv:a..b", "pyvenv:"] {
+        let r = pypi(bin);
+        assert!(invalid(r.clone()), "{bin}: {r:?}");
+    }
+    // venv 가 없는 패키지(github)의 `pyvenv:` 은 지원하지 않는 위임이다.
+    assert!(matches!(
+        github("pyvenv:debugpy"),
+        Err(ToolUnsupported::ToolBin { .. })
+    ));
+}
+
+/// 완료 기준 ③ · ⑤: 고정 판(2026-11-01)의 디버거 넷은 이 기기 대상마다 풀리고, 번들 밖 `golang` purl(delve)은 「지원하지 않음」
+/// 그대로다.
+#[test]
+fn the_pinned_registry_debug_adapters_resolve() {
+    let index = pinned_registry();
+    let resolve = |name: &str, t: ToolTarget| index.get(name).unwrap().resolve(Some(t), None);
+
+    let lldb = resolve("codelldb", ToolTarget::DarwinArm64).unwrap();
+    assert_eq!(
+        files_of(&lldb),
+        [(
+            "codelldb-darwin-arm64.vsix".to_owned(),
+            "https://github.com/vadimcn/vscode-lldb/releases/download/v1.12.3/codelldb-darwin-arm64.vsix"
+                .to_owned()
+        )]
+    );
+    let ToolSource::Files { files } = &lldb.source else {
+        panic!()
+    };
+    assert_eq!(files[0].format, ArchiveFormat::Zip);
+    assert_eq!(
+        lldb.bin["codelldb"],
+        ToolBin::Exec("extension/adapter/codelldb".into())
+    );
+    assert_eq!(lldb.opt["lldb/"], "extension/lldb/");
+    // Windows 항목은 위임이 아닌 경로다.
+    assert_eq!(
+        resolve("codelldb", ToolTarget::WinX64).unwrap().bin["codelldb"],
+        ToolBin::Path("extension/adapter/codelldb.exe".into())
+    );
+
+    let js = resolve("js-debug-adapter", ToolTarget::LinuxX64Gnu).unwrap();
+    assert_eq!(
+        files_of(&js),
+        [(
+            "js-debug-dap-v1.140.0.tar.gz".to_owned(),
+            "https://github.com/microsoft/vscode-js-debug/releases/download/v1.140.0/js-debug-dap-v1.140.0.tar.gz"
+                .to_owned()
+        )]
+    );
+    assert_eq!(
+        js.bin["js-debug-adapter"],
+        ToolBin::Node("js-debug/src/dapDebugServer.js".into())
+    );
+
+    let py = resolve("debugpy", ToolTarget::DarwinX64).unwrap();
+    assert_eq!(
+        py.source,
+        ToolSource::Pypi {
+            package: ToolPackageSpec {
+                name: "debugpy".into(),
+                version: Some("1.8.22".into())
+            },
+            extra: vec![]
+        }
+    );
+    assert_eq!(py.bin["debugpy"], ToolBin::Pyvenv("debugpy".into()));
+    assert_eq!(
+        py.bin["debugpy-adapter"],
+        ToolBin::Pyvenv("debugpy.adapter".into())
+    );
+
+    let java = resolve("java-debug-adapter", ToolTarget::LinuxArm64Gnu).unwrap();
+    assert_eq!(java.kind, PurlKind::Openvsx);
+    assert_eq!(
+        files_of(&java),
+        [(
+            "vscjava.vscode-java-debug-0.59.0.vsix".to_owned(),
+            "https://open-vsx.org/api/vscjava/vscode-java-debug/0.59.0/file/vscjava.vscode-java-debug-0.59.0.vsix"
+                .to_owned()
+        )]
+    );
+    assert!(java.bin.is_empty());
+    assert_eq!(
+        java.share["java-debug-adapter/com.microsoft.java.debug.plugin.jar"],
+        "extension/server/com.microsoft.java.debug.plugin-0.53.2.jar"
+    );
+
+    for target in ToolTarget::ALL {
+        for name in [
+            "codelldb",
+            "js-debug-adapter",
+            "debugpy",
+            "java-debug-adapter",
+        ] {
+            let r = resolve(name, target);
+            // codelldb 는 Windows arm64 · Linux 의 일부 대상에 자산이 없다.
+            assert!(
+                r.is_ok() || (name == "codelldb" && r == Err(ToolUnsupported::Target)),
+                "{name} on {target}: {r:?}"
+            );
+        }
+        assert_eq!(
+            resolve("delve", target),
+            Err(ToolUnsupported::PurlType {
+                purl_type: "golang".into()
+            })
+        );
+    }
+}
+
 fn github_def(bin: &str) -> serde_json::Value {
     json!({
         "name": "demo", "description": "d", "homepage": "https://example.com",
@@ -330,11 +486,11 @@ fn unknown_expressions_bins_keys_and_urls_make_the_package_unsupported() {
         Err(ToolUnsupported::Expression { .. })
     ));
 
-    // 지원하지 않는 위임 · npm 아닌 패키지의 `npm:` · 폴더 밖 경로.
+    // 지원하지 않는 위임 · npm 아닌 패키지의 `npm:` · 폴더 밖 경로. `exec:` · `node:` · `pyvenv:` 은
+    // `delegated_bins_resolve_inside_the_install_folder` 가 본다.
     for (bin, bad) in [
-        ("node:server.js", true),
         ("java-jar:x.jar", true),
-        ("exec:x", true),
+        ("golang:dlv", true),
         ("npm:demo", true),
         ("python:../x.py", true),
         ("python:bin/x.py", false),

@@ -549,7 +549,9 @@ impl ToolsInstaller {
         resolved: &ResolvedTool,
     ) -> Result<Toolchain, RpcError> {
         let kind = resolved.kind;
-        if !matches!(kind, PurlKind::Npm | PurlKind::Pypi) {
+        // `node:` 실행 파일은 런타임 환경의 node 로 돈다(런처가 PATH 의 node 를 부른다) — 받기 전에 node 가 있는지 본다.
+        let runs_on_node = resolved.bin.values().any(|b| matches!(b, ToolBin::Node(_)));
+        if !matches!(kind, PurlKind::Npm | PurlKind::Pypi) && !runs_on_node {
             return Ok(Toolchain::None);
         }
         let toolchains = Arc::clone(&host.toolchains);
@@ -561,10 +563,15 @@ impl ToolsInstaller {
         .await
         .map_err(|e| RpcError::internal(e.to_string()))?;
         let env = env.map_err(RpcError::internal)?;
+        let to = if matches!(kind, PurlKind::Npm | PurlKind::Pypi) {
+            "install"
+        } else {
+            "run"
+        };
         let missing = |runtime: &str| {
             RpcError::new(
                 code::RUNTIME_MISSING,
-                format!("{runtime} is needed to install this tool — install it with mise"),
+                format!("{runtime} is needed to {to} this tool — install it with mise"),
             )
             .with_data(json!({
                 "runtime": runtime,
@@ -572,12 +579,19 @@ impl ToolsInstaller {
                 "name": resolved.name,
             }))
         };
-        Ok(if kind == PurlKind::Npm {
-            let found = runner::find_npm(&env).map_err(|m| missing(m.0))?;
-            Toolchain::Npm { found, base }
-        } else {
-            let found = runner::find_python(&env).map_err(|m| missing(m.0))?;
-            Toolchain::Python { found, base }
+        Ok(match kind {
+            PurlKind::Npm => {
+                let found = runner::find_npm(&env).map_err(|m| missing(m.0))?;
+                Toolchain::Npm { found, base }
+            }
+            PurlKind::Pypi => {
+                let found = runner::find_python(&env).map_err(|m| missing(m.0))?;
+                Toolchain::Python { found, base }
+            }
+            _ => {
+                runner::find_node(&env).map_err(|m| missing(m.0))?;
+                Toolchain::None
+            }
         })
     }
 
@@ -738,6 +752,11 @@ impl ToolsInstaller {
             .unwrap_or_default();
         write_launchers(&dir, &launchers).map_err(|e| failed("bin", &name, e))?;
 
+        // 위임(`node:` · `pyvenv:`)의 런처. 실행 파일을 고르기 전에 둔다.
+        let generated =
+            delegate_launchers(&dir, &plan.resolved.bin).map_err(|e| failed("bin", &name, e))?;
+        write_launchers(&dir, &generated).map_err(|e| failed("bin", &name, e))?;
+
         // 실행 파일.
         let mut bins = BTreeMap::new();
         for (bin, at) in &plan.resolved.bin {
@@ -758,6 +777,17 @@ impl ToolsInstaller {
                 ToolBin::Python(_) => {
                     return Err(failed("bin", &name, "python launchers are not supported"));
                 }
+                ToolBin::Exec(p) => {
+                    extract::make_executable(&dir, p)
+                        .map_err(|e| failed("bin", &name, e.to_string()))?;
+                    p.clone()
+                }
+                ToolBin::Node(_) | ToolBin::Pyvenv(_) => {
+                    let rel = launcher_path(bin);
+                    extract::make_executable(&dir, &rel)
+                        .map_err(|e| failed("bin", &name, e.to_string()))?;
+                    rel
+                }
             };
             if !dir.join(&rel).is_file() {
                 return Err(failed(
@@ -769,6 +799,15 @@ impl ToolsInstaller {
             bins.insert(bin.clone(), rel);
         }
 
+        for (share, src) in &plan.resolved.share {
+            if !dir.join(src).exists() {
+                // 설치는 그대로 끝낸다 — 그 `share` 를 찾는 쪽(jdtls 의 bundles)이 「다시 설치」 를 본다.
+                self.log(
+                    &name,
+                    &format!("share {share} ({src}) is not in the install folder"),
+                );
+            }
+        }
         let _ = fs::remove_file(dir.join(INSTALLING_MARK));
         let entry = InstalledVersion {
             version: version.clone(),
@@ -781,6 +820,7 @@ impl ToolsInstaller {
             size: dir_size(&dir),
             installed_at_ms: now_ms(),
             bins,
+            shares: plan.resolved.share.clone(),
             python: match &used {
                 Used::Python(p) => Some(p.clone()),
                 _ => None,
@@ -1621,6 +1661,111 @@ fn show_args(args: &[OsString]) -> String {
 
 /// 런처를 설치 폴더에 쓴다 — 유닉스는 그 경로에 셸 스크립트(0755), Windows 는 `<경로>.cmd`. 받은 보관 파일에 같은 경로가 이미
 /// 있으면 실패한다(받은 배포물을 덮어쓰지 않는다 — 경로는 덮어쓰기 정의를 읽을 때 본다, `Override::parse`).
+/// 위임 실행 파일(`node:` · `pyvenv:`)의 런처 자리(설치 폴더 기준). Windows 는 그 `.cmd` 다.
+fn launcher_path(bin: &str) -> String {
+    let rel = format!("{LAUNCHER_DIR}/{bin}");
+    if cfg!(windows) {
+        format!("{rel}.cmd")
+    } else {
+        rel
+    }
+}
+
+/// 위임 런처를 두는 폴더(설치 폴더 기준).
+const LAUNCHER_DIR: &str = "pitwall-bin";
+
+/// `node:` · `pyvenv:` 실행 파일의 런처(17-m6-plan.md M6-16 ③). 키는 [`write_launchers`] 의 경로(Windows 의 `.cmd` 를 뺀 것)다.
+/// 설치 폴더의 절대 경로를 박는다 — 실행 링크(`$DATA/tools/bin/<이름>`)로 불려도 같은 파일을 가리키게.
+/// - `node:` — PATH 의 node 로 그 스크립트를 돌린다. node 는 런타임 환경의 것이다(어댑터를 띄우는 쪽이 정의의 `requires` 로 찾은
+///   node 를 PATH 맨 앞에 둔다 — 언어 서버와 같다). 없으면 그렇다고 적고 127 로 끝난다.
+/// - `pyvenv:` — 그 패키지 venv 의 python 으로 `-I -m <모듈>`(격리 — 작업 폴더 · `PYTHON*` 환경이 모듈을 가리지 못하게).
+fn delegate_launchers(
+    dir: &Path,
+    bins: &BTreeMap<String, ToolBin>,
+) -> Result<BTreeMap<String, crate::overrides::Launcher>, String> {
+    let mut out = BTreeMap::new();
+    if !bins
+        .values()
+        .any(|b| matches!(b, ToolBin::Node(_) | ToolBin::Pyvenv(_)))
+    {
+        return Ok(out);
+    }
+    let root = fs::canonicalize(dir).map_err(|e| e.to_string())?;
+    for (bin, at) in bins {
+        let (target, sh_line, cmd_line) = match at {
+            ToolBin::Node(script) => {
+                let target = root.join(script);
+                if !target.is_file() {
+                    return Err(format!("{bin} ({script}) is not in the install folder"));
+                }
+                let t = target.display().to_string();
+                (
+                    target,
+                    format!(
+                        "if ! command -v node >/dev/null 2>&1; then\n  echo {} >&2\n  exit 127\nfi\nexec node {} \"$@\"\n",
+                        sh_quote(&format!(
+                            "pitwall: node is needed to run {bin} — install it with mise"
+                        )),
+                        sh_quote(&t)
+                    ),
+                    format!(
+                        "where node >nul 2>nul || (echo pitwall: node is needed to run {} - install it with mise 1>&2 & exit /b 127)\r\nnode {} %*\r\n",
+                        cmd_escape(bin),
+                        cmd_quote(&t)
+                    ),
+                )
+            }
+            ToolBin::Pyvenv(module) => {
+                let target = root.join(venv_python());
+                let t = target.display().to_string();
+                (
+                    target,
+                    format!("exec {} -I -m {module} \"$@\"\n", sh_quote(&t)),
+                    format!("{} -I -m {module} %*\r\n", cmd_quote(&t)),
+                )
+            }
+            _ => continue,
+        };
+        if !target.starts_with(&root) {
+            return Err(format!("{bin} points outside the install folder"));
+        }
+        out.insert(
+            format!("{LAUNCHER_DIR}/{bin}"),
+            crate::overrides::Launcher {
+                sh: format!("#!/bin/sh\n# Pitwall launcher for {bin}\n{sh_line}"),
+                cmd: format!("@echo off\r\n{cmd_line}"),
+            },
+        );
+    }
+    Ok(out)
+}
+
+/// sh 의 홑따옴표 글(안의 `'` 는 `'\''`).
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// cmd 의 겹따옴표 경로(Windows 경로에는 `"` 가 없다). `%` 는 배치 파일에서 변수로 읽히므로 `%%`.
+fn cmd_quote(s: &str) -> String {
+    format!("\"{}\"", s.replace('%', "%%"))
+}
+
+/// cmd 의 `echo` 에 넣는 글 — 명령을 잇는 글자를 `^` 로 막는다.
+fn cmd_escape(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        match c {
+            '%' => out.push_str("%%"),
+            '&' | '|' | '<' | '>' | '^' | '(' | ')' => {
+                out.push('^');
+                out.push(c);
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn write_launchers(
     dir: &Path,
     launchers: &BTreeMap<String, crate::overrides::Launcher>,

@@ -7,8 +7,10 @@
 //! - 글 · 목록에 상한을 두고, 저장 이름 · 설치 폴더 안 경로는 폴더 밖으로 나가지 못하게 검사하고, 받을 주소는 HTTPS 만 받는다
 //!   (결정 M4-D17 — 받기 자체의 검사는 설치기 M4-04 가 다시 한다).
 //!
-//! 지원 범위: purl 형식 `github` · `generic` · `npm` · `pypi`(§3 — 나머지는 「지원하지 않음」), `bin` 의 위임 접두
-//! `npm:` · `pypi:` · `python:` 과 설치 폴더 안 경로(표현식 `{{source.asset.bin}}` 등을 푼 것), 표현식은 [`crate::expr`].
+//! 지원 범위: purl 형식 `github` · `generic` · `npm` · `pypi` · `openvsx`(§3 — 나머지는 「지원하지 않음」), `bin` 의 위임 접두
+//! `npm:` · `pypi:` · `python:` · `exec:` · `node:` · `pyvenv:` 과 설치 폴더 안 경로(표현식 `{{source.asset.bin}}` ·
+//! `{{source.bin}}` 등을 푼 것), 표현식은 [`crate::expr`]. `openvsx` · `exec:` · `node:` · `pyvenv:` 은 기본 번들 디버거가 쓰는 것이다
+//! (17-m6-plan.md M6-16 — codelldb `exec:`, js-debug-adapter `node:`, debugpy `pyvenv:`, java-debug-adapter `openvsx`).
 
 use std::collections::BTreeMap;
 
@@ -78,10 +80,10 @@ pub enum ToolUnsupported {
     /// 형식이 맞지 않는다(필수 키가 없다 · 형이 다르다 · 상한을 넘는다 · 경로가 폴더 밖이다).
     #[serde(rename_all = "camelCase")]
     InvalidDefinition { message: String },
-    /// M4 가 설치하지 않는 purl 형식(`cargo` · `golang` · `openvsx` 등 — 15-m4-plan.md §3).
+    /// 설치하지 않는 purl 형식(`cargo` · `golang` 등 — 15-m4-plan.md §3, 17-m6-plan.md 「3」).
     #[serde(rename_all = "camelCase")]
     PurlType { purl_type: String },
-    /// 지원하지 않는 `bin` 위임(`node:` · `java-jar:` · `exec:` 등).
+    /// 지원하지 않는 `bin` 위임(`java-jar:` · `golang:` 등).
     #[serde(rename_all = "camelCase")]
     ToolBin { bin: String, value: String },
     /// 모르는 표현식(필터 · 함수 · 오타). 대상별 항목에 있으면 그 대상만 빠진다.
@@ -147,6 +149,9 @@ pub enum PurlKind {
     Generic,
     Npm,
     Pypi,
+    /// Open VSX 의 VS Code 확장(`.vsix` — zip 으로 푼다). 받을 주소는 `https://open-vsx.org/api/<네임스페이스>/<이름>/<판>/file/<파일>`
+    /// 이다(mason 의 openvsx 받기와 같은 꼴).
+    Openvsx,
 }
 
 impl PurlKind {
@@ -156,10 +161,14 @@ impl PurlKind {
             "generic" => Some(PurlKind::Generic),
             "npm" => Some(PurlKind::Npm),
             "pypi" => Some(PurlKind::Pypi),
+            "openvsx" => Some(PurlKind::Openvsx),
             _ => None,
         }
     }
 }
+
+/// Open VSX 의 받기 API 앞(`<앞>/<네임스페이스>/<이름>/<판>/file/<파일>`).
+pub const OPENVSX_API: &str = "https://open-vsx.org/api";
 
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
@@ -387,6 +396,10 @@ impl Package {
         if let Some(d) = &download {
             source_ctx.insert("download".into(), d.clone());
         }
+        // `source.bin`(js-debug-adapter 의 `"bin": "{{source.bin}}"`) — 대상과 상관없는 글 하나.
+        if let Some(Value::String(b)) = source.get("bin") {
+            source_ctx.insert("bin".into(), Value::String(render(b, &version_only)?));
+        }
         let source_ctx = Value::Object(source_ctx);
         let ctx = Context {
             version: &version,
@@ -408,6 +421,14 @@ impl Package {
                     return Err(invalid("no files to download"));
                 }
                 ToolSource::Files { files }
+            }
+            PurlKind::Openvsx => {
+                let download = download.as_ref().ok_or_else(|| {
+                    invalid("an openvsx package needs `source.download` with a `file`")
+                })?;
+                ToolSource::Files {
+                    files: vec![openvsx_file(download, purl, &version)?],
+                }
             }
             PurlKind::Npm | PurlKind::Pypi => {
                 let extra = match source.get("extra_packages") {
@@ -620,6 +641,12 @@ pub enum ToolBin {
     Pypi(String),
     /// venv 의 python 으로 돌리는 스크립트(설치 폴더 안 경로).
     Python(String),
+    /// 설치 폴더 안의 실행 파일(`exec:` — 실행 비트를 준다). codelldb 처럼 자기 자리를 기준으로 옆 파일을 찾는 실행 파일이다.
+    Exec(String),
+    /// 런타임 환경의 node 로 돌리는 스크립트(`node:` — 설치 폴더 안 경로). 설치기가 런처를 만든다.
+    Node(String),
+    /// 그 패키지 venv 의 python 으로 `-m` 돌리는 모듈(`pyvenv:` — `debugpy.adapter`). 설치기가 런처를 만든다.
+    Pyvenv(String),
 }
 
 impl ToolBin {
@@ -638,6 +665,23 @@ impl ToolBin {
             Some(("python", path)) => {
                 check_relative(path).map_err(|_| unsupported())?;
                 Ok(ToolBin::Python(path.to_owned()))
+            }
+            // 받은 정의라 미신뢰다 — 설치 폴더 밖(`..` · 절대 경로)을 가리키면 정의가 틀린 것이다.
+            Some(("exec", path)) => {
+                check_relative(path).map_err(|m| invalid(format!("bin `{bin}`: exec: {m}")))?;
+                Ok(ToolBin::Exec(path.to_owned()))
+            }
+            Some(("node", path)) => {
+                check_relative(path).map_err(|m| invalid(format!("bin `{bin}`: node: {m}")))?;
+                Ok(ToolBin::Node(path.to_owned()))
+            }
+            Some(("pyvenv", module)) if kind == PurlKind::Pypi => {
+                if !valid_python_module(module) {
+                    return Err(invalid(format!(
+                        "bin `{bin}`: pyvenv: `{module}` is not a python module name"
+                    )));
+                }
+                Ok(ToolBin::Pyvenv(module.to_owned()))
             }
             Some(_) => Err(unsupported()),
             None => {
@@ -747,6 +791,39 @@ fn asset_files(
             })
         })
         .collect()
+}
+
+/// Open VSX 의 `.vsix` 하나(`download.file` — `이름[:풀 곳]`). 주소는 purl 의 네임스페이스 · 이름 · 판으로 만든다.
+fn openvsx_file(
+    download: &Value,
+    purl: &Purl,
+    version: &str,
+) -> Result<ToolDownload, ToolUnsupported> {
+    let spec = download
+        .get("file")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("`source.download` has no `file`"))?;
+    let (name, dest) = split_dest(spec)?;
+    let (Some(namespace), true) = (purl.namespace.as_deref(), valid_url_segment(version)) else {
+        return Err(invalid(
+            "openvsx purl needs `namespace/name` and a plain version",
+        ));
+    };
+    if !valid_url_segment(namespace) || !valid_url_segment(&purl.name) || !valid_url_segment(&name)
+    {
+        return Err(invalid(
+            "openvsx namespace, name and file must be plain URL segments",
+        ));
+    }
+    Ok(ToolDownload {
+        url: format!(
+            "{OPENVSX_API}/{namespace}/{}/{version}/file/{name}",
+            purl.name
+        ),
+        format: ArchiveFormat::from_name(&name),
+        name,
+        dest,
+    })
 }
 
 /// `download.files`(저장 이름 → 주소).
@@ -891,8 +968,17 @@ fn valid_dist_name(name: &str, kind: PurlKind) -> bool {
                 && word(name, &['-', '.', '_'])
                 && name.ends_with(|c: char| c.is_ascii_alphanumeric())
         }
-        PurlKind::Github | PurlKind::Generic => valid_name(name),
+        PurlKind::Github | PurlKind::Generic | PurlKind::Openvsx => valid_name(name),
     }
+}
+
+/// `pyvenv:` 의 모듈 이름: `.` 으로 이은 파이썬 식별자(ASCII). 런처의 `-m` 인자가 된다 — `-` 로 시작하는 글을 받지 않는다.
+fn valid_python_module(module: &str) -> bool {
+    module.len() <= 128
+        && module.split('.').all(|part| {
+            part.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
 }
 
 /// 판 · 판 범위. 옵션으로 읽히지 않게 `-` 로 시작하지 않는다.
@@ -954,4 +1040,4 @@ fn string_map(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

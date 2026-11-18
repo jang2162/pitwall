@@ -291,6 +291,10 @@ pub struct InstalledVersion {
     pub installed_at_ms: u64,
     /// 실행 파일 이름 → 설치 폴더 기준 경로.
     pub bins: BTreeMap<String, String>,
+    /// Mason `share` 이름 → 설치 폴더 기준 경로(17-m6-plan.md M6-16 — java-debug-adapter 의 jar). 정의가 적은 그대로이고, 있는지는
+    /// 찾을 때 본다([`InstalledTools`] 의 `locate_share`).
+    #[serde(default)]
+    pub shares: BTreeMap<String, String>,
     /// pypi: venv 를 만든 python.
     #[serde(default)]
     pub python: Option<UsedRuntime>,
@@ -311,35 +315,71 @@ impl InstalledTools {
     }
 }
 
-impl ToolLocator for InstalledTools {
-    fn locate(&self, package: &str, bin: &str) -> Located {
+impl InstalledTools {
+    /// 지금 판의 설치 기록과 설치 폴더. 쓸 수 없으면 그 까닭(`Located`).
+    fn current(&self, package: &str) -> Result<(InstalledVersion, PathBuf), Located> {
         if !crate::package::valid_file_name(package) {
-            return Located::Absent;
+            return Err(Located::Absent);
         }
         let record = match self.layout.read_record(package) {
             Ok(Some(r)) => r,
-            Ok(None) => return Located::Absent,
+            Ok(None) => return Err(Located::Absent),
             Err(e) => {
-                return Located::Broken {
+                return Err(Located::Broken {
                     reason: format!("the install record cannot be read: {e}"),
-                };
+                });
             }
         };
         let Some(entry) = record.current_entry() else {
-            return Located::Broken {
+            return Err(Located::Broken {
                 reason: "the install record has no current version".into(),
-            };
+            });
         };
         let dir = self.layout.version_dir(package, &entry.version);
         if dir.join(INSTALLING_MARK).exists() || !dir.is_dir() {
-            // 같은 판을 다시 설치하는 중이거나 폴더가 사라졌다 — 고르지 않는다.
-            return Located::Broken {
+            return Err(Located::Broken {
                 reason: format!(
                     "{} {} is being installed or missing",
                     package, entry.version
                 ),
-            };
+            });
         }
+        Ok((entry.clone(), dir))
+    }
+}
+
+impl ToolLocator for InstalledTools {
+    fn locate_share(&self, package: &str, share: &str) -> Located {
+        let (entry, dir) = match self.current(package) {
+            Ok(found) => found,
+            Err(located) => return located,
+        };
+        let Some(rel) = entry.shares.get(share) else {
+            return Located::Absent;
+        };
+        // 받은 것 속의 링크가 설치 폴더 밖을 가리키면 쓰지 않는다(실행 파일과 같은 규칙).
+        let inside = fs::canonicalize(&dir).ok().and_then(|root| {
+            fs::canonicalize(dir.join(rel))
+                .ok()
+                .filter(|real| real.starts_with(&root))
+        });
+        match inside {
+            Some(_) => Located::Installed {
+                path: dir.join(rel),
+                version: entry.version.clone(),
+            },
+            None => Located::Broken {
+                reason: format!("{share} is missing from the install folder — reinstall"),
+            },
+        }
+    }
+
+    fn locate(&self, package: &str, bin: &str) -> Located {
+        // 같은 판을 다시 설치하는 중이거나 폴더가 사라졌으면 고르지 않는다.
+        let (entry, dir) = match self.current(package) {
+            Ok(found) => found,
+            Err(located) => return located,
+        };
         let Some(rel) = entry.bins.get(bin) else {
             return Located::Absent;
         };

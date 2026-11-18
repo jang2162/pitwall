@@ -107,6 +107,11 @@ pub fn find_npm(env: &RuntimeEnv) -> Result<Found, Missing> {
     })
 }
 
+/// 런타임 환경에서 node 를 찾는다(`node:` 실행 파일 — 설치는 node 를 부르지 않고, 없으면 받기 전에 거절한다).
+pub fn find_node(env: &RuntimeEnv) -> Result<PathBuf, Missing> {
+    find_program("node", &env.path).ok_or(Missing("node"))
+}
+
 /// 런타임 환경에서 python 을 찾는다(`python3` 먼저).
 pub fn find_python(env: &RuntimeEnv) -> Result<Found, Missing> {
     let python = find_program("python3", &env.path)

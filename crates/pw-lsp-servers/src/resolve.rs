@@ -25,6 +25,13 @@ use crate::settings::{ConfiguredPath, LspSettingsOrigin, ServerConfig};
 pub trait ToolLocator: Send + Sync {
     /// Mason 패키지 `package` 의 실행 파일 `bin`. 설치 중인 판은 고르지 않는다.
     fn locate(&self, package: &str, bin: &str) -> Located;
+
+    /// Mason 패키지 `package` 의 `share` 이름 `share` 가 가리키는 파일(설치 폴더 안 — java-debug-adapter 의 jar 를 jdtls 의
+    /// `bundles` 로 넘길 때, 17-m6-plan.md M6-16). 판은 설치 기록의 것이다. 설치본이 없는 locator 는 늘 없다.
+    fn locate_share(&self, package: &str, share: &str) -> Located {
+        let _ = (package, share);
+        Located::Absent
+    }
 }
 
 /// [`ToolLocator::locate`] 의 답.

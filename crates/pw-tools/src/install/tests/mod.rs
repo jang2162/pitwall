@@ -1,6 +1,8 @@
 //! 설치기 시험(15-m4-plan.md M4-04 완료 기준 ① ~ ⑨). 가짜 HTTP 서버(`crate::test_http`)와 가짜 npm · python 실행 파일로 돈다.
 //! 정의의 `https://fake.test` 주소를 가짜 서버로 바꿔 받는다 — 정의의 「https 만」 검사는 그대로 지난다.
 
+#[cfg(unix)]
+mod adapters;
 mod archive;
 mod consent;
 mod files;
