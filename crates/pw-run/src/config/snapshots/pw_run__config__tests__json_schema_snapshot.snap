@@ -1,0 +1,327 @@
+---
+source: crates/pw-run/src/config/tests.rs
+expression: "serde_json::to_string_pretty(&json_schema()).unwrap()"
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RunConfig",
+  "description": "One run configuration: the common fields plus the kind (`type`, [`RunKindConfig`]). Doc comments of the configuration types are\nEnglish — they become the JSON Schema descriptions an agent reads (M6-13, decision M5-D39).",
+  "type": "object",
+  "properties": {
+    "cwd": {
+      "description": "Working directory, relative to the project root (inside the active worktree). Defaults to the project root. A path that\nresolves outside the root (`..`, a symbolic link) makes the configuration unusable.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "debug": {
+      "description": "How to debug this configuration. Without it the configuration cannot be debugged.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DebugConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "env": {
+      "description": "Environment variables (name to value), applied over the runtime environment and `envFile`.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {}
+    },
+    "envFile": {
+      "description": "`.env` files relative to the project root, applied in order. A file outside the root makes the configuration unusable.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "name": {
+      "description": "Display name (run selector, console tab).",
+      "type": "string"
+    },
+    "profiles": {
+      "description": "Named overrides picked in the run selector.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/RunProfile"
+      },
+      "default": {}
+    }
+  },
+  "oneOf": [
+    {
+      "description": "A shell command line, passed verbatim to the login shell's `-c` (pipes and expansions are the shell's).",
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "shell"
+        }
+      },
+      "required": [
+        "type",
+        "command"
+      ]
+    },
+    {
+      "description": "A `package.json` script. The package manager (npm, pnpm, yarn, bun) follows the lockfile.",
+      "type": "object",
+      "properties": {
+        "script": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "npm"
+        }
+      },
+      "required": [
+        "type",
+        "script"
+      ]
+    },
+    {
+      "description": "Gradle tasks. Uses the `gradlew` wrapper when there is one.",
+      "type": "object",
+      "properties": {
+        "tasks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "type": {
+          "type": "string",
+          "const": "gradle"
+        }
+      },
+      "required": [
+        "type",
+        "tasks"
+      ]
+    },
+    {
+      "description": "Maven goals. Uses the `mvnw` wrapper when there is one.",
+      "type": "object",
+      "properties": {
+        "tasks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "type": {
+          "type": "string",
+          "const": "maven"
+        }
+      },
+      "required": [
+        "type",
+        "tasks"
+      ]
+    },
+    {
+      "description": "`cargo <command> <args…>`.",
+      "type": "object",
+      "properties": {
+        "args": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "command": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "cargo"
+        }
+      },
+      "required": [
+        "type",
+        "command"
+      ]
+    },
+    {
+      "description": "`go <command> [package] <args…>`.",
+      "type": "object",
+      "properties": {
+        "args": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "command": {
+          "type": "string"
+        },
+        "package": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "type": {
+          "type": "string",
+          "const": "go"
+        }
+      },
+      "required": [
+        "type",
+        "command"
+      ]
+    },
+    {
+      "description": "`python -m <module>` or `python <script>`; exactly one of the two.",
+      "type": "object",
+      "properties": {
+        "args": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "module": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "script": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "type": {
+          "type": "string",
+          "const": "python"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "`docker compose [-f <file>] up [services…]`. Stopping sends SIGINT first so compose stops the containers.",
+      "type": "object",
+      "properties": {
+        "file": {
+          "description": "Compose file relative to the project root. Without it compose finds its own.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "services": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "type": {
+          "type": "string",
+          "const": "docker-compose"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "`mise run <task>`.",
+      "type": "object",
+      "properties": {
+        "task": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "mise-task"
+        }
+      },
+      "required": [
+        "type",
+        "task"
+      ]
+    }
+  ],
+  "required": [
+    "name"
+  ],
+  "$defs": {
+    "DebugConfig": {
+      "description": "`[debug]`. Keys other than `adapter` and `mode` (`program`, `port`, `pid` …) fill the debug adapter's launch or attach\ntemplate and are kept as written.",
+      "type": "object",
+      "properties": {
+        "adapter": {
+          "description": "Debug adapter id. Without it the adapter is chosen by language.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "mode": {
+          "$ref": "#/$defs/DebugMode",
+          "default": "launch"
+        }
+      },
+      "additionalProperties": true
+    },
+    "DebugMode": {
+      "description": "`launch` starts the program under the debugger; `attach` only connects to a program that is already running.",
+      "type": "string",
+      "enum": [
+        "launch",
+        "attach"
+      ]
+    },
+    "RunProfile": {
+      "description": "A profile (`[profiles.<name>]`): overrides applied over the configuration when it is picked.",
+      "type": "object",
+      "properties": {
+        "args": {
+          "description": "Replaces the kind's `args` as a whole. Only for kinds with `args` (cargo, go, python).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "string"
+          }
+        },
+        "env": {
+          "description": "Applied key by key over the configuration's `env`.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        }
+      }
+    }
+  }
+}

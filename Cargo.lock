@@ -5863,6 +5863,7 @@ name = "pw-run"
 version = "0.0.0"
 dependencies = [
  "base64 0.23.1",
+ "insta",
  "libc",
  "portable-pty",
  "pw-core",
@@ -5875,6 +5876,7 @@ dependencies = [
  "specta",
  "tempfile",
  "tokio",
+ "toml_edit 0.25.17+spec-1.1.0",
  "tracing",
 ]
 

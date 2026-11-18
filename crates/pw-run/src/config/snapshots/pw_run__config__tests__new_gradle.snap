@@ -1,0 +1,21 @@
+---
+source: crates/pw-run/src/config/tests.rs
+expression: text
+---
+schema = 1
+name = "API"
+type = "gradle"
+tasks = ["bootRun"]
+cwd = "backend"
+env = { SPRING_PROFILES_ACTIVE = "local" }
+env_file = [".env.local"]
+
+[profiles.empty]
+
+[profiles.prod-like]
+env = { SPRING_PROFILES_ACTIVE = "prod" }
+
+[debug]
+adapter = "java-debug"
+mode = "attach"
+port = 5005

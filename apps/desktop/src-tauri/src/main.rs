@@ -188,6 +188,9 @@ fn local_host_parts(
     // 내장 터미널(M1-08). 창이 닫히면 그 연결의 터미널 스트림이 버려져 셸의 프로세스 트리가 끝난다.
     let terminals = Arc::new(pw_run::Terminals::new(Arc::clone(&runtime)));
     let terminal_methods = Arc::clone(&terminals);
+    // 실행 구성(`run.config.*`, M6-01). `.pitwall/run/*.toml` 을 읽고 쓴다.
+    let run_configs = Arc::new(pw_run::config::methods::RunConfigs::new());
+    let run_config_methods = Arc::clone(&run_configs);
     // 구문 강조(`syntax.*`). 문법 엔진은 처음 문서를 열 때 만든다.
     let syntax = Arc::new(pw_syntax::Syntax::new(Arc::clone(&extensions)));
     // git(`git.*`, M2). 읽기는 gix, 쓰기는 런타임 환경으로 띄우는 git CLI 다.
@@ -252,6 +255,7 @@ fn local_host_parts(
         .methods(move |router| pw_index::register(router, symbol_index_methods))
         .methods(move |router| pw_open_with::cli::register(router, cli_check))
         .methods(move |router| pw_run::methods::register(router, terminal_methods))
+        .methods(move |router| pw_run::config::methods::register(router, run_config_methods))
         .methods(move |router| pw_syntax::methods::register(router, syntax))
         .methods(move |router| pw_git::methods::register(router, git_methods))
         .methods(move |router| pw_git::write::register(router, git_write_methods))
@@ -315,6 +319,11 @@ fn local_host_parts(
             // 터미널은 전역 설정(`[terminal] shell`)과 레지스트리(프로젝트 · cwd)를 쓴다.
             terminals.attach(pw_run::HostParts {
                 global: config.global.clone(),
+                projects: projects.clone(),
+            });
+            // 실행 구성은 설정 경로(개인 전용 프로젝트의 폴더)와 레지스트리를 쓴다.
+            run_configs.attach(pw_run::config::methods::HostParts {
+                paths: config.paths.clone(),
                 projects: projects.clone(),
             });
             // git 은 전역 설정(`[git] path`) · 레지스트리를 쓰고, 쓰기를 끈 알림을 버스로 낸다.

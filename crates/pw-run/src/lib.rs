@@ -1,6 +1,7 @@
-//! 실행(`docs/design/02-tech-stack.md` 「레포 구조」 의 `pw-run`). 지금은 내장 터미널의 PTY 세션만 있다(M1-08). 실행 구성 ·
+//! 실행(`docs/design/02-tech-stack.md` 「레포 구조」 의 `pw-run`). 내장 터미널의 PTY 세션(M1-08)과 실행 구성(M6-01). 실행 관리자 ·
 //! 태스크 감지는 M6 이 같은 PTY 위에 더한다.
 //!
+//! - [`config`]: 실행 구성 `.pitwall/run/<id>.toml` 의 타입 · 읽기 · 쓰기 · argv · `run.config.*` RPC.
 //! - [`shell`]: 띄울 셸의 argv 와 환경(결정 M1-D14).
 //! - `integration`(유닉스): 셸의 시작 파일 뒤에 런타임 제공자의 PATH 를 다시 앞에 둔다.
 //! - [`pty`]: PTY 하나 — 상한 있는 출력 버퍼, 순서 지키는 입력, 크기, 끝내기.
@@ -13,6 +14,7 @@
 //! `terminalId` 는 그 터미널을 연 RPC 세션(연결) 안에서만 유효하다 — 다른 창 · 다른 연결이 같은 번호로 부르면 없는 터미널이다
 //! (03-architecture.md 「RPC 설계」).
 
+pub mod config;
 #[cfg(unix)]
 pub mod integration;
 pub mod methods;

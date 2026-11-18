@@ -1101,6 +1101,23 @@ export type UnaryMethods = {
 	 */
 	"project.update": { params: UpdateProjectParams; result: Project };
 	/**
+	 * 구성 파일을 지운다(`location` 이 없으면 공유 · 개인 둘 다). 그 프로젝트 창의 연결만. 그 id 의 구성(쓸 수 없는 것 포함)이
+	 * 없으면 not found.
+	 */
+	"run.config.delete": { params: RunConfigDeleteParams; result: RunConfigDeleted };
+	/**
+	 * 프로젝트의 실행 구성 목록: 쓸 수 있는 구성 · 쓸 수 없는 구성(까닭) · 감지된 태스크. 디스크에 쓰지 않는다(구버전 파일도
+	 * 메모리에서만 올린다). 없는 프로젝트는 not found, 그 프로젝트의 것이 아닌 `worktree` 는 invalid params.
+	 */
+	"run.config.list": { params: RunConfigListParams; result: RunConfigList };
+	/**
+	 * 구성 파일(`location` 의 것 하나)을 만들거나 고친다 — 주석과 모르는 키는 그대로 두고, 개인 파일에 쓰면 공유 파일에만 있는
+	 * 키는 그대로 비친다. 그 프로젝트 창의 연결만(아니면 permission denied). 구성이 검증(`cwd` 가 루트 안 등)을 지나지 못하거나
+	 * id 가 틀렸으면 invalid params, 대소문자만 다른 구성이 있거나 · 파일이 TOML 이 아니거나 · 앱보다 새 `schema` 거나 · 저장소 안의
+	 * 링크면 conflict.
+	 */
+	"run.config.save": { params: RunConfigSaveParams; result: RunConfigSaved };
+	/**
 	 * 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).
 	 * 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.
 	 */
@@ -1515,6 +1532,9 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"project.tool.register": {"name":"project.tool.register","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<ProjectRegisterToolParams>","output":"ProjectRegisterToolResult","doc":" Register a folder as a Pitwall project and return what was detected in it (build files, languages, the settings\n folder). Needs approval in Pitwall: the request shows the real path that will be registered (symbolic links and\n `..` resolved), the name and where the settings live. Refused before asking: a relative path, a folder that does\n not exist, the file system root, the home folder or a folder above it, and a folder that is already a project\n root or lies inside a registered project, including a git worktree of one (use `project_open` for those). The\n new project is not trusted: only a person can trust it in Pitwall.\n","mcp":{"group":"project","name":"project_register"},"fileScope":false},
 	"project.trust": {"name":"project.trust","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ProjectIdParams","output":"ProjectTrust","doc":" 프로젝트의 신뢰. 워크트리 프로젝트는 메인 저장소 프로젝트의 신뢰를 따른다(`ownerId`). 없는 id 면 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"project.update": {"name":"project.update","kind":"unary","tier":"write","roles":["owner"],"params":"UpdateProjectParams","output":"Project","doc":" 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.\n","mcp":null,"fileScope":false},
+	"run.config.delete": {"name":"run.config.delete","kind":"unary","tier":"write","roles":["owner"],"params":"RunConfigDeleteParams","output":"RunConfigDeleted","doc":" 구성 파일을 지운다(`location` 이 없으면 공유 · 개인 둘 다). 그 프로젝트 창의 연결만. 그 id 의 구성(쓸 수 없는 것 포함)이\n 없으면 not found.\n","mcp":null,"fileScope":false},
+	"run.config.list": {"name":"run.config.list","kind":"unary","tier":"read","roles":["owner"],"params":"RunConfigListParams","output":"RunConfigList","doc":" 프로젝트의 실행 구성 목록: 쓸 수 있는 구성 · 쓸 수 없는 구성(까닭) · 감지된 태스크. 디스크에 쓰지 않는다(구버전 파일도\n 메모리에서만 올린다). 없는 프로젝트는 not found, 그 프로젝트의 것이 아닌 `worktree` 는 invalid params.\n","mcp":null,"fileScope":false},
+	"run.config.save": {"name":"run.config.save","kind":"unary","tier":"write","roles":["owner"],"params":"RunConfigSaveParams","output":"RunConfigSaved","doc":" 구성 파일(`location` 의 것 하나)을 만들거나 고친다 — 주석과 모르는 키는 그대로 두고, 개인 파일에 쓰면 공유 파일에만 있는\n 키는 그대로 비친다. 그 프로젝트 창의 연결만(아니면 permission denied). 구성이 검증(`cwd` 가 루트 안 등)을 지나지 못하거나\n id 가 틀렸으면 invalid params, 대소문자만 다른 구성이 있거나 · 파일이 TOML 이 아니거나 · 앱보다 새 `schema` 거나 · 저장소 안의\n 링크면 conflict.\n","mcp":null,"fileScope":false},
 	"runtime.get": {"name":"runtime.get","kind":"unary","tier":"read","roles":["owner"],"params":"RuntimeGetParams","output":"RuntimeInfo","doc":" 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"runtime.reload": {"name":"runtime.reload","kind":"unary","tier":"write","roles":["owner"],"params":"RuntimeReloadParams","output":"()","doc":" 「환경 다시 읽기」: 로그인 셸 환경과 디렉터리별 캐시를 잊고 `runtime.changed` 를 낸다. 셸은 다음 요청에서 다시 돈다\n (백그라운드로 미리 시작한다). 이미 띄운 프로세스(열린 터미널)의 환경은 바뀌지 않는다.\n","mcp":null,"fileScope":false},
 	"search.files": {"name":"search.files","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SearchFilesParams","output":"SearchFiles","doc":" 프로젝트의 파일을 이름 · 경로로 퍼지 매칭한다(`⌘⇧O` · Search Everywhere). 목록은 창이 `fs.watch` 로 보는 루트마다 메모리에\n 있고 변경을 따라간다(`pw_fs::index` 머리 주석). 처음 만드는 중이면 다 만들 때까지 기다린다. 빈 질의는 경로순 앞에서부터다.\n","mcp":null,"fileScope":false},
@@ -3687,6 +3707,19 @@ export type Ddl = {
 	text: string,
 };
 
+/**
+ *  `[debug]`. Keys other than `adapter` and `mode` (`program`, `port`, `pid` …) fill the debug adapter's launch or attach
+ *  template and are kept as written.
+ */
+export type DebugConfig = {
+	/**  Debug adapter id. Without it the adapter is chosen by language. */
+	adapter?: string | null,
+	mode?: DebugMode,
+} & { [key in string]: JsonValue };
+
+/**  `launch` starts the program under the debugger; `attach` only connects to a program that is already running. */
+export type DebugMode = "launch" | "attach";
+
 /**  The default tool. */
 export type DefaultToolInfo = { kind: "tool"; id: string } | 
 /**  Neither the project nor the global settings have `open_with.default`. */
@@ -3701,6 +3734,15 @@ export type DemoTaskParams = {
 
 /**  데모 작업 스트림의 청크. 진행 알림이 여러 번, 종료 알림이 마지막에 한 번 온다. */
 export type DemoTaskUpdate = { kind: "progress"; taskId: number; progress: TaskProgress } | { kind: "finished"; taskId: number; outcome: TaskStatus };
+
+/**  파일 없이 감지된 태스크(가상 구성 — 감지기는 M6-04 · 05 가 더한다). 「구성으로 저장」 은 `config` 를 `run.config.save` 로 쓴다. */
+export type DetectedRunTask = {
+	/**  `detected:<감지기>:<이름>` — 「사람이 본 구성」 기록(M6-11)의 열쇠. */
+	key: string,
+	/**  감지기 이름(`package.json` · `mise` …). */
+	detector: string,
+	config: RunConfig,
+};
 
 export type DiagnosticSeverity = "error" | "warning";
 
@@ -8176,6 +8218,136 @@ export type RpcError = {
 	data?: JsonValue,
 };
 
+/**
+ *  One run configuration: the common fields plus the kind (`type`, [`RunKindConfig`]). Doc comments of the configuration types are
+ *  English — they become the JSON Schema descriptions an agent reads (M6-13, decision M5-D39).
+ */
+export type RunConfig = {
+	/**  Display name (run selector, console tab). */
+	name: string,
+	/**
+	 *  Working directory, relative to the project root (inside the active worktree). Defaults to the project root. A path that
+	 *  resolves outside the root (`..`, a symbolic link) makes the configuration unusable.
+	 */
+	cwd?: string | null,
+	/**  Environment variables (name to value), applied over the runtime environment and `envFile`. */
+	env?: { [key in string]: string },
+	/**  `.env` files relative to the project root, applied in order. A file outside the root makes the configuration unusable. */
+	envFile?: string[],
+	/**  Named overrides picked in the run selector. */
+	profiles?: { [key in string]: RunProfile },
+	/**  How to debug this configuration. Without it the configuration cannot be debugged. */
+	debug?: DebugConfig | null,
+} & RunKindConfig;
+
+export type RunConfigDeleteParams = {
+	projectId: string,
+	worktree?: string | null,
+	id: string,
+	/**  지울 파일. 없으면 공유 · 개인 둘 다(구성이 목록에서 사라진다). 개인만 지우면 공유 파일의 구성이 다시 보인다. */
+	location?: RunConfigLocation | null,
+};
+
+export type RunConfigDeleted = {
+	/**  지운 파일. */
+	paths: string[],
+};
+
+/**  쓸 수 있는 구성 하나. */
+export type RunConfigEntry = {
+	/**  구성 id(파일 이름). */
+	id: string,
+	config: RunConfig,
+	/**  값을 준 파일(공유 · 개인, 아래부터) — 구성 편집의 「저장 위치」 가 처음 고를 것. */
+	layers: RunConfigLayer[],
+};
+
+/**  레이어 파일 하나. */
+export type RunConfigLayer = {
+	/**  `shared`(`<id>.toml`) · `local`(`<id>.local.toml`). */
+	origin: LayerOrigin,
+	path: string,
+};
+
+export type RunConfigList = {
+	/**  쓸 수 있는 구성(id 순). */
+	configs: RunConfigEntry[],
+	/**  쓸 수 없는 구성과 까닭(id 순) — 모르는 `type` · 형식 오류 · 루트 밖 `cwd` 등. 버리지 않고 보인다. */
+	unusable: UnusableRunConfig[],
+	/**  감지된 태스크(M6-04 · 05 가 채운다 — 지금은 늘 비어 있다). */
+	detected: DetectedRunTask[],
+	/**  구성 폴더 자체를 읽지 못한 까닭. 그 폴더의 구성은 목록에 없다. */
+	problem: string | null,
+};
+
+export type RunConfigListParams = {
+	projectId: string,
+	/**
+	 *  활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 공유 구성(`.pitwall/run/*.toml`)을 그 워크트리에서 읽고, `cwd` 는
+	 *  그 워크트리 안의 프로젝트 루트 기준이다. 없으면 주 루트.
+	 */
+	worktree?: string | null,
+};
+
+/**  Which file to write: the shared, committed `run/<id>.toml` or the personal `run/<id>.local.toml`. */
+export type RunConfigLocation = 
+/**  `run/<id>.toml` of the active worktree (of the personal folder for a personal-only project). */
+"shared" | 
+/**  `run/<id>.local.toml`, the personal override (the main checkout's when a linked worktree has none). */
+"local";
+
+export type RunConfigSaveParams = {
+	projectId: string,
+	/**  [`RunConfigListParams::worktree`] 와 같다. 공유 파일은 그 워크트리의 것에 쓴다. */
+	worktree?: string | null,
+	/**  구성 id(파일 이름): 영문자 · 숫자 · `-` · `_`, 1~64 글자. */
+	id: string,
+	config: RunConfig,
+	/**  없으면 공유 파일. */
+	location?: RunConfigLocation,
+};
+
+export type RunConfigSaved = {
+	/**  쓴 파일. */
+	path: string,
+	/**  내용이 바뀌었는가(같은 내용이면 쓰지 않는다). */
+	changed: boolean,
+};
+
+/**
+ *  The kind of configuration (`type`) and its fields. Every kind except `shell` builds its command line from these fields, one
+ *  field value per argument — nothing is joined into a shell string.
+ */
+export type RunKindConfig = 
+/**  A shell command line, passed verbatim to the login shell's `-c` (pipes and expansions are the shell's). */
+{ type: "shell"; command: string } | 
+/**  A `package.json` script. The package manager (npm, pnpm, yarn, bun) follows the lockfile. */
+{ type: "npm"; script: string } | 
+/**  Gradle tasks. Uses the `gradlew` wrapper when there is one. */
+{ type: "gradle"; tasks: string[] } | 
+/**  Maven goals. Uses the `mvnw` wrapper when there is one. */
+{ type: "maven"; tasks: string[] } | 
+/**  `cargo <command> <args…>`. */
+{ type: "cargo"; command: string; args?: string[] } | 
+/**  `go <command> [package] <args…>`. */
+{ type: "go"; command: string; package?: string | null; args?: string[] } | 
+/**  `python -m <module>` or `python <script>`; exactly one of the two. */
+{ type: "python"; module?: string | null; script?: string | null; args?: string[] } | 
+/**  `docker compose [-f <file>] up [services…]`. Stopping sends SIGINT first so compose stops the containers. */
+{ type: "docker-compose"; services?: string[]; 
+/**  Compose file relative to the project root. Without it compose finds its own. */
+file?: string | null } | 
+/**  `mise run <task>`. */
+{ type: "mise-task"; task: string };
+
+/**  A profile (`[profiles.<name>]`): overrides applied over the configuration when it is picked. */
+export type RunProfile = {
+	/**  Applied key by key over the configuration's `env`. */
+	env?: { [key in string]: string },
+	/**  Replaces the kind's `args` as a whole. Only for kinds with `args` (cargo, go, python). */
+	args?: string[] | null,
+};
+
 export type RuntimeGetParams = {
 	projectId: string,
 	/**  절대 경로. 프로젝트 루트나 그 루트를 담은 연결 워크트리 안이어야 한다. 없으면 프로젝트의 주 루트. */
@@ -9262,6 +9434,16 @@ export type UnsupportedCount = {
 	/**  [`ToolUnsupported`] 의 `reason`. */
 	reason: string,
 	count: number,
+};
+
+/**  쓸 수 없는 구성 하나 — 목록에 남는다. */
+export type UnusableRunConfig = {
+	id: string,
+	/**  파일의 `name`(읽을 수 있었으면). 실행 선택기가 id 대신 보인다. */
+	name: string | null,
+	/**  왜 쓸 수 없는가(어느 파일 · 무엇). 환경 변수 값은 담지 않는다. */
+	reason: string,
+	layers: RunConfigLayer[],
 };
 
 export type UpdateProjectParams = {

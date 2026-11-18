@@ -40451,6 +40451,1004 @@
       ],
       "tier": "write"
     },
+    "run.config.delete": {
+      "description": "구성 파일을 지운다(`location` 이 없으면 공유 · 개인 둘 다). 그 프로젝트 창의 연결만. 그 id 의 구성(쓸 수 없는 것 포함)이\n없으면 not found.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "RunConfigLocation": {
+            "description": "Which file to write: the shared, committed `run/<id>.toml` or the personal `run/<id>.local.toml`.",
+            "oneOf": [
+              {
+                "const": "shared",
+                "description": "`run/<id>.toml` of the active worktree (of the personal folder for a personal-only project).",
+                "type": "string"
+              },
+              {
+                "const": "local",
+                "description": "`run/<id>.local.toml`, the personal override (the main checkout's when a linked worktree has none).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunConfigLocation"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "지울 파일. 없으면 공유 · 개인 둘 다(구성이 목록에서 사라진다). 개인만 지우면 공유 파일의 구성이 다시 보인다."
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "id"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "paths": {
+            "description": "지운 파일.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "paths"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "run.config.list": {
+      "description": "프로젝트의 실행 구성 목록: 쓸 수 있는 구성 · 쓸 수 없는 구성(까닭) · 감지된 태스크. 디스크에 쓰지 않는다(구버전 파일도\n메모리에서만 올린다). 없는 프로젝트는 not found, 그 프로젝트의 것이 아닌 `worktree` 는 invalid params.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "활성 워크트리의 꼭대기(`ActiveWorktree.top`, 절대 경로). 공유 구성(`.pitwall/run/*.toml`)을 그 워크트리에서 읽고, `cwd` 는\n그 워크트리 안의 프로젝트 루트 기준이다. 없으면 주 루트.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DebugConfig": {
+            "additionalProperties": true,
+            "description": "`[debug]`. Keys other than `adapter` and `mode` (`program`, `port`, `pid` …) fill the debug adapter's launch or attach\ntemplate and are kept as written.",
+            "properties": {
+              "adapter": {
+                "default": null,
+                "description": "Debug adapter id. Without it the adapter is chosen by language.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mode": {
+                "$ref": "#/$defs/DebugMode",
+                "default": "launch"
+              }
+            },
+            "required": [
+              "adapter",
+              "mode"
+            ],
+            "type": "object"
+          },
+          "DebugMode": {
+            "description": "`launch` starts the program under the debugger; `attach` only connects to a program that is already running.",
+            "enum": [
+              "launch",
+              "attach"
+            ],
+            "type": "string"
+          },
+          "DetectedRunTask": {
+            "description": "파일 없이 감지된 태스크(가상 구성 — 감지기는 M6-04 · 05 가 더한다). 「구성으로 저장」 은 `config` 를 `run.config.save` 로 쓴다.",
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/RunConfig"
+              },
+              "detector": {
+                "description": "감지기 이름(`package.json` · `mise` …).",
+                "type": "string"
+              },
+              "key": {
+                "description": "`detected:<감지기>:<이름>` — 「사람이 본 구성」 기록(M6-11)의 열쇠.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "detector",
+              "config"
+            ],
+            "type": "object"
+          },
+          "LayerOrigin": {
+            "oneOf": [
+              {
+                "enum": [
+                  "builtin"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "`<id>.toml` — 커밋되는 공유 설정(전역이면 그냥 설정 파일).",
+                "type": "string"
+              },
+              {
+                "const": "local",
+                "description": "`<id>.local.toml` — 개인 덮어쓰기. 워크트리면 메인 체크아웃의 것일 수 있다.",
+                "type": "string"
+              }
+            ]
+          },
+          "RunConfig": {
+            "description": "One run configuration: the common fields plus the kind (`type`, [`RunKindConfig`]). Doc comments of the configuration types are\nEnglish — they become the JSON Schema descriptions an agent reads (M6-13, decision M5-D39).",
+            "oneOf": [
+              {
+                "description": "A shell command line, passed verbatim to the login shell's `-c` (pipes and expansions are the shell's).",
+                "properties": {
+                  "command": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "shell",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "command"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "A `package.json` script. The package manager (npm, pnpm, yarn, bun) follows the lockfile.",
+                "properties": {
+                  "script": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "npm",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "script"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "Gradle tasks. Uses the `gradlew` wrapper when there is one.",
+                "properties": {
+                  "tasks": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": {
+                    "const": "gradle",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "tasks"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "Maven goals. Uses the `mvnw` wrapper when there is one.",
+                "properties": {
+                  "tasks": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": {
+                    "const": "maven",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "tasks"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`cargo <command> <args…>`.",
+                "properties": {
+                  "args": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "command": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "cargo",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "command",
+                  "args"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`go <command> [package] <args…>`.",
+                "properties": {
+                  "args": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "command": {
+                    "type": "string"
+                  },
+                  "package": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "const": "go",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "command",
+                  "package",
+                  "args"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`python -m <module>` or `python <script>`; exactly one of the two.",
+                "properties": {
+                  "args": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "module": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "script": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "const": "python",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "module",
+                  "script",
+                  "args"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`docker compose [-f <file>] up [services…]`. Stopping sends SIGINT first so compose stops the containers.",
+                "properties": {
+                  "file": {
+                    "default": null,
+                    "description": "Compose file relative to the project root. Without it compose finds its own.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "services": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": {
+                    "const": "docker-compose",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "services",
+                  "file"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`mise run <task>`.",
+                "properties": {
+                  "task": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "mise-task",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "task"
+                ],
+                "type": "object"
+              }
+            ],
+            "properties": {
+              "cwd": {
+                "default": null,
+                "description": "Working directory, relative to the project root (inside the active worktree). Defaults to the project root. A path that\nresolves outside the root (`..`, a symbolic link) makes the configuration unusable.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "debug": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DebugConfig"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "How to debug this configuration. Without it the configuration cannot be debugged."
+              },
+              "env": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "default": {},
+                "description": "Environment variables (name to value), applied over the runtime environment and `envFile`.",
+                "type": "object"
+              },
+              "envFile": {
+                "default": [],
+                "description": "`.env` files relative to the project root, applied in order. A file outside the root makes the configuration unusable.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "name": {
+                "description": "Display name (run selector, console tab).",
+                "type": "string"
+              },
+              "profiles": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/RunProfile"
+                },
+                "default": {},
+                "description": "Named overrides picked in the run selector.",
+                "type": "object"
+              }
+            },
+            "required": [
+              "name",
+              "cwd",
+              "env",
+              "envFile",
+              "profiles",
+              "debug"
+            ],
+            "type": "object"
+          },
+          "RunConfigEntry": {
+            "description": "쓸 수 있는 구성 하나.",
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/RunConfig"
+              },
+              "id": {
+                "description": "구성 id(파일 이름).",
+                "type": "string"
+              },
+              "layers": {
+                "description": "값을 준 파일(공유 · 개인, 아래부터) — 구성 편집의 「저장 위치」 가 처음 고를 것.",
+                "items": {
+                  "$ref": "#/$defs/RunConfigLayer"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "config",
+              "layers"
+            ],
+            "type": "object"
+          },
+          "RunConfigLayer": {
+            "description": "레이어 파일 하나.",
+            "properties": {
+              "origin": {
+                "$ref": "#/$defs/LayerOrigin",
+                "description": "`shared`(`<id>.toml`) · `local`(`<id>.local.toml`)."
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "origin",
+              "path"
+            ],
+            "type": "object"
+          },
+          "RunProfile": {
+            "description": "A profile (`[profiles.<name>]`): overrides applied over the configuration when it is picked.",
+            "properties": {
+              "args": {
+                "default": null,
+                "description": "Replaces the kind's `args` as a whole. Only for kinds with `args` (cargo, go, python).",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "env": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "default": {},
+                "description": "Applied key by key over the configuration's `env`.",
+                "type": "object"
+              }
+            },
+            "required": [
+              "env",
+              "args"
+            ],
+            "type": "object"
+          },
+          "UnusableRunConfig": {
+            "description": "쓸 수 없는 구성 하나 — 목록에 남는다.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "layers": {
+                "items": {
+                  "$ref": "#/$defs/RunConfigLayer"
+                },
+                "type": "array"
+              },
+              "name": {
+                "description": "파일의 `name`(읽을 수 있었으면). 실행 선택기가 id 대신 보인다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason": {
+                "description": "왜 쓸 수 없는가(어느 파일 · 무엇). 환경 변수 값은 담지 않는다.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "reason",
+              "layers"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "configs": {
+            "description": "쓸 수 있는 구성(id 순).",
+            "items": {
+              "$ref": "#/$defs/RunConfigEntry"
+            },
+            "type": "array"
+          },
+          "detected": {
+            "description": "감지된 태스크(M6-04 · 05 가 채운다 — 지금은 늘 비어 있다).",
+            "items": {
+              "$ref": "#/$defs/DetectedRunTask"
+            },
+            "type": "array"
+          },
+          "problem": {
+            "description": "구성 폴더 자체를 읽지 못한 까닭. 그 폴더의 구성은 목록에 없다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unusable": {
+            "description": "쓸 수 없는 구성과 까닭(id 순) — 모르는 `type` · 형식 오류 · 루트 밖 `cwd` 등. 버리지 않고 보인다.",
+            "items": {
+              "$ref": "#/$defs/UnusableRunConfig"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "configs",
+          "unusable",
+          "detected",
+          "problem"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "run.config.save": {
+      "description": "구성 파일(`location` 의 것 하나)을 만들거나 고친다 — 주석과 모르는 키는 그대로 두고, 개인 파일에 쓰면 공유 파일에만 있는\n키는 그대로 비친다. 그 프로젝트 창의 연결만(아니면 permission denied). 구성이 검증(`cwd` 가 루트 안 등)을 지나지 못하거나\nid 가 틀렸으면 invalid params, 대소문자만 다른 구성이 있거나 · 파일이 TOML 이 아니거나 · 앱보다 새 `schema` 거나 · 저장소 안의\n링크면 conflict.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "DebugConfig": {
+            "additionalProperties": true,
+            "description": "`[debug]`. Keys other than `adapter` and `mode` (`program`, `port`, `pid` …) fill the debug adapter's launch or attach\ntemplate and are kept as written.",
+            "properties": {
+              "adapter": {
+                "default": null,
+                "description": "Debug adapter id. Without it the adapter is chosen by language.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mode": {
+                "$ref": "#/$defs/DebugMode",
+                "default": "launch"
+              }
+            },
+            "type": "object"
+          },
+          "DebugMode": {
+            "description": "`launch` starts the program under the debugger; `attach` only connects to a program that is already running.",
+            "enum": [
+              "launch",
+              "attach"
+            ],
+            "type": "string"
+          },
+          "RunConfig": {
+            "description": "One run configuration: the common fields plus the kind (`type`, [`RunKindConfig`]). Doc comments of the configuration types are\nEnglish — they become the JSON Schema descriptions an agent reads (M6-13, decision M5-D39).",
+            "oneOf": [
+              {
+                "description": "A shell command line, passed verbatim to the login shell's `-c` (pipes and expansions are the shell's).",
+                "properties": {
+                  "command": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "shell",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "command"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "A `package.json` script. The package manager (npm, pnpm, yarn, bun) follows the lockfile.",
+                "properties": {
+                  "script": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "npm",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "script"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "Gradle tasks. Uses the `gradlew` wrapper when there is one.",
+                "properties": {
+                  "tasks": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": {
+                    "const": "gradle",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "tasks"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "Maven goals. Uses the `mvnw` wrapper when there is one.",
+                "properties": {
+                  "tasks": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": {
+                    "const": "maven",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "tasks"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`cargo <command> <args…>`.",
+                "properties": {
+                  "args": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "command": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "cargo",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "command"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`go <command> [package] <args…>`.",
+                "properties": {
+                  "args": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "command": {
+                    "type": "string"
+                  },
+                  "package": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "const": "go",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "command"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`python -m <module>` or `python <script>`; exactly one of the two.",
+                "properties": {
+                  "args": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "module": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "script": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "const": "python",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`docker compose [-f <file>] up [services…]`. Stopping sends SIGINT first so compose stops the containers.",
+                "properties": {
+                  "file": {
+                    "default": null,
+                    "description": "Compose file relative to the project root. Without it compose finds its own.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "services": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": {
+                    "const": "docker-compose",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`mise run <task>`.",
+                "properties": {
+                  "task": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "mise-task",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "task"
+                ],
+                "type": "object"
+              }
+            ],
+            "properties": {
+              "cwd": {
+                "default": null,
+                "description": "Working directory, relative to the project root (inside the active worktree). Defaults to the project root. A path that\nresolves outside the root (`..`, a symbolic link) makes the configuration unusable.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "debug": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DebugConfig"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "How to debug this configuration. Without it the configuration cannot be debugged."
+              },
+              "env": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "default": {},
+                "description": "Environment variables (name to value), applied over the runtime environment and `envFile`.",
+                "type": "object"
+              },
+              "envFile": {
+                "default": [],
+                "description": "`.env` files relative to the project root, applied in order. A file outside the root makes the configuration unusable.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "name": {
+                "description": "Display name (run selector, console tab).",
+                "type": "string"
+              },
+              "profiles": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/RunProfile"
+                },
+                "default": {},
+                "description": "Named overrides picked in the run selector.",
+                "type": "object"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          },
+          "RunConfigLocation": {
+            "description": "Which file to write: the shared, committed `run/<id>.toml` or the personal `run/<id>.local.toml`.",
+            "oneOf": [
+              {
+                "const": "shared",
+                "description": "`run/<id>.toml` of the active worktree (of the personal folder for a personal-only project).",
+                "type": "string"
+              },
+              {
+                "const": "local",
+                "description": "`run/<id>.local.toml`, the personal override (the main checkout's when a linked worktree has none).",
+                "type": "string"
+              }
+            ]
+          },
+          "RunProfile": {
+            "description": "A profile (`[profiles.<name>]`): overrides applied over the configuration when it is picked.",
+            "properties": {
+              "args": {
+                "default": null,
+                "description": "Replaces the kind's `args` as a whole. Only for kinds with `args` (cargo, go, python).",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "env": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "default": {},
+                "description": "Applied key by key over the configuration's `env`.",
+                "type": "object"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "config": {
+            "$ref": "#/$defs/RunConfig"
+          },
+          "id": {
+            "description": "구성 id(파일 이름): 영문자 · 숫자 · `-` · `_`, 1~64 글자.",
+            "type": "string"
+          },
+          "location": {
+            "$ref": "#/$defs/RunConfigLocation",
+            "default": "shared",
+            "description": "없으면 공유 파일."
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "[`RunConfigListParams::worktree`] 와 같다. 공유 파일은 그 워크트리의 것에 쓴다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "id",
+          "config"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "changed": {
+            "description": "내용이 바뀌었는가(같은 내용이면 쓰지 않는다).",
+            "type": "boolean"
+          },
+          "path": {
+            "description": "쓴 파일.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "changed"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "runtime.get": {
       "description": "그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.",
       "kind": "unary",

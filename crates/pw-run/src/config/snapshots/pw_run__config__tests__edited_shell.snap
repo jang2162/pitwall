@@ -1,0 +1,17 @@
+---
+source: crates/pw-run/src/config/tests.rs
+expression: text
+---
+# Dev server for the web app
+schema = 1
+name = "Dev (web)" # shown in the selector
+type = "shell"
+command = "npm run dev"
+# added by a newer Pitwall
+future_key = "keep me"
+env = { PORT = "4000" } # the port
+
+[debug]
+# attach to the inspector
+mode = "attach"
+port = 9229
