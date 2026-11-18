@@ -1,5 +1,8 @@
 //! 역요청 `runInTerminal` · `startDebugging`(17-m6-plan.md M6-15 완료 기준 ③ · ④ · ⑦).
 
+// 프로세스 그룹(`pgrep -g`)으로 어댑터가 끝났는지 본다 — unix 만(`pw-lsp` 의 통합 시험과 같다).
+#![cfg(unix)]
+
 mod common;
 
 use common::*;
@@ -46,7 +49,7 @@ async fn run_in_terminal_creates_a_run_in_the_run_manager() {
     let runs = s.terminals.runs.lock().unwrap().clone();
     assert_eq!(runs.len(), 1);
     let (project, run) = &runs[0];
-    assert_eq!(project, "p1");
+    assert_eq!(project, &p.id);
     assert_eq!(run.cwd, p.root.join("src"));
     assert_eq!(run.args, ["node", "app.js", "--flag"]);
     assert_eq!(run.title.as_deref(), Some("app"));
@@ -222,4 +225,85 @@ async fn start_debugging_on_a_port_adapter_connects_again() {
     s.debug.disconnect(None).await;
     assert!(child.ended().is_some());
     assert!(eventually(SOON, || group_members(pid).is_empty()).await);
+}
+
+/// 리뷰 F4: 끝난 뒤(끊는 중)의 `startDebugging` 은 거절하고 어댑터를 더 띄우지 않는다(⑦ 의 `runInTerminal` 짝).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_debugging_after_the_session_ended_is_refused() {
+    let p = project();
+    let scenario = Scenario::default().on(
+        "disconnect",
+        vec![
+            Action::Request {
+                command: "startDebugging".into(),
+                arguments: json!({ "request": "launch", "configuration": { "__child": true } }),
+                unless_arg: None,
+            },
+            Action::Sleep { ms: 300 },
+        ],
+    );
+    let s = start(&p, scenario, Transport::Stdio, launch(json!({}))).await;
+    s.debug.disconnect(None).await;
+    assert!(
+        eventually(SOON, || !p.responses_to("startDebugging").is_empty()).await,
+        "no response to startDebugging"
+    );
+    let response = p.responses_to("startDebugging").remove(0);
+    assert_eq!(response["success"], false, "{response}");
+    // 띄운 어댑터는 뿌리 하나뿐이다.
+    let started = p
+        .records()
+        .iter()
+        .filter(|r| r.get("argv").is_some())
+        .count();
+    assert_eq!(started, 1);
+    assert_eq!(s.debug.sessions().len(), 1);
+}
+
+/// 리뷰 F3: 세션 중 신뢰를 거두면 `runInTerminal` 도 `startDebugging` 도 거절한다 — 쥐고 있던 허가로는 띄우지 못한다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn requests_after_trust_is_revoked_are_refused() {
+    let p = project();
+    let scenario = Scenario::default().on(
+        "threads",
+        vec![
+            run_in_terminal(json!({ "cwd": path_str(&p.root), "args": ["node", "app.js"] })),
+            Action::Request {
+                command: "startDebugging".into(),
+                arguments: json!({ "request": "launch", "configuration": { "__child": true } }),
+                unless_arg: None,
+            },
+        ],
+    );
+    let s = start(&p, scenario, Transport::Stdio, launch(json!({}))).await;
+    p.projects.set_trust(&p.id, false).unwrap();
+    s.debug
+        .root()
+        .request::<pw_dap::protocol::Threads>(&pw_dap::protocol::Empty {})
+        .await
+        .unwrap();
+    assert!(
+        eventually(SOON, || !p.responses_to("runInTerminal").is_empty()
+            && !p.responses_to("startDebugging").is_empty())
+        .await
+    );
+    for command in ["runInTerminal", "startDebugging"] {
+        let response = p.responses_to(command).remove(0);
+        assert_eq!(response["success"], false, "{command}: {response}");
+        assert!(
+            response["message"]
+                .as_str()
+                .unwrap()
+                .contains("no longer trusted"),
+            "{command}: {response}"
+        );
+    }
+    assert!(s.terminals.runs.lock().unwrap().is_empty());
+    let started = p
+        .records()
+        .iter()
+        .filter(|r| r.get("argv").is_some())
+        .count();
+    assert_eq!(started, 1);
+    s.debug.disconnect(None).await;
 }

@@ -3,11 +3,17 @@
 //! **stdio 를 먼저** — 어댑터가 stdio 로 DAP 를 말하면 stdin · stdout 이 프로토콜이다(debugpy 의 `debugpy.adapter`, codelldb 는
 //! `--port` · `--connect` 없이 띄우면 stdio — v1.12.3 `src/codelldb/src/lib.rs` 를 확인했다).
 //!
-//! **TCP 는 `127.0.0.1` 에만** — 포트로만 말하는 어댑터(js-debug 의 `dapDebugServer.js [port] [host=localhost]` — v1.140.0
-//! `src/dapDebugServer.ts` 를 확인했다)는 Pitwall 이 고른 빈 포트와 `127.0.0.1` 을 인자로 준다. 정의의 포트 인자 꼴
+//! **포트보다 소켓 경로** — 포트로만 말하던 어댑터도 소켓 경로를 받으면([`Transport::Socket`] — js-debug 의
+//! `dapDebugServer.js` 는 첫 인자가 수가 아니면 그 경로에서 받는다, v1.140.0 `src/dapDebugServer.ts` 를 확인했다) 그것을 쓴다.
+//! unix 는 이 사용자만 들어가는 `0700` 폴더 안의 소켓, Windows 는 named pipe 이고, 붙은 뒤 상대가 그 어댑터인지 본다
+//! (`crate::socket`). 같은 기기의 다른 사용자가 붙지 못하고, 어댑터보다 먼저 그 자리를 차지한 프로세스에 붙지도 않는다.
+//!
+//! **TCP 는 `127.0.0.1` 에만** — 포트로만 말하는 어댑터는 Pitwall 이 고른 빈 포트와 `127.0.0.1` 을 인자로 준다. 정의의 포트 인자 꼴
 //! ([`Transport::Tcp::port_args`])에 `{port}` 와 `{host}` 자리가 **둘 다** 있어야 한다 — `{host}` 가 없는 꼴은 어댑터가 어느
-//! 주소에 묶는지 Pitwall 이 정하지 못하므로 띄우지 않는다([`LaunchError::HostNotBound`]). 같은 기기의 다른 프로세스가 그 포트에
-//! 붙어 `evaluate` 로 디버그 대상 안에서 코드를 돌리지 못하게 한다. 붙는 쪽도 [`LOOPBACK`] 으로만 붙는다.
+//! 주소에 묶는지 Pitwall 이 정하지 못하므로 띄우지 않는다([`LaunchError::HostNotBound`]). loopback 묶기는 **다른 기기**가 그 포트에
+//! 붙어 `evaluate` · `launch` 로 코드를 돌리지 못하게 할 뿐이다 — **같은 기기의 다른 사용자는 막지 못하고**, 빈 포트를 고른 뒤
+//! 어댑터가 묶기 전에 다른 프로세스가 그 포트를 먼저 묶으면 Pitwall 은 그 상대에 붙는다(어댑터는 묶지 못하고 끝난다 — 그때
+//! 세션은 어댑터 프로세스가 끝나는 대로 끝난다). 그래서 소켓 경로를 받는 어댑터는 소켓으로 정의한다(M6-19).
 //!
 //! 언어 서버가 연 포트(java-debug — jdtls 의 `vscode.java.startDebugSession`)는 Pitwall 이 주소를 정하지 못한다. 그 길(M6-16 의
 //! `start.lsp`)은 [`crate::DebugSession::start`] 에 [`Transport::Connect`] 로 받은 포트를 넘긴다 — 묶는 주소는 M6-19 가 실제로 본다.
@@ -25,6 +31,8 @@ pub const LOOPBACK: Ipv4Addr = Ipv4Addr::LOCALHOST;
 /// 포트 인자 꼴의 자리 표지.
 pub const PORT_PLACEHOLDER: &str = "{port}";
 pub const HOST_PLACEHOLDER: &str = "{host}";
+/// 소켓 인자 꼴의 자리 표지.
+pub const SOCKET_PLACEHOLDER: &str = "{socket}";
 
 /// 어댑터와 말하는 길.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +42,9 @@ pub enum Transport {
     /// 어댑터 프로세스를 띄우고 그것이 연 포트에 붙는다. `port_args` 는 [`AdapterSpec::args`] 뒤에 붙는 인자 꼴 — `{port}` 와
     /// `{host}` 가 든다(예: js-debug 는 `["{port}", "{host}"]`).
     Tcp { port_args: Vec<String> },
+    /// 어댑터 프로세스를 띄우고 그것이 연 소켓 경로(unix 소켓 · Windows named pipe)에 붙는다. `socket_args` 는
+    /// [`AdapterSpec::args`] 뒤에 붙는 인자 꼴 — `{socket}` 이 든다(예: js-debug 는 `["{socket}"]`). 자리는 Pitwall 이 정한다.
+    Socket { socket_args: Vec<String> },
     /// 이미 열린 `127.0.0.1` 의 포트에 붙기만 한다(프로세스를 띄우지 않는다 — 언어 서버가 연 포트).
     Connect { port: u16 },
 }
@@ -62,6 +73,10 @@ pub enum LaunchError {
     PortMissing,
     /// TCP 포트 인자 꼴에 `{host}` 가 없다 — 묶는 주소를 정하지 못한다(머리 주석).
     HostNotBound,
+    /// 소켓 인자 꼴에 `{socket}` 이 없다.
+    SocketMissing,
+    /// 소켓을 연 프로세스가 그 어댑터가 아니다(까닭) — 붙지 않았다.
+    Impostor(String),
     Io(std::io::Error),
 }
 
@@ -75,6 +90,13 @@ impl fmt::Display for LaunchError {
                 f,
                 "the adapter's port arguments have no {HOST_PLACEHOLDER}, so it cannot be bound to {LOOPBACK}"
             ),
+            Self::SocketMissing => {
+                write!(
+                    f,
+                    "the adapter's socket arguments have no {SOCKET_PLACEHOLDER}"
+                )
+            }
+            Self::Impostor(why) => write!(f, "refused to connect: {why}"),
             Self::Io(e) => write!(f, "cannot start the debug adapter: {e}"),
         }
     }
@@ -108,7 +130,29 @@ pub fn tcp_args(
         .collect())
 }
 
-/// [`LOOPBACK`] 의 빈 포트 하나(묶었다 곧바로 놓는다 — 어댑터가 그 사이 다른 프로세스에 뺏기면 붙기에서 실패한다).
+/// 소켓 어댑터의 argv(프로그램 다음): `args` 뒤에 `socket_args` 의 `{socket}` 을 채워 붙인다.
+pub fn socket_args(
+    args: &[OsString],
+    socket_args: &[String],
+    socket: &std::path::Path,
+) -> Result<Vec<OsString>, LaunchError> {
+    if !socket_args.iter().any(|a| a.contains(SOCKET_PLACEHOLDER)) {
+        return Err(LaunchError::SocketMissing);
+    }
+    let socket = socket.to_string_lossy();
+    Ok(args
+        .iter()
+        .cloned()
+        .chain(
+            socket_args
+                .iter()
+                .map(|a| OsString::from(a.replace(SOCKET_PLACEHOLDER, &socket))),
+        )
+        .collect())
+}
+
+/// [`LOOPBACK`] 의 빈 포트 하나. 묶었다 곧바로 놓으므로 어댑터가 묶기 전에 다른 프로세스가 그 포트를 먼저 묶을 수 있다 — 그러면
+/// 붙기는 **그 상대에게 성공한다**(어댑터는 묶지 못하고 끝나고, 세션은 그때 끝난다 — 머리 주석). 그 틈을 없애려면 소켓 경로를 쓴다.
 pub(crate) fn free_port() -> std::io::Result<u16> {
     let listener = std::net::TcpListener::bind((LOOPBACK, 0))?;
     Ok(listener.local_addr()?.port())
@@ -129,6 +173,22 @@ mod tests {
         assert_eq!(args, ["dapDebugServer.js", "41234", "127.0.0.1"]);
         let joined = tcp_args(&[], &["--listen={host}:{port}".into()], 7).unwrap();
         assert_eq!(joined, ["--listen=127.0.0.1:7"]);
+    }
+
+    #[test]
+    fn socket_arguments_carry_the_path_and_need_the_placeholder() {
+        let path = std::path::Path::new("/tmp/pw-dap-x/dap.sock");
+        let args = socket_args(
+            &[OsString::from("dapDebugServer.js")],
+            &["{socket}".into()],
+            path,
+        )
+        .unwrap();
+        assert_eq!(args, ["dapDebugServer.js", "/tmp/pw-dap-x/dap.sock"]);
+        assert!(matches!(
+            socket_args(&[], &["--listen".into()], path),
+            Err(LaunchError::SocketMissing)
+        ));
     }
 
     #[test]

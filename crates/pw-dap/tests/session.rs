@@ -1,5 +1,8 @@
 //! 세션의 시작 순서 · 끝 · 틀 위반 · 잘못된 메시지 · 끊기(17-m6-plan.md M6-15 완료 기준 ① · ② · ⑤ · ⑧).
 
+// 프로세스 그룹(`pgrep -g`)으로 어댑터가 끝났는지 본다 — unix 만(`pw-lsp` 의 통합 시험과 같다).
+#![cfg(unix)]
+
 mod common;
 
 use std::time::{Duration, Instant};
@@ -11,7 +14,7 @@ use pw_dap::protocol::{
 };
 use pw_dap::{
     EndReason, InitialBreakpoints, LaunchError, RequestError, SessionEventKind, StartError,
-    Transport,
+    Timeouts, Transport,
 };
 use serde_json::{Value, json};
 
@@ -168,8 +171,20 @@ async fn a_frame_over_the_limits_kills_the_adapter() {
         let scenario = Scenario::default()
             .reply("threads", Reply::silent())
             .on("threads", vec![Action::Raw { text: raw }]);
-        let mut s = start(&p, scenario, Transport::Stdio, launch(json!({}))).await;
-        let root = s.debug.root().clone();
+        // 끝내기의 물러남(`exit_grace`)을 길게 둔다 — 그래도 2 s 안에 그룹이 비면 위반 그 자리에서 죽인 것이다(리뷰 R1).
+        let timeouts = Timeouts {
+            exit_grace: Duration::from_secs(30),
+            ..short_timeouts()
+        };
+        let (started, mut events, _t) = try_start_with(
+            p.grant(),
+            p.adapter(scenario, Transport::Stdio),
+            launch(json!({})),
+            timeouts,
+        )
+        .await;
+        let (debug, _) = started.unwrap();
+        let root = debug.root().clone();
         let pid = root.pid().unwrap();
         let started = Instant::now();
         let got = root.request::<protocol::Threads>(&protocol::Empty {}).await;
@@ -178,7 +193,7 @@ async fn a_frame_over_the_limits_kills_the_adapter() {
             "{name}: {got:?}"
         );
         assert!(started.elapsed() < Duration::from_secs(2), "{name}");
-        let ended = next_event(&mut s.events, SOON, |e| match e.kind {
+        let ended = next_event(&mut events, SOON, |e| match e.kind {
             SessionEventKind::Ended(ended) => Some(ended),
             _ => None,
         })
@@ -189,10 +204,10 @@ async fn a_frame_over_the_limits_kills_the_adapter() {
             "{name}: {ended:?}"
         );
         assert!(
-            eventually(SOON, || group_members(pid).is_empty()).await,
-            "{name}"
+            eventually(Duration::from_secs(2), || group_members(pid).is_empty()).await,
+            "{name}: the adapter was not killed on the spot"
         );
-        assert!(s.debug.grant().revoked());
+        assert!(debug.grant().revoked());
     }
 }
 

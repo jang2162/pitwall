@@ -1,5 +1,5 @@
-//! 시험 전용 가짜 디버그 어댑터(17-m6-plan.md M6-15). `pw-dap-fake <시나리오.json> [--port N --host H]` — 형식은 `pw_dap::fake`
-//! 머리 주석. 배포물에 들지 않는다.
+//! 시험 전용 가짜 디버그 어댑터(17-m6-plan.md M6-15). `pw-dap-fake <시나리오.json> [--port N --host H | --socket 경로]` — 형식은
+//! `pw_dap::fake` 머리 주석. `pw-dap-fake --sleep N` 은 N 초 자고 끝난다(`hold` 가 띄우는 자식). 배포물에 들지 않는다.
 
 use std::collections::HashSet;
 use std::fs::OpenOptions;
@@ -51,9 +51,46 @@ struct Conn {
     seq: AtomicI64,
     initialized: AtomicBool,
     received: watch::Sender<HashSet<String>>,
+    /// 이 연결의 소켓(unix — `hold` 가 자식에게 물려준다).
+    fd: Option<i32>,
 }
 
 impl Conn {
+    /// 이 연결의 소켓을 물려받은 자식을 새 프로세스 그룹에 띄운다 — 어댑터(이 프로세스)가 끝나도 연결이 열린 채 남는다.
+    fn hold(&self, seconds: u64) {
+        #[cfg(unix)]
+        {
+            let Some(fd) = self.fd else {
+                eprintln!("pw-dap-fake: hold needs a socket connection");
+                return;
+            };
+            // SAFETY: 이 프로세스가 연 소켓의 FD_CLOEXEC 를 걷는다 — 다음 exec 에 물려준다.
+            unsafe {
+                libc::fcntl(fd, libc::F_SETFD, 0);
+            }
+            let Ok(me) = std::env::current_exe() else {
+                return;
+            };
+            use std::os::unix::process::CommandExt as _;
+            match std::process::Command::new(me)
+                .args(["--sleep", &seconds.to_string()])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .process_group(0)
+                .spawn()
+            {
+                Ok(child) => self.fake.record(&json!({ "holder": child.id() })),
+                Err(e) => eprintln!("pw-dap-fake: cannot spawn the holder: {e}"),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = seconds;
+            eprintln!("pw-dap-fake: hold is unix only");
+        }
+    }
+
     async fn send(&self, body: Vec<u8>) {
         let mut bytes = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
         bytes.extend_from_slice(&body);
@@ -98,6 +135,7 @@ impl Conn {
                 }
                 Action::Body { text } => self.send(text.as_bytes().to_vec()).await,
                 Action::Sleep { ms } => tokio::time::sleep(Duration::from_millis(*ms)).await,
+                Action::Hold { seconds } => self.hold(*seconds),
                 Action::Exit { code } => {
                     // 보낼 것을 먼저 내보낼 틈을 준다.
                     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -177,7 +215,7 @@ impl Conn {
     }
 }
 
-async fn serve<R, W>(fake: Arc<Fake>, index: usize, reader: R, mut writer: W)
+async fn serve<R, W>(fake: Arc<Fake>, index: usize, fd: Option<i32>, reader: R, mut writer: W)
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin + Send + 'static,
@@ -197,6 +235,7 @@ where
         seq: AtomicI64::new(1),
         initialized: AtomicBool::new(false),
         received: watch::channel(HashSet::new()).0,
+        fd,
     });
     conn.act(&fake.scenario.start, &Value::Null).await;
     let mut frames = FrameReader::new(reader);
@@ -230,8 +269,26 @@ where
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("--listen-detached") {
+        let (Some(scenario), Some(socket)) = (args.get(2), args.get(3)) else {
+            return ExitCode::from(2);
+        };
+        let Ok(scenario) = Scenario::read(std::path::Path::new(scenario)) else {
+            return ExitCode::from(2);
+        };
+        let fake = Arc::new(Fake {
+            scenario,
+            tcp: true,
+        });
+        return listen_socket(fake, socket).await;
+    }
+    if args.get(1).map(String::as_str) == Some("--sleep") {
+        let seconds = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(1);
+        std::thread::sleep(Duration::from_secs(seconds));
+        return ExitCode::SUCCESS;
+    }
     let Some(path) = args.get(1).map(PathBuf::from) else {
-        eprintln!("usage: pw-dap-fake <scenario.json> [--port N --host H]");
+        eprintln!("usage: pw-dap-fake <scenario.json> [--port N --host H | --socket PATH]");
         return ExitCode::from(2);
     };
     let scenario = match Scenario::read(&path) {
@@ -247,12 +304,18 @@ async fn main() -> ExitCode {
             .and_then(|i| args.get(i + 1))
             .cloned()
     };
-    let (port, host) = (flag("--port"), flag("--host"));
+    let (port, host, socket) = (flag("--port"), flag("--host"), flag("--socket"));
     let fake = Arc::new(Fake {
         scenario,
-        tcp: port.is_some(),
+        tcp: port.is_some() || socket.is_some(),
     });
     fake.record(&json!({ "argv": &args[1..], "pid": std::process::id() }));
+    if let Some(socket) = socket {
+        if fake.scenario.listen_elsewhere {
+            return listen_elsewhere(&fake, &path, &socket).await;
+        }
+        return listen_socket(fake, &socket).await;
+    }
     match (port, host) {
         (Some(port), Some(host)) => {
             let listener = match tokio::net::TcpListener::bind(format!("{host}:{port}")).await {
@@ -264,14 +327,15 @@ async fn main() -> ExitCode {
             };
             let mut index = 0;
             while let Ok((stream, _)) = listener.accept().await {
+                let fd = raw_fd(&stream);
                 let (read, write) = stream.into_split();
-                tokio::spawn(serve(Arc::clone(&fake), index, read, write));
+                tokio::spawn(serve(Arc::clone(&fake), index, fd, read, write));
                 index += 1;
             }
             ExitCode::SUCCESS
         }
         (None, None) => {
-            serve(fake, 0, tokio::io::stdin(), tokio::io::stdout()).await;
+            serve(fake, 0, None, tokio::io::stdin(), tokio::io::stdout()).await;
             ExitCode::SUCCESS
         }
         _ => {
@@ -279,4 +343,90 @@ async fn main() -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+#[cfg(unix)]
+fn raw_fd<T: std::os::fd::AsRawFd>(stream: &T) -> Option<i32> {
+    Some(stream.as_raw_fd())
+}
+
+#[cfg(not(unix))]
+fn raw_fd<T>(_stream: &T) -> Option<i32> {
+    None
+}
+
+/// 소켓 경로(unix 소켓 · Windows named pipe)에서 연결을 받는다.
+#[cfg(unix)]
+async fn listen_socket(fake: Arc<Fake>, path: &str) -> ExitCode {
+    let listener = match tokio::net::UnixListener::bind(path) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("pw-dap-fake: cannot listen on {path}: {e}");
+            return ExitCode::from(3);
+        }
+    };
+    let mut index = 0;
+    while let Ok((stream, _)) = listener.accept().await {
+        let fd = raw_fd(&stream);
+        let (read, write) = stream.into_split();
+        tokio::spawn(serve(Arc::clone(&fake), index, fd, read, write));
+        index += 1;
+    }
+    ExitCode::SUCCESS
+}
+
+#[cfg(windows)]
+async fn listen_socket(fake: Arc<Fake>, path: &str) -> ExitCode {
+    use tokio::net::windows::named_pipe::ServerOptions;
+    let mut first = true;
+    let mut index = 0;
+    loop {
+        let server = match ServerOptions::new().first_pipe_instance(first).create(path) {
+            Ok(server) => server,
+            Err(e) => {
+                eprintln!("pw-dap-fake: cannot listen on {path}: {e}");
+                return ExitCode::from(3);
+            }
+        };
+        first = false;
+        if server.connect().await.is_err() {
+            return ExitCode::SUCCESS;
+        }
+        let (read, write) = tokio::io::split(server);
+        tokio::spawn(serve(Arc::clone(&fake), index, None, read, write));
+        index += 1;
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+async fn listen_socket(_fake: Arc<Fake>, path: &str) -> ExitCode {
+    eprintln!("pw-dap-fake: cannot listen on {path} here");
+    ExitCode::from(3)
+}
+
+/// 소켓을 스스로 받지 않고 새 프로세스 그룹의 자식이 받게 한 뒤, 이 프로세스는 자기만 한다(시나리오의 `listenElsewhere`).
+async fn listen_elsewhere(fake: &Fake, scenario: &std::path::Path, socket: &str) -> ExitCode {
+    let Ok(me) = std::env::current_exe() else {
+        return ExitCode::from(2);
+    };
+    let mut command = std::process::Command::new(me);
+    command
+        .arg("--listen-detached")
+        .arg(scenario)
+        .arg(socket)
+        .stdin(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        command.process_group(0);
+    }
+    match command.spawn() {
+        Ok(child) => fake.record(&json!({ "listener": child.id() })),
+        Err(e) => {
+            eprintln!("pw-dap-fake: cannot spawn the listener: {e}");
+            return ExitCode::from(3);
+        }
+    }
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    ExitCode::SUCCESS
 }

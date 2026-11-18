@@ -31,7 +31,9 @@ use serde_json::{Map, Value};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, watch};
 
-use crate::adapter::{AdapterSpec, LOOPBACK, LaunchError, Transport, free_port, tcp_args};
+use crate::adapter::{
+    AdapterSpec, LOOPBACK, LaunchError, Transport, free_port, socket_args, tcp_args,
+};
 use crate::connection::{Closed, Connection, Inbound, RequestError};
 use crate::grant::DebugGrant;
 use crate::process::AdapterProcess;
@@ -42,6 +44,7 @@ use crate::protocol::{
     SetFunctionBreakpointsArguments, StartDebuggingRequestArguments, StartMode, StoppedEvent,
     TerminatedEvent, ThreadEvent,
 };
+use crate::socket::{self, Attempt, Halves, SocketPath};
 use crate::terminal::Terminals;
 
 /// 세션 하나에서 동시에 처리하는 역요청 수. 넘으면 곧바로 실패로 답한다.
@@ -210,9 +213,17 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// TCP 어댑터: 뿌리가 띄운 프로세스와 그 포트(자식은 여기에 붙는다).
-struct TcpAdapter {
-    port: u16,
+/// 붙는 자리(포트 · 소켓 경로).
+#[derive(Clone)]
+enum Endpoint {
+    Port(u16),
+    /// 버려지면(나무가 끝나면) 폴더째 지운다.
+    Socket(Arc<SocketPath>),
+}
+
+/// TCP · 소켓 어댑터: 뿌리가 띄운 프로세스와 그 자리(자식은 여기에 붙는다).
+struct SharedAdapter {
+    endpoint: Endpoint,
     process: Option<Arc<AdapterProcess>>,
 }
 
@@ -225,7 +236,7 @@ struct Tree {
     timeouts: Timeouts,
     /// 자식에게도 보낼 처음 브레이크포인트.
     breakpoints: InitialBreakpoints,
-    tcp: Mutex<Option<TcpAdapter>>,
+    shared: Mutex<Option<SharedAdapter>>,
     sessions: Mutex<BTreeMap<SessionId, Arc<Session>>>,
     next_id: AtomicU64,
     children: AtomicUsize,
@@ -295,29 +306,26 @@ impl Tree {
                     Connection::open(label, stdout, stdin, Box::new(move || killer.kill()));
                 Ok((connection, inbound, Some(process), true))
             }
-            Transport::Tcp { port_args } => {
-                let existing = lock(&self.tcp)
+            Transport::Tcp { .. } | Transport::Socket { .. } => {
+                let existing = lock(&self.shared)
                     .as_ref()
-                    .map(|t| (t.port, t.process.clone()));
-                let (port, process, owns) = match existing {
-                    Some((port, process)) if !root => (port, process, false),
+                    .map(|t| (t.endpoint.clone(), t.process.clone()));
+                let (endpoint, process, owns) = match existing {
+                    Some((endpoint, process)) if !root => (endpoint, process, false),
                     _ => {
-                        let port =
-                            free_port().map_err(|e| StartError::Launch(LaunchError::Io(e)))?;
-                        let args = tcp_args(&self.adapter.args, port_args, port)
-                            .map_err(StartError::Launch)?;
+                        let (endpoint, args) = self.endpoint()?;
                         let spawned = AdapterProcess::spawn(&self.adapter, args, false)
                             .await
                             .map_err(|e| StartError::Launch(LaunchError::Io(e)))?;
-                        *lock(&self.tcp) = Some(TcpAdapter {
-                            port,
+                        *lock(&self.shared) = Some(SharedAdapter {
+                            endpoint: endpoint.clone(),
                             process: Some(Arc::clone(&spawned.process)),
                         });
-                        (port, Some(spawned.process), true)
+                        (endpoint, Some(spawned.process), true)
                     }
                 };
-                let stream = connect(port, process.as_deref(), self.timeouts.connect).await?;
-                let (read, write) = stream.into_split();
+                let (read, write) =
+                    connect(&endpoint, process.as_deref(), self.timeouts.connect).await?;
                 let killer = process.clone();
                 let (connection, inbound) = Connection::open(
                     label,
@@ -332,14 +340,39 @@ impl Tree {
                 Ok((connection, inbound, process, owns))
             }
             Transport::Connect { port } => {
-                *lock(&self.tcp) = Some(TcpAdapter {
-                    port: *port,
+                let endpoint = Endpoint::Port(*port);
+                *lock(&self.shared) = Some(SharedAdapter {
+                    endpoint: endpoint.clone(),
                     process: None,
                 });
-                let stream = connect(*port, None, self.timeouts.connect).await?;
-                let (read, write) = stream.into_split();
+                let (read, write) = connect(&endpoint, None, self.timeouts.connect).await?;
                 let (connection, inbound) = Connection::open(label, read, write, Box::new(|| {}));
                 Ok((connection, inbound, None, false))
+            }
+        }
+    }
+
+    /// 뿌리가 띄울 어댑터의 자리와 그 argv(프로그램 다음).
+    fn endpoint(&self) -> Result<(Endpoint, Vec<std::ffi::OsString>), StartError> {
+        match &self.adapter.transport {
+            Transport::Tcp { port_args } => {
+                let port = free_port().map_err(|e| StartError::Launch(LaunchError::Io(e)))?;
+                let args =
+                    tcp_args(&self.adapter.args, port_args, port).map_err(StartError::Launch)?;
+                Ok((Endpoint::Port(port), args))
+            }
+            Transport::Socket {
+                socket_args: template,
+            } => {
+                let path = SocketPath::new().map_err(|e| StartError::Launch(LaunchError::Io(e)))?;
+                let args = socket_args(&self.adapter.args, template, path.path())
+                    .map_err(StartError::Launch)?;
+                Ok((Endpoint::Socket(Arc::new(path)), args))
+            }
+            Transport::Stdio | Transport::Connect { .. } => {
+                Err(StartError::Launch(LaunchError::Io(std::io::Error::other(
+                    "this adapter has no address to listen on",
+                ))))
             }
         }
     }
@@ -367,6 +400,18 @@ impl Tree {
         });
         lock(&self.sessions).insert(id, Arc::clone(&session));
         tokio::spawn(pump(Arc::clone(self), Arc::clone(&session), inbound));
+        // 어댑터 프로세스가 끝나면 그 프로세스에 붙은 연결을 닫는다(리뷰 F1 b) — 연결의 상대가 어댑터가 아니어도(포트를 먼저
+        // 차지한 다른 프로세스) 세션이 어댑터보다 오래 살지 않는다.
+        if let Some(process) = session.process.clone() {
+            let connection = session.connection.clone();
+            tokio::spawn(async move {
+                let exit = process.wait().await;
+                connection.close(Closed::Gone(format!(
+                    "the debug adapter exited (code {:?})",
+                    exit.code
+                )));
+            });
+        }
         if let Some(parent) = parent.and_then(|p| self.session(p)) {
             self.emit(&parent, SessionEventKind::ChildStarted { child: id });
         }
@@ -388,9 +433,7 @@ impl Tree {
     ) -> Result<Value, String> {
         let args: StartDebuggingRequestArguments = serde_json::from_value(args)
             .map_err(|e| format!("bad startDebugging arguments: {e}"))?;
-        if self.grant.revoked() {
-            return Err("the debug session has ended".to_owned());
-        }
+        self.grant.check_start_child(self.parent_ending(parent))?;
         if self.children.fetch_add(1, Ordering::SeqCst) >= MAX_CHILD_SESSIONS {
             self.children.fetch_sub(1, Ordering::SeqCst);
             return Err(format!("at most {MAX_CHILD_SESSIONS} child sessions"));
@@ -400,41 +443,72 @@ impl Tree {
             arguments: args.configuration,
             breakpoints: self.breakpoints.clone(),
         };
-        self.open(Some(parent), request)
+        let (child, _) = self
+            .open(Some(parent), request)
             .await
-            .map(|_| Value::Object(Map::new()))
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        // 여는 사이 부모 · 나무가 끝났으면(그 정리에 들지 못했다) 곧바로 끊는다.
+        if let Err(why) = self.grant.check_start_child(self.parent_ending(parent)) {
+            child.shut(None, self.timeouts).await;
+            return Err(why);
+        }
+        Ok(Value::Object(Map::new()))
+    }
+
+    /// 그 세션이 끊는 중이거나 끝났는가(없으면 끝난 것).
+    fn parent_ending(&self, id: SessionId) -> bool {
+        self.session(id)
+            .is_none_or(|s| s.ending.load(Ordering::SeqCst) || s.ended.borrow().is_some())
     }
 }
 
-/// `127.0.0.1:port` 에 붙는다. 어댑터가 포트를 열기까지 되풀이하되, 그 사이 어댑터가 끝나면 그만둔다.
+/// 그 자리에 붙는다. 어댑터가 열기까지 되풀이하되, 그 사이 어댑터가 끝나면 그만둔다. 소켓의 상대가 어댑터가 아니면 붙지 않고
+/// 어댑터를 끝낸다(`crate::socket`).
 async fn connect(
-    port: u16,
+    endpoint: &Endpoint,
     process: Option<&AdapterProcess>,
     limit: Duration,
-) -> Result<TcpStream, StartError> {
+) -> Result<Halves, StartError> {
     let deadline = tokio::time::Instant::now() + limit;
     loop {
-        match TcpStream::connect((LOOPBACK, port)).await {
-            Ok(stream) => return Ok(stream),
-            Err(e) => {
-                if let Some(exit) = process.and_then(AdapterProcess::exited) {
-                    return Err(StartError::Launch(LaunchError::Io(std::io::Error::other(
-                        format!(
-                            "the debug adapter exited (code {:?}) before it opened port {port}",
-                            exit.code
-                        ),
-                    ))));
+        let attempt = match endpoint {
+            Endpoint::Port(port) => match TcpStream::connect((LOOPBACK, *port)).await {
+                Ok(stream) => {
+                    let (read, write) = stream.into_split();
+                    Attempt::Connected((Box::new(read), Box::new(write)))
                 }
-                if tokio::time::Instant::now() >= deadline {
-                    if let Some(p) = process {
-                        p.kill();
-                    }
-                    return Err(StartError::Launch(LaunchError::Io(e)));
-                }
-                tokio::time::sleep(Duration::from_millis(25)).await;
+                Err(e) => Attempt::NotYet(e),
+            },
+            Endpoint::Socket(path) => {
+                socket::connect_once(path.path(), process.and_then(AdapterProcess::pid)).await
             }
+        };
+        let e = match attempt {
+            Attempt::Connected(halves) => return Ok(halves),
+            Attempt::Impostor(why) => {
+                tracing::warn!(target: "pw_dap", %why, "refused to connect to the debug adapter's socket");
+                if let Some(p) = process {
+                    p.kill();
+                }
+                return Err(StartError::Launch(LaunchError::Impostor(why)));
+            }
+            Attempt::NotYet(e) => e,
+        };
+        if let Some(exit) = process.and_then(AdapterProcess::exited) {
+            return Err(StartError::Launch(LaunchError::Io(std::io::Error::other(
+                format!(
+                    "the debug adapter exited (code {:?}) before it started listening",
+                    exit.code
+                ),
+            ))));
         }
+        if tokio::time::Instant::now() >= deadline {
+            if let Some(p) = process {
+                p.kill();
+            }
+            return Err(StartError::Launch(LaunchError::Io(e)));
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
     }
 }
 
@@ -916,7 +990,7 @@ impl DebugSession {
             locale: options.locale,
             timeouts: options.timeouts,
             breakpoints: request.breakpoints.clone(),
-            tcp: Mutex::new(None),
+            shared: Mutex::new(None),
             sessions: Mutex::new(BTreeMap::new()),
             next_id: AtomicU64::new(1),
             children: AtomicUsize::new(0),

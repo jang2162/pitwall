@@ -7,13 +7,17 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use pw_core::registry::exec::{ExecGrant, Launch, exec_grant};
+use pw_core::bus::{DEFAULT_CAPACITY, EventBus};
+use pw_core::config::AppPaths;
+use pw_core::registry::exec::ExecGrant;
+use pw_core::registry::path::simplify;
+use pw_core::registry::{NewProject, Registry};
 use pw_dap::fake::Scenario;
 use pw_dap::protocol::StartMode;
 use pw_dap::terminal::TerminalFuture;
 use pw_dap::{
     AdapterSpec, Configured, DebugGrant, DebugSession, SessionEvent, SessionOptions, StartError,
-    StartRequest, TerminalRun, TerminalStarted, Terminals, Timeouts, Transport,
+    StartRequest, TerminalRun, TerminalStarted, Terminals, Timeouts, Transport, debug_grant,
 };
 use pw_rpc::ConnectionScope;
 use pw_runtime::RuntimeEnv;
@@ -27,35 +31,50 @@ pub struct Project {
     pub base: PathBuf,
     pub root: PathBuf,
     pub record: PathBuf,
+    pub projects: Registry,
+    pub id: String,
 }
 
-/// 프로젝트 루트 하나(임시 폴더 — 실제 경로).
+/// 신뢰한 프로젝트 하나(임시 폴더 — 실제 경로).
 pub fn project() -> Project {
     let tmp = tempfile::tempdir().unwrap();
-    let base = std::fs::canonicalize(tmp.path()).unwrap();
+    let base = simplify(std::fs::canonicalize(tmp.path()).unwrap());
     let root = base.join("project");
     std::fs::create_dir_all(root.join("src")).unwrap();
     let record = base.join("record.jsonl");
+    let projects = Registry::new(
+        AppPaths::under(&base.join("app")),
+        None,
+        EventBus::new(DEFAULT_CAPACITY),
+    );
+    let id = projects
+        .create(NewProject {
+            root: root.clone(),
+            ..NewProject::default()
+        })
+        .unwrap()
+        .id;
+    projects.set_trust(&id, true).unwrap();
     Project {
         _tmp: tmp,
         base,
         root,
         record,
+        projects,
+        id,
     }
 }
 
-pub fn exec(project_id: &str) -> ExecGrant {
-    exec_grant(
-        &ConnectionScope::Project(project_id.into()),
-        project_id,
-        &Launch::Process,
-    )
-    .unwrap()
-}
-
 impl Project {
+    /// 그 프로젝트 창의 허가.
     pub fn grant(&self) -> DebugGrant {
-        DebugGrant::new(exec("p1"), &self.root).unwrap()
+        debug_grant(
+            &ConnectionScope::Project(self.id.clone()),
+            &self.projects,
+            &self.id,
+            None,
+        )
+        .unwrap()
     }
 
     /// 시나리오를 쓰고(기록 파일을 이 프로젝트의 것으로) 그 어댑터 정의.
@@ -105,6 +124,12 @@ impl Project {
             .into_iter()
             .filter(|m| m["type"] == "response" && m["command"] == command)
             .collect()
+    }
+}
+
+pub fn socket() -> Transport {
+    Transport::Socket {
+        socket_args: vec!["--socket".into(), "{socket}".into()],
     }
 }
 
@@ -179,13 +204,26 @@ pub async fn try_start(
     mpsc::Receiver<SessionEvent>,
     Arc<RecordingTerminals>,
 ) {
+    try_start_with(grant, adapter, request, short_timeouts()).await
+}
+
+pub async fn try_start_with(
+    grant: DebugGrant,
+    adapter: AdapterSpec,
+    request: StartRequest,
+    timeouts: Timeouts,
+) -> (
+    Result<(DebugSession, Configured), StartError>,
+    mpsc::Receiver<SessionEvent>,
+    Arc<RecordingTerminals>,
+) {
     let (tx, rx) = mpsc::channel(256);
     let terminals = Arc::new(RecordingTerminals::default());
     let options = SessionOptions {
         events: tx,
         terminals: terminals.clone(),
         locale: Some("ko".to_owned()),
-        timeouts: short_timeouts(),
+        timeouts,
     };
     (
         DebugSession::start(grant, adapter, request, options).await,
@@ -258,4 +296,12 @@ pub fn group_members(group: u32) -> Vec<u32> {
 
 pub fn path_str(path: &Path) -> String {
     path.to_str().unwrap().to_owned()
+}
+
+/// 그 pid 의 프로세스를 끝낸다(시험이 띄우게 한 남는 자식 정리).
+#[cfg(unix)]
+pub fn kill(pid: u64) {
+    let _ = std::process::Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .status();
 }

@@ -3,7 +3,8 @@
 //!
 //! - 틀: `pw_wire`(`Content-Length` 머리 + JSON 본문 — LSP 와 같은 상한 · 같은 「넘으면 그 프로세스를 죽인다」 규칙).
 //! - 메시지([`protocol`]): 요청 · 응답 · 이벤트, 쓰는 명령 · 이벤트 · 역요청의 타입. 규격 판은 그 머리 주석.
-//! - 어댑터([`adapter`]): 띄울 것([`AdapterSpec`])과 붙는 길([`Transport`] — stdio 먼저, TCP 는 `127.0.0.1` 에만).
+//! - 어댑터([`adapter`]): 띄울 것([`AdapterSpec`])과 붙는 길([`Transport`] — stdio 먼저, 그다음 소켓 경로(0700 폴더의 unix 소켓 ·
+//!   named pipe — 상대가 어댑터인지 본다), TCP 는 `127.0.0.1` 에만).
 //! - 프로세스: 어댑터를 자기 프로세스 그룹(Windows 는 Job Object)으로 띄우고 트리째 끝낸다(`pw-lsp` 와 같은 규칙).
 //! - 연결: 요청 표 · 시한 · 틀 위반이면 어댑터를 죽인다 · 쓰기 큐 상한.
 //! - 세션([`session`]): 시작 순서(`initialized` 전에는 브레이크포인트를 보내지 않는다), 역요청 `runInTerminal`(허가 판정을 지나
@@ -20,11 +21,12 @@ pub mod grant;
 mod process;
 pub mod protocol;
 pub mod session;
+mod socket;
 pub mod terminal;
 
 pub use adapter::{AdapterSpec, LOOPBACK, LaunchError, Transport};
 pub use connection::{MAX_QUEUED_BYTES, RequestError};
-pub use grant::DebugGrant;
+pub use grant::{DebugGrant, debug_grant};
 pub use process::MAX_LOG_LINE;
 pub use session::{
     Configured, DebugSession, EndReason, Ended, InitialBreakpoints, Session, SessionEvent,

@@ -1,6 +1,7 @@
 //! 가짜 디버그 어댑터의 시나리오 형식(17-m6-plan.md M6-15 시험 — `pw-lsp` 의 `fake` 와 같은 방식). 어댑터 자체는
 //! `src/bin/pw-dap-fake.rs`(시험 전용 바이너리 — 배포물에 들지 않는다)이고, 시험은 [`Scenario`] 를 JSON 파일로 써서 그 경로를 첫
-//! 인자로 준다. `--port N --host H` 를 더 주면 stdio 대신 `H:N` 에서 연결을 받는다(연결마다 같은 시나리오로 답한다).
+//! 인자로 준다. `--port N --host H` 를 더 주면 stdio 대신 `H:N` 에서, `--socket 경로` 면 그 소켓(Windows 는 named pipe)에서 연결을
+//! 받는다(연결마다 같은 시나리오로 답한다).
 //!
 //! ```json
 //! {
@@ -57,6 +58,10 @@ pub struct Scenario {
     pub require_initialized: Vec<String>,
     #[serde(default)]
     pub record: Option<PathBuf>,
+    /// `--socket` 으로 띄웠을 때 스스로 받지 않고, 새 프로세스 그룹의 자식(`--listen-detached`)이 그 소켓을 받게 한다 — 어댑터가 아닌
+    /// 프로세스가 소켓 자리를 먼저 차지한 경우의 흉내. 자식의 pid 는 `{"listener": n}` 줄로 남는다.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub listen_elsewhere: bool,
 }
 
 /// 요청 하나의 답.
@@ -108,6 +113,11 @@ pub enum Action {
     },
     Sleep {
         ms: u64,
+    },
+    /// 이 연결의 소켓을 물려받은 자식을 새 프로세스 그룹에 띄운다(unix · 소켓 연결만) — 그 뒤 어댑터가 끝나도 연결은 `seconds`
+    /// 동안 열린 채다(어댑터가 끝나면 세션을 끝내는가의 시험). 자식의 pid 는 `{"holder": n}` 줄로 남는다.
+    Hold {
+        seconds: u64,
     },
     /// 곧바로 이 코드로 끝난다(죽음).
     Exit {
