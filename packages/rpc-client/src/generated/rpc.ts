@@ -8852,6 +8852,8 @@ export type RunInfo = {
 	logStart: number,
 	/**  로그의 끝 오프셋(쓴 바이트 수 전체). */
 	logEnd: number,
+	/**  프로세스 트리가 듣는 TCP 포트(포트 순 — M6-08, [`ports`]). 끝난 실행 · 프로세스가 아닌 종류는 빈 목록. */
+	ports: RunPort[],
 };
 
 export type RunInputParams = {
@@ -8911,6 +8913,15 @@ export type RunList = {
 
 export type RunListParams = {
 	projectId: string,
+};
+
+/**  실행의 프로세스 트리가 듣는 TCP 포트 하나. */
+export type RunPort = {
+	port: number,
+	/**  Listening on every address (`0.0.0.0` or `::`) — reachable from other machines on the network. */
+	allAddresses: boolean,
+	/**  The local addresses it listens on, sorted (`127.0.0.1`, `::1`, `0.0.0.0`, `::`, …). */
+	addresses: string[],
 };
 
 /**  A profile (`[profiles.<name>]`): overrides applied over the configuration when it is picked. */
@@ -9228,6 +9239,8 @@ export type RunToolRun = {
 	logStart: number,
 	/**  Log end offset (bytes written so far). */
 	logEnd: number,
+	/**  TCP ports the run's process tree listens on, read every 2 seconds while it runs. Empty once the run has ended. */
+	ports: RunPort[],
 };
 
 export type RunToolState = "running" | 
