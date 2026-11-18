@@ -9,10 +9,13 @@
 //! 1. 세션의 노출 — 보이지 않는 툴은 JSON-RPC invalid params(오류 `data` 에 결과 표지).
 //! 2. 빈 `projectId` 는 세션 프로젝트로, 빈 `worktree` 는 세션의 활성 워크트리 꼭대기로 채운다(세션 프로젝트를 겨눌 때만).
 //! 3. 대상 프로젝트의 노출 — `projectId` 가 세션 프로젝트가 아니면 그 프로젝트의 `[mcp]` 로도 판정한다(결정 M5-D28).
-//! 4. 등급 정책([`crate::policy`]). 승인 경로가 없는 세션(헤드리스)의 `write` 이상은 여기서 거절한다.
+//! 4. 등급 정책([`crate::policy`]). 승인 경로가 없는 세션(헤드리스)의 `write` 이상은 여기서 **선언 등급으로** 거절한다 — 툴을
+//!    부르기 전(계획을 만들기 전)이다.
 //! 5. **승인**(16-m5-plan M5-12, 결정 M5-D30): 계획을 만드는 툴([`Tool::planned`] — `write` 이상은 모두)은 먼저 승인 표 없이
 //!    부른다. 툴은 부작용 없이 계획을 실은 「승인 필요」(`pw_core::registry::plan::APPROVAL_REQUIRED`)로 답하고, 세션은
-//!    `auto_approve` · 세션 허용 · CLI 허용을 보거나 그 프로젝트 창에 묻는다([`crate::approval`]). 허용이면 승인 표(해시)를 예약 키에
+//!    정책 자동(계획의 `policyAuto` — 툴이 05 의 규칙으로 판정한 것) · `auto_approve` · 세션 허용 · CLI 허용을 보거나 그 프로젝트
+//!    창에 묻는다([`crate::approval`]). 판정의 등급은 **계획 등급**이다 — 선언 등급은 상한이라 계획이 그보다 높거나 `dangerous`
+//!    계획이 정책 자동을 달면 툴의 버그로 묻지도 돌리지도 않는다(17-m6-plan 결정 M6-P9). 허용이면 승인 표(해시)를 예약 키에
 //!    실어 다시 부르고, 툴이 계획을 다시 만들어 해시가 다르면 다시 묻지 않고 거절한다(`plan_changed`). 「승인 필요」 오류는
 //!    에이전트에게 그대로 나가지 않는다 — 묻지 못하면 정해진 거절 까닭이다. 에이전트가 보낸 예약 키는 맨 앞에서 버린다.
 //!    계획이 승인을 청하지 않은 `read` 호출은 그 첫 호출의 결과가 곧 결과다.
@@ -709,8 +712,8 @@ impl Session {
             .await
     }
 
-    /// 계획 하나의 승인 방식을 정한다: `auto_approve` → 세션 허용 · CLI 허용 → 창에 묻기. `dangerous` 는 매번 묻고 기억하지
-    /// 않는다. 묻는 동안 호출이 취소되거나 클라이언트가 끊으면 요청을 거둔다.
+    /// 계획 하나의 승인 방식을 정한다: 정책 자동(`policyAuto`) → `auto_approve` → 세션 허용 · CLI 허용 → 창에 묻기. 등급은 계획
+    /// 등급이다. `dangerous` 계획은 매번 묻고 기억하지 않는다. 묻는 동안 호출이 취소되거나 클라이언트가 끊으면 요청을 거둔다.
     async fn approve(
         &self,
         tool: &Tool,
@@ -727,10 +730,17 @@ impl Session {
                 ),
             ));
         };
-        let policy = self.policy_for(project_id, cancel).await?;
-        // 선언 등급과 계획 등급 가운데 높은 쪽(계획이 선언보다 높으면 `planned` 가 이미 거절했다).
-        let tier = tool.tier.max(plan.tier);
+        // 판정은 계획 등급이다(17-m6-plan 결정 M6-P9). 선언 등급은 상한이다 — 계획이 그보다 높으면 `planned` 가 이미 툴의 버그로
+        // 거절했다(`plan_problem`). 노출 · 헤드리스 거절 · `readOnly` 표지는 선언 등급으로 이미 정해졌다.
+        let tier = plan.tier;
         let dangerous = tier == Tier::Dangerous;
+        // 정책 자동: 툴이 05 의 규칙으로 묻지 않아도 된다고 판정했다(`dangerous` 계획의 표지는 `plan_problem` 이 거절했다). 승인 표를
+        // 실어 다시 부르는 것 · 선기록 · 해시 재확인은 그대로다. 다른 머신을 겨누는 호출(M7 의 `checkout`)에는 `auto_approve` 와
+        // 같이 적용하지 않는다 — M7 이 그 세션의 머신 허용 뒤에 얹을지 정한다(지금은 그런 호출이 없다).
+        if plan.rules.policy_auto {
+            return Ok(AuditApproval::Policy);
+        }
+        let policy = self.policy_for(project_id, cancel).await?;
         if !dangerous && plan.rules.auto_approve && policy.auto_approves(tier) {
             return Ok(AuditApproval::Auto);
         }
@@ -1353,8 +1363,9 @@ impl Session {
     }
 }
 
-/// 툴이 보낸 계획이 그 툴의 것이 아닌 까닭(권고 1 — 16-m5-plan M5-12 리뷰): 다른 메서드의 계획이거나 선언 등급보다 높은
-/// 등급이다(「등급은 그 툴이 도달할 수 있는 가장 높은 등급」 — `pw-mcp` 머리 주석 「툴 메서드 규약」). 맞으면 `None`.
+/// 툴이 보낸 계획이 그 툴의 것이 아닌 까닭(권고 1 — 16-m5-plan M5-12 리뷰): 다른 메서드의 계획이거나, 선언 등급보다 높은
+/// 등급이거나(선언 등급은 상한 — 「등급은 그 툴이 도달할 수 있는 가장 높은 등급」, `pw-mcp` 머리 주석 「툴 메서드 규약」 · 17-m6-plan
+/// 결정 M6-P9), `dangerous` 계획에 정책 자동을 단 것이다(`dangerous` 는 매번 묻는다 — 17-m6-plan M6-10 ③). 맞으면 `None`.
 fn plan_problem(tool: &Tool, plan: &ToolPlan) -> Option<String> {
     if plan.method != tool.method {
         return Some(format!(
@@ -1362,13 +1373,15 @@ fn plan_problem(tool: &Tool, plan: &ToolPlan) -> Option<String> {
             plan.method, tool.method
         ));
     }
-    (plan.tier > tool.tier).then(|| {
-        format!(
+    if plan.tier > tool.tier {
+        return Some(format!(
             "the plan tier `{}` is above the declared tier `{}`",
             policy::tier_name(plan.tier),
             policy::tier_name(tool.tier)
-        )
-    })
+        ));
+    }
+    (plan.tier == Tier::Dangerous && plan.rules.policy_auto)
+        .then(|| "a `dangerous` plan cannot skip the question by policy".to_owned())
 }
 
 /// 툴이 결과(또는 오류 `data`) 최상위에 실은 감사 상세 글(`audit` — 「툴 메서드 규약」). 감사 행의 상세 칸으로 간다(길이는

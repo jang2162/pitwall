@@ -1608,7 +1608,12 @@ export type AuditApproval =
 /**  사람이 [이 세션 동안 허용] — 앞서 허용한 것으로 묻지 않은 호출도 이것이다. */
 "session" | 
 /**  CLI 호출의 「이 프로젝트 창이 열려 있는 동안 CLI 허용」(결정 M5-D5). */
-"window";
+"window" | 
+/**
+ *  툴이 05 「권한 모델」 의 규칙(사람이 본 실행 구성 · `sql` 구성의 조회만)으로 묻지 않았다 — 계획의 `policyAuto`(17-m6-plan
+ *  M6-10 ③).
+ */
+"policy";
 
 export type AuditOutcome = "ok" | 
 /**  툴은 불렸고 실패했다(RPC 오류). */
@@ -7784,6 +7789,13 @@ export type PlanRules = {
 	autoApprove: boolean,
 	/**  「이 세션 동안 허용」(CLI 면 「창이 열려 있는 동안 CLI 허용」)이 무엇을 기억하는가. `dangerous` 는 이것과 상관없이 없다. */
 	remember: Remember,
+	/**
+	 *  **정책 자동**(17-m6-plan M6-10 ③ — 결정 M6-P9): 툴이 05 「권한 모델」 의 규칙으로 「묻지 않아도 된다」 고 판정했다(`exec` 의
+	 *  「신뢰한 프로젝트 + 사람이 본 구성」, `sql` 구성의 조회만). 세션은 묻지 않고 승인 표를 실어 다시 부르고 감사 행의 승인 방식을
+	 *  `policy` 로 남긴다 — 두 단계 · 선기록 · 해시 재확인은 그대로다. 판정은 툴이 하고 세션은 표지만 읽는다. `dangerous` 계획에는
+	 *  둘 수 없다(세션이 툴의 버그로 거절한다). 기본 `false`.
+	 */
+	policyAuto: boolean,
 };
 
 export type Pong = {

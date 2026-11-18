@@ -61,6 +61,8 @@ const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 /// - 둘째 판: 결과에 `started`(선기록 — 실행 전에 쓴 행), 승인 방식 · 계획 해시 칸, 시각 색인(보관 정리). id 는
 ///   `AUTOINCREMENT` — 지운 가장 큰 id 를 다시 쓰지 않는다. SQLite 는 열의 `CHECK` · `AUTOINCREMENT` 를 고치지 못하므로 표를 새로
 ///   만들어 행을 옮긴다(id 그대로 — `sqlite_sequence` 가 가장 큰 id 에서 이어진다).
+/// - 셋째 판: 승인 방식 `policy`(정책 자동 — 17-m6-plan M6-10 ③). `CHECK` 를 고치려고 표를 새로 만들어 행을 옮긴다. 옮기기 전
+///   표의 `sqlite_sequence` 값(지운 가장 큰 id 까지 센 값)을 새 표로 넘긴다 — 옮긴 행의 가장 큰 id 로 되돌아가지 않는다.
 const MIGRATIONS: &[&str] = &[
     "CREATE TABLE calls (
          id          INTEGER PRIMARY KEY,
@@ -95,6 +97,29 @@ const MIGRATIONS: &[&str] = &[
          SELECT id, at, session, client, project_id, tool, args, outcome, detail, result_size, duration_ms FROM calls;
      DROP TABLE calls;
      ALTER TABLE calls_v2 RENAME TO calls;
+     CREATE INDEX calls_project_at ON calls(project_id, at);
+     CREATE INDEX calls_at ON calls(at);",
+    "CREATE TABLE calls_v3 (
+         id          INTEGER PRIMARY KEY AUTOINCREMENT,
+         at          INTEGER NOT NULL,
+         session     TEXT NOT NULL,
+         client      TEXT,
+         project_id  TEXT,
+         tool        TEXT NOT NULL,
+         args        TEXT NOT NULL,
+         outcome     TEXT NOT NULL CHECK (outcome IN ('ok', 'error', 'denied', 'started')),
+         detail      TEXT,
+         result_size INTEGER,
+         duration_ms INTEGER NOT NULL,
+         approval    TEXT CHECK (approval IN ('auto', 'once', 'session', 'window', 'policy')),
+         plan_hash   TEXT
+     );
+     INSERT INTO calls_v3 SELECT id, at, session, client, project_id, tool, args, outcome, detail, result_size,
+         duration_ms, approval, plan_hash FROM calls;
+     DELETE FROM sqlite_sequence WHERE name = 'calls_v3';
+     INSERT INTO sqlite_sequence (name, seq) SELECT 'calls_v3', seq FROM sqlite_sequence WHERE name = 'calls';
+     DROP TABLE calls;
+     ALTER TABLE calls_v3 RENAME TO calls;
      CREATE INDEX calls_project_at ON calls(project_id, at);
      CREATE INDEX calls_at ON calls(at);",
 ];
@@ -172,13 +197,22 @@ pub enum AuditApproval {
     Session,
     /// CLI 호출의 「이 프로젝트 창이 열려 있는 동안 CLI 허용」(결정 M5-D5).
     Window,
+    /// 툴이 05 「권한 모델」 의 규칙(사람이 본 실행 구성 · `sql` 구성의 조회만)으로 묻지 않았다 — 계획의 `policyAuto`(17-m6-plan
+    /// M6-10 ③).
+    Policy,
 }
 
 impl AuditApproval {
     fn parse(s: &str) -> Option<Self> {
-        [Self::Auto, Self::Once, Self::Session, Self::Window]
-            .into_iter()
-            .find(|a| a.as_str() == s)
+        [
+            Self::Auto,
+            Self::Once,
+            Self::Session,
+            Self::Window,
+            Self::Policy,
+        ]
+        .into_iter()
+        .find(|a| a.as_str() == s)
     }
 
     fn as_str(self) -> &'static str {
@@ -187,6 +221,7 @@ impl AuditApproval {
             Self::Once => "once",
             Self::Session => "session",
             Self::Window => "window",
+            Self::Policy => "policy",
         }
     }
 }
@@ -991,7 +1026,7 @@ mod tests {
         let log = AuditLog::at(file.clone());
         let rows = all(&log);
         assert_eq!(version(&file), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 2);
+        assert_eq!(SCHEMA_VERSION, 3);
         let kept: Vec<(i64, &str, Outcome)> = rows
             .iter()
             .map(|r| (r.id, r.tool.as_str(), r.outcome))
@@ -1026,6 +1061,64 @@ mod tests {
         drop(log);
         assert_eq!(all(&AuditLog::at(file.clone())).len(), 3);
         assert_eq!(version(&file), SCHEMA_VERSION);
+    }
+
+    /// 둘째 판 파일(M5 의 앱이 쓴 것)을 열면 셋째 판으로 올라가 행 · 승인 칸이 그대로 남고, 승인 방식 `policy` 를 쓸 수 있다.
+    /// 올리기 전에 지운 가장 큰 id 도 다시 쓰지 않는다(`sqlite_sequence` 를 넘긴다).
+    #[test]
+    fn a_second_version_file_is_upgraded_and_takes_the_policy_approval() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("audit.db");
+        {
+            let conn = Connection::open(&file).unwrap();
+            conn.execute_batch(MIGRATIONS[0]).unwrap();
+            conn.execute_batch(MIGRATIONS[1]).unwrap();
+            conn.pragma_update(None, "user_version", 2).unwrap();
+            for (id, approval) in [(3, Some("once")), (9, Some("window")), (12, None)] {
+                conn.execute(
+                    "INSERT INTO calls (id, at, session, tool, args, outcome, duration_ms, approval, plan_hash)
+                     VALUES (?1, 1000, 's0', 't', '{}', 'ok', 0, ?2, ?3)",
+                    params![id, approval, approval.map(|_| "sha256:h")],
+                )
+                .unwrap();
+            }
+            conn.execute("DELETE FROM calls WHERE id = 12", []).unwrap();
+            assert!(
+                conn.execute(
+                    "INSERT INTO calls (at, session, tool, args, outcome, duration_ms, approval)
+                     VALUES (1, 's', 't', '{}', 'ok', 0, 'policy')",
+                    [],
+                )
+                .is_err(),
+                "둘째 판은 policy 를 받지 않는다"
+            );
+        }
+        let log = AuditLog::at(file.clone());
+        let rows = all(&log);
+        assert_eq!(version(&file), SCHEMA_VERSION);
+        let kept: Vec<(i64, Option<AuditApproval>, Option<&str>)> = rows
+            .iter()
+            .map(|r| (r.id, r.approval, r.plan_hash.as_deref()))
+            .collect();
+        assert_eq!(
+            kept,
+            [
+                (3, Some(AuditApproval::Once), Some("sha256:h")),
+                (9, Some(AuditApproval::Window), Some("sha256:h")),
+            ]
+        );
+        let id = log
+            .begin(&Entry {
+                approval: Some(AuditApproval::Policy),
+                plan_hash: Some("sha256:p".into()),
+                ..entry("run_start", Some("p1"))
+            })
+            .unwrap();
+        assert_eq!(id, 13, "지운 가장 큰 id(12) 뒤에서 이어진다");
+        assert_eq!(
+            all(&log).pop().unwrap().approval,
+            Some(AuditApproval::Policy)
+        );
     }
 
     /// 여러 연결(프로세스 여럿 — 앱과 헤드리스 `pitwall mcp`)이 첫째 판 파일을 **동시에 처음 열어도** 모두 열리고 쓴다. 판

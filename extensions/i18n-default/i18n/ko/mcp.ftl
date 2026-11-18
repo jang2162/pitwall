@@ -51,6 +51,8 @@ mcp-activity-approval-auto = 자동
 mcp-activity-approval-once = 이번만
 mcp-activity-approval-session = 세션 동안
 mcp-activity-approval-window = 창이 열린 동안
+# 툴이 자기 규칙(사람이 본 실행 구성 · 조회만 하는 sql 구성)으로 묻지 않은 호출
+mcp-activity-approval-policy = 규칙
 # 승인을 지나지 않은 호출(read · 거절)
 mcp-activity-approval-none = 없음
 # 프로젝트 없는 호출의 표지

@@ -8,8 +8,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use pw_core::config::AppPaths;
-use pw_core::registry::NewProject;
+use pw_core::registry::agent::agent_grant;
+use pw_core::registry::exec::{RunSpec, agent_run_grant};
 use pw_core::registry::plan::{APPROVAL_KEY, PlanChange, PlanRules, Planned, Remember, ToolPlan};
+use pw_core::registry::{NewProject, Registry};
 use pw_core::{HostRouter, LocalHost};
 use pw_mcp::approval::{
     AnswerError, Answerer, Connection, Listener, McpApprovalAnswer, McpApprovalEvent,
@@ -148,6 +150,16 @@ rpc_method! {
         mcp: { group: "project", name: "fake_dangerous_low" },
     }
 
+    /// 실행 툴의 자리(17-m6-plan M6-10 — `run_start` 는 M6-14): 선언은 도달할 수 있는 가장 높은 `dangerous`, 계획 등급 · 규칙은
+    /// `tag`(`<등급>[+policy][+human]`)가 정한다. 계획 때 프로젝트 루트의 `.env.local` 을 읽어 [`RunSpec`] 을 싣고, 승인 뒤
+    /// [`agent_run_grant`] 의 허가가 준 것만 「띄운다」([`Probe::launched`] 에 남긴다 — 프로세스는 띄우지 않는다).
+    pub FakeRun: "approvaltest.run" {
+        params: Planned<ToolParams>,
+        result: ToolResult,
+        tier: Dangerous,
+        mcp: { group: "project", name: "fake_run" },
+    }
+
     /// 승인 뒤 「되돌릴 수 없는 지점」(`pw_rpc::PointOfNoReturn` — `db_execute` 의 커밋 자리)을 세우는 쓰기 툴. 시험이
     /// [`PointGate`] 로 그 앞뒤를 쥔다.
     pub FakeIrreversible: "approvaltest.irreversible" {
@@ -176,6 +188,9 @@ struct PointGate {
     fail: std::sync::atomic::AtomicBool,
 }
 
+/// `fake_run` 이 승인과 허가 사이에 한 번 부르는 것.
+type Between = Box<dyn FnOnce() + Send>;
+
 /// 가짜 툴이 불린 수.
 #[derive(Clone, Default)]
 struct Probe {
@@ -185,6 +200,48 @@ struct Probe {
     runs: Arc<AtomicUsize>,
     /// `fake_irreversible` 의 앞뒤.
     gate: Arc<PointGate>,
+    /// `fake_run` 이 허가로 받아 「띄운」 것.
+    launched: Arc<std::sync::Mutex<Vec<RunSpec>>>,
+    /// `fake_run` 이 승인을 지난 뒤 · 허가를 받기 전에 한 번 부르는 것(그 사이에 파일이 바뀌는 자리).
+    between: Arc<std::sync::Mutex<Option<Between>>>,
+    /// `fake_run` 이 관문(`agent_grant`)에 쓰는 레지스트리 — Host 를 만든 뒤 채운다.
+    registry: Arc<std::sync::OnceLock<Registry>>,
+}
+
+/// `fake_run` 의 계획 등급과 규칙: `tag` 는 `<read|write|exec|dangerous>[+policy][+human]`. `human` 은 사람이 띄운 실행을 겨누는
+/// 꼴이다(결정 D69 — `auto_approve` 없음, 그 실행 하나의 열쇠).
+fn run_plan_rules(p: &ToolParams) -> (Tier, PlanRules) {
+    let mut parts = p.tag.split('+');
+    let tier = match parts.next() {
+        Some("read") => Tier::Read,
+        Some("write") => Tier::Write,
+        Some("dangerous") => Tier::Dangerous,
+        _ => Tier::Exec,
+    };
+    let mut rules = PlanRules::default();
+    for flag in parts {
+        match flag {
+            "policy" => rules.policy_auto = true,
+            "human" => {
+                rules.auto_approve = false;
+                rules.remember = Remember::Key {
+                    key: p.key.clone().unwrap_or_else(|| "human:r1".into()),
+                };
+            }
+            other => panic!("unknown flag {other}"),
+        }
+    }
+    (tier, rules)
+}
+
+/// `.env` 꼴(`KEY=VALUE` 줄)을 읽는다. 없으면 빈 것.
+fn read_env(file: &Path) -> std::collections::BTreeMap<String, String> {
+    std::fs::read_to_string(file)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.split_once('='))
+        .map(|(k, v)| (k.trim().to_owned(), v.trim().to_owned()))
+        .collect()
 }
 
 fn target_file(p: &ToolParams) -> Option<PathBuf> {
@@ -232,6 +289,7 @@ fn register_tools(router: &mut pw_rpc::Router, probe: &Probe) {
     let never = PlanRules {
         auto_approve: false,
         remember: Remember::Never,
+        policy_auto: false,
     };
     for (method, tier, rules) in [
         ("approvaltest.write", Tier::Write, plain.clone()),
@@ -282,6 +340,7 @@ fn register_tools(router: &mut pw_rpc::Router, probe: &Probe) {
                     remember: Remember::Key {
                         key: p.params.key.clone().unwrap_or_else(|| p.params.tag.clone()),
                     },
+                    policy_auto: false,
                 };
                 let plan = plan_of(method, Tier::Read, rules, &p.params);
                 execute(probe, plan, p).await
@@ -366,6 +425,50 @@ fn register_tools(router: &mut pw_rpc::Router, probe: &Probe) {
             })
         }
     });
+    let run = probe.clone();
+    router.unary(FakeRun, move |ctx, p: Planned<ToolParams>| {
+        let probe = run.clone();
+        let scope = ctx.scope().clone();
+        async move {
+            probe.plans.fetch_add(1, Ordering::SeqCst);
+            let registry = probe.registry.get().expect("registry").clone();
+            let agent = agent_grant(&scope, &registry, &p.params.project_id)?;
+            let root = PathBuf::from(&agent.project().roots[0]);
+            let spec = RunSpec {
+                config: "dev".into(),
+                argv: vec!["node".into(), "server.js".into()],
+                env: read_env(&root.join(".env.local")),
+                cwd: root,
+                profile: None,
+            };
+            let (tier, rules) = run_plan_rules(&p.params);
+            let plan = ToolPlan::builder("approvaltest.run", tier, &p.params)
+                .summary(format!("run dev ({})", p.params.tag))
+                .change(PlanChange::Text {
+                    label: "run".into(),
+                    text: format!("node server.js · env {:?}", spec.env.keys()),
+                })
+                .rules(rules)
+                .runs([spec])
+                .build();
+            let approved = p.approve(plan)?;
+            let between = probe.between.lock().unwrap().take();
+            if let Some(between) = between {
+                between();
+            }
+            // 띄우는 쪽은 허가의 RunSpec 만 받는다 — 구성 · `.env.local` 을 다시 읽지 않는다.
+            let grant = agent_run_grant(&agent, &approved)?;
+            probe.runs.fetch_add(1, Ordering::SeqCst);
+            probe
+                .launched
+                .lock()
+                .unwrap()
+                .extend(grant.runs().iter().cloned());
+            Ok::<_, RpcError>(ToolResult {
+                audit: format!("tag={}", p.params.tag),
+            })
+        }
+    });
     let low = probe.clone();
     router.unary(FakeDangerousLow, move |_ctx, p: Planned<ToolParams>| {
         let plan = plan_of(
@@ -379,7 +482,8 @@ fn register_tools(router: &mut pw_rpc::Router, probe: &Probe) {
 }
 
 /// `[mcp.tools]` 의 공통 줄 — `dangerous` 툴은 프리셋 `standard` 에 없다.
-const TOOLS: &str = "[mcp.tools]\nfake_dangerous = true\nfake_dangerous_low = true\n";
+const TOOLS: &str =
+    "[mcp.tools]\nfake_dangerous = true\nfake_dangerous_low = true\nfake_run = true\n";
 
 struct Fixture {
     _tmp: tempfile::TempDir,
@@ -430,6 +534,7 @@ impl Fixture {
                 .build(),
         );
         let registry = host.registry().unwrap();
+        probe.registry.set(registry.clone()).ok().unwrap();
         let mut ids = ["alpha", "beta"].iter().map(|name| {
             registry
                 .create(NewProject {
@@ -542,6 +647,11 @@ impl Fixture {
 
     fn runs(&self) -> usize {
         self.probe.runs.load(Ordering::SeqCst)
+    }
+
+    /// `fake_run` 이 「띄운」 것.
+    fn launched(&self) -> Vec<RunSpec> {
+        self.probe.launched.lock().unwrap().clone()
     }
 
     fn plans(&self) -> usize {
@@ -1925,8 +2035,8 @@ async fn a_planned_tool_that_runs_without_a_ticket_is_reported_as_a_bug() {
 }
 
 /// 세션은 툴의 계획을 검증한다: 다른 메서드의 계획이나 선언보다 높은 등급의 계획은 묻지도 돌리지도 않고 「Pitwall bug」 오류다
-/// (`auto_approve` 에 선언 등급이 있어도). 계획 등급이 선언보다 낮으면 높은 쪽(선언)으로 판정한다 — `dangerous` 로 선언한 툴의
-/// `write` 계획도 매번 묻고 셋째 답이 없다.
+/// (`auto_approve` 에 선언 등급이 있어도 — 17-m6-plan M6-10 ④, 선언은 상한). 계획 등급이 선언보다 낮으면 계획 등급으로 판정한다
+/// (결정 M6-P9) — `dangerous` 로 선언한 툴의 `write` 계획은 `write` 로 묻고 셋째 답이 있다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_session_checks_the_plan_against_the_tool() {
     let f = Fixture::with_global("[mcp]\nauto_approve = [\"write\", \"exec\"]\n");
@@ -1944,15 +2054,211 @@ async fn the_session_checks_the_plan_against_the_tool() {
     assert!(window.quiet(), "규약을 어긴 계획으로 물었다");
     assert_eq!(f.runs(), 0);
 
+    // `auto_approve` 의 `write` 가 계획 등급 `write` 에 닿는다 — 묻지 않는다.
+    assert_eq!(
+        mark(&agent.call("fake_dangerous_low", json!({"tag": "x"})).await),
+        Mark::ok()
+    );
+    assert!(window.quiet(), "계획 등급이 아니라 선언 등급으로 판정했다");
+    assert_eq!(f.runs(), 1);
+
+    let f = Fixture::new();
+    let mut window = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
     let call = agent.spawn("fake_dangerous_low", json!({"tag": "x"}));
     let request = window.opened().await;
-    assert_eq!(request.tier, Tier::Dangerous);
+    assert_eq!(request.tier, Tier::Write, "승인 요청의 등급은 계획 등급");
     assert_eq!(request.plan.tier, Tier::Write);
+    assert_eq!(
+        request.answers,
+        [
+            McpApprovalAnswer::Deny,
+            McpApprovalAnswer::Once,
+            McpApprovalAnswer::Session
+        ]
+    );
+    window.answer(request.id, McpApprovalAnswer::Once).unwrap();
+    assert_eq!(mark(&within(call).await.unwrap()), Mark::ok());
+    assert_eq!(f.runs(), 1);
+}
+
+// ---- 계획 등급 · 정책 자동 · 에이전트의 실행 허가(17-m6-plan M6-10) ----
+
+fn run_rows(f: &Fixture, n: usize) -> Vec<(String, String, Option<String>)> {
+    f.rows(n)
+        .into_iter()
+        .map(|r| (r.tool, r.outcome, r.approval))
+        .collect()
+}
+
+/// ③ `dangerous` 로 선언한 툴의 `exec` 계획은 `auto_approve = ["exec"]` 로 묻지 않는다(높은 쪽 — 선언으로 판정하면 묻는다).
+/// 같은 툴의 `dangerous` 계획은 그래도 매번 묻고 셋째 답이 없다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dangerous_tool_with_an_exec_plan_is_judged_by_the_plan_tier() {
+    let f = Fixture::with_global("[mcp]\nauto_approve = [\"exec\"]\n");
+    let mut window = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    assert_eq!(
+        mark(&agent.call("fake_run", json!({"tag": "exec"})).await),
+        Mark::ok()
+    );
+    assert!(window.quiet(), "선언 등급(dangerous)으로 판정해 물었다");
+    assert_eq!(f.launched().len(), 1);
+
+    let call = agent.spawn("fake_run", json!({"tag": "dangerous"}));
+    let request = window.opened().await;
+    assert_eq!(request.tier, Tier::Dangerous);
     assert_eq!(
         request.answers,
         [McpApprovalAnswer::Deny, McpApprovalAnswer::Once]
     );
     window.answer(request.id, McpApprovalAnswer::Once).unwrap();
     assert_eq!(mark(&within(call).await.unwrap()), Mark::ok());
+    window.closed(request.id).await;
+    assert_eq!(
+        run_rows(&f, 2),
+        [
+            ("fake_run".into(), "ok".into(), Some("auto".into())),
+            ("fake_run".into(), "ok".into(), Some("once".into())),
+        ]
+    );
+}
+
+/// ⑤ 정책 자동 계획은 묻지 않고 돈다 — 창이 없어도. 그래도 두 단계(계획 둘)이고, 선기록한 행의 승인 방식은 `policy`, 계획 해시가
+/// 남는다. `auto_approve` 가 없어도 된다(툴이 판정한 자동).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_policy_auto_plan_runs_without_asking_and_is_logged_as_policy() {
+    let f = Fixture::new();
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let result = agent.call("fake_run", json!({"tag": "exec+policy"})).await;
+    assert_eq!(mark(&result), Mark::ok(), "{}", text(&result));
+    assert_eq!((f.plans(), f.runs()), (2, 1), "승인 표를 실어 다시 불렀다");
+    let rows = f.rows(1);
+    assert_eq!(
+        (rows[0].outcome.as_str(), rows[0].approval.as_deref()),
+        ("ok", Some("policy"))
+    );
+    assert!(rows[0].plan_hash.as_deref().unwrap().starts_with("sha256:"));
+
+    // 정책 자동이 없는 같은 계획은 묻는다 — 묻지 않은 것은 표지 때문이다.
+    let mut window = f.window(&f.alpha);
+    let call = agent.spawn("fake_run", json!({"tag": "exec"}));
+    let request = window.opened().await;
+    assert_eq!(request.tier, Tier::Exec);
+    window.answer(request.id, McpApprovalAnswer::Deny).unwrap();
+    assert_eq!(
+        mark(&within(call).await.unwrap()),
+        Mark::denied(Reason::ApprovalDenied)
+    );
     assert_eq!(f.runs(), 1);
+}
+
+/// ⑥ `dangerous` 계획의 정책 자동은 툴의 버그다 — 묻지도 돌리지도 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dangerous_plan_cannot_carry_policy_auto() {
+    let f = Fixture::with_global("[mcp]\nauto_approve = [\"write\", \"exec\"]\n");
+    let mut window = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let result = agent
+        .call("fake_run", json!({"tag": "dangerous+policy"}))
+        .await;
+    assert_eq!(mark(&result), Mark::error(None));
+    assert!(text(&result).contains("Pitwall bug"), "{}", text(&result));
+    assert!(window.quiet(), "규약을 어긴 계획으로 물었다");
+    assert_eq!((f.plans(), f.runs()), (1, 0));
+    assert!(f.launched().is_empty());
+    let rows = f.rows(1);
+    assert_eq!(
+        (rows[0].outcome.as_str(), rows[0].approval.as_deref()),
+        ("error", None)
+    );
+}
+
+/// ⑦ 헤드리스는 선언 등급으로 거절한다 — 툴을 부르기 전(계획을 만들기 전)이고, 계획이 `read` · 정책 자동이어도 같다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_headless_session_refuses_by_the_declared_tier_before_planning() {
+    let f = Fixture::with_global("[mcp]\nauto_approve = [\"write\", \"exec\"]\n");
+    let agent = f
+        .agent_on("agent", &f.work("alpha"), HostKind::Headless)
+        .await;
+    for tag in ["exec+policy", "read+policy", "exec"] {
+        let result = agent.call("fake_run", json!({"tag": tag})).await;
+        assert_eq!(mark(&result), Mark::denied(Reason::HeadlessWrite), "{tag}");
+    }
+    assert_eq!((f.plans(), f.runs()), (0, 0));
+}
+
+/// ⑧ 승인 뒤 띄우기 전에 `.env.local` 이 바뀌어도 계획 때 읽은 값으로 돈다(띄우는 쪽이 다시 읽으면 실패). 승인을 묻는 동안
+/// 바뀌면 다시 만든 계획의 해시가 달라 돌지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_launch_uses_the_env_read_when_planning() {
+    let f = Fixture::new();
+    let env = f.work("alpha").join(".env.local");
+    std::fs::write(&env, "API_URL=seen\n").unwrap();
+    let changed = env.clone();
+    *f.probe.between.lock().unwrap() = Some(Box::new(move || {
+        std::fs::write(changed, "API_URL=swapped\n").unwrap();
+    }));
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let result = agent.call("fake_run", json!({"tag": "exec+policy"})).await;
+    assert_eq!(mark(&result), Mark::ok(), "{}", text(&result));
+    assert_eq!(std::fs::read_to_string(&env).unwrap(), "API_URL=swapped\n");
+    let launched = f.launched();
+    assert_eq!(launched.len(), 1);
+    assert_eq!(launched[0].env["API_URL"], "seen");
+    assert_eq!(launched[0].cwd, f.work("alpha"));
+
+    let mut window = f.window(&f.alpha);
+    let call = agent.spawn("fake_run", json!({"tag": "exec"}));
+    let request = window.opened().await;
+    std::fs::write(&env, "API_URL=behind-the-dialog\n").unwrap();
+    window.answer(request.id, McpApprovalAnswer::Once).unwrap();
+    assert_eq!(
+        mark(&within(call).await.unwrap()),
+        Mark::denied(Reason::PlanChanged)
+    );
+    assert_eq!(f.launched().len(), 1, "바뀐 .env.local 로 띄웠다");
+}
+
+/// 사람이 띄운 실행을 겨누는 꼴(결정 D69 — 실제 툴은 M6-14): 계획 `exec` 라도 규칙이 `auto_approve` 를 끄면
+/// `auto_approve = ["exec"]` 로 묻지 않고 돌지 않는다. 세션 허용은 그 열쇠(그 실행 하나)에만 닿는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_approve_does_not_reach_a_plan_that_turns_it_off() {
+    let f = Fixture::with_global("[mcp]\nauto_approve = [\"exec\"]\n");
+    let mut window = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let call = agent.spawn("fake_run", json!({"tag": "exec+human", "key": "human:r1"}));
+    let request = window.opened().await;
+    assert_eq!(request.tier, Tier::Exec);
+    assert_eq!(
+        request.answers,
+        [
+            McpApprovalAnswer::Deny,
+            McpApprovalAnswer::Once,
+            McpApprovalAnswer::Session
+        ]
+    );
+    window
+        .answer(request.id, McpApprovalAnswer::Session)
+        .unwrap();
+    assert_eq!(mark(&within(call).await.unwrap()), Mark::ok());
+    window.closed(request.id).await;
+    // 같은 실행은 세션 허용으로, 다른 실행은 다시 묻는다.
+    assert_eq!(
+        mark(
+            &agent
+                .call("fake_run", json!({"tag": "exec+human", "key": "human:r1"}))
+                .await
+        ),
+        Mark::ok()
+    );
+    assert!(window.quiet());
+    let call = agent.spawn("fake_run", json!({"tag": "exec+human", "key": "human:r2"}));
+    let request = window.opened().await;
+    window.answer(request.id, McpApprovalAnswer::Deny).unwrap();
+    within(call).await.unwrap();
+    assert_eq!(
+        run_rows(&f, 3).into_iter().map(|r| r.2).collect::<Vec<_>>(),
+        [Some("session".into()), Some("session".into()), None]
+    );
 }

@@ -56,6 +56,7 @@ export function mcpStrings(t: Translate) {
         once: t("mcp-activity-approval-once"),
         session: t("mcp-activity-approval-session"),
         window: t("mcp-activity-approval-window"),
+        policy: t("mcp-activity-approval-policy"),
       } satisfies Record<AuditApproval, string>,
       approvalNone: t("mcp-activity-approval-none"),
       noProject: t("mcp-activity-no-project"),

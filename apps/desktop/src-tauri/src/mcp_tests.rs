@@ -11,6 +11,7 @@
 //! 목록에 앱 전용 툴이 섞여 [`mcp_tools_are_exactly_these`] 가 실패한다(M5-05 · M5-06 이 각각 빼 보고 확인했다).
 //!
 //! 툴 행의 왕복 시험은 하위 모듈에 둔다(`git` · `db` · `code` · `project` · `project_write` — 이 파일의 병합 충돌을 줄이려고).
+//! 계획을 내는 툴은 `plan_tiers` 의 회귀 표에도 더한다(17-m6-plan M6-10 ⑨).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -31,6 +32,7 @@ use crate::mcp;
 mod code;
 mod db;
 mod git;
+mod plan_tiers;
 mod project;
 mod project_write;
 

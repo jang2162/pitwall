@@ -62,6 +62,8 @@ mcp-activity-approval-auto = auto
 mcp-activity-approval-once = once
 mcp-activity-approval-session = session
 mcp-activity-approval-window = while window open
+# The tool skipped the question by its own rule (a run configuration the person has seen, a read-only sql configuration)
+mcp-activity-approval-policy = by rule
 # Calls that did not pass approval (read, refused)
 mcp-activity-approval-none = none
 # Marks a call without a project

@@ -396,6 +396,7 @@ it("shows the result in words, with started rows as end unknown, the time taken 
     row(5, { approval: "window", client: "pitwall-cli" }),
     row(6, { approval: "auto" }),
     row(7, { approval: "session" }),
+    row(8, { approval: "policy", tool: "run_start" }),
   ];
   await openPanel();
   const byId = (id: number) => panel()!.querySelector<HTMLElement>(`[data-mcp-row="${id}"]`)!;
@@ -415,6 +416,8 @@ it("shows the result in words, with started rows as end unknown, the time taken 
   expect(approval(5)).toBe(T.activity.approval.window);
   expect(approval(6)).toBe(T.activity.approval.auto);
   expect(approval(7)).toBe(T.activity.approval.session);
+  expect(approval(8)).toBe("규칙");
+  expect(approval(8)).toBe(T.activity.approval.policy);
   expect(approval(1)).toBe(T.activity.approvalNone);
   expect(byId(2).querySelector("[data-mcp-outcome]")?.getAttribute("title")).toBe("no such file");
 });
