@@ -126,7 +126,8 @@ rpc_method! {
         mcp: { group: "project", name: "fake_rogue" },
     }
 
-    /// 규약을 어긴 쓰기 툴: 선언(`write`)보다 높은 등급(`tag` — `exec` · `dangerous`)의 계획을 낸다.
+    /// 규약을 어긴 쓰기 툴: 선언(`write`)과 다른 등급(`tag` — `exec` · `dangerous` 는 높고, `read` 는 낮춤 목록 없이 낮다)의
+    /// 계획을 낸다.
     pub FakeOverTier: "approvaltest.overTier" {
         params: Planned<ToolParams>,
         result: ToolResult,
@@ -363,10 +364,10 @@ fn register_tools(router: &mut pw_rpc::Router, probe: &Probe) {
     });
     let over = probe.clone();
     router.unary(FakeOverTier, move |_ctx, p: Planned<ToolParams>| {
-        let tier = if p.params.tag == "dangerous" {
-            Tier::Dangerous
-        } else {
-            Tier::Exec
+        let tier = match p.params.tag.as_str() {
+            "dangerous" => Tier::Dangerous,
+            "read" => Tier::Read,
+            _ => Tier::Exec,
         };
         let plan = plan_of(
             "approvaltest.overTier",
@@ -481,6 +482,19 @@ fn register_tools(router: &mut pw_rpc::Router, probe: &Probe) {
     });
 }
 
+/// 가짜 툴 가운데 계획 등급을 선언보다 낮게 낼 수 있는 것(`pw_mcp::catalog::LOWERED_PLAN_TIERS` 의 자리). `fake_over_tier` 는
+/// 없다 — 그 툴의 낮춘 계획은 거절된다.
+const FAKE_LOWERED: &[(&str, &[Tier])] = &[
+    ("fake_dangerous_low", &[Tier::Write]),
+    ("fake_run", &[Tier::Read, Tier::Write, Tier::Exec]),
+];
+
+fn fake_catalog() -> Catalog {
+    Catalog::linked()
+        .with_lowered_plan_tiers(FAKE_LOWERED)
+        .unwrap()
+}
+
 /// `[mcp.tools]` 의 공통 줄 — `dangerous` 툴은 프리셋 `standard` 에 없다.
 const TOOLS: &str =
     "[mcp.tools]\nfake_dangerous = true\nfake_dangerous_low = true\nfake_run = true\n";
@@ -550,7 +564,7 @@ impl Fixture {
             paths: paths.clone(),
             global: config.global.clone(),
             projects: registry.clone(),
-            catalog: Arc::new(Catalog::linked().routed_by(host.router())),
+            catalog: Arc::new(fake_catalog().routed_by(host.router())),
             audit: Arc::new(AuditLog::under_state(&paths.state)),
         });
         Self {
@@ -575,7 +589,7 @@ impl Fixture {
             global: self.host.config().unwrap().global.clone(),
             bus: self.host.bus().clone(),
             audit: Arc::new(AuditLog::under_state(&self.paths.state)),
-            catalog: Arc::new(Catalog::linked().routed_by(self.host.router())),
+            catalog: Arc::new(fake_catalog().routed_by(self.host.router())),
             approval: Approval::for_host(host_kind, &self.sessions),
             transport: "test",
             host_kind,
@@ -2261,4 +2275,59 @@ async fn auto_approve_does_not_reach_a_plan_that_turns_it_off() {
         run_rows(&f, 3).into_iter().map(|r| r.2).collect::<Vec<_>>(),
         [Some("session".into()), Some("session".into()), None]
     );
+}
+
+/// 낮춤 목록에 없는 툴이 선언보다 낮은 계획을 내면 툴의 버그다 — 묻지도 돌리지도 않는다(`auto_approve` 에 그 낮은 등급이
+/// 있어도). 낮춤을 받으면 `auto_approve` · 세션 허용이 선언보다 낮은 등급으로 닿기 때문이다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_tool_off_the_lowering_list_cannot_lower_its_plan() {
+    let f = Fixture::with_global("[mcp]\nauto_approve = [\"read\", \"write\"]\n");
+    let mut window = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let result = agent.call("fake_over_tier", json!({"tag": "read"})).await;
+    assert_eq!(mark(&result), Mark::error(None));
+    assert!(text(&result).contains("may not lower"), "{}", text(&result));
+    assert!(window.quiet(), "목록에 없는 낮춤으로 물었다");
+    assert_eq!((f.plans(), f.runs()), (1, 0));
+}
+
+/// 세션 허용 · CLI 허용은 그 계획 등급에만 닿는다: 낮춘 `write` 계획에 준 허용으로 같은 툴의 `exec` 계획이 묻지 않고 돌지
+/// 않는다(같은 등급은 다시 묻지 않는다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_allowance_reaches_only_the_plan_tier_it_was_given_for() {
+    let f = Fixture::new();
+    let mut window = f.window(&f.alpha);
+    for client in ["agent", pw_mcp::server::CLI_CLIENT] {
+        let agent = f.agent(client, &f.work("alpha")).await;
+        let remember = if client == "agent" {
+            McpApprovalAnswer::Session
+        } else {
+            McpApprovalAnswer::Window
+        };
+        let call = agent.spawn("fake_run", json!({"tag": "write"}));
+        let request = window.opened().await;
+        assert_eq!(request.tier, Tier::Write);
+        window.answer(request.id, remember).unwrap();
+        assert_eq!(mark(&within(call).await.unwrap()), Mark::ok(), "{client}");
+        window.closed(request.id).await;
+
+        assert_eq!(
+            mark(&agent.call("fake_run", json!({"tag": "write"})).await),
+            Mark::ok(),
+            "{client}"
+        );
+        assert!(window.quiet(), "{client}: 같은 등급인데 다시 물었다");
+
+        let call = agent.spawn("fake_run", json!({"tag": "exec"}));
+        let request = window.opened().await;
+        assert_eq!(request.tier, Tier::Exec, "{client}");
+        window.answer(request.id, McpApprovalAnswer::Deny).unwrap();
+        assert_eq!(
+            mark(&within(call).await.unwrap()),
+            Mark::denied(Reason::ApprovalDenied),
+            "{client}"
+        );
+        window.closed(request.id).await;
+    }
+    assert_eq!(f.launched().len(), 4);
 }

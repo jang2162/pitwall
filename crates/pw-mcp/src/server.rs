@@ -736,7 +736,8 @@ impl Session {
         let dangerous = tier == Tier::Dangerous;
         // 정책 자동: 툴이 05 의 규칙으로 묻지 않아도 된다고 판정했다(`dangerous` 계획의 표지는 `plan_problem` 이 거절했다). 승인 표를
         // 실어 다시 부르는 것 · 선기록 · 해시 재확인은 그대로다. 다른 머신을 겨누는 호출(M7 의 `checkout`)에는 `auto_approve` 와
-        // 같이 적용하지 않는다 — M7 이 그 세션의 머신 허용 뒤에 얹을지 정한다(지금은 그런 호출이 없다).
+        // 같이 적용하지 않는다 — M7 이 그 세션의 머신 허용 뒤에 얹을지 정한다(지금은 그런 호출이 없다). 이 갈래는 대상 프로젝트의
+        // 설정(`policy_for`)보다 앞이라 설정이 정책 자동을 끌 수 없다 — 그런 설정(「정책 자동도 묻기」)을 더하면 이 순서를 바꾼다.
         if plan.rules.policy_auto {
             return Ok(AuditApproval::Policy);
         }
@@ -744,7 +745,8 @@ impl Session {
         if !dangerous && plan.rules.auto_approve && policy.auto_approves(tier) {
             return Ok(AuditApproval::Auto);
         }
-        // 기억하는 단위는 늘 그 툴의 것이다 — 같은 열쇠를 내는 다른 툴에 닿지 않는다.
+        // 기억하는 단위는 늘 그 툴의 것이고 그 계획 등급의 것이다 — 같은 열쇠를 내는 다른 툴에도, 같은 툴의 다른 등급 계획(낮춘
+        // `write` 계획에 준 허용 → `exec` 계획)에도 닿지 않는다.
         let key = if dangerous {
             None
         } else {
@@ -752,10 +754,12 @@ impl Session {
                 Remember::Tool => Some(Allowance {
                     tool: name.clone(),
                     key: None,
+                    tier,
                 }),
                 Remember::Key { key } => Some(Allowance {
                     tool: name.clone(),
                     key: Some(key.clone()),
+                    tier,
                 }),
                 Remember::Never => None,
             }
@@ -1365,7 +1369,7 @@ impl Session {
 
 /// 툴이 보낸 계획이 그 툴의 것이 아닌 까닭(권고 1 — 16-m5-plan M5-12 리뷰): 다른 메서드의 계획이거나, 선언 등급보다 높은
 /// 등급이거나(선언 등급은 상한 — 「등급은 그 툴이 도달할 수 있는 가장 높은 등급」, `pw-mcp` 머리 주석 「툴 메서드 규약」 · 17-m6-plan
-/// 결정 M6-P9), `dangerous` 계획에 정책 자동을 단 것이다(`dangerous` 는 매번 묻는다 — 17-m6-plan M6-10 ③). 맞으면 `None`.
+/// 결정 M6-P9), 낮춤 목록(`catalog::LOWERED_PLAN_TIERS`)에 없는 낮은 등급이거나, `dangerous` 계획에 정책 자동을 단 것이다(`dangerous` 는 매번 묻는다 — 17-m6-plan M6-10 ③). 맞으면 `None`.
 fn plan_problem(tool: &Tool, plan: &ToolPlan) -> Option<String> {
     if plan.method != tool.method {
         return Some(format!(
@@ -1376,6 +1380,15 @@ fn plan_problem(tool: &Tool, plan: &ToolPlan) -> Option<String> {
     if plan.tier > tool.tier {
         return Some(format!(
             "the plan tier `{}` is above the declared tier `{}`",
+            policy::tier_name(plan.tier),
+            policy::tier_name(tool.tier)
+        ));
+    }
+    // 낮춤은 목록에 적힌 툴 · 등급만(`catalog::LOWERED_PLAN_TIERS`) — 낮춘 계획에는 `auto_approve` · 세션 허용이 더 낮은 등급으로
+    // 닿으므로, 툴이 말없이 낮추면 승인이 넓어진다.
+    if plan.tier < tool.tier && !tool.lowered.contains(&plan.tier) {
+        return Some(format!(
+            "the plan tier `{}` is below the declared tier `{}`, and this tool may not lower it",
             policy::tier_name(plan.tier),
             policy::tier_name(tool.tier)
         ));

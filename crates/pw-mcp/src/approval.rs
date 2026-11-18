@@ -105,12 +105,15 @@ pub enum McpApprovalEvent {
     },
 }
 
-/// 허용이 기억하는 단위(프로젝트를 뺀 부분): 툴 이름과 계획이 정한 열쇠(`Remember::Key` — 없으면 그 툴 전부). 툴 이름이 늘
-/// 들어 있어 한 툴의 허용이 같은 열쇠를 내는 다른 툴에 닿지 않는다.
+/// 허용이 기억하는 단위(프로젝트를 뺀 부분): 툴 이름과 계획이 정한 열쇠(`Remember::Key` — 없으면 그 툴 전부)와 계획 등급. 툴
+/// 이름이 늘 들어 있어 한 툴의 허용이 같은 열쇠를 내는 다른 툴에 닿지 않는다. 계획 등급이 들어 있어 계획 등급을 낮추는 툴
+/// (`catalog::LOWERED_PLAN_TIERS`)의 낮은 계획에 준 허용이 같은 툴의 높은 계획에 닿지 않는다(17-m6-plan M6-10 — 등급이 같을 때만
+/// 닿는다).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Allowance {
     pub tool: String,
     pub key: Option<String>,
+    pub tier: Tier,
 }
 
 /// 세션이 청하는 것. [`Approvals::ask`].
@@ -625,6 +628,7 @@ mod tests {
         Allowance {
             tool: "fake_write".into(),
             key: None,
+            tier: Tier::Write,
         }
     }
 
@@ -877,9 +881,20 @@ mod tests {
             "p",
             &Allowance {
                 tool: "other_tool".into(),
-                key: None
+                key: None,
+                tier: Tier::Write,
             }
         ));
+        assert!(
+            !approvals.cli_allowed(
+                "p",
+                &Allowance {
+                    tier: Tier::Exec,
+                    ..fake_write()
+                }
+            ),
+            "다른 계획 등급"
+        );
         assert!(!approvals.cli_allowed("q", &fake_write()));
         drop(first);
         assert!(

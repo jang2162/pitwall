@@ -33,6 +33,15 @@ pub const PROJECT_ID: &str = "projectId";
 /// 확장별 그룹(`<ext-id>`)은 확장 툴(v1.x)과 함께 온다.
 pub const GROUPS: [&str; 7] = ["project", "run", "debug", "db", "git", "code", "open_with"];
 
+/// 계획 등급을 선언 등급보다 **낮게** 낼 수 있는 툴과 그 등급(17-m6-plan M6-10 — 결정 M6-P9). 세션은 승인을 계획 등급으로
+/// 판정하므로 낮춤은 `auto_approve` · 세션 허용을 선언보다 낮은 등급으로 닿게 한다. 그래서 낮춤은 여기 적힌 툴 · 등급만 받는다
+/// — 목록에 없는 툴이 낮춘 계획은 세션이 툴의 버그로 거절한다(`server` 의 `plan_problem`). 한 툴이 입력에 따라 등급이 갈릴 때
+/// (`run_start` 의 프로세스 구성 `exec` · `sql` 조회만 `read`) 그 툴 행이 자기 줄을 까닭과 함께 더한다(M6-14 가 `run_start` ·
+/// `run_restart`). 데스크톱 크레이트의 회귀 표(`mcp_tests::plan_tiers`)가 이 목록과 맞춰 본다.
+///
+/// 실행 파일에 링크되지 않은 툴의 줄은 무시한다(그 툴이 카탈로그에 없다). 선언 이상의 등급을 적으면 카탈로그가 실패한다.
+pub const LOWERED_PLAN_TIERS: &[(&str, &[Tier])] = &[];
+
 /// MCP 툴 이름의 최대 길이. 클라이언트가 서버 이름과 이어 붙이므로(`mcp__pitwall__project_list`) 짧게 둔다.
 pub const MAX_NAME: usize = 64;
 
@@ -51,6 +60,8 @@ pub struct Tool {
     /// 입력이 `Planned` 다 — 승인 표 없이 부르면 계획만 만들어 「승인 필요」 로 답한다(`pw_core::registry::plan`). `write`
     /// 이상은 언제나 `true` 다(아니면 카탈로그가 실패한다). `read` 툴도 호출마다 승인을 청하면 `true` 다.
     pub planned: bool,
+    /// 선언보다 낮게 낼 수 있는 계획 등급([`LOWERED_PLAN_TIERS`]). 비면 계획 등급은 선언 등급과 같아야 한다.
+    pub lowered: Vec<Tier>,
     input_schema: Map<String, Value>,
     pub output_schema: Option<Arc<Map<String, Value>>>,
 }
@@ -98,6 +109,7 @@ impl Tool {
             description: String::new(),
             unit_params: true,
             planned: tier != Tier::Read,
+            lowered: Vec::new(),
             input_schema: Map::new(),
             output_schema: None,
         }
@@ -122,6 +134,8 @@ pub enum CatalogError {
     UnknownGroup { method: &'static str, group: String },
     /// `write` 이상 툴의 입력이 `Planned` 가 아니다 — 계획 없이는 승인을 받을 수 없다.
     Unplanned(&'static str),
+    /// 낮춤 목록([`LOWERED_PLAN_TIERS`])이 선언 등급 이상의 등급을 적었다.
+    NotLower { name: String, tier: Tier },
     /// 두 메서드가 같은 툴 이름이 된다.
     Duplicate {
         name: String,
@@ -149,6 +163,11 @@ impl fmt::Display for CatalogError {
                 f,
                 "`{m}`: tools above `read` must take `Planned` params and build a plan (pw_core::registry::plan)"
             ),
+            CatalogError::NotLower { name, tier } => write!(
+                f,
+                "`{name}`: the lowered plan tier `{}` is not below the declared tier",
+                crate::policy::tier_name(*tier)
+            ),
             CatalogError::Duplicate {
                 name,
                 first,
@@ -166,7 +185,39 @@ impl Catalog {
     /// # Panics
     /// 선언이 툴 규칙을 어기면 패닉한다(프로그래밍 오류 — 시험이 잡는다).
     pub fn linked() -> Self {
-        Self::from_methods(pw_rpc::methods()).unwrap_or_else(|e| panic!("MCP tool catalog: {e}"))
+        Self::from_methods(pw_rpc::methods())
+            .and_then(|c| c.with_lowered_plan_tiers(LOWERED_PLAN_TIERS))
+            .unwrap_or_else(|e| panic!("MCP tool catalog: {e}"))
+    }
+
+    /// 낮춤 목록을 `table` 로 **바꾼다**(앞의 것을 지운다). [`Self::linked`] 가 [`LOWERED_PLAN_TIERS`] 로 부른다. 앱은 그 목록
+    /// 말고 쓰지 않는다 — 다른 목록은 가짜 툴 메서드를 쓰는 시험의 자리다. 카탈로그에 없는 이름은 무시하고, 선언 이상의 등급은
+    /// [`CatalogError::NotLower`].
+    pub fn with_lowered_plan_tiers(
+        mut self,
+        table: &[(&str, &[Tier])],
+    ) -> Result<Self, CatalogError> {
+        for tool in &mut self.tools {
+            tool.lowered.clear();
+        }
+        for (name, tiers) in table {
+            let Some(tool) = self.tools.iter_mut().find(|t| t.name == *name) else {
+                continue;
+            };
+            for &tier in *tiers {
+                if tier >= tool.tier {
+                    return Err(CatalogError::NotLower {
+                        name: tool.name.clone(),
+                        tier,
+                    });
+                }
+                if !tool.lowered.contains(&tier) {
+                    tool.lowered.push(tier);
+                }
+            }
+            tool.lowered.sort();
+        }
+        Ok(self)
     }
 
     /// `mcp` 를 단 선언만 툴로 만든다. 나머지는 보지 않는다.
@@ -291,6 +342,7 @@ fn tool(info: &MethodInfo, decl: McpTool) -> Result<Tool, CatalogError> {
         description: description(meta.doc),
         unit_params,
         planned,
+        lowered: Vec::new(),
         input_schema,
         output_schema,
     })
@@ -530,6 +582,49 @@ mod tests {
     }
     impl UnaryMethod for UnplannedWrite {
         type Result = ();
+    }
+
+    /// 낮춤 목록: 적힌 툴에만 그 등급이 실리고(바꾸면 앞의 것은 지워진다), 없는 툴의 줄은 무시하며, 선언 이상의 등급은
+    /// 실패다. 지금 앱의 목록은 비었다 — 모든 계획 툴은 계획 등급 = 선언 등급이다.
+    #[test]
+    fn the_lowering_list_reaches_only_the_tools_it_names() {
+        let base = Catalog {
+            tools: vec![
+                Tool::fake("high", Tier::Dangerous),
+                Tool::fake("plain", Tier::Write),
+            ],
+        };
+        let lowered = |c: &Catalog| -> Vec<(String, Vec<Tier>)> {
+            c.tools()
+                .iter()
+                .map(|t| (t.name.clone(), t.lowered.clone()))
+                .collect()
+        };
+        let c = base
+            .clone()
+            .with_lowered_plan_tiers(&[
+                ("high", &[Tier::Exec, Tier::Read, Tier::Exec]),
+                ("not_linked", &[Tier::Read]),
+            ])
+            .unwrap();
+        assert_eq!(
+            lowered(&c),
+            [
+                ("high".to_owned(), vec![Tier::Read, Tier::Exec]),
+                ("plain".to_owned(), vec![])
+            ]
+        );
+        let c = c.with_lowered_plan_tiers(&[]).unwrap();
+        assert!(c.tools().iter().all(|t| t.lowered.is_empty()));
+        assert_eq!(
+            base.with_lowered_plan_tiers(&[("plain", &[Tier::Write])])
+                .unwrap_err(),
+            CatalogError::NotLower {
+                name: "plain".into(),
+                tier: Tier::Write
+            }
+        );
+        assert!(LOWERED_PLAN_TIERS.is_empty());
     }
 
     /// `write` 이상 툴은 `Planned` 입력이어야 한다(fail-closed) — 아니면 카탈로그가 실패한다. 표지는 보이는 스키마에서 지운다.
