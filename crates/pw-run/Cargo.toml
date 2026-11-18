@@ -12,11 +12,15 @@ base64 = "0.23.1"
 # 결정 M1-D14(docs/design/12-m1-plan.md §4). wezterm 저장소 안의 크레이트라 릴리스가 드물다.
 portable-pty = "0.9.0"
 pw-core = { path = "../pw-core" }
+# `.env` 파일을 루트 안 판정 · 연 핸들 재판정으로 읽는다(17-m6-plan M6-03 ② — `scope::Roots::readable` · `open_inside`).
+pw-fs = { path = "../pw-fs" }
 pw-rpc = { path = "../pw-rpc" }
 pw-runtime = { path = "../pw-runtime" }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+# 「사람이 본 구성」 해시(M6-11)의 `.env` 파일 내용 해시(pw-core 와 같은 버전).
+sha2 = "0.10.9"
 specta = { workspace = true, features = ["derive"] }
 # 실행 구성 파일을 고칠 때 주석 · 모르는 키를 지킨다(pw-core 의 설정 쓰기와 같은 버전).
 toml_edit = "0.25.17"
@@ -33,7 +37,5 @@ tempfile = "3.27.0"
 [dev-dependencies]
 # 실행 구성 JSON Schema 스냅숏(17-m6-plan M6-01 ⑦).
 insta = "1.49.0"
-# mise 제공자의 끝에서 끝 시험: 버전 파일 변경을 실제 파일 감시(`fs.watch`)로 받는다.
-pw-fs = { path = "../pw-fs" }
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
