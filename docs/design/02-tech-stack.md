@@ -160,7 +160,8 @@ pitwall/
 │  ├─ pw-git/            # gix 읽기 + CLI 쓰기
 │  ├─ pw-db*/            # pw-db, pw-db-types, pw-db-sql, pw-db-driver(-pg/-mysql/-sqlite/-redis) (§2.7)
 │  ├─ pw-lsp/            # LSP 클라이언트, 서버 관리자
-│  ├─ pw-dap/            # DAP 클라이언트
+│  ├─ pw-dap/            # DAP 클라이언트: 어댑터 프로세스 · 연결(stdio, TCP 는 127.0.0.1 만) · 메시지 타입(직접 정의) · 세션 나무(역요청 runInTerminal · startDebugging) — 17-m6-plan M6-15
+│  ├─ pw-wire/           # LSP · DAP 공용 `Content-Length` 틀: 머리 8 KiB · 본문 64 MiB 상한, 넘으면 그 프로세스를 죽인다(17-m6-plan 메인 판정 M6-P7)
 │  ├─ pw-runtime/        # 런타임 제공자 (mise · direnv · asdf · 로그인 셸), (프로젝트, 디렉터리)별 env 캐시 — 지금은 로그인 셸 환경만(03 §5-1)
 │  ├─ pw-open-with/      # 외부 도구로 열기: 도구 목록(확장 + 전역 설정) · 기본 도구 · 셸 없는 실행 (04 F8)
 │  ├─ pw-run/            # 실행 구성, 프로세스/PTY 관리, 태스크 감지 — 지금은 터미널 PTY 세션만(03 「RPC 설계」, M1-08)
