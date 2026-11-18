@@ -154,6 +154,9 @@ pub struct SeenContent {
     /// 명령 정의 본문: `npm` 은 `package.json` 의 그 script, `mise-task` 는 `mise tasks ls --json` 의 그 태스크 `run`, 감지된
     /// 태스크는 그 감지 출처의 본문. 정의가 따로 없는 종류는 `None`.
     pub definition: Option<String>,
+    /// 런타임 환경의 원천 파일(`mise.toml` · `.tool-versions` 등 — `pw_run::seen::runtime_files`)의 경로와 내용 sha256, 경로 순.
+    /// 런타임 env 의 값은 넣지 않는다(로그인 셸의 값이 섞인다).
+    pub runtime_files: Vec<EnvFileDigest>,
 }
 
 /// `env_file` 하나: 구성에 적힌 경로와 그 내용의 sha256(파일이 없으면 `None`).
@@ -175,7 +178,7 @@ impl EnvFileDigest {
 }
 
 /// 해시 입력의 판. 덮는 것의 꼴을 바꾸면 올린다 — 옛 기록은 새 해시와 맞지 않아 한 번 다시 묻는다.
-const CONTENT_VERSION: u32 = 1;
+const CONTENT_VERSION: u32 = 2;
 
 impl SeenContent {
     pub fn hash(&self) -> SeenHash {
@@ -208,6 +211,7 @@ impl fmt::Debug for SeenContent {
             .field("envFiles", &self.env_files)
             .field("profile", &self.profile)
             .field("definitionLen", &self.definition.as_ref().map(String::len))
+            .field("runtimeFiles", &self.runtime_files)
             .finish()
     }
 }
@@ -326,6 +330,7 @@ mod tests {
             env_files: vec![EnvFileDigest::of(".env", Some(b"API_TOKEN=s3cret"))],
             profile: None,
             definition: Some("vite --port 3000".into()),
+            runtime_files: vec![EnvFileDigest::of("\0root\0mise.toml", Some(b"[env]\nA=1"))],
         }
     }
 
@@ -353,7 +358,7 @@ mod tests {
     #[test]
     fn every_field_is_hashed_and_debug_hides_values() {
         let base = content().hash();
-        let variants: [fn(&mut SeenContent); 7] = [
+        let variants: [fn(&mut SeenContent); 8] = [
             |c| c.config.push(' '),
             |c| c.argv.push("--x".into()),
             |c| c.cwd = "web".into(),
@@ -363,6 +368,7 @@ mod tests {
             |c| c.env_files[0] = EnvFileDigest::of(".env", None),
             |c| c.profile = Some("prod".into()),
             |c| c.definition = None,
+            |c| c.runtime_files[0] = EnvFileDigest::of("\0root\0mise.toml", Some(b"[env]\nA=2")),
         ];
         for change in variants {
             let mut c = content();
