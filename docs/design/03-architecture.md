@@ -188,7 +188,7 @@ type = "gradle"               # shell | npm | gradle | maven | cargo | go | pyth
 tasks = ["bootRun"]           # shell 만 글(command — 로그인 셸의 -c)이고, 그 밖 종류는 필드 값 하나가 argv 한 칸이다(래퍼 gradlew 가 있으면 그것)
 cwd = "."                     # 프로젝트 루트 기준. 루트 밖(.. · 링크 · 절대 경로)이면 쓸 수 없다
 env = { SPRING_PROFILES_ACTIVE = "local" }
-env_file = [".env.local"]     # 목록, 프로젝트 루트 안만. 변수 확장은 하지 않는다
+env_file = [".env.local"]     # 목록, 프로젝트 루트 안만(링크로 밖이면 거절), 파일 하나 5 MiB 까지. 변수 확장은 하지 않는다. 덮는 순서는 런타임 환경 → env_file → env → 프로필 env(`pw_run::env` — 17-m6-plan M6-03)
 [profiles.prod-like]          # 실행 선택기에서 고르는 덮어쓰기 — env 는 키별로 얹고 args 는 통째로 바꾼다(args 는 cargo · go · python 만)
 env = { SPRING_PROFILES_ACTIVE = "prod" }
 [debug]                       # ⌃D — 어댑터 정의의 launch · attach 틀이 읽는다(M6-17). adapter · mode 밖의 키는 그대로 넘긴다
@@ -300,7 +300,7 @@ rust-analyzer = { cargo = { features = "all" } }
 
 GUI 앱은 터미널과 환경이 달라 프로젝트가 고정한 런타임 버전(Node/Java/Python 등)을 모른다. Pitwall은 **런타임 버전을 직접 설치 · 관리하지 않고**, 외부 도구가 계산한 환경을 받아 프로세스를 띄울 때 적용한다.
 
-**비밀**: `RuntimeEnv` 는 사람의 환경 변수 전체라 비밀(토큰 · 키)을 담는다 — 그것이나 그것을 담은 값을 로그 · 오류 · 시험 메시지에 쓸 때 변수 값을 꺼내 쓰지 않는다(변수 이름 · 개수, 또는 PATH 만). 그래서 `RuntimeEnv` 의 `Debug` 는 손으로 써서 값을 찍지 않고(`crates/pw-runtime/src/env.rs`), 그것을 담은 값(언어 서버의 `ServerSetup` · `ServerConfig` — 설정의 `env` · `settings` 도 이름 · 키만)도 같은 꼴이다. 새로 담는 타입도 `Debug` 를 derive 하지 않고 같은 규칙으로 쓴다
+**비밀**: `RuntimeEnv` 는 사람의 환경 변수 전체라 비밀(토큰 · 키)을 담는다 — 그것이나 그것을 담은 값을 로그 · 오류 · 시험 메시지에 쓸 때 변수 값을 꺼내 쓰지 않는다(변수 이름 · 개수, 또는 PATH 만). 그래서 `RuntimeEnv` 의 `Debug` 는 손으로 써서 값을 찍지 않고(`crates/pw-runtime/src/env.rs`), 그것을 담은 값(언어 서버의 `ServerSetup` · `ServerConfig` — 설정의 `env` · `settings` 도 이름 · 키만, 실행 구성의 env 를 푼 `pw_run::env::RunEnv` — 변수 이름 · `.env` 경로 · 프로필만)도 같은 꼴이다. 새로 담는 타입도 `Debug` 를 derive 하지 않고 같은 규칙으로 쓴다
 
 ### 런타임 제공자 (Runtime Provider)
 
