@@ -344,7 +344,7 @@ fn gradle_starts_nothing_until_tasks_are_read() {
     assert_eq!(calls(&s.marker), 1);
     assert_eq!(
         fs::read_to_string(&s.marker).unwrap(),
-        "tasks --all --quiet --console=plain --no-daemon\n"
+        "tasks --all --quiet --console=plain --no-daemon -Dorg.gradle.daemon=false\n"
     );
     let key = cache::key(&s.root, cache::BuildFiles::Gradle).unwrap();
     cache::store(e.cache_dir().unwrap(), "gradle", &key, &read).unwrap();
@@ -749,6 +749,9 @@ struct Host {
     tasks: TaskSpawner,
     root: PathBuf,
     marker: PathBuf,
+    /// `$DATA/projects/<id>/` — 캐시 자리.
+    cache_dir: PathBuf,
+    projects: Registry,
 }
 
 fn host(trusted: bool, setup: impl FnOnce(&Site)) -> Host {
@@ -767,8 +770,12 @@ fn host(trusted: bool, setup: impl FnOnce(&Site)) -> Host {
     if trusted {
         projects.set_trust(&project, true).unwrap();
     }
+    let cache_dir = paths.data.join("projects").join(&project);
     let configs = Arc::new(RunConfigs::new());
-    configs.attach(HostParts { paths, projects });
+    configs.attach(HostParts {
+        paths,
+        projects: projects.clone(),
+    });
     let tasks = TaskSpawner::new(bus, Scope::Host, CancellationToken::new());
     let bin = s.bin.clone();
     configs.attach_detect(DetectHost {
@@ -782,6 +789,8 @@ fn host(trusted: bool, setup: impl FnOnce(&Site)) -> Host {
         configs,
         project,
         tasks,
+        cache_dir,
+        projects,
     }
 }
 
@@ -1110,4 +1119,447 @@ async fn a_changed_mise_file_announces_the_project_with_the_same_executor() {
         panic!("{received:?}")
     };
     assert_eq!(event.payload["changed"], json!([watch::CHANGED_KEY]));
+}
+
+// --- 리뷰 반영(M6-05 리뷰 고쳐야 1 · 2, 권고) ------------------------------------------------------------------------------
+
+/// gradle 의 1회용 데몬 꼴: 스스로 `setsid` 하고 SIGTERM 을 무시하는(인터럽트를 삼키는 빌드 스크립트) 자손. 실행기는 그것을 도는
+/// 동안 부모로 따라가 기록했다가 — 클라이언트가 먼저 끝나 init 으로 넘어가도 — 정상 끝 · 시한 · 취소에서 SIGKILL 까지 끝낸다.
+fn escaping_daemon(pidfile: &Path) -> String {
+    format!(
+        "perl -e 'use POSIX; POSIX::setsid(); $SIG{{TERM}}=\"IGNORE\"; open(F, \">\", \"{p}.tmp\"); print F $$; close F; rename(\"{p}.tmp\", \"{p}\"); sleep 60' > /dev/null 2>&1 &\nwhile [ ! -f '{p}' ]; do sleep 0.05; done\nsleep 0.4\n",
+        p = pidfile.display()
+    )
+}
+
+#[test]
+fn a_setsid_descendant_ignoring_sigterm_is_ended_in_every_way_a_read_ends() {
+    // 정상 끝: 데몬을 남기고 클라이언트는 목록을 내고 끝난다.
+    let s = site();
+    let pid = s.base.join("daemon.pid");
+    let body = format!("{}{}", escaping_daemon(&pid), gradle_prints_fixture(&s));
+    gradle_project(&s, &body);
+    let names = gradle::read(&s.root, &exec(&s, true, QUICK)).unwrap();
+    assert_eq!(names.len(), 77);
+    assert_gone(&pid);
+
+    // 시한: 클라이언트도 멈춰 있다.
+    let s = site();
+    let pid = s.base.join("daemon.pid");
+    gradle_project(&s, &format!("{}sleep 60\n", escaping_daemon(&pid)));
+    let short = ExecLimits {
+        timeout: Duration::from_secs(3),
+        max_output: 1024,
+    };
+    let err = gradle::read(&s.root, &exec(&s, true, short)).unwrap_err();
+    assert!(err.contains("did not finish within"), "{err}");
+    assert_gone(&pid);
+
+    // 취소.
+    let s = site();
+    let pid = s.base.join("daemon.pid");
+    gradle_project(&s, &format!("{}sleep 60\n", escaping_daemon(&pid)));
+    let cancel = pw_runtime::Cancel::default();
+    let e = exec(&s, true, QUICK).with_cancel(cancel.clone());
+    let root = s.root.clone();
+    let reading = std::thread::spawn(move || gradle::read(&root, &e));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !pid.exists() {
+        assert!(Instant::now() < deadline, "the daemon did not start");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    cancel.cancel();
+    let err = reading.join().unwrap().unwrap_err();
+    assert!(err.contains("was cancelled"), "{err}");
+    assert_gone(&pid);
+}
+
+/// 도는 동안 사람이 신뢰를 거두면 읽기를 멈추고(세션 · 자손째) 미신뢰 까닭이다.
+#[test]
+fn withdrawing_trust_stops_a_running_read() {
+    let s = site();
+    let pid = s.base.join("daemon.pid");
+    gradle_project(&s, &format!("{}sleep 60\n", escaping_daemon(&pid)));
+    let trusted = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let flag = Arc::clone(&trusted);
+    let bin = s.bin.clone();
+    let e = TrustedExec::new(
+        "p",
+        Arc::new(move |_| flag.load(std::sync::atomic::Ordering::SeqCst)),
+        Arc::new(move |_, _| env_with(&bin)),
+        QUICK,
+    );
+    let root = s.root.clone();
+    let started = Instant::now();
+    let reading = std::thread::spawn(move || gradle::read(&root, &e));
+    while !pid.exists() {
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the daemon did not start"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    trusted.store(false, std::sync::atomic::Ordering::SeqCst);
+    let err = reading.join().unwrap().unwrap_err();
+    assert_eq!(err, exec::untrusted_reason("gradlew"));
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_gone(&pid);
+}
+
+/// 수만 개 · 이상한 이름을 내는 gradle: 캐시에는 꼴을 지난 이름순 500 개만 쓰고, 다른 감지기(maven)의 기록은 남는다.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_huge_task_list_is_trimmed_before_it_is_cached() {
+    let h = host(true, |s| {
+        let mut out = String::from("Other tasks\n-----------\n");
+        for i in 0..50_000 {
+            out.push_str(&format!("task{i:05}{} - x\n", "y".repeat(150)));
+        }
+        out.push_str("a;rm - x\n-flag - x\n");
+        let file = s.base.join("huge.out");
+        fs::write(&file, out).unwrap();
+        gradle_project(s, &format!("cat '{}'\n", file.display()));
+    });
+    cache::store(&h.cache_dir, "maven", "sha256:k", &["package".to_owned()]).unwrap();
+    let refreshed = call(
+        &h,
+        ConnectionScope::Project(h.project.clone()),
+        "run.tasks.refresh",
+        refresh_params(&h, "gradle"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(refreshed["error"], Value::Null, "{refreshed:#}");
+    assert_eq!(refreshed["detected"].as_array().unwrap().len(), MAX_TASKS);
+    let text = fs::read_to_string(h.cache_dir.join(cache::FILE)).unwrap();
+    assert!(text.len() < 1024 * 1024, "{} bytes", text.len());
+    assert!(!text.contains("a;rm") && !text.contains("-flag"));
+    // 거르지 않은 목록을 그대로 쓰려 하면 캐시는 쓰기를 거절한다 — 읽는 쪽이 파일째 버려 maven 기록까지 사라지지 않게.
+    let huge: Vec<String> = (0..50_000)
+        .map(|i| format!("task{i:05}{}", "y".repeat(150)))
+        .collect();
+    let err = cache::store(&h.cache_dir, "gradle", "sha256:other", &huge).unwrap_err();
+    assert!(err.contains("would be larger than"), "{err}");
+    assert_eq!(
+        cache::lookup(&h.cache_dir, "maven", || Ok("sha256:k".to_owned())).unwrap(),
+        cache::Lookup::Hit(vec!["package".to_owned()])
+    );
+}
+
+/// 손으로 고친 캐시의 이상한 이름(셸 글자 · 제어 문자 · `-` 머리 · 너무 긴 것)은 감지에서 다시 빠진다.
+#[test]
+fn odd_names_in_a_cache_are_left_out() {
+    let s = site();
+    gradle_project(&s, "true\n");
+    let e = exec(&s, true, QUICK);
+    let key = cache::key(&s.root, cache::BuildFiles::Gradle).unwrap();
+    let names: Vec<String> = [
+        "ok",
+        "a;rm -rf x",
+        "line\nbreak",
+        "-flag",
+        &"x".repeat(MAX_NAME_LEN + 1),
+    ]
+    .iter()
+    .map(|n| (*n).to_owned())
+    .collect();
+    cache::store(e.cache_dir().unwrap(), "gradle", &key, &names).unwrap();
+    let detection = detect_with(&only(gradle::ID), &s.root, &e);
+    let got: Vec<&str> = detection.tasks.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(got, ["ok"]);
+    assert!(
+        detection.problems[0].reason.contains("skipped 4 task(s)"),
+        "{:?}",
+        detection.problems
+    );
+}
+
+/// mise 가 숨은 태스크(`hide`)나 제어 문자가 든 이름을 내도 목록에 넣지 않는다.
+#[test]
+fn hidden_and_control_character_mise_tasks_are_left_out() {
+    let s = site();
+    mise_project(&s);
+    let source = s.root.join("mise.toml").display().to_string();
+    let listed = json!([
+        {"name": "shown", "source": source},
+        {"name": "secret", "source": source, "hide": true},
+        {"name": "evil\u{1b}[2Jname", "source": source},
+    ]);
+    let out = s.base.join("out.json");
+    fs::write(&out, listed.to_string()).unwrap();
+    script(&s.bin.join("mise"), &format!("cat '{}'\n", out.display()));
+    let detection = detect_with(&only(mise::ID), &s.root, &exec(&s, true, QUICK));
+    let got: Vec<&str> = detection.tasks.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(got, ["shown"]);
+    assert!(detection.problems[0].reason.contains("control characters"));
+}
+
+/// 깊게 중첩된 XML 은 읽지 않는다(메모리).
+#[test]
+fn a_deeply_nested_effective_pom_is_refused() {
+    let xml = format!("{}{}", "<a>".repeat(10_000), "</a>".repeat(10_000));
+    assert!(
+        maven::plugin_goals(&xml)
+            .unwrap_err()
+            .contains("deeper than")
+    );
+}
+
+/// 그 프로젝트 창이 아닌 연결의 `run.config.list` 는 mise 를 띄우지 않고 캐시 · 정적 결과만 준다. 그 창의 목록은 띄운다.
+#[tokio::test(flavor = "multi_thread")]
+async fn only_the_projects_own_window_lists_start_mise() {
+    let h = host(true, |s| {
+        mise_project(s);
+        fake_mise(s, "2026.4.3", "trusted");
+        gradle_project(s, "true\n");
+    });
+    let key = cache::key(&h.root, cache::BuildFiles::Gradle).unwrap();
+    cache::store(&h.cache_dir, "gradle", &key, &["fromCache".to_owned()]).unwrap();
+    let params = json!({"projectId": h.project});
+    for scope in [
+        ConnectionScope::Host,
+        ConnectionScope::Agent,
+        ConnectionScope::Project("someone-else".into()),
+    ] {
+        let list = call(&h, scope.clone(), "run.config.list", params.clone())
+            .await
+            .unwrap();
+        assert_eq!(calls(&h.marker), 0, "{scope:?}");
+        assert!(
+            list["detectProblems"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["detector"] == "mise" && p["reason"] == exec::NOT_THIS_WINDOW),
+            "{list:#}"
+        );
+        assert_eq!(
+            list["taskLists"],
+            json!([{"detector": "gradle", "state": "read"}])
+        );
+    }
+    let list = call(
+        &h,
+        ConnectionScope::Project(h.project.clone()),
+        "run.config.list",
+        params,
+    )
+    .await
+    .unwrap();
+    assert_eq!(calls(&h.marker), 1);
+    assert!(
+        list["detected"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["key"] == "detected:mise:build")
+    );
+}
+
+/// 버려진 요청(창이 닫힘)은 읽기 작업을 멈추고 gradle 을 끝낸다.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dropped_refresh_request_stops_the_read() {
+    let pid_holder = Arc::new(std::sync::Mutex::new(PathBuf::new()));
+    let holder = Arc::clone(&pid_holder);
+    let h = host(true, move |s| {
+        let pid = s.base.join("daemon.pid");
+        *holder.lock().unwrap() = pid.clone();
+        gradle_project(s, &format!("{}sleep 60\n", escaping_daemon(&pid)));
+    });
+    let pid = pid_holder.lock().unwrap().clone();
+    let configs = Arc::clone(&h.configs);
+    let scope = ConnectionScope::Project(h.project.clone());
+    let params: crate::detect::refresh::RunTasksRefreshParams =
+        serde_json::from_value(refresh_params(&h, "gradle")).unwrap();
+    let request = tokio::spawn(async move { configs.refresh(&scope, params).await });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !pid.exists() {
+        assert!(Instant::now() < deadline, "gradlew did not start");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    request.abort();
+    while !h.tasks.running(Some(&h.project)).is_empty() {
+        assert!(
+            Instant::now() < deadline,
+            "the host task kept running after the request was dropped"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tokio::task::spawn_blocking(move || assert_gone(&pid))
+        .await
+        .unwrap();
+}
+
+/// 감지 결과의 태스크가 같아도 목록 상태(`notRead` → `read`)만 바뀌면 창에 알린다(지문에 상태가 든다).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_task_list_state_change_alone_is_announced() {
+    let h = host(true, |s| gradle_project(s, "true\n"));
+    let bus = EventBus::new(DEFAULT_CAPACITY);
+    let mut announced =
+        bus.subscribe(pw_core::bus::Filter::all().topics([pw_core::config::TOPIC_CHANGED]));
+    tokio::spawn(follow_files(
+        subscribe_files(&bus),
+        h.configs.seen(),
+        bus.clone(),
+    ));
+    let list = call(
+        &h,
+        ConnectionScope::Project(h.project.clone()),
+        "run.config.list",
+        json!({"projectId": h.project}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        list["taskLists"],
+        json!([{"detector": "gradle", "state": "notRead"}])
+    );
+    // 같은 이름(`build` · `test`)을 읽은 것으로 캐시에 둔다 — 태스크는 같고 상태만 `read` 가 된다.
+    let key = cache::key(&h.root, cache::BuildFiles::Gradle).unwrap();
+    cache::store(
+        &h.cache_dir,
+        "gradle",
+        &key,
+        &["build".to_owned(), "test".to_owned()],
+    )
+    .unwrap();
+    bus.publish(
+        Scope::Project(h.project.clone()),
+        "fs.changed",
+        &json!({"root": h.root.display().to_string(), "worktree": null, "paths": [h.root.join("build.gradle.kts").display().to_string()], "kinds": ["modified"], "rescan": false}),
+    )
+    .unwrap();
+    let received = tokio::time::timeout(Duration::from_secs(10), announced.recv())
+        .await
+        .expect("a state-only change was not announced")
+        .unwrap();
+    let pw_core::bus::Received::Event(event) = received else {
+        panic!("{received:?}")
+    };
+    assert_eq!(event.payload["changed"], json!([watch::CHANGED_KEY]));
+    let _ = &h.projects;
+}
+
+// --- 로컬 live: 실제 gradle 의 1회용 데몬 ------------------------------------------------------------------------------
+
+/// `pgrep -f <pattern>` 의 pid 들.
+fn procs(pattern: &str) -> std::collections::BTreeSet<String> {
+    let out = std::process::Command::new("pgrep")
+        .args(["-f", pattern])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// `PITWALL_LIVE_GRADLE=<gradle 실행 파일>`(와 `JAVA_HOME`)일 때만: `org.gradle.jvmargs` 가 있어 1회용 데몬(스스로 새 세션)이 뜨고, 빌드
+/// 스크립트가 프로세스 하나(`sleep`)를 띄운 뒤 인터럽트를 삼키며 120 초를 돈다(M6-05 리뷰의 실측 꼴). 시한(60 초)에 끝낸 뒤 데몬도 그
+/// 자식도 남지 않는다 — 데몬은 그 자식을 남긴 채 스스로 끝나므로, 도는 동안 자손으로 기록해 둔 것을 끝내야 한다.
+#[test]
+fn live_gradle_leaves_no_single_use_daemon() {
+    let Some(gradle) = std::env::var_os("PITWALL_LIVE_GRADLE") else {
+        eprintln!(
+            "skipped: set PITWALL_LIVE_GRADLE=<path to gradle> (and JAVA_HOME) to run against the real gradle"
+        );
+        return;
+    };
+    let s = site();
+    fs::write(
+        s.root.join("settings.gradle.kts"),
+        "rootProject.name = \"live\"\n",
+    )
+    .unwrap();
+    fs::write(
+        s.root.join("gradle.properties"),
+        "org.gradle.jvmargs=-Xmx383m\n",
+    )
+    .unwrap();
+    fs::write(
+        s.root.join("build.gradle.kts"),
+        "ProcessBuilder(\"/bin/sleep\", \"61.383\").start()\nval end = System.currentTimeMillis() + 120_000\nwhile (System.currentTimeMillis() < end) { try { Thread.sleep(100) } catch (e: Throwable) {} }\n",
+    )
+    .unwrap();
+    script(
+        &s.root.join("gradlew"),
+        &format!("exec '{}' \"$@\"\n", Path::new(&gradle).display()),
+    );
+    // 데몬(이 시험만 쓰는 `-Xmx383m`)과 빌드 스크립트가 띄운 것(`sleep 61.383`). 데몬은 클라이언트가 죽으면 스스로 끝나지만(Gradle
+    // 9.5 실측 — 8 초 안) 그 자식은 init 으로 넘어가 남는다.
+    let daemons = || -> std::collections::BTreeSet<String> {
+        let mut all = procs("Xmx383m");
+        all.extend(procs("sleep 61[.]383"));
+        all
+    };
+    assert!(
+        daemons().is_empty(),
+        "a live daemon is already running: {:?}",
+        daemons()
+            .iter()
+            .map(|p| String::from_utf8_lossy(
+                &std::process::Command::new("ps")
+                    .args(["-o", "args=", "-p", p])
+                    .output()
+                    .unwrap()
+                    .stdout
+            )
+            .into_owned())
+            .collect::<Vec<_>>()
+    );
+    let mut vars = std::collections::BTreeMap::new();
+    vars.insert(
+        "GRADLE_USER_HOME".into(),
+        s.base.join("guh").into_os_string(),
+    );
+    if let Some(java) = std::env::var_os("JAVA_HOME") {
+        vars.insert("JAVA_HOME".into(), java);
+    }
+    vars.insert("HOME".into(), s.base.join("home").into_os_string());
+    let env = RuntimeEnv {
+        path: "/usr/bin:/bin".into(),
+        vars,
+        ..RuntimeEnv::default()
+    };
+    let limits = ExecLimits {
+        timeout: Duration::from_secs(60),
+        max_output: 8 * 1024 * 1024,
+    };
+    let e = TrustedExec::new(
+        "p",
+        Arc::new(|_| true),
+        Arc::new(move |_, _| env.clone()),
+        limits,
+    );
+    let root = s.root.clone();
+    let watcher = std::thread::spawn(move || {
+        let (mut daemon, mut child) = (false, false);
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(58) {
+            daemon |= !procs("Xmx383m").is_empty();
+            child |= !procs("sleep 61[.]383").is_empty();
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        (daemon, child)
+    });
+    let err = gradle::read(&root, &e).unwrap_err();
+    let (daemon, child) = watcher.join().unwrap();
+    assert!(err.contains("did not finish within"), "{err}");
+    assert!(
+        daemon,
+        "no single-use daemon appeared (did org.gradle.jvmargs take effect?)"
+    );
+    assert!(
+        child,
+        "the build script did not start its process within the time limit"
+    );
+    let deadline = Instant::now() + Duration::from_secs(12);
+    while !daemons().is_empty() {
+        assert!(Instant::now() < deadline, "left behind: {:?}", daemons());
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
