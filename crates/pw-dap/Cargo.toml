@@ -1,0 +1,56 @@
+[package]
+name = "pw-dap"
+description = "Pitwall DAP client: adapter process and connection, message types, the session tree with runInTerminal and startDebugging, and the fake test adapter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# 시험 전용 가짜 디버그 어댑터(17-m6-plan.md M6-15). 배포물에 들지 않는다 — 데스크톱 번들은 앱 바이너리만 싣는다.
+[[bin]]
+name = "pw-dap-fake"
+path = "src/bin/pw-dap-fake.rs"
+test = false
+
+[dependencies]
+# 디버그 세션의 실행 허가(`ExecGrant` — 03 「실행의 연결 범위」).
+pw-core = { path = "../pw-core" }
+# 어댑터를 띄울 환경(`RuntimeEnv` — D26).
+pw-runtime = { path = "../pw-runtime" }
+# 어댑터의 fork 를 프로세스 수명 동안 사는 전용 스레드에서(Linux `PR_SET_PDEATHSIG` 는 fork 한 스레드에 묶인다).
+pw-spawn = { path = "../pw-spawn" }
+# `Content-Length` 틀(LSP 와 함께 쓴다 — 메인 판정 M6-P7).
+pw-wire = { path = "../pw-wire" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = [
+  "rt",
+  "sync",
+  "macros",
+  "time",
+  "process",
+  "io-util",
+  "net",
+  # 가짜 어댑터(src/bin/pw-dap-fake.rs)의 stdin · stdout.
+  "io-std",
+] }
+tracing = "0.1.44"
+
+[target.'cfg(unix)'.dependencies]
+# 어댑터를 자기 프로세스 그룹으로 띄우고 그룹째 끝낸다(`killpg`). 판은 pw-lsp 와 같다.
+libc = "0.2.190"
+
+[target.'cfg(windows)'.dependencies]
+# 어댑터를 Job Object 에 넣어 끝낼 때 프로세스 트리째 끝내고, 콘솔 창 없이 띄운다. 판은 pw-lsp 와 같다.
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+# 허가 시험의 연결 범위(`ConnectionScope`).
+pw-rpc = { path = "../pw-rpc" }
+tempfile = "3.27.0"
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "io-util"] }

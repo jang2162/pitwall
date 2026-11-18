@@ -1,0 +1,282 @@
+//! 시험 전용 가짜 디버그 어댑터(17-m6-plan.md M6-15). `pw-dap-fake <시나리오.json> [--port N --host H]` — 형식은 `pw_dap::fake`
+//! 머리 주석. 배포물에 들지 않는다.
+
+use std::collections::HashSet;
+use std::fs::OpenOptions;
+use std::io::Write as _;
+use std::path::PathBuf;
+use std::process::ExitCode;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::time::Duration;
+
+use pw_dap::fake::{Action, Reply, Scenario};
+use pw_dap::protocol::{self, Incoming};
+use pw_wire::FrameReader;
+use serde_json::{Value, json};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::sync::{mpsc, watch};
+
+struct Fake {
+    scenario: Scenario,
+    tcp: bool,
+}
+
+impl Fake {
+    fn record(&self, line: &Value) {
+        let Some(path) = &self.scenario.record else {
+            return;
+        };
+        // 한 줄을 한 번의 `write` 로 — 같은 기록 파일을 쓰는 가짜 어댑터 여럿(자식 세션)의 줄이 섞이지 않게(O_APPEND).
+        let mut text = line.to_string();
+        text.push('\n');
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+            let _ = file.write_all(text.as_bytes());
+        }
+    }
+
+    fn initialized_after(&self) -> &str {
+        self.scenario
+            .initialized_after
+            .as_deref()
+            .unwrap_or("initialize")
+    }
+}
+
+/// 연결 하나.
+struct Conn {
+    fake: Arc<Fake>,
+    index: usize,
+    out: mpsc::Sender<Vec<u8>>,
+    seq: AtomicI64,
+    initialized: AtomicBool,
+    received: watch::Sender<HashSet<String>>,
+}
+
+impl Conn {
+    async fn send(&self, body: Vec<u8>) {
+        let mut bytes = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
+        bytes.extend_from_slice(&body);
+        let _ = self.out.send(bytes).await;
+    }
+
+    fn next_seq(&self) -> i64 {
+        self.seq.fetch_add(1, Ordering::SeqCst)
+    }
+
+    async fn initialized(&self) {
+        self.initialized.store(true, Ordering::SeqCst);
+        let seq = self.next_seq();
+        self.send(protocol::event(seq, "initialized", &Value::Null))
+            .await;
+    }
+
+    async fn act(&self, actions: &[Action], trigger: &Value) {
+        for action in actions {
+            match action {
+                Action::Event { event, body } => {
+                    let seq = self.next_seq();
+                    self.send(protocol::event(seq, event, body)).await;
+                }
+                Action::Request {
+                    command,
+                    arguments,
+                    unless_arg,
+                } => {
+                    if unless_arg
+                        .as_deref()
+                        .is_some_and(|key| trigger.get(key).is_some())
+                    {
+                        continue;
+                    }
+                    let seq = self.next_seq();
+                    self.send(protocol::request(seq, command, arguments)).await;
+                }
+                Action::Stderr { text } => eprintln!("{text}"),
+                Action::Raw { text } => {
+                    let _ = self.out.send(text.as_bytes().to_vec()).await;
+                }
+                Action::Body { text } => self.send(text.as_bytes().to_vec()).await,
+                Action::Sleep { ms } => tokio::time::sleep(Duration::from_millis(*ms)).await,
+                Action::Exit { code } => {
+                    // 보낼 것을 먼저 내보낼 틈을 준다.
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    std::process::exit(*code);
+                }
+            }
+        }
+    }
+
+    fn default_body(&self, command: &str, arguments: &Value) -> Value {
+        match command {
+            "initialize" => self.fake.scenario.capabilities.clone(),
+            "threads" => json!({ "threads": [{ "id": 1, "name": "main" }] }),
+            "setFunctionBreakpoints" => {
+                let n = arguments
+                    .get("breakpoints")
+                    .and_then(Value::as_array)
+                    .map_or(0, Vec::len);
+                json!({ "breakpoints": vec![json!({ "verified": true }); n] })
+            }
+            "setBreakpoints" => {
+                let lines: Vec<Value> = arguments
+                    .get("breakpoints")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .map(|b| json!({ "verified": true, "line": b.get("line").cloned().unwrap_or(Value::Null) }))
+                    .collect();
+                json!({ "breakpoints": lines })
+            }
+            _ => Value::Null,
+        }
+    }
+
+    async fn handle(self: Arc<Self>, request_seq: i64, command: String, arguments: Value) {
+        let scenario = &self.fake.scenario;
+        if let Some(actions) = scenario.on.get(&command) {
+            self.act(actions, &arguments).await;
+        }
+        let after = self.fake.initialized_after();
+        if command == after && command != "initialize" {
+            self.initialized().await;
+        }
+        let reply = scenario.replies.get(&command).cloned().unwrap_or_default();
+        if !reply.after.is_empty() {
+            let mut received = self.received.subscribe();
+            let _ = received
+                .wait_for(|got| reply.after.iter().all(|c| got.contains(c)))
+                .await;
+        }
+        if reply.delay_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(reply.delay_ms)).await;
+        }
+        if !reply.no_reply {
+            let result = match &reply {
+                Reply {
+                    error: Some(message),
+                    ..
+                } => Err(message.clone()),
+                Reply {
+                    body: Some(body), ..
+                } => Ok(body.clone()),
+                _ => Ok(self.default_body(&command, &arguments)),
+            };
+            let seq = self.next_seq();
+            self.send(protocol::response(seq, request_seq, &command, &result))
+                .await;
+        }
+        if command == "initialize" && after == "initialize" {
+            self.initialized().await;
+        }
+        self.act(&reply.then, &arguments).await;
+        if command == "disconnect" && (!self.fake.tcp || self.index == 0) {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            std::process::exit(0);
+        }
+    }
+}
+
+async fn serve<R, W>(fake: Arc<Fake>, index: usize, reader: R, mut writer: W)
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
+    let (out, mut out_rx) = mpsc::channel::<Vec<u8>>(1024);
+    tokio::spawn(async move {
+        while let Some(bytes) = out_rx.recv().await {
+            if writer.write_all(&bytes).await.is_err() || writer.flush().await.is_err() {
+                break;
+            }
+        }
+    });
+    let conn = Arc::new(Conn {
+        fake: Arc::clone(&fake),
+        index,
+        out,
+        seq: AtomicI64::new(1),
+        initialized: AtomicBool::new(false),
+        received: watch::channel(HashSet::new()).0,
+    });
+    conn.act(&fake.scenario.start, &Value::Null).await;
+    let mut frames = FrameReader::new(reader);
+    while let Ok(Some(body)) = frames.read_frame().await {
+        let message: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        fake.record(&json!({ "conn": index, "msg": message }));
+        if let Ok(Incoming::Request {
+            seq,
+            command,
+            arguments,
+        }) = protocol::parse(&body)
+        {
+            if fake.scenario.require_initialized.contains(&command)
+                && !conn.initialized.load(Ordering::SeqCst)
+            {
+                fake.record(&json!({
+                    "conn": index,
+                    "violation": format!("`{command}` came before the `initialized` event"),
+                }));
+                eprintln!("pw-dap-fake: `{command}` came before the `initialized` event");
+                std::process::exit(97);
+            }
+            conn.received.send_modify(|got| {
+                got.insert(command.clone());
+            });
+            tokio::spawn(Arc::clone(&conn).handle(seq, command, arguments));
+        }
+    }
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().collect();
+    let Some(path) = args.get(1).map(PathBuf::from) else {
+        eprintln!("usage: pw-dap-fake <scenario.json> [--port N --host H]");
+        return ExitCode::from(2);
+    };
+    let scenario = match Scenario::read(&path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("pw-dap-fake: cannot read {}: {e}", path.display());
+            return ExitCode::from(2);
+        }
+    };
+    let flag = |name: &str| {
+        args.iter()
+            .position(|a| a == name)
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+    };
+    let (port, host) = (flag("--port"), flag("--host"));
+    let fake = Arc::new(Fake {
+        scenario,
+        tcp: port.is_some(),
+    });
+    fake.record(&json!({ "argv": &args[1..], "pid": std::process::id() }));
+    match (port, host) {
+        (Some(port), Some(host)) => {
+            let listener = match tokio::net::TcpListener::bind(format!("{host}:{port}")).await {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("pw-dap-fake: cannot listen on {host}:{port}: {e}");
+                    return ExitCode::from(3);
+                }
+            };
+            let mut index = 0;
+            while let Ok((stream, _)) = listener.accept().await {
+                let (read, write) = stream.into_split();
+                tokio::spawn(serve(Arc::clone(&fake), index, read, write));
+                index += 1;
+            }
+            ExitCode::SUCCESS
+        }
+        (None, None) => {
+            serve(fake, 0, tokio::io::stdin(), tokio::io::stdout()).await;
+            ExitCode::SUCCESS
+        }
+        _ => {
+            eprintln!("pw-dap-fake: --port and --host go together");
+            ExitCode::from(2)
+        }
+    }
+}
