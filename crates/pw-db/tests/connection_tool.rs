@@ -1399,3 +1399,39 @@ async fn agent_db_tools_fail_closed_when_the_mark_memory_cannot_be_read() {
         assert_eq!(e.connects(), 0);
     }
 }
+
+/// 17-m6-plan M6-01 재확인 리뷰 권고 1: 메인 체크아웃은 멀쩡하고 워크트리의 `.pitwall/db/*.toml` 만 깨졌으면(정책은 메인을 읽어
+/// 지나간다) 그 워크트리를 겨누는 연결 목록 · 스키마는 연결 설정 읽기에서 `projectConfigUnreadable` 로 거절된다 — 빈 목록이
+/// 아니다. 같은 프로젝트의 메인 목록은 그대로다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_broken_worktree_connection_file_refuses_that_worktree_only() {
+    let e = env();
+    e.f.write_db("dev.toml", DEV);
+    let wt = e.worktree(&[("dev.toml", DEV), ("broken.toml", "name = \"broken\n")]);
+    let mut agent = e.agent();
+    let list = e
+        .call(&mut agent, "db.tool.connectionList", json!({}), None)
+        .await
+        .unwrap();
+    assert_eq!(list["connections"][0]["id"], "dev");
+    refused(
+        &e.call(
+            &mut agent,
+            "db.tool.connectionList",
+            json!({ "worktree": wt }),
+            None,
+        )
+        .await,
+        "projectConfigUnreadable",
+    );
+    refused(
+        &e.call(
+            &mut agent,
+            "db.tool.schema",
+            json!({ "worktree": wt, "connectionId": "dev" }),
+            None,
+        )
+        .await,
+        "projectConfigUnreadable",
+    );
+}

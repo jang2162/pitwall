@@ -18,6 +18,32 @@ use std::time::{Duration, Instant};
 /// 감싸지 않은 연산이었는지는 [`labeled`] 의 메시지가 가린다.
 const PATIENCE: Duration = Duration::from_millis(2000);
 
+/// 설정 파일 하나의 크기 상한(1 MiB). 넘는 파일은 읽지 않고 오류다 — 설정 계층의 「읽기 실패」 라 프로젝트 정책은 닫힌다(05
+/// 「권한 모델」 의 fail-closed). 커밋된 64 MiB 파일 하나로 정책 읽기가 1초를 넘고, MCP 호출마다 여러 번 읽는다(17-m6-plan M6-01
+/// 재확인 리뷰 권고 4). 사람이 쓰는 TOML 은 이 크기에 닿지 않는다.
+pub const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
+
+/// 설정 파일을 글로 읽는다([`retrying`]). [`MAX_CONFIG_BYTES`] 를 넘으면 그만큼만 읽고 `InvalidData` 오류다.
+pub fn read_config(path: &Path) -> io::Result<String> {
+    use std::io::Read as _;
+    retrying(|| {
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)?
+            .take(MAX_CONFIG_BYTES + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > MAX_CONFIG_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "larger than {} KiB; Pitwall does not read a settings file that large",
+                    MAX_CONFIG_BYTES / 1024
+                ),
+            ));
+        }
+        String::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    })
+}
+
 /// io 오류의 메시지 앞에 `<연산> <경로>: ` 를 붙인다. 종류(`kind`)는 그대로라 [`retrying`] 의 판정에 영향이 없다.
 pub(crate) fn labeled<'a>(op: &'a str, path: &'a Path) -> impl FnOnce(io::Error) -> io::Error + 'a {
     move |e| io::Error::new(e.kind(), format!("{op} {}: {e}", path.display()))

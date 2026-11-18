@@ -672,7 +672,7 @@ fn list(
 }
 
 fn read_doc(path: &Path) -> Result<DocumentMut, ConfigError> {
-    let text = super::robust::retrying(|| fs::read_to_string(path))
+    let text = super::robust::read_config(path)
         .map_err(super::robust::labeled("read", path))
         .map_err(|e| ConfigError::Io {
             path: path.to_path_buf(),

@@ -1147,6 +1147,11 @@ fn a_name_that_reads_as_an_option_is_unusable() {
         ("npm", "type = 'npm'\nscript = '--prefix=/tmp'"),
         ("py", "type = 'python'\nscript = '-c'\nargs = ['print(1)']"),
         (
+            "pymod",
+            "type = 'python'\nmodule = '-c'\nargs = ['print(1)']",
+        ),
+        ("gocmd", "type = 'go'\ncommand = '-toolexec=/bin/sh'"),
+        (
             "go",
             "type = 'go'\ncommand = 'run'\npackage = '-exec=/bin/sh'",
         ),
@@ -1229,4 +1234,18 @@ async fn delete_takes_the_exact_id_only() {
         assert_eq!(err.code, code::NOT_FOUND, "{err:?}");
         assert!(file.exists(), "`dev` deleted `Dev.toml`");
     }
+}
+
+/// 재확인 리뷰 권고 4: 크기 상한(1 MiB, `pw_core::config::robust::MAX_CONFIG_BYTES`)을 넘는 구성 파일은 읽지 않고 「쓸 수 없음」 이다.
+#[test]
+fn an_oversized_run_file_is_unusable() {
+    let f = Fixture::new();
+    let filler = "x".repeat(pw_core::config::robust::MAX_CONFIG_BYTES as usize);
+    f.run_file(
+        "big.toml",
+        &format!("schema = 1\nname = 'big'\ntype = 'shell'\ncommand = 'true'\n# {filler}\n"),
+    );
+    let set = read(&f.place());
+    let u = set.unusable.iter().find(|u| u.id == "big").unwrap();
+    assert!(u.reason.contains("larger than"), "{}", u.reason);
 }

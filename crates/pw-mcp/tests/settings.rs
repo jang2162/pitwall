@@ -607,3 +607,38 @@ async fn a_global_tool_key_reaches_a_tool_the_project_turned_off_by_group() {
         (false, "shared".into(), Value::Null)
     );
 }
+
+/// 재확인 리뷰 권고 2 ②: 프로젝트 설정 파일을 읽지 못하면 사람의 설정 창은 그 프로젝트의 자동 승인을 「없음」 으로 보이고(에이전트
+/// 호출이 거절되므로), 읽지 못한 파일과 까닭을 경고에 싣는다 — 전역의 자동 승인을 보이면 실패.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_settings_window_shows_no_auto_approval_for_an_unreadable_project() {
+    let f = Fixture::new();
+    std::fs::write(
+        f.paths.config.join("settings.toml"),
+        "schema = 1\n[mcp]\nauto_approve = [\"read\", \"write\"]\n",
+    )
+    .unwrap();
+    f.host.config().unwrap().global.reload().unwrap();
+    let window = f.window().await;
+    let view = window
+        .call("mcp.settings.get", json!({ "projectId": f.alpha }))
+        .await
+        .unwrap();
+    // 공유 `project.toml` 의 `auto_approve = ["write"]` 가 좁힌다.
+    assert_eq!(view["project"]["autoApprove"], json!(["write"]));
+
+    let broken = f.base.join("work/alpha/.pitwall/db/y.toml");
+    std::fs::create_dir_all(broken.parent().unwrap()).unwrap();
+    std::fs::write(&broken, "name = \"y\n").unwrap();
+    let view = window
+        .call("mcp.settings.get", json!({ "projectId": f.alpha }))
+        .await
+        .unwrap();
+    let project = &view["project"];
+    assert_eq!(project["autoApprove"], json!([]));
+    let warnings = project["warnings"].to_string();
+    assert!(
+        warnings.contains("y.toml") && warnings.contains("refused"),
+        "{warnings}"
+    );
+}

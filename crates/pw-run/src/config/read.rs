@@ -261,7 +261,7 @@ fn read_layer(
             ));
         }
     }
-    let text = pw_core::config::robust::retrying(|| fs::read_to_string(path))
+    let text = pw_core::config::robust::read_config(path)
         .map_err(|e| format!("{}: {e}", path.display()))?;
     let mut doc: DocumentMut = text.parse().map_err(|e: toml_edit::TomlError| {
         let at = e.span().map_or(0, |span| span.start);

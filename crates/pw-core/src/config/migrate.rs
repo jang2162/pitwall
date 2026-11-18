@@ -247,7 +247,7 @@ fn migrate_file_with(
         path: path.to_path_buf(),
         error,
     };
-    let original = super::robust::retrying(|| fs::read_to_string(path))
+    let original = super::robust::read_config(path)
         .map_err(labeled("read", path))
         .map_err(io)?;
     let mut doc: DocumentMut =

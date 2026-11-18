@@ -271,6 +271,18 @@ pub fn read_project_over(
         .map_err(|e| unreadable(&e))?
         .without_writes();
     let layered = source.load_layered().map_err(|e| unreadable(&e))?;
+    // 대상 없는 링크는 설정 계층이 알림으로 두고 건너뛴다. 정책 읽기는 그것도 「못 읽음」 이다 — 사람의 `.local.toml` 이 dotfiles
+    // 링크이고 그 대상이 사라지면 사람이 둔 좁히기가 조용히 빠진다(17-m6-plan M6-01 재확인 리뷰 1).
+    if let Some(path) = layered.snapshot.notices.iter().find_map(|n| match n {
+        super::ConfigNotice::BrokenLink { path } => Some(path),
+        _ => None,
+    }) {
+        return Err(ProjectConfigUnreadable {
+            project_id: project.id.clone(),
+            path: Some(std::path::PathBuf::from(path)),
+            detail: format!("{path}: a symbolic link whose target does not exist"),
+        });
+    }
     let full = layered.snapshot.get("project", MCP_KEY).cloned();
     if project.config_mode != ConfigMode::Repository {
         // 개인 전용 project.toml 은 사람의 설정이다.
@@ -436,6 +448,37 @@ mod tests {
             read_project_over(&paths, Some(&global), &p).unwrap().0,
             narrowed
         );
+
+        // 크기 상한(1 MiB)을 넘는 파일은 문법이 맞아도 읽지 않는다 — 거절(fail-closed).
+        let big = pw.join("db/big.toml");
+        put(
+            &big,
+            &format!(
+                "name = \"big\"\n# {}\n",
+                "x".repeat(super::super::robust::MAX_CONFIG_BYTES as usize)
+            ),
+        );
+        let err = read_project_over(&paths, Some(&global), &p).unwrap_err();
+        assert_eq!(err.path.as_deref(), Some(big.as_path()));
+        assert!(err.detail.contains("larger than"), "{}", err.detail);
+        std::fs::remove_file(&big).unwrap();
+
+        // 사람의 `.local.toml` 이 대상 없는 링크(옮겨진 dotfiles)여도 거절이다 — 건너뛰면 좁히기가 빠져 전역으로 넓어진다.
+        #[cfg(unix)]
+        {
+            let local = pw.join("project.local.toml");
+            let saved = std::fs::read_to_string(&local).unwrap();
+            std::fs::remove_file(&local).unwrap();
+            std::os::unix::fs::symlink(tmp.path().join("moved-away.toml"), &local).unwrap();
+            let err = read_project_over(&paths, Some(&global), &p).unwrap_err();
+            assert_eq!(err.path.as_deref(), Some(local.as_path()));
+            std::fs::remove_file(&local).unwrap();
+            put(&local, &saved);
+            assert_eq!(
+                read_project_over(&paths, Some(&global), &p).unwrap().0,
+                narrowed
+            );
+        }
 
         // 개인 전용 프로젝트도 같다.
         let personal = project(&root, ConfigMode::Personal);

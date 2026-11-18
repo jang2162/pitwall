@@ -207,6 +207,8 @@ struct Probe {
     between: Arc<std::sync::Mutex<Option<Between>>>,
     /// `fake_run` 이 관문(`agent_grant`)에 쓰는 레지스트리 — Host 를 만든 뒤 채운다.
     registry: Arc<std::sync::OnceLock<Registry>>,
+    /// 쓰기 툴들([`execute`])이 다음 계획을 만들 때 한 번 부르는 것(세션의 호출 앞 판정 뒤 · 승인 판정 앞에 파일이 바뀌는 자리).
+    on_plan: Arc<std::sync::Mutex<Option<Between>>>,
 }
 
 /// `fake_run` 의 계획 등급과 규칙: `tag` 는 `<read|write|exec|dangerous>[+policy][+human]`. `human` 은 사람이 띄운 실행을 겨누는
@@ -275,6 +277,10 @@ async fn execute(
     p: Planned<ToolParams>,
 ) -> Result<ToolResult, RpcError> {
     probe.plans.fetch_add(1, Ordering::SeqCst);
+    let hook = probe.on_plan.lock().unwrap().take();
+    if let Some(hook) = hook {
+        hook();
+    }
     let approved = p.approve(plan)?;
     probe.runs.fetch_add(1, Ordering::SeqCst);
     if let Some(file) = target_file(&p.params) {
@@ -1376,6 +1382,38 @@ async fn a_project_whose_settings_cannot_be_read_is_refused_not_widened() {
     let request = alpha.opened().await;
     alpha.answer(request.id, McpApprovalAnswer::Once).unwrap();
     assert_eq!(mark(&within(call).await.unwrap()), Mark::ok());
+}
+
+/// 재확인 리뷰 권고 2 ①: 호출 앞 판정을 지난 뒤 · 승인 판정 앞에 설정 파일이 깨지면(TOCTOU) 승인 판정(`policy_for`)도 전역으로
+/// 떨어지지 않고 거절한다 — 넓은 전역 `auto_approve` 로 묻지 않고 돌면 실패.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn settings_that_break_while_planning_refuse_the_approval() {
+    let f = Fixture::build("[mcp]\nauto_approve = [\"write\"]\n", |work| {
+        let dir = work.join("alpha/.pitwall");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("project.local.toml"),
+            "schema = 1\n[mcp]\nauto_approve = []\n",
+        )
+        .unwrap();
+    });
+    let mut alpha = f.window(&f.alpha);
+    let agent = f.agent("agent", &f.work("alpha")).await;
+    let broken = f.work("alpha").join(".pitwall/db/y.toml");
+    let path = broken.clone();
+    *f.probe.on_plan.lock().unwrap() = Some(Box::new(move || {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "name = \"y\n").unwrap();
+    }));
+    let result = agent.call("fake_write", json!({"tag": "breaks"})).await;
+    assert_eq!(
+        mark(&result),
+        Mark::denied(Reason::ProjectConfigUnreadable),
+        "{}",
+        text(&result)
+    );
+    assert!(alpha.quiet(), "asked about a project whose settings broke");
+    assert_eq!(f.runs(), 0);
 }
 
 /// 공유 `project.toml` 의 `[mcp.policy] approval_timeout_secs` 는 효과가 없고 경고가 남는다. 전역 · `.local.toml` 의 값은 먹는다.
