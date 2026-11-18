@@ -152,3 +152,48 @@ fn proc_net_tcp_lines_are_parsed() {
         ]
     );
 }
+
+/// 부모의 시작 시각을 알고 자식의 것을 모르면(Windows 에서 열지 못한 프로세스 — 다른 사용자 · 보호 프로세스) 자손으로 보지 않는다.
+/// 묵은 부모 pid 칸이 실행의 프로세스가 다시 받은 번호를 가리켜도 그 포트가 실행에 붙지 않게.
+#[test]
+fn a_child_whose_start_is_unknown_is_not_a_descendant() {
+    let snapshot = Snapshot::of(vec![
+        Proc {
+            pid: 10,
+            parent: Some(4),
+            session: None,
+            start: Some(100),
+        },
+        Proc {
+            pid: 40,
+            parent: Some(10),
+            session: None,
+            start: None,
+        },
+    ]);
+    assert_eq!(pids(&snapshot.tree(10, &mut Known::default())), [10]);
+}
+
+/// 부모가 끝나 init 으로 넘어갔지만 세션에 남은 것(`nohup … &` 를 띄운 하위 셸이 끝난 뒤)도 실행의 것이다.
+#[test]
+fn a_session_member_whose_parent_ended_is_in_the_tree() {
+    let snapshot = Snapshot::of(vec![proc(10, 1, 10, 100), proc(12, 1, 10, 120)]);
+    assert_eq!(pids(&snapshot.tree(10, &mut Known::default())), [10, 12]);
+}
+
+/// 중지에 넘기는 것은 시작 시각을 아는 것만이다(모르는 것은 남의 프로세스인지 가를 수 없다).
+#[test]
+fn only_known_starts_are_handed_to_the_stop() {
+    let mut known = Known::default();
+    Snapshot::of(vec![
+        proc(10, 1, 10, 100),
+        Proc {
+            pid: 11,
+            parent: Some(10),
+            session: Some(10),
+            start: None,
+        },
+    ])
+    .tree(10, &mut known);
+    assert_eq!(known.verified(), [(10, 100)]);
+}

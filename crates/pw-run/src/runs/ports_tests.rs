@@ -231,7 +231,7 @@ async fn polling_stops_when_the_runs_end() {
 
 /// 실행이 띄운 것이 `setsid` 로 세션을 떠나고 그 부모가 끝나 init 으로 넘어가도(실행 관리자가 앞서 본 후손) 그 포트를 계속 보인다.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_descendant_that_left_the_session_keeps_its_ports() {
+async fn a_descendant_that_left_the_session_keeps_its_ports_and_is_stopped() {
     let f = fast();
     let escape = script(
         &f,
@@ -271,12 +271,97 @@ exit 0;
         c.read_until(&mut a, "PARENT_DONE").await;
         assert!(alive(escaped));
         ports_stay(&f, &run.run_id, shown).await;
+        // 중지는 폴링이 아는 후손까지 끝낸다 — 세션을 떠나 init 으로 넘어갔어도(시작 시각이 같으니 그 프로세스다).
+        stop(&mut c, &mut a, &run.run_id).await;
     };
     let outcome = tokio::time::timeout(Duration::from_secs(30), result).await;
-    // 세션을 떠나 init 으로 넘어간 것은 중지가 닿지 않는다(03 「프로세스 · 창 모델」 — 끝내기를 시작하기 전에 부모를 떠난 것).
-    kill(escaped);
+    let left = !gone_within(escaped, Duration::from_secs(2));
+    if left {
+        kill(escaped);
+    }
     outcome.expect("timed out");
+    assert!(
+        !left,
+        "the descendant that left the session outlived the stop, holding its port"
+    );
+}
+
+/// 실행 둘이 각자 다른 포트를 들으면 각 실행에는 제 포트만 붙는다(다른 실행의 트리에 든 소켓을 붙이지 않는다).
+#[tokio::test(flavor = "multi_thread")]
+async fn each_run_shows_only_its_own_ports() {
+    let f = fast();
+    let listen = script(&f, "listen.pl", LISTEN);
+    f.shell_config("dev", &format!("perl {} 127.0.0.1", listen.display()));
+    let mut c = f.client();
+    let mut started = Vec::new();
+    for _ in 0..2 {
+        let run = info(
+            c.call(
+                "run.start",
+                json!({"projectId": f.project, "configId": "dev"}),
+            )
+            .await,
+        );
+        let mut a = c.attach(&run.run_id, None).await;
+        c.read_until(&mut a, "PORT=").await;
+        c.read_until(&mut a, "\n").await;
+        let port = u16::try_from(number(&a.text, "PORT")).unwrap();
+        started.push((run, a, port));
+    }
+    assert_ne!(started[0].2, started[1].2);
+    for (run, _, port) in &started {
+        ports_until(&f, &run.run_id, |p| !p.is_empty()).await;
+        ports_stay(&f, &run.run_id, |p| p.len() == 1 && p[0].port == *port).await;
+    }
+    for (run, a, _) in &mut started {
+        stop(&mut c, a, &run.run_id).await;
+    }
+}
+
+/// `run.ports` 는 `run.exited` 뒤에 나가지 않는다 — 포트를 읽은 뒤 이벤트를 내기 전에 실행이 끝나도(그 사이를 넓혀 결정적으로 본다).
+#[tokio::test(flavor = "multi_thread")]
+async fn ports_are_never_announced_after_the_run_ended() {
+    let f = fast();
+    let listen = script(&f, "listen.pl", LISTEN);
+    f.shell_config("dev", &format!("perl {} 127.0.0.1", listen.display()));
+    *lock(&f.runs.inner.poller.publish_delay) = Duration::from_millis(1500);
+    let mut events = f.bus.subscribe(
+        Filter::all()
+            .scope(Scope::Project(f.project.clone()))
+            .topics([TOPIC_PORTS, TOPIC_EXITED]),
+    );
+    let mut c = f.client();
+    let run = info(
+        c.call(
+            "run.start",
+            json!({"projectId": f.project, "configId": "dev"}),
+        )
+        .await,
+    );
+    let mut a = c.attach(&run.run_id, None).await;
+    // 포트를 읽었다(이벤트는 아직 기다리는 중) — 그 사이 끝낸다.
+    ports_until(&f, &run.run_id, |p| !p.is_empty()).await;
     stop(&mut c, &mut a, &run.run_id).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let mut got = Vec::new();
+    while let Some(Received::Event(e)) = events.try_recv() {
+        let info: RunInfo = serde_json::from_value(e.payload.clone()).unwrap();
+        got.push((e.topic.clone(), info.state, info.ports.len()));
+    }
+    let exited = got
+        .iter()
+        .position(|(topic, ..)| topic == TOPIC_EXITED)
+        .unwrap_or_else(|| panic!("no run.exited in {got:?}"));
+    assert!(
+        got[exited + 1..].is_empty(),
+        "an event after run.exited: {got:?}"
+    );
+    assert!(
+        got.iter()
+            .filter(|(topic, ..)| topic == TOPIC_PORTS)
+            .all(|(_, state, _)| *state != RunState::Exited),
+        "{got:?}"
+    );
 }
 
 /// 실행 20개 · 후손 300개에서 한 번 읽는 데 드는 시간(완료 기준 밖 — 보고서의 측정). `--ignored` 로 돌린다.

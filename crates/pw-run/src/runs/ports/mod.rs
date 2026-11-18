@@ -18,6 +18,9 @@
 //! 버린다. 닿지 않는 것은 두 폴링 사이(2초)에 태어나 부모를 떠났고 부모도 그 사이 끝난 것(두 번 fork 한 데몬)이다. 다른 사용자의
 //! 프로세스는 macOS · Linux 에서 fd 를 읽지 못해 빠진다(Windows 는 표가 pid 를 주지만 트리의 pid 만 본다).
 //!
+//! 중지도 이 기록을 쓴다 — 프로세스 종류의 끝내기(`process`)가 시작 시각을 아는 기록([`Known::verified`])을 `tree::end_sessions_known`
+//! 에 넘겨, 세션을 떠나 부모가 먼저 끝난 후손이 포트를 쥔 채 남지 않게 한다(지금의 시작 시각이 같을 때만 신호를 보낸다).
+//!
 //! # 폴링
 //!
 //! Host 의 실행 관리자 하나에 스레드 하나(`run-ports`)가 **끝나지 않은 실행(pid 가 있는)이 있는 동안만** 돈다 — 한 번 훑은 프로세스
@@ -157,8 +160,10 @@ impl Snapshot {
             }
             for &child in self.children.get(&pid).into_iter().flatten() {
                 // 부모보다 먼저 태어난 「자식」 은 부모 pid 가 다시 쓰인 것이다(Windows 는 부모가 끝나도 부모 pid 칸이 남는다).
+                // 부모의 시작 시각을 알고 자식의 것을 모르면(Windows 에서 열지 못한 프로세스) 가를 수 없으니 넣지 않는다.
                 let older = match (self.procs.get(&child).and_then(|c| c.start), proc.start) {
                     (Some(child), Some(parent)) => child < parent,
+                    (None, Some(_)) => true,
                     _ => false,
                 };
                 if !older {
@@ -180,6 +185,17 @@ impl Snapshot {
 #[derive(Debug, Default)]
 pub(crate) struct Known {
     pids: BTreeMap<u32, Option<u64>>,
+}
+
+impl Known {
+    /// 시작 시각을 아는 것만 — 중지가 이것으로 끝낸다(지금의 시작 시각이 같을 때만 신호를 보낸다). 시작 시각을 못 읽은 것은
+    /// 남의 프로세스인지 가를 수 없어 뺀다.
+    pub(crate) fn verified(&self) -> Vec<(u32, u64)> {
+        self.pids
+            .iter()
+            .filter_map(|(&pid, &start)| Some((pid, start?)))
+            .collect()
+    }
 }
 
 /// 듣는 소켓을 포트로 묶는다(포트 순).
@@ -247,6 +263,9 @@ pub(super) struct Poller {
     active: std::sync::Mutex<bool>,
     /// 살아 있는 폴링 스레드 수(시험이 0 을 본다).
     threads: Arc<AtomicUsize>,
+    /// 시험: 포트를 읽은 뒤 이벤트를 내기 전에 기다린다(실행이 그 사이 끝나는 경합을 넓힌다).
+    #[cfg(test)]
+    pub(super) publish_delay: std::sync::Mutex<std::time::Duration>,
 }
 
 impl Poller {
@@ -338,12 +357,24 @@ pub(super) fn poll(inner: &Arc<Inner>) -> bool {
     }
     tracing::trace!(target: "pw_run", runs = runs.len(), processes = snapshot.len(), tree = all.len(), took = ?began.elapsed(), "read the run ports");
     for run in changed {
-        let info: RunInfo = run.info();
-        if info.state != RunState::Exited {
-            inner.publish(&info.project_id, TOPIC_PORTS, &info);
-        }
+        #[cfg(test)]
+        std::thread::sleep(*lock(&inner.poller.publish_delay));
+        announce(inner, &run);
     }
     true
+}
+
+/// `run.ports` 를 낸다 — `run.started` · `run.exited` 와 같은 잠금 안에서, 시작을 알린 뒤 끝을 알리기 전에만(끝난 실행을 「실행
+/// 중」 으로 다시 그리지 않게). 상태도 그 잠금 안에서 읽는다.
+fn announce(inner: &Inner, run: &Run) {
+    let announced = lock(&run.announced);
+    if !announced.started || announced.exited {
+        return;
+    }
+    let info: RunInfo = run.info();
+    if info.state != RunState::Exited {
+        inner.publish(&info.project_id, TOPIC_PORTS, &info);
+    }
 }
 
 /// 그 pid 들의 지금 시작 시각만(소켓을 읽은 뒤의 확인 — 프로세스 목록 전체를 다시 훑지 않는다).

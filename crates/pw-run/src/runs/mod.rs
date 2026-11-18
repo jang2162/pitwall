@@ -279,8 +279,8 @@ pub struct Run {
     announced: Mutex<Announced>,
     /// 듣는 포트(폴링이 쓴다 — [`ports`]). `status` 다음에 잠근다.
     ports: Mutex<Vec<RunPort>>,
-    /// 앞선 폴링에서 찾은 프로세스 트리.
-    known: Mutex<ports::Known>,
+    /// 앞선 폴링에서 찾은 프로세스 트리. 중지(`process`)도 함께 쥐어 그 후손까지 끝낸다.
+    known: Arc<Mutex<ports::Known>>,
 }
 
 #[derive(Default)]
@@ -406,6 +406,11 @@ impl RunOutput {
         {
             inner.evict_over_total(&mut lock(&inner.table));
         }
+    }
+
+    /// 포트 폴링이 찾은 이 실행의 프로세스 트리(M6-08). 프로세스 종류의 끝내기가 그 후손까지 끝내는 데 쓴다.
+    pub(crate) fn known_tree(&self) -> Arc<Mutex<ports::Known>> {
+        Arc::clone(&self.run.known)
     }
 
     /// 띄우는 동안 중지가 왔는가(`run.stop` · 창 닫기 — 종류는 프로그램을 풀지 않고 끝낼 수 있다).
@@ -835,7 +840,7 @@ impl Runs {
             changed: watch::channel(0).0,
             announced: Mutex::default(),
             ports: Mutex::default(),
-            known: Mutex::default(),
+            known: Arc::default(),
         });
         // 띄우는 동안 나온 출력 · 곧바로 끝난 실행도 받도록 표에 먼저 넣는다.
         lock(&self.inner.table)

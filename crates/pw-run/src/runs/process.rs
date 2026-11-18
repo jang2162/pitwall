@@ -133,6 +133,7 @@ impl ProcessLauncher for PtyLauncher {
         #[cfg(unix)]
         drop(pinned);
         let process = Arc::new(ProcessRun {
+            known: output.known_tree(),
             pid: pty.pid(),
             pty: Mutex::new(Some(Arc::clone(&pty))),
             ending: spec.ending,
@@ -331,6 +332,8 @@ pub(crate) mod hooks {
 }
 
 struct ProcessRun {
+    /// 포트 폴링이 찾은 트리(M6-08) — 끝낼 때 세션을 떠나 부모가 먼저 끝난 후손까지 끝낸다(시작 시각이 같을 때만).
+    known: Arc<Mutex<super::ports::Known>>,
     pid: Option<u32>,
     /// 끝나면 비운다 — 끝난 실행이 목록에 남는 동안 PTY 의 fd 를 쥐지 않게.
     pty: Mutex<Option<Arc<Pty>>>,
@@ -346,6 +349,16 @@ impl ProcessRun {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    /// `pty` 의 세션과 그 자손, 폴링이 앞서 찾은 후손을 [`Self::ending`] 대로 끝낸다.
+    fn end(&self, pty: &Pty) {
+        let known = self
+            .known
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .verified();
+        pty.end_known(self.ending, known);
     }
 }
 
@@ -375,7 +388,7 @@ impl RunKind for ProcessRun {
 
     fn stop(&self) {
         if let Some(pty) = self.pty() {
-            pty.end(self.ending);
+            self.end(&pty);
         }
     }
 }
@@ -405,7 +418,7 @@ async fn pump(pty: Arc<Pty>, process: Arc<ProcessRun>, output: RunOutput) {
     }
     let exit = pty.exit().await;
     // 리더가 끝났으면 세션에 남은 것도 끝낸다. 중지 중이면 이미 시작한 끝내기가 이어진다(두 번째 `end` 는 아무것도 하지 않는다).
-    pty.end(process.ending);
+    process.end(&pty);
     pty.ended().await;
     // 세션을 떠난 데몬이 PTY 를 쥐고 있으면 읽기 스레드가 EOF 를 못 본다 — 닫아 그 스레드도 끝낸다.
     pty.close_output();

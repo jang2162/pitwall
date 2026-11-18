@@ -296,6 +296,11 @@ impl Pty {
     /// 셸(프로그램)과 그 세션의 프로세스를 `ending` 대로 끝낸다. 기다리지 않는다 — 다 끝나면 [`Self::ended`]. 두 번째부터는
     /// 아무것도 하지 않는다(먼저 고른 방법이 이어진다).
     pub fn end(&self, ending: Ending) {
+        self.end_known(ending, Vec::new());
+    }
+
+    /// [`Self::end`] 에 앞서 찾은 자손 `known`(pid, 시작 시각 — `crate::tree::end_sessions_known`)을 더한다. 실행의 중지가 쓴다.
+    pub fn end_known(&self, ending: Ending, known: Vec<(u32, u64)>) {
         if self.terminated.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -303,6 +308,9 @@ impl Pty {
         // 그 writer 는 버려질 때 셸에 `\n` + ^D(EOF)를 쓴다 — 신호보다 먼저 가면 셸이 그것을 읽고 `exit 0` 으로 끝나 신호 종료가
         // 정상 종료로 보인다(시험 `closing_does_not_feed_the_shell_an_eof_before_ending_it`).
         let input = lock(&self.input).take();
+        // 세션 · 자손을 찾지 못하는 OS 는 앞서 찾은 자손도 쓰지 않는다.
+        #[cfg(not(unix))]
+        drop(known);
         if ending == Ending::Hangup {
             self.output.close();
         }
@@ -313,8 +321,12 @@ impl Pty {
             let input = Arc::new(Mutex::new(input));
             let held = Arc::clone(&input);
             let ended = self.ended.clone();
+            let known: Vec<(libc::pid_t, u64)> = known
+                .into_iter()
+                .filter_map(|(pid, start)| Some((libc::pid_t::try_from(pid).ok()?, start)))
+                .collect();
             let spawned = thread("pty-terminate", move || {
-                crate::tree::end_sessions(&[leader], &ending.steps(), ending.reach());
+                crate::tree::end_sessions_known(&[leader], &ending.steps(), ending.reach(), &known);
                 drop(lock(&held).take());
                 forget_leader(leader);
                 ended.send_replace(true);

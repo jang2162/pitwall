@@ -34,7 +34,23 @@ pub fn terminate_sessions(leaders: &[pid_t], grace: Duration) {
 /// 시간 안에 다 끝나면 멈춘다. 모든 단계 뒤에 남은 것에는 SIGKILL 을 보낸다. 끝날 때까지 블로킹한다. 실행(`crate::runs`)의 중지는
 /// `[(SIGTERM, 5 s)]`, compose 는 그 앞에 `(SIGINT, …)` 이고, 터미널은 `[(SIGHUP, 300 ms)]` 다.
 pub fn end_sessions(leaders: &[pid_t], steps: &[(libc::c_int, Duration)], reach: Reach) {
-    end_known(leaders, steps, reach, &mut BTreeMap::new());
+    end_sessions_known(leaders, steps, reach, &[]);
+}
+
+/// [`end_sessions`] 에 앞서 찾은 자손 `known`(pid, 시작 시각)을 더한다 — 실행의 포트 폴링(`crate::runs::ports`)이 도는 동안 본
+/// 후손(세션을 떠나 부모가 먼저 끝난 것 포함)이다. 그 pid 는 **지금의 시작 시각이 같을 때만** 신호를 받는다 — 끝난 뒤 그 번호를
+/// 받은 남의 프로세스는 닿지 않는다. [`Reach::SessionAndChildren`] 일 때만 쓰인다.
+pub fn end_sessions_known(
+    leaders: &[pid_t],
+    steps: &[(libc::c_int, Duration)],
+    reach: Reach,
+    known: &[(pid_t, u64)],
+) {
+    let mut known: BTreeMap<pid_t, Option<u64>> = known
+        .iter()
+        .map(|&(pid, start)| (pid, Some(start)))
+        .collect();
+    end_known(leaders, steps, reach, &mut known);
 }
 
 /// 띄운 프로세스(새 세션의 리더) 하나의 세션과 자손을 **도는 동안** 기록해 두었다가 끝낸다 — 태스크 감지(17-m6-plan M6-05)가 띄운
@@ -344,7 +360,73 @@ pub fn dir_identity(meta: &std::fs::Metadata) -> (u64, u64) {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::process::CommandExt as _;
+    use std::process::{Child, Command};
+
     use super::*;
+
+    /// 새 세션의 리더로 `sleep` 을 띄운다(이 시험 프로세스의 세션 밖).
+    fn session_leader() -> Child {
+        let mut command = Command::new("sleep");
+        command.arg("30");
+        // SAFETY: fork 뒤 exec 앞에서 setsid(2) 만 부른다.
+        unsafe {
+            command.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        command.spawn().unwrap()
+    }
+
+    fn reaped_within(child: &mut Child, within: Duration) -> bool {
+        let deadline = Instant::now() + within;
+        while Instant::now() < deadline {
+            if child.try_wait().unwrap().is_some() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    /// 앞서 찾은 자손은 지금의 시작 시각이 같을 때만 신호를 받는다 — 같은 번호의 남의 프로세스(여기서는 시작 시각이 다르다고
+    /// 기록된 것)는 살아남고, 맞는 시작 시각이면 세션 · 부모와 상관없이 끝난다.
+    #[test]
+    fn a_known_descendant_is_ended_only_when_its_start_still_matches() {
+        let steps = [(libc::SIGTERM, Duration::from_secs(1))];
+        let mut other = Command::new("sleep").arg("30").spawn().unwrap();
+        let other_pid = pid_t::try_from(other.id()).unwrap();
+        let started = start_time(other_pid).unwrap();
+
+        let mut leader = session_leader();
+        let leader_pid = pid_t::try_from(leader.id()).unwrap();
+        end_sessions_known(
+            &[leader_pid],
+            &steps,
+            Reach::SessionAndChildren,
+            &[(other_pid, started + 1)],
+        );
+        assert!(reaped_within(&mut leader, Duration::from_secs(2)));
+        let survived = !reaped_within(&mut other, Duration::from_millis(300));
+        assert!(survived, "a process whose start differs was signalled");
+
+        let mut leader = session_leader();
+        let leader_pid = pid_t::try_from(leader.id()).unwrap();
+        end_sessions_known(
+            &[leader_pid],
+            &steps,
+            Reach::SessionAndChildren,
+            &[(other_pid, started)],
+        );
+        assert!(reaped_within(&mut leader, Duration::from_secs(2)));
+        let ended = reaped_within(&mut other, Duration::from_secs(2));
+        if !ended {
+            let _ = other.kill();
+            let _ = other.wait();
+        }
+        assert!(ended, "the known descendant outlived the stop");
+    }
 
     #[test]
     fn this_process_is_listed_in_its_own_session() {
