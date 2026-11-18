@@ -539,13 +539,16 @@ async fn configure(
         .await
         .map_err(|e| StartError::Request("initialize", e))?;
     *lock(&session.capabilities) = capabilities.clone();
-    // `launch`/`attach` 는 보내 두고 답은 `configurationDone` 뒤에 본다.
+    // `launch`/`attach` 는 보내 두고 답은 `configurationDone` 뒤에 본다. 보내기는 여기서 곧바로 줄에 세운다 — 답 기다리기만
+    // 태스크로 보낸다. 보내기까지 태스크에 두면 `initialized` 가 이미 와 있을 때 아래의 `setBreakpoints` 가 `launch` 보다
+    // 먼저 선에 나갈 수 있다(태스크가 언제 도는지는 정해져 있지 않다).
     let mut launch = {
-        let connection = session.connection.clone();
-        let command = request.mode.command();
-        let arguments = Value::Object(request.arguments);
+        let pending = session
+            .connection
+            .send_request(request.mode.command(), &Value::Object(request.arguments))
+            .map_err(|e| StartError::Request(request.mode.command(), e))?;
         let limit = t.launch;
-        tokio::spawn(async move { connection.request(command, &arguments, limit).await })
+        tokio::spawn(pending.answer(limit))
     };
     let mut initialized = session.initialized.subscribe();
     let mut launch_done: Option<Result<Value, RequestError>> = None;

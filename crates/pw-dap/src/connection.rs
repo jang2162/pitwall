@@ -224,24 +224,28 @@ impl Connection {
         arguments: &Value,
         timeout: Duration,
     ) -> Result<Value, RequestError> {
+        self.send_request(command, arguments)?.answer(timeout).await
+    }
+
+    /// 요청을 곧바로 쓰기 줄에 세우고 답을 기다릴 손잡이를 돌려준다. 이 함수가 돌아오면 그 요청의 차례가 정해졌다 —
+    /// 뒤에 보내는 요청은 선에서 그 뒤에 선다(쓰기 줄은 하나다). 답을 기다리는 동안 다른 요청을 보내야 할 때 쓴다(시작
+    /// 순서의 `launch` — session.rs `configure`).
+    pub(crate) fn send_request(
+        &self,
+        command: &str,
+        arguments: &Value,
+    ) -> Result<PendingRequest, RequestError> {
         let seq = self.shared.seq.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
         lock(&self.shared.pending).insert(seq, tx);
-        let guard = InFlight {
-            shared: &self.shared,
+        let pending = PendingRequest {
+            shared: Arc::clone(&self.shared),
             seq: Some(seq),
+            rx,
         };
         self.shared
             .send(protocol::request(seq, command, arguments))?;
-        let answer = tokio::time::timeout(timeout, rx).await;
-        match answer {
-            Err(_) => Err(RequestError::Timeout),
-            Ok(Err(_)) => Err(RequestError::Closed(self.close_reason())),
-            Ok(Ok(result)) => {
-                guard.answered();
-                result.map_err(RequestError::Adapter)
-            }
-        }
+        Ok(pending)
     }
 
     /// 역요청 `request_seq` 에 답한다.
@@ -262,11 +266,6 @@ impl Connection {
 
     pub(crate) fn closed(&self) -> Option<Closed> {
         self.shared.closed.borrow().clone()
-    }
-
-    pub(crate) fn close_reason(&self) -> String {
-        self.closed()
-            .map_or_else(|| "the connection is closed".to_owned(), |c| c.reason())
     }
 
     /// 닫힐 때까지 기다린다.
@@ -293,19 +292,33 @@ impl Connection {
     }
 }
 
-/// 요청 하나가 표에 있는 동안의 손잡이. 답을 받기 전에 버려지면 표에서 지운다.
-struct InFlight<'a> {
-    shared: &'a Shared,
+/// 보낸 요청 하나의 답을 기다리는 손잡이. 답을 받기 전에 버려지면 표에서 지운다.
+pub(crate) struct PendingRequest {
+    shared: Arc<Shared>,
     seq: Option<i64>,
+    rx: oneshot::Receiver<Result<Value, ErrorResponse>>,
 }
 
-impl InFlight<'_> {
-    fn answered(mut self) {
-        self.seq = None;
+impl PendingRequest {
+    pub(crate) async fn answer(mut self, timeout: Duration) -> Result<Value, RequestError> {
+        match tokio::time::timeout(timeout, &mut self.rx).await {
+            Err(_) => Err(RequestError::Timeout),
+            Ok(Err(_)) => Err(RequestError::Closed(
+                self.shared
+                    .closed
+                    .borrow()
+                    .as_ref()
+                    .map_or_else(|| "the connection is closed".to_owned(), Closed::reason),
+            )),
+            Ok(Ok(result)) => {
+                self.seq = None;
+                result.map_err(RequestError::Adapter)
+            }
+        }
     }
 }
 
-impl Drop for InFlight<'_> {
+impl Drop for PendingRequest {
     fn drop(&mut self) {
         if let Some(seq) = self.seq.take() {
             lock(&self.shared.pending).remove(&seq);
