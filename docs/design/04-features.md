@@ -158,13 +158,13 @@ pitwall <path>[:line[:col]]
 | ID | 기능 | 우선 |
 |---|---|---|
 | F7-1 | 실행 구성 CRUD (`.pitwall/run/*.toml`) — shell, npm/pnpm 스크립트, gradle/maven 태스크, cargo, go, python, docker-compose, **`mise-task`**, **`sql`**(DB 연결 + SQL 파일 목록 + 트랜잭션 방식 — 프로세스를 띄우지 않고 DB 실행 경로로 돌며 결과 요약은 실행 콘솔에, F6-14) | P0 |
-| F7-2 | 태스크 자동 감지 (package.json scripts, Makefile, gradle tasks, justfile, compose 서비스, **mise tasks**(`mise tasks ls --json`)) → 원클릭 실행 | P0 |
+| F7-2 | 태스크 자동 감지 (package.json scripts, Makefile, justfile, compose 서비스, **mise tasks**(`mise tasks ls --json` — 신뢰한 프로젝트만)) → 원클릭 실행. gradle · maven 태스크는 빌드 스크립트를 돌려야 나오므로 사람이 「태스크 읽기」 를 누를 때만 읽고 캐시한다(06-roadmap.md 결정 D70) | P0 |
 | F7-3 | 실행 콘솔: PTY, ANSI 색상, 검색, 파일:라인 링크 클릭 이동, 로그 레벨 하이라이트 | P0 |
 | F7-4 | 프로세스 관리: 동시 실행, 재시작, 중지(트리 kill), 포트 표시 | P0 |
-| F7-5 | 복합 구성 (여러 구성을 순서/병렬 실행, before-launch 태스크 — `sql` 구성도 낄 수 있다: 시드 · 마이그레이션 뒤 서버 실행) | P1 |
-| F7-6 | env / `.env` 파일 / 프로필 지원 | P0 |
-| F7-7 | 디버그 (DAP): launch/attach, 브레이크포인트(조건/로그포인트/hit count), 스텝, 콜스택, 변수/워치, 디버그 콘솔(evaluate) | P0 (범용 DAP + 기본 번들 어댑터는 주력 언어 결정 후 선정) |
-| F7-8 | 예외 브레이크포인트, 핫 리로드/Hot code replace(가능한 어댑터) | P1 |
+| F7-5 | 복합 구성 (여러 구성을 순서/병렬 실행, before-launch 태스크 — `sql` 구성도 낄 수 있다: 시드 · 마이그레이션 뒤 서버 실행) | P1 — M6 에 넣는다(06-roadmap.md 결정 D67) |
+| F7-6 | env / `.env` 파일 / 프로필 지원 — 프로필은 구성 안 `[profiles.<이름>]` 의 env · args 덮어쓰기이고 실행 선택기에서 고른다(17-m6-plan 결정 M6-P4) | P0 |
+| F7-7 | 디버그 (DAP): launch/attach, 브레이크포인트(조건/로그포인트/hit count), 스텝, 콜스택, 변수/워치, 디버그 콘솔(evaluate). 기본 번들 어댑터의 보장: Rust · Node · Python 은 launch · attach, JVM 은 attach 만(06 「리스크」, 17-m6-plan 결정 M6-P20) | P0 (범용 DAP + 기본 번들 어댑터 — 06-roadmap.md 결정 D65) |
+| F7-8 | 예외 브레이크포인트, 핫 리로드/Hot code replace(가능한 어댑터) | P1 — 예외 브레이크포인트(어댑터가 알린 필터 켜고 끄기)는 M6, 핫 리로드는 뒤로(06-roadmap.md 결정 D67) |
 | F7-9 | 내장 터미널 (프로젝트 루트, 여러 탭) | **P0 — M1에 포함** |
 | F7-10 | 테스트 러너 통합 (트리 결과, 실패 이동) | P2 |
 | F7-11 | 원격 실행 + 포트 포워딩 | P1 |

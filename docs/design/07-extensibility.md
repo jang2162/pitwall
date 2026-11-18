@@ -50,8 +50,14 @@ requires = { java = ">=21" }                # (선택) 서버를 「돌리는」
 # project_jdk_setting = "java.configuration.runtimes"     # (선택) 프로젝트가 쓰는 JDK 를 이 설정 경로로 넘긴다 (결정 M4-D6 · 15-m4-plan M4-18)
 # initialize_timeout = 60                    # (선택) initialize 의 답을 기다리는 시한, 정수 초 1 – 600 (기본 10 — JVM 서버만 늘린다)
 
-[contributes.debug_adapters.java]
-languages = ["kotlin", "java"]
+[contributes.debug_adapters.java-debug]    # 표 이름 = 어댑터 id = 실행 구성 `[debug] adapter` · 설정 `[dap.<id>]` 의 id (17-m6-plan M6-16 — 아직 없다). 내장 확장만
+languages = ["java", "kotlin"]              # 맡는 언어 id — Kotlin 은 JDWP attach 로 확인만 하고 보장하지 않는다(06-roadmap.md 결정 D65)
+mason = "java-debug-adapter"                # (선택) Mason registry 패키지 — 이 패키지는 실행 파일 없이 jdtls 의 bundles 로 싣는 jar 다
+# command = "..."  args = [...]            # 실행 파일이 있는 어댑터(codelldb · debugpy-adapter 등)는 언어 서버와 같은 꼴. (선택) requires = { python = ">=3.9" } 처럼 어댑터를 돌리는 런타임
+transport = "tcp"                           # stdio | tcp — stdio 를 먼저 쓰고, tcp 는 127.0.0.1 에만 묶는다
+attach = { hostName = "127.0.0.1", port = "{port}" }   # 실행 구성 `[debug]` 를 attach 요청으로 옮기는 틀 — 자리 표지만, 값은 구성에서. JVM 은 attach 만(17-m6-plan 결정 M6-P20)
+
+# 확장의 태스크 감지 규칙은 M8 이후다 — M6 의 내장 감지기(package.json · Makefile · justfile · compose · mise · gradle · maven)는 코어(`pw_run::detect`)에 있다(17-m6-plan 「3」)
 
 [contributes.task_detectors.gradle]
 files = ["build.gradle", "build.gradle.kts"]
@@ -202,7 +208,7 @@ dir = "i18n/ko"                             # 그 언어의 Fluent 리소스(.ft
 | 고정 | Pitwall 판마다 registry 판 하나를 고정한다 — `crates/pw-tools/registry.toml` 에 판 · 주소 · 산출물 해시와 **기본 번들 패키지의 (판, 대상, 파일)별 SHA-256**(결정 M4-D16 · D17). 판은 `node scripts/tools-registry-bump.mjs bump` 로 올린다. 설정 `settings.toml` 의 `[tools] registry = "pinned"`(기본) · `"latest"`(하루 한 번 최신 태그를 보고 그 판의 `checksums.txt` 로 확인) |
 | 내장 스냅숏 | 기본 번들 패키지의 정의를 고정 판에서 뽑아 바이너리에 묶는다(`crates/pw-tools/snapshot/bundled.json`) — 첫 실행 · 오프라인에서도 「어디서 무엇을 받는지」 안다. 캐시가 없으면 이것만으로 답한다 |
 | 덮어쓰기 | registry 정의가 그대로 쓸 수 없는 패키지는 `crates/pw-tools/overrides/<패키지>.toml` 이 받을 판 · 주소 · `bin` 을 덮어 고정하고, 실행 파일 별칭(`[bin_alias]`)을 둔다(jdtls — 결정 M4-D4, kotlin-lsp 의 `kotlin-lsp` → `intellij-server`) |
-| 읽는 범위(M4) | purl `github` · `generic` · `npm` · `pypi`, `bin` 위임 `npm:` · `pypi:` · `python:` 과 설치 폴더 안 경로, 표현식 `{{version}}` · `{{source.asset.*}}` · `{{source.download.*}}` · 필터 `strip_prefix`. 그 밖(`cargo` · `golang` · `openvsx` purl, `node:` · `java-jar:` 등 위임, 모르는 필터 · 함수)은 그 패키지(대상별 항목이면 그 대상)를 「지원하지 않음」 으로 — 추측해 채우지 않는다. npm · PyPI 이름은 각 레지스트리의 이름 문법으로 보고 `-` 로 시작하는 이름 · 판은 거절한다(설치기 인자로 넘어간다) |
+| 읽는 범위(M4) | purl `github` · `generic` · `npm` · `pypi`, `bin` 위임 `npm:` · `pypi:` · `python:` 과 설치 폴더 안 경로, 표현식 `{{version}}` · `{{source.asset.*}}` · `{{source.download.*}}` · 필터 `strip_prefix`. 그 밖(`cargo` · `golang` · `openvsx` purl, `node:` · `java-jar:` 등 위임, 모르는 필터 · 함수)은 그 패키지(대상별 항목이면 그 대상)를 「지원하지 않음」 으로 — 추측해 채우지 않는다. M6 은 `exec:` · `node:` · `pyvenv:` 위임과 `openvsx` purl 을 더한다(기본 번들 디버거가 쓰는 것 — 06-roadmap.md 결정 D65, 아직 없다 — 17-m6-plan M6-16). npm · PyPI 이름은 각 레지스트리의 이름 문법으로 보고 `-` 로 시작하는 이름 · 판은 거절한다(설치기 인자로 넘어간다) |
 | 설치 위치 | `$DATA/tools/<패키지>/<버전>/`, 설치 기록 `$DATA/tools/<패키지>/install.json`(지금 판 · 이전 판 · 판마다 출처 · 받은 파일 해시 · 체크섬 유무 · 라이선스 · 크기 · 때), 실행 파일 링크는 `$DATA/tools/bin/`(유닉스 — PATH에 넣지 않고 Pitwall이 설치 기록의 절대 경로로 실행). 새 판은 자기 폴더에 다 만든 뒤 기록 · 링크만 바꾸고 이전 판 하나를 남긴다. 같은 패키지의 설치는 Host 안 잠금 + `$DATA/tools/<패키지>.lock` 으로 하나만(다른 앱 프로세스 포함), 만드는 중인 판은 해석이 고르지 않는다(15-m4-plan.md M4-04) |
 | 설치기 (purl 유형별) | `github`(릴리스 자산 다운로드 · 압축 해제), `generic`(URL), `npm`, `pypi`(전용 venv), `cargo`, `golang`, `openvsx`(VS Code 확장 형태 디버거: codelldb · js-debug 등) — M4 는 `github` · `generic` · `npm` · `pypi`, `openvsx` 는 디버거와 함께 M6. 받기는 HTTPS 만(리다이렉트도) · 설치 하나에 받기 1 GiB · 풀린 것 2 GiB 상한. 풀기(`.tar.gz` · `.zip` · `.gz` 단일 파일)는 폴더 밖 경로 · 링크를 지나는 항목 · 같은 이름 두 번(tar.gz 의 폴더 항목끼리의 중복은 빼고 — zip 은 폴더라도 거절, 15-m4-plan.md M4-04)이면 설치 전체를 실패로, 심볼릭 링크는 설치 폴더 안을 가리킬 때만, 권한은 `bin` 은 0755 · 보관 파일이 실행으로 적은 일반 파일만 0755 · 나머지 0644(setuid · setgid · sticky · 쓰기 비트는 지운다). npm 은 `--ignore-scripts`, pip 은 `--only-binary=:all:`(설치가 패키지 코드를 돌리지 않게 — 결정 M4-D17) |
 | 툴체인 | `npm` · `pypi` · `cargo` · `golang` 설치에 필요한 node · python 등은 **런타임 제공자(03 §5-1, mise 등)**에서 찾음 — 설치를 부른 프로젝트 창이면 그 프로젝트의 런타임 환경, 설정 창이면 로그인 셸. 없으면 "node가 필요합니다 — mise로 설치" 안내. 설치본은 모든 프로젝트가 함께 쓰므로 프로젝트 환경이 출처를 바꾸지 못하게 부른다: cwd 는 설치 폴더, 환경은 로그인 셸 바탕에 고른 node · python 의 폴더만 얹고 `NPM_CONFIG_*` · `npm_config_*` · `PIP_*` · `PYTHON*` 를 지운다, 출처는 인자로 고정(npm `--registry https://registry.npmjs.org/` · 빈 `--userconfig` · `--globalconfig`, pip `--isolated --index-url https://pypi.org/simple`), 패키지 명세 앞에 `--` |

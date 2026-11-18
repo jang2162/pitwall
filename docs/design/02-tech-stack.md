@@ -81,7 +81,7 @@
 
 ### 2.5 디버깅: DAP
 - 언어별 디버거를 직접 구현하지 않고 Debug Adapter Protocol만 구현
-- 기본 번들/자동 설치 대상: `js-debug`(Node/브라우저), `debugpy`, `codelldb`(Rust/C/C++), `delve`(Go), `java-debug`(jdtls 확장)
+- 기본 번들 어댑터(06-roadmap.md 결정 D65 — 17-m6-plan 결정 M6-D2): `codelldb`(Rust) · `js-debug-adapter`(JavaScript/TypeScript — Node 만, 브라우저 디버깅은 뒤로) · `debugpy`(Python) · `java-debug-adapter`(Java — jdtls 플러그인, attach 만). Kotlin 은 같은 JDWP attach 로 확인만 하고 보장하지 않는다. `delve`(Go) 등 그 밖은 사람이 `[dap.<id>] path` 로 이미 설치한 어댑터를 쓴다(`golang` purl 설치기가 없다)
 
 ### 2.6 RPC 계약 우선
 - 코어 API는 Rust 타입으로 정의 → `specta`로 TS 타입 생성, MCP 툴 스키마도 같은 타입에서 `schemars`로 생성

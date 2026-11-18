@@ -21,7 +21,7 @@
 | [14-m3-plan.md](14-m3-plan.md) | M3(DB) 작업 분할 · M3 결정 |
 | [15-m4-plan.md](15-m4-plan.md) | M4(LSP · 편집) 작업 분할 · M4 결정 |
 | [16-m5-plan.md](16-m5-plan.md) | M5(MCP · 에이전트 연동) 작업 분할 · M5 결정 |
-| [17-m6-plan.md](17-m6-plan.md) | M6(실행 · 디버그) 작업 분할 · M6 결정(결정 필요) |
+| [17-m6-plan.md](17-m6-plan.md) | M6(실행 · 디버그) 작업 분할 · M6 결정 |
 
 ## 한 줄 요약
 
