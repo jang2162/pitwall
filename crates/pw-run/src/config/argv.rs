@@ -103,9 +103,15 @@ pub fn argv(
         RunKindConfig::MiseTask { task } => {
             out.extend(["mise".to_owned(), "run".to_owned(), task.clone()]);
         }
+        // 프로세스를 띄우지 않는다 — DB 실행 경로(`pw_db::run_sql`)로 돈다(M6-09, D55).
+        RunKindConfig::Sql { .. } => return Err(NOT_A_PROCESS.to_owned()),
     }
     Ok(out)
 }
+
+/// `sql` 구성의 argv 를 청했을 때의 까닭(창의 `run.start` · 에이전트의 프로세스 계획이 받는다).
+pub const NOT_A_PROCESS: &str =
+    "an `sql` configuration runs no process; it runs on its database connection (`run.sql.start`)";
 
 /// 로그인 셸에 명령 글을 넘기는 옵션.
 fn shell_flag() -> &'static str {

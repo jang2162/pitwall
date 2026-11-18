@@ -1249,3 +1249,71 @@ fn an_oversized_run_file_is_unusable() {
     let u = set.unusable.iter().find(|u| u.id == "big").unwrap();
     assert!(u.reason.contains("larger than"), "{}", u.reason);
 }
+
+// --- `sql` 종류(M6-09) ----------------------------------------------------------------------------------------
+
+/// `sql` 구성: 필드(`connection` · `files` · `transaction` — 기본 `all`)를 읽고, 프로세스가 아니라 argv 를 만들지 않는다. 파일이
+/// 루트 밖이거나 목록이 비면 쓸 수 없다.
+#[test]
+fn an_sql_config_reads_its_fields_and_has_no_argv() {
+    use super::{RunKindConfig, SqlTransaction};
+    let config = parse(
+        "name = 'seed'\ntype = 'sql'\nconnection = 'local-pg'\nfiles = ['db/seed.sql', 'db/fixtures.sql']\n",
+    );
+    assert_eq!(
+        config.kind,
+        RunKindConfig::Sql {
+            connection: "local-pg".into(),
+            files: strings(&["db/seed.sql", "db/fixtures.sql"]),
+            transaction: SqlTransaction::All,
+        }
+    );
+    for (text, mode) in [
+        ("all", SqlTransaction::All),
+        ("per_file", SqlTransaction::PerFile),
+        ("none", SqlTransaction::None),
+    ] {
+        let config = parse(&format!(
+            "name = 's'\ntype = 'sql'\nconnection = 'c'\nfiles = ['a.sql']\ntransaction = '{text}'\n"
+        ));
+        let RunKindConfig::Sql { transaction, .. } = config.kind else {
+            panic!()
+        };
+        assert_eq!(transaction, mode);
+        assert_eq!(transaction.name(), text);
+    }
+    let f = Fixture::new();
+    let cx = ArgvContext {
+        root: &f.root,
+        cwd: &f.root,
+        login_shell: &shell(),
+    };
+    assert_eq!(
+        super::argv::argv(&config, None, &cx).unwrap_err(),
+        super::argv::NOT_A_PROCESS
+    );
+
+    let sql = |body: &str| {
+        let _ = fs::remove_dir_all(f.root.join(".pitwall/run"));
+        f.run_file(
+            "s.toml",
+            &format!("schema = 1\nname = 's'\ntype = 'sql'\nconnection = 'c'\n{body}"),
+        );
+        let set = read(&f.place());
+        set.unusable.first().map(|u| u.reason.clone())
+    };
+    assert_eq!(sql("files = ['db/seed.sql']"), None);
+    for refused in [
+        "files = []",
+        "files = ['../outside.sql']",
+        "files = ['db/a.sql', '../../x.sql']",
+        "files = ['a.sql']\ntransaction = 'nested'",
+    ] {
+        assert!(sql(refused).is_some(), "`{refused}` was accepted");
+    }
+    assert!(
+        sql("files = ['../outside.sql']")
+            .unwrap()
+            .starts_with("files[0]")
+    );
+}

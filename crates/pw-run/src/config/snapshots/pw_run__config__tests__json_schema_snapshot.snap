@@ -265,6 +265,37 @@ expression: "serde_json::to_string_pretty(&json_schema()).unwrap()"
         "type",
         "task"
       ]
+    },
+    {
+      "description": "SQL files run on a database connection. No process is started: Pitwall runs the statements itself, through the same\npath as the SQL console and `db_execute`, and classifies the files every time it runs them — a file that gains a\nwrite asks again, whatever the configuration says.",
+      "type": "object",
+      "properties": {
+        "connection": {
+          "description": "Connection id (`.pitwall/db/<id>.toml`).",
+          "type": "string"
+        },
+        "files": {
+          "description": "SQL files relative to the project root, run in this order. A file outside the root makes the configuration\nunusable.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "transaction": {
+          "description": "How the files are grouped into transactions. A failing statement always stops the run.",
+          "$ref": "#/$defs/SqlTransaction",
+          "default": "all"
+        },
+        "type": {
+          "type": "string",
+          "const": "sql"
+        }
+      },
+      "required": [
+        "type",
+        "connection",
+        "files"
+      ]
     }
   ],
   "required": [
@@ -322,6 +353,26 @@ expression: "serde_json::to_string_pretty(&json_schema()).unwrap()"
           "default": {}
         }
       }
+    },
+    "SqlTransaction": {
+      "description": "How an `sql` configuration's files are grouped into transactions.",
+      "oneOf": [
+        {
+          "description": "Every file in one transaction: if any statement fails, nothing of the run is kept.",
+          "type": "string",
+          "const": "all"
+        },
+        {
+          "description": "One transaction per file: a failure rolls back that file only — the files before it stay committed.",
+          "type": "string",
+          "const": "per_file"
+        },
+        {
+          "description": "No transaction: every statement commits on its own, so the statements before a failure stay. For statements that\ncannot run inside a transaction (PostgreSQL `CREATE INDEX CONCURRENTLY`, `VACUUM`).",
+          "type": "string",
+          "const": "none"
+        }
+      ]
     }
   }
 }

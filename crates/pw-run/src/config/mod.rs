@@ -20,7 +20,8 @@
 //!
 //! - **종류**([`RunKindConfig`]): `shell` 만 글(`command` — 로그인 셸의 `-c`)이고, 그 밖은 필드에서 argv 를 만든다 — 필드를 셸
 //!   글로 이어 붙이지 않는다([`argv`]). 종류를 더하는 행(M6-09 `sql` · M6-21 `compound`)은 갈래 하나와 [`argv::argv`] ·
-//!   [`validate`] 의 갈래를 더한다.
+//!   [`validate`] 의 갈래를 더한다. `sql`(M6-09)은 프로세스가 아니다 — argv 가 없고(`argv` 가 거절한다) `pw_db::run_sql` 이
+//!   DB 실행 경로로 돌린다.
 //! - **키 이름**: 파일은 snake_case(`env_file`), RPC 는 camelCase(`envFile`) — 둘이 다른 키는 [`FILE_KEYS`] 표 하나로 옮긴다.
 //! - **모르는 키**는 읽을 때 무시하고(새 버전 Pitwall 이 더한 키), 쓸 때 그대로 둔다([`write`]). 모르는 `type` · 형식 오류 ·
 //!   검증 실패는 버리지 않고 「쓸 수 없음(까닭)」 이다([`read`]).
@@ -134,6 +135,56 @@ pub enum RunKindConfig {
     },
     /// `mise run <task>`.
     MiseTask { task: String },
+    /// SQL files run on a database connection. No process is started: Pitwall runs the statements itself, through the same
+    /// path as the SQL console and `db_execute`, and classifies the files every time it runs them — a file that gains a
+    /// write asks again, whatever the configuration says.
+    Sql {
+        /// Connection id (`.pitwall/db/<id>.toml`).
+        connection: String,
+        /// SQL files relative to the project root, run in this order. A file outside the root makes the configuration
+        /// unusable.
+        files: Vec<String>,
+        /// How the files are grouped into transactions. A failing statement always stops the run.
+        #[serde(default)]
+        transaction: SqlTransaction,
+    },
+}
+
+/// How an `sql` configuration's files are grouped into transactions.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    specta::Type,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SqlTransaction {
+    /// Every file in one transaction: if any statement fails, nothing of the run is kept.
+    #[default]
+    All,
+    /// One transaction per file: a failure rolls back that file only — the files before it stay committed.
+    PerFile,
+    /// No transaction: every statement commits on its own, so the statements before a failure stay. For statements that
+    /// cannot run inside a transaction (PostgreSQL `CREATE INDEX CONCURRENTLY`, `VACUUM`).
+    None,
+}
+
+impl SqlTransaction {
+    /// 파일의 값(`all` · `per_file` · `none`).
+    pub fn name(self) -> &'static str {
+        match self {
+            SqlTransaction::All => "all",
+            SqlTransaction::PerFile => "per_file",
+            SqlTransaction::None => "none",
+        }
+    }
 }
 
 impl RunKindConfig {
@@ -149,6 +200,7 @@ impl RunKindConfig {
             RunKindConfig::Python { .. } => "python",
             RunKindConfig::DockerCompose { .. } => "docker-compose",
             RunKindConfig::MiseTask { .. } => "mise-task",
+            RunKindConfig::Sql { .. } => "sql",
         }
     }
 
@@ -375,6 +427,19 @@ fn validate_kind(kind: &RunKindConfig, root: &std::path::Path) -> Result<(), Str
             Ok(())
         }
         RunKindConfig::MiseTask { task } => arg("task", task),
+        RunKindConfig::Sql {
+            connection, files, ..
+        } => {
+            text("connection", connection)?;
+            no_nul("connection", connection)?;
+            if files.is_empty() {
+                return Err("files is empty".to_owned());
+            }
+            for (i, file) in files.iter().enumerate() {
+                root::inside(root, file).map_err(|why| format!("files[{i}] {why}"))?;
+            }
+            Ok(())
+        }
     }
 }
 
