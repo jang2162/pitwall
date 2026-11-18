@@ -384,6 +384,54 @@ export type UnaryMethods = {
 	 */
 	"db.tool.schema": { params: DbToolSchemaParams; result: DbToolSchema };
 	/**
+	 * 저장된 브레이크포인트(`$DATA/projects/<id>/breakpoints.json`).
+	 */
+	"debug.breakpoints.list": { params: DebugBreakpointsListParams; result: DebugBreakpointsList };
+	/**
+	 * 브레이크포인트 한 줄(없으면 그 파일 전부)을 지운다.
+	 */
+	"debug.breakpoints.remove": { params: DebugBreakpointsRemoveParams; result: FileBreakpoints };
+	/**
+	 * 파일 하나의 브레이크포인트를 통째로 바꾸고 열린 세션마다 곧바로 보낸다(어댑터가 옮긴 줄 · 확인은 `debug.breakpoints` 이벤트).
+	 */
+	"debug.breakpoints.set": { params: DebugBreakpointsSetParams; result: FileBreakpoints };
+	/**
+	 * 스텝 · 계속 · 멈춤.
+	 */
+	"debug.control": { params: DebugControlParams; result: null };
+	/**
+	 * 식을 디버그 대상 안에서 평가한다(콘솔 · 워치 · 마우스 올림) — 대상 안에서 코드를 돌리므로 exec 이다.
+	 */
+	"debug.evaluate": { params: DebugEvaluateParams; result: DebugEvaluated };
+	/**
+	 * 예외 브레이크포인트: 어댑터가 알린 필터만 켜고 끈다(알리지 않은 이름은 invalid params). 어댑터마다 저장한다.
+	 */
+	"debug.exceptions.set": { params: DebugExceptionsParams; result: DebugExceptions };
+	/**
+	 * 한 프레임의 범위(지역 · 전역 등). 변수는 펼칠 때 `debug.variables` 로.
+	 */
+	"debug.scopes": { params: DebugScopesParams; result: DebugScopes };
+	/**
+	 * 한 스레드의 콜스택(쪽 단위).
+	 */
+	"debug.stack": { params: DebugStackParams; result: DebugStack };
+	/**
+	 * 실행 구성의 `[debug]` 로 디버그 세션을 연다 — 세션은 실행 하나다(`kind = "debug"`, 콘솔은 `run.attach`, 끝내기는 `run.stop`).
+	 * `mode = "attach"` 면 프로그램을 띄우지 않고 붙기만 한다. 그 프로젝트의 창이 아니면 permission denied, 미신뢰 프로젝트면 어댑터를
+	 * 띄우지 않고 permission denied(`data.reason = "untrusted"`), 없는 구성은 not found, `[debug]` 가 없거나 어댑터를 쓸 수 없으면
+	 * invalid params(`data.reason` — `noDebug` · `adapterMissing` · `adapterDisabled` · `adapterArgs` · `runtimeMissing` ·
+	 * `languageServerNotRunning`). 어댑터가 시작에 실패하면 그 실행은 끝난 실행으로 남고 오류의 `data.runId` 가 그것이다.
+	 */
+	"debug.start": { params: DebugStartParams; result: DebugStarted };
+	/**
+	 * 스레드 목록.
+	 */
+	"debug.threads": { params: DebugSessionParams; result: DebugThreads };
+	/**
+	 * 변수 한 쪽(기본 100, 상한 500). 어댑터가 쪽을 지키지 않아도 그 쪽만 준다.
+	 */
+	"debug.variables": { params: DebugVariablesParams; result: DebugVariables };
+	/**
 	 * 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.
 	 * 경로 · 비밀 · 홈 디렉터리 이름은 가린다.
 	 */
@@ -1454,6 +1502,17 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"db.tool.kvScan": {"name":"db.tool.kvScan","kind":"unary","tier":"read","roles":["owner"],"params":"Planned<DbToolKvScanParams>","output":"DbToolKvScan","doc":" Find Redis keys, one page at a time (Redis `SCAN` with an optional glob `match`): each key with its type · TTL ·\n size, and `nextCursor` for the next page — call again with it until `nextCursor` is missing. A page may hold\n fewer keys than `limit`, even none, while more pages remain. Keys are not repeated within one page, but **a key\n can appear again on a later page** (Redis `SCAN` may return a key twice); keys that exist for the whole scan are\n never missed. There is no command input — this tool only reads. Uses only connections the person opened in\n Pitwall's DB explorer during this app run (otherwise `notOpenedByUser` — try again after the person has opened\n it once) and does not use a Redis server marked production — any database number on the same server · user\n (`productionBlocked`) — unless the person set production targets to ask, and then each call waits for the\n person's approval in Pitwall. Redis connections only — for SQL databases use `db_schema` · `db_query`. The only page that\n cannot be returned is one whose key name alone is larger than the response (about 192 KiB): that call is refused\n (`data.reason: \"tooLarge\"`) and `data.nextCursor` continues after it.\n","mcp":{"group":"db","name":"db_kv_scan"},"fileScope":false},
 	"db.tool.query": {"name":"db.tool.query","kind":"unary","tier":"read","roles":["owner"],"params":"Planned<DbToolQueryParams>","output":"DbToolQuery","doc":" Run read-only SQL (SQL drivers only — PG · MySQL/MariaDB · SQLite). The input is either `sql` (text) or `file`\n (an SQL file path relative to the project root — Pitwall reads it when it runs). The statements are split by the\n dialect and run in order in one read-only transaction, with one result per statement (columns · rows ·\n `truncated` · duration). **Only queries run** — if any statement is not a query (a write · DDL · `SET` ·\n transaction control · `ATTACH` · text that cannot be parsed), nothing runs and the call is refused (`notAQuery`\n — writes go through `db_execute`). If a statement fails, it stops there and returns the results so far with\n `error` (statement index · line). Rows are limited to `maxRows` per statement (default 100), cells are cut at 4\n KiB (`truncated` values). The whole response is limited to about 192 KiB — when the rows fill it, that statement\n is `truncated` and the later statements do not run and are reported as `notRun` (`count` from `index`, `reason:\n \"responseBudget\"`). **There is no next page** — if a result was cut, narrow the WHERE · LIMIT · columns and call\n again (a new call sees a different snapshot).\n Uses only connections the person opened in Pitwall's DB explorer during this app run, or that this session was\n approved to open through `db_connection_test` (`notOpenedByUser`), and does not use a target marked production — for MySQL · MariaDB, any database on the same server · user\n (`productionBlocked`) — unless the person set production targets to ask, and then each call shows its statements\n to the person and waits for approval in Pitwall. The result's `audit` is the detail kept in the audit log\n (statement count · grade · hashes) and is shown to the agent too.\n","mcp":{"group":"db","name":"db_query"},"fileScope":false},
 	"db.tool.schema": {"name":"db.tool.schema","kind":"unary","tier":"read","roles":["owner"],"params":"Planned<DbToolSchemaParams>","output":"DbToolSchema","doc":" Read a DB schema (SQL drivers only — PG · MySQL/MariaDB · SQLite). Without `object`, one page of one level's\n list (`kind`: `database` · `schema` · `table` (default) · `view`, etc. — object lists are within `database` ·\n `schema` and filtered by `filter`); with it, that object's columns (name · type · null · default · primary key)\n · indexes · foreign keys, or its DDL text with `detail: \"ddl\"`. Sees the same as Pitwall's DB explorer. Uses\n only connections the person opened in Pitwall's DB explorer during this app run, or that this session was\n approved to open through `db_connection_test` (otherwise `notOpenedByUser`; it never asks by itself) and does\n not use connections marked production\n (`productionBlocked`) — unless the person set them to ask, and then each call waits for the person's approval in\n Pitwall. For a Redis connection, `unsupported` — use `db_kv_scan`.\n","mcp":{"group":"db","name":"db_schema"},"fileScope":false},
+	"debug.breakpoints.list": {"name":"debug.breakpoints.list","kind":"unary","tier":"read","roles":["owner"],"params":"DebugBreakpointsListParams","output":"DebugBreakpointsList","doc":" 저장된 브레이크포인트(`$DATA/projects/<id>/breakpoints.json`).\n","mcp":null,"fileScope":false},
+	"debug.breakpoints.remove": {"name":"debug.breakpoints.remove","kind":"unary","tier":"write","roles":["owner"],"params":"DebugBreakpointsRemoveParams","output":"FileBreakpoints","doc":" 브레이크포인트 한 줄(없으면 그 파일 전부)을 지운다.\n","mcp":null,"fileScope":false},
+	"debug.breakpoints.set": {"name":"debug.breakpoints.set","kind":"unary","tier":"write","roles":["owner"],"params":"DebugBreakpointsSetParams","output":"FileBreakpoints","doc":" 파일 하나의 브레이크포인트를 통째로 바꾸고 열린 세션마다 곧바로 보낸다(어댑터가 옮긴 줄 · 확인은 `debug.breakpoints` 이벤트).\n","mcp":null,"fileScope":false},
+	"debug.control": {"name":"debug.control","kind":"unary","tier":"exec","roles":["owner"],"params":"DebugControlParams","output":"()","doc":" 스텝 · 계속 · 멈춤.\n","mcp":null,"fileScope":false},
+	"debug.evaluate": {"name":"debug.evaluate","kind":"unary","tier":"exec","roles":["owner"],"params":"DebugEvaluateParams","output":"DebugEvaluated","doc":" 식을 디버그 대상 안에서 평가한다(콘솔 · 워치 · 마우스 올림) — 대상 안에서 코드를 돌리므로 exec 이다.\n","mcp":null,"fileScope":false},
+	"debug.exceptions.set": {"name":"debug.exceptions.set","kind":"unary","tier":"write","roles":["owner"],"params":"DebugExceptionsParams","output":"DebugExceptions","doc":" 예외 브레이크포인트: 어댑터가 알린 필터만 켜고 끈다(알리지 않은 이름은 invalid params). 어댑터마다 저장한다.\n","mcp":null,"fileScope":false},
+	"debug.scopes": {"name":"debug.scopes","kind":"unary","tier":"read","roles":["owner"],"params":"DebugScopesParams","output":"DebugScopes","doc":" 한 프레임의 범위(지역 · 전역 등). 변수는 펼칠 때 `debug.variables` 로.\n","mcp":null,"fileScope":false},
+	"debug.stack": {"name":"debug.stack","kind":"unary","tier":"read","roles":["owner"],"params":"DebugStackParams","output":"DebugStack","doc":" 한 스레드의 콜스택(쪽 단위).\n","mcp":null,"fileScope":false},
+	"debug.start": {"name":"debug.start","kind":"unary","tier":"exec","roles":["owner"],"params":"DebugStartParams","output":"DebugStarted","doc":" 실행 구성의 `[debug]` 로 디버그 세션을 연다 — 세션은 실행 하나다(`kind = \"debug\"`, 콘솔은 `run.attach`, 끝내기는 `run.stop`).\n `mode = \"attach\"` 면 프로그램을 띄우지 않고 붙기만 한다. 그 프로젝트의 창이 아니면 permission denied, 미신뢰 프로젝트면 어댑터를\n 띄우지 않고 permission denied(`data.reason = \"untrusted\"`), 없는 구성은 not found, `[debug]` 가 없거나 어댑터를 쓸 수 없으면\n invalid params(`data.reason` — `noDebug` · `adapterMissing` · `adapterDisabled` · `adapterArgs` · `runtimeMissing` ·\n `languageServerNotRunning`). 어댑터가 시작에 실패하면 그 실행은 끝난 실행으로 남고 오류의 `data.runId` 가 그것이다.\n","mcp":null,"fileScope":false},
+	"debug.threads": {"name":"debug.threads","kind":"unary","tier":"read","roles":["owner"],"params":"DebugSessionParams","output":"DebugThreads","doc":" 스레드 목록.\n","mcp":null,"fileScope":false},
+	"debug.variables": {"name":"debug.variables","kind":"unary","tier":"read","roles":["owner"],"params":"DebugVariablesParams","output":"DebugVariables","doc":" 변수 한 쪽(기본 100, 상한 500). 어댑터가 쪽을 지키지 않아도 그 쪽만 준다.\n","mcp":null,"fileScope":false},
 	"diag.collect": {"name":"diag.collect","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"DiagnosticsText","doc":" 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.\n 경로 · 비밀 · 홈 디렉터리 이름은 가린다.\n","mcp":null,"fileScope":false},
 	"ext.list": {"name":"ext.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ExtensionList","doc":" 등록된 확장과 읽는 중에 나온 진단.\n","mcp":null,"fileScope":false},
 	"fs.copy": {"name":"fs.copy","kind":"unary","tier":"write","roles":["owner"],"params":"FsFromToParams","output":"FsCopied","doc":" 파일이나 폴더(그 아래 전부)를 복사한다. 심링크는 따르지 않고 링크로 복사한다. 대상 이름이 있으면 덮지 않고 `CONFLICT`.\n","mcp":null,"fileScope":false},
@@ -1832,6 +1891,28 @@ export type BlameRange = {
 };
 
 export type Bom = "utf8" | "utf16Le" | "utf16Be";
+
+/**  브레이크포인트 하나(줄은 1부터). */
+export type Breakpoint = {
+	line: number,
+	/**  꺼 둔 것은 어댑터에 보내지 않는다. */
+	enabled?: boolean,
+	/**  멈출 조건 — 디버그 대상 안에서 평가되는 식. */
+	condition?: string | null,
+	/**  멈추지 않고 이 글을 찍는다(로그포인트, `{식}` 은 대상 안에서 평가된다). */
+	logMessage?: string | null,
+	/**  몇 번째에 멈추나(어댑터의 문법 — 대상 안에서 평가된다). */
+	hitCondition?: string | null,
+};
+
+/**  어댑터가 본 브레이크포인트 하나(그 세션에서). */
+export type BreakpointState = {
+	/**  어댑터가 옮겼으면 옮긴 줄. */
+	line: number,
+	verified: boolean,
+	/**  확인하지 못한 까닭 등(어댑터의 글). */
+	message: string | null,
+};
 
 export type CancelRequestParams = {
 	id: Id,
@@ -3805,6 +3886,49 @@ export type Ddl = {
 	text: string,
 };
 
+/**  스텝 · 계속 · 멈춤. */
+export type DebugAction = "continue" | 
+/**  넘기기(F8). */
+"next" | 
+/**  들어가기(F7). */
+"stepIn" | 
+/**  나오기(⇧F8). */
+"stepOut" | "pause";
+
+/**  이벤트 `debug.breakpoints`: 저장이 바뀌었거나(`runId` 없음) 어댑터가 확인 · 옮김을 알렸다(`runId` · `states`). */
+export type DebugBreakpointsEvent = {
+	projectId: string,
+	runId: string | null,
+	path: string,
+	/**  그 파일의 저장된 목록(옮긴 줄 반영 뒤). */
+	breakpoints: Breakpoint[],
+	states: BreakpointState[],
+};
+
+export type DebugBreakpointsList = {
+	/**  파일(상대 경로)마다, 경로 차례. */
+	files: FileBreakpoints[],
+};
+
+export type DebugBreakpointsListParams = {
+	projectId: string,
+};
+
+export type DebugBreakpointsRemoveParams = {
+	projectId: string,
+	path: string,
+	/**  지울 줄. 없으면 그 파일 전부. */
+	line?: number | null,
+};
+
+export type DebugBreakpointsSetParams = {
+	projectId: string,
+	/**  프로젝트 루트 기준 상대 경로(`/` 로 나눔 — 워크트리는 같은 목록을 쓴다). */
+	path: string,
+	/**  그 파일의 목록 전체(빈 목록이면 지운다). 같은 줄은 뒤의 것이 이긴다. */
+	breakpoints: Breakpoint[],
+};
+
 /**
  *  `[debug]`. Keys other than `adapter` and `mode` (`program`, `port`, `pid` …) fill the debug adapter's launch or attach
  *  template and are kept as written.
@@ -3815,8 +3939,194 @@ export type DebugConfig = {
 	mode?: DebugMode,
 } & { [key in string]: JsonValue };
 
+/**  이벤트 `debug.continued`. */
+export type DebugContinuedEvent = {
+	projectId: string,
+	runId: string,
+	session: number,
+	threadId: number | null,
+	allThreadsContinued: boolean,
+};
+
+export type DebugControlParams = {
+	runId: string,
+	session?: number | null,
+	threadId: number,
+	action: DebugAction,
+};
+
+/**  이벤트 `debug.ended` — 세션이 끝났다(실행의 끝은 `run.exited`). */
+export type DebugEndedEvent = {
+	projectId: string,
+	runId: string,
+};
+
+export type DebugEvaluateParams = {
+	runId: string,
+	session?: number | null,
+	expression: string,
+	/**  그 프레임의 문맥에서(없으면 전역). */
+	frameId?: number | null,
+	context?: EvaluateContext,
+};
+
+export type DebugEvaluated = {
+	result: string,
+	type: string | null,
+	variablesReference: number,
+	namedVariables: number | null,
+	indexedVariables: number | null,
+};
+
+export type DebugExceptions = {
+	exceptionFilters: ExceptionFilter[],
+};
+
+export type DebugExceptionsParams = {
+	runId: string,
+	/**  켤 필터(어댑터가 알린 이름만 — 나머지는 끈다). */
+	filters: string[],
+};
+
+export type DebugFrame = {
+	id: number,
+	name: string,
+	/**  소스 파일의 절대 경로(어댑터가 준 그대로 — 루트 밖일 수 있다). */
+	path: string | null,
+	/**  경로 없는 소스(어댑터가 내용을 쥔 것)의 참조. */
+	sourceReference: number | null,
+	line: number,
+	column: number,
+	presentationHint: string | null,
+};
+
 /**  `launch` starts the program under the debugger; `attach` only connects to a program that is already running. */
 export type DebugMode = "launch" | "attach";
+
+/**  이벤트 `debug.output`(콘솔에도 쓴다). 글은 16 KiB 까지 싣는다. */
+export type DebugOutputEvent = {
+	projectId: string,
+	runId: string,
+	session: number,
+	/**  `console` · `stdout` · `stderr` · `important` 등. */
+	category: string | null,
+	output: string,
+};
+
+export type DebugScope = {
+	name: string,
+	/**  펼칠 때 `debug.variables` 에 준다. */
+	variablesReference: number,
+	namedVariables: number | null,
+	indexedVariables: number | null,
+	/**  읽는 데 오래 걸린다(펼칠 때만 읽는다). */
+	expensive: boolean,
+};
+
+export type DebugScopes = {
+	scopes: DebugScope[],
+};
+
+export type DebugScopesParams = {
+	runId: string,
+	session?: number | null,
+	frameId: number,
+};
+
+export type DebugSessionParams = {
+	runId: string,
+	/**  세션 나무의 세션(`startDebugging` 의 자식). 없으면 뿌리. */
+	session?: number | null,
+};
+
+export type DebugStack = {
+	frames: DebugFrame[],
+	/**  어댑터가 안 전체 수(모르면 없다). */
+	totalFrames: number | null,
+};
+
+export type DebugStackParams = {
+	runId: string,
+	session?: number | null,
+	threadId: number,
+	/**  처음 프레임(0 이 맨 위). */
+	startFrame?: number | null,
+	/**  몇 프레임(기본 20, 상한 200). */
+	levels?: number | null,
+};
+
+export type DebugStartParams = {
+	projectId: string,
+	/**  창의 활성 워크트리 꼭대기. 구성 · 어댑터 · 브레이크포인트 경로가 그 워크트리 안의 프로젝트 루트 기준이다. */
+	worktree?: string | null,
+	/**  구성 id(`.pitwall/run/<id>.toml` — `[debug]` 가 있어야 한다). */
+	configId: string,
+	profile?: string | null,
+	/**  콘솔 크기. 없으면 120 × 30. */
+	cols?: number | null,
+	rows?: number | null,
+};
+
+export type DebugStarted = {
+	/**  디버그 세션인 실행(`kind = "debug"`). 콘솔은 `run.attach`, 끝내기는 `run.stop`. */
+	run: RunInfo,
+	adapter: string,
+	mode: DebugMode,
+	exceptionFilters: ExceptionFilter[],
+};
+
+/**  이벤트 `debug.stopped`. */
+export type DebugStoppedEvent = {
+	projectId: string,
+	runId: string,
+	session: number,
+	/**  `breakpoint` · `step` · `exception` · `pause` 등(어댑터의 글). */
+	reason: string,
+	description: string | null,
+	threadId: number | null,
+	text: string | null,
+	allThreadsStopped: boolean,
+	hitBreakpointIds: number[],
+};
+
+export type DebugThread = {
+	id: number,
+	name: string,
+};
+
+export type DebugThreads = {
+	threads: DebugThread[],
+};
+
+export type DebugVariable = {
+	name: string,
+	value: string,
+	type: string | null,
+	/**  워치 · 평가에 쓸 식. */
+	evaluateName: string | null,
+	/**  0 이 아니면 펼칠 수 있다. */
+	variablesReference: number,
+	namedVariables: number | null,
+	indexedVariables: number | null,
+};
+
+export type DebugVariables = {
+	variables: DebugVariable[],
+	/**  이 쪽의 처음. */
+	start: number,
+	/**  이 쪽의 크기(요청을 상한으로 줄인 값). */
+	count: number,
+};
+
+export type DebugVariablesParams = {
+	runId: string,
+	session?: number | null,
+	variablesReference: number,
+	/**  쪽의 처음(0부터). */
+	start?: number | null,
+	/**  쪽의 크기(기본 100, 상한 500). */
+	count?: number | null,
+};
 
 /**  The default tool. */
 export type DefaultToolInfo = { kind: "tool"; id: string } | 
@@ -4056,12 +4366,31 @@ export type EntryKind = "file" | "dir" | "symlink" |
 /**  소켓 · 장치 · FIFO 등. */
 "other";
 
+/**  평가의 자리(DAP `evaluate` 의 `context`). */
+export type EvaluateContext = 
+/**  콘솔. */
+"repl" | 
+/**  워치. */
+"watch" | 
+/**  에디터의 마우스 올림. */
+"hover";
+
 export type EventMessage = {
 	subscriptionId: number,
 	/**  Host 범위 이벤트면 `null`. */
 	projectId: string | null,
 	topic: string,
 	payload: JsonValue,
+};
+
+/**  어댑터가 `initialize` 로 알린 예외 필터 하나와 켰는가. */
+export type ExceptionFilter = {
+	filter: string,
+	label: string,
+	description: string | null,
+	/**  어댑터가 기본으로 켜자고 한 것. */
+	default: boolean,
+	enabled: boolean,
 };
 
 /**  실행 계획. */
@@ -4133,6 +4462,13 @@ export type FastForward =
 "only" | 
 /**  늘 merge 커밋(`--no-ff`). */
 "never";
+
+/**  파일 하나의 브레이크포인트. */
+export type FileBreakpoints = {
+	/**  프로젝트 루트 기준 상대 경로(`/` 로 나눔). */
+	path: string,
+	breakpoints: Breakpoint[],
+};
 
 export type FileChangeKind = 
 /**  `A`. */
