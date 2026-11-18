@@ -138,7 +138,8 @@ pub enum RunAttachEvent {
 rpc_method! {
     /// 실행 구성 하나를 띄운다(PTY — 런타임 환경 위에 구성의 `env_file` · `env` · 프로필). 실행은 Host 의 것이라 이 연결이 닫혀도 돈다 — 출력은
     /// `run.attach`, 끝은 이벤트 `run.exited`. 그 프로젝트의 창이 아닌 연결이면 permission denied, 미신뢰 프로젝트면 띄우지 않고
-    /// permission denied(`data.reason = "untrusted"`), 없는 구성은 not found, 쓸 수 없는 구성 · 프로젝트 밖 작업 폴더 · 없는
+    /// permission denied(`data.reason = "untrusted"`), 작업 폴더가 푼 뒤에 바뀌었거나 사라졌으면 띄우지 않고 permission
+    /// denied(`data.reason = "cwd_changed"`), 없는 구성은 not found, 쓸 수 없는 구성 · 프로젝트 밖 작업 폴더 · 없는
     /// 프로필 · 읽지 못한 `env_file` 은 invalid params.
     pub RunStart: "run.start" {
         params: RunStartParams,

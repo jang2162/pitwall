@@ -1134,10 +1134,11 @@ export type UnaryMethods = {
 	 */
 	"run.restart": { params: RunIdParams; result: RunInfo };
 	/**
-	 * 실행 구성 하나를 띄운다(PTY — 런타임 환경 위에 구성의 env). 실행은 Host 의 것이라 이 연결이 닫혀도 돈다 — 출력은
+	 * 실행 구성 하나를 띄운다(PTY — 런타임 환경 위에 구성의 `env_file` · `env` · 프로필). 실행은 Host 의 것이라 이 연결이 닫혀도 돈다 — 출력은
 	 * `run.attach`, 끝은 이벤트 `run.exited`. 그 프로젝트의 창이 아닌 연결이면 permission denied, 미신뢰 프로젝트면 띄우지 않고
-	 * permission denied(`data.reason = "untrusted"`), 없는 구성은 not found, 쓸 수 없는 구성 · 프로젝트 밖 작업 폴더 · 없는
-	 * 프로필은 invalid params.
+	 * permission denied(`data.reason = "untrusted"`), 작업 폴더가 푼 뒤에 바뀌었거나 사라졌으면 띄우지 않고 permission
+	 * denied(`data.reason = "cwd_changed"`), 없는 구성은 not found, 쓸 수 없는 구성 · 프로젝트 밖 작업 폴더 · 없는
+	 * 프로필 · 읽지 못한 `env_file` 은 invalid params.
 	 */
 	"run.start": { params: RunStartParams; result: RunInfo };
 	/**
@@ -1572,7 +1573,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"run.list": {"name":"run.list","kind":"unary","tier":"read","roles":["owner"],"params":"RunListParams","output":"RunList","doc":" 그 프로젝트의 실행(실행 중 · 남은 끝난 실행)과 상태 · 끝 코드.\n","mcp":null,"fileScope":false},
 	"run.resize": {"name":"run.resize","kind":"unary","tier":"write","roles":["owner"],"params":"RunResizeParams","output":"()","doc":" 실행 콘솔의 PTY 크기를 바꾼다. 0 인 크기는 invalid params.\n","mcp":null,"fileScope":false},
 	"run.restart": {"name":"run.restart","kind":"unary","tier":"exec","roles":["owner"],"params":"RunIdParams","output":"RunInfo","doc":" 다시 실행: 중지하고 프로세스 트리가 끝난 것을 본 뒤 같은 구성을 새 실행으로 띄운다(`restartOf` 가 앞 실행).\n","mcp":null,"fileScope":false},
-	"run.start": {"name":"run.start","kind":"unary","tier":"exec","roles":["owner"],"params":"RunStartParams","output":"RunInfo","doc":" 실행 구성 하나를 띄운다(PTY — 런타임 환경 위에 구성의 env). 실행은 Host 의 것이라 이 연결이 닫혀도 돈다 — 출력은\n `run.attach`, 끝은 이벤트 `run.exited`. 그 프로젝트의 창이 아닌 연결이면 permission denied, 미신뢰 프로젝트면 띄우지 않고\n permission denied(`data.reason = \"untrusted\"`), 없는 구성은 not found, 쓸 수 없는 구성 · 프로젝트 밖 작업 폴더 · 없는\n 프로필은 invalid params.\n","mcp":null,"fileScope":false},
+	"run.start": {"name":"run.start","kind":"unary","tier":"exec","roles":["owner"],"params":"RunStartParams","output":"RunInfo","doc":" 실행 구성 하나를 띄운다(PTY — 런타임 환경 위에 구성의 `env_file` · `env` · 프로필). 실행은 Host 의 것이라 이 연결이 닫혀도 돈다 — 출력은\n `run.attach`, 끝은 이벤트 `run.exited`. 그 프로젝트의 창이 아닌 연결이면 permission denied, 미신뢰 프로젝트면 띄우지 않고\n permission denied(`data.reason = \"untrusted\"`), 작업 폴더가 푼 뒤에 바뀌었거나 사라졌으면 띄우지 않고 permission\n denied(`data.reason = \"cwd_changed\"`), 없는 구성은 not found, 쓸 수 없는 구성 · 프로젝트 밖 작업 폴더 · 없는\n 프로필 · 읽지 못한 `env_file` 은 invalid params.\n","mcp":null,"fileScope":false},
 	"run.stop": {"name":"run.stop","kind":"unary","tier":"exec","roles":["owner"],"params":"RunIdParams","output":"RunInfo","doc":" 실행을 중지한다 — 프로세스 세션 전체에 SIGTERM, 5초 안에 끝나지 않은 것은 SIGKILL(compose 는 SIGINT 를 먼저). 기다리지\n 않는다(끝나면 `run.exited`). 이미 끝난 실행이면 아무것도 하지 않는다.\n","mcp":null,"fileScope":false},
 	"runtime.get": {"name":"runtime.get","kind":"unary","tier":"read","roles":["owner"],"params":"RuntimeGetParams","output":"RuntimeInfo","doc":" 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"runtime.reload": {"name":"runtime.reload","kind":"unary","tier":"write","roles":["owner"],"params":"RuntimeReloadParams","output":"()","doc":" 「환경 다시 읽기」: 로그인 셸 환경과 디렉터리별 캐시를 잊고 `runtime.changed` 를 낸다. 셸은 다음 요청에서 다시 돈다\n (백그라운드로 미리 시작한다). 이미 띄운 프로세스(열린 터미널)의 환경은 바뀌지 않는다.\n","mcp":null,"fileScope":false},
@@ -8429,7 +8430,7 @@ export type RunInfo = {
 	/**  종류: `process`(M6-02) · `sql`(M6-09) · `debug`(M6-17). */
 	kind: string,
 	launchedBy: LaunchedBy,
-	/**  띄운 활성 워크트리 꼭대기. 주 체크아웃이면 `null`. */
+	/**  창이 고른 활성 워크트리 꼭대기. 주 체크아웃 · 에이전트가 띄운 실행이면 `null`(에이전트 실행의 작업 폴더는 `cwd`). */
 	worktree: string | null,
 	/**  작업 폴더(정규화한 절대 경로) — 콘솔의 상대 경로 링크 기준(M6-06 ②). */
 	cwd: string | null,
