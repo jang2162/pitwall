@@ -1,0 +1,15 @@
+[package]
+name = "pw-wire"
+description = "Pitwall Content-Length framing shared by the LSP and DAP clients: header and body limits, frame reader and writer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# LSP(pw-lsp)와 DAP(pw-dap)의 base protocol 은 같다 — 머리 · 본문 상한과 「넘으면 그 프로세스를 죽인다」 규칙을 한 자리에서
+# 지킨다(17-m6-plan.md M6-15 ①, 메인 판정 M6-P7). 의존을 가볍게 둔다(tokio 만).
+[dependencies]
+tokio = { workspace = true, features = ["io-util"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros", "io-util"] }

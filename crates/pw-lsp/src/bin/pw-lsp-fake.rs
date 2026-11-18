@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use pw_lsp::fake::{Action, Reply, Scenario};
 use pw_lsp::message::{self, Incoming, RequestId, ResponseError, code};
-use pw_lsp::transport::FrameReader;
+use pw_wire::FrameReader;
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;

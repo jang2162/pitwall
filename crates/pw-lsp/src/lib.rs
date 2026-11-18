@@ -1,6 +1,6 @@
 //! Pitwall 의 LSP 클라이언트(03 「코어 모듈」 의 `lsp`, 15-m4-plan.md — 결정 M4-D9: 자체 구현 + `lsp-types`).
 //!
-//! 이 크레이트의 바탕(M4-01): 전송([`transport`] — stdio 의 `Content-Length` 틀), JSON-RPC 메시지([`message`]), 서버 하나의 연결과
+//! 이 크레이트의 바탕(M4-01): 전송(`pw_wire` — stdio 의 `Content-Length` 틀, DAP 와 함께 쓴다 — 17-m6-plan.md M6-15), JSON-RPC 메시지([`message`]), 서버 하나의 연결과
 //! 수명([`server`] — 요청 표 · 취소 · 시한 · `initialize` · 서버 → 클라이언트 요청 · 동적 등록 · 끝내기), 서버를 띄우는 실행 허가
 //! ([`grant`] — 신뢰를 타입으로 증명, 결정 M4-D8), 프로세스 트리([`process`]), 서버 로그([`log`]), 가짜 서버의 시나리오 형식
 //! ([`fake`] — 서버는 `src/bin/pw-lsp-fake.rs`), 실 서버 시험 도우미([`live`]), Host 가 강제로 끝난 뒤 남은 서버 그룹 거두기
@@ -43,7 +43,6 @@ pub mod server;
 pub mod status;
 pub mod symbols;
 pub mod tools;
-pub mod transport;
 pub mod uri;
 pub mod watched;
 pub mod workspace_symbols;

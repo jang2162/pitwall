@@ -1,10 +1,17 @@
-//! stdio 의 LSP 틀(base protocol): `Content-Length: N\r\n` 머리들, 빈 줄, 본문 N 바이트.
+//! `Content-Length` 틀(base protocol): `Content-Length: N\r\n` 머리들, 빈 줄, 본문 N 바이트. LSP(`pw-lsp`)와 DAP(`pw-dap`)가 함께
+//! 쓴다 — 두 프로토콜의 base protocol 은 같다(17-m6-plan.md M6-15 ①, 메인 판정 M6-P7). 15-m4-plan.md M4-01 ① 에서 `pw-lsp::transport`
+//! 로 만든 것을 그대로 옮겼다.
 //!
 //! - 머리는 [`MAX_HEADER_BYTES`] 까지(빈 줄 포함). 넘으면 [`FrameError::HeaderTooLarge`].
-//! - 본문은 [`MAX_BODY_BYTES`] 까지. `Content-Length` 가 그보다 크면 본문을 읽지 않고 곧바로 [`FrameError::BodyTooLarge`] — 서버가
-//!   보낸 수를 믿고 메모리를 잡지 않는다. 부른 쪽(서버 관리)은 그 서버를 죽인다(15-m4-plan.md M4-01 ①).
-//! - `Content-Type` 은 받되 charset 이 `utf-8`(옛 이름 `utf8`)이 아니면 거절한다 — LSP 는 UTF-8 만 정한다. 모르는 머리는 무시한다.
+//! - 본문은 [`MAX_BODY_BYTES`] 까지. `Content-Length` 가 그보다 크면 본문을 읽지 않고 곧바로 [`FrameError::BodyTooLarge`] — 상대가
+//!   보낸 수를 믿고 메모리를 잡지 않는다.
+//! - `Content-Type` 은 받되 charset 이 `utf-8`(옛 이름 `utf8`)이 아니면 거절한다 — LSP 는 UTF-8 만 정하고 DAP 는 본문을 UTF-8 로
+//!   정한다. 모르는 머리는 무시한다.
 //! - 한 번의 읽기에 틀 여럿이 들어와도, 머리가 여러 읽기로 쪼개져 와도 같은 결과다(남은 바이트는 다음 틀의 앞이다).
+//!
+//! **규칙**: [`FrameReader::read_frame`] 이 낸 [`FrameError`] 는 어느 것이든 그 스트림을 더 읽을 수 없다는 뜻이다(틀의 경계를
+//! 잃었다). 부른 쪽(언어 서버 · 디버그 어댑터의 연결)은 그 상대 프로세스를 트리째 죽이고 연결을 닫는다 — 프로세스 하나가 Host 를
+//! 막지 않게. 틀 안의 본문이 JSON 이 아닌 것은 틀 오류가 아니다(그 메시지만 버린다 — 각 크레이트의 몫).
 
 use std::fmt;
 use std::io;

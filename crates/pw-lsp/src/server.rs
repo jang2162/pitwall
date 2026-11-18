@@ -42,6 +42,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use lsp_types::{Registration, RegistrationParams, UnregistrationParams};
+use pw_wire::{FrameReader, write_frame};
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout};
@@ -55,7 +56,6 @@ use crate::log::{Line, ServerLog};
 use crate::message::{self, Incoming, RequestId, ResponseError};
 use crate::process::{self, LaunchSpec, ProcessTree};
 use crate::progress::{ProgressMark, WireProgress};
-use crate::transport::{FrameReader, write_frame};
 use crate::uri::file_uri;
 
 /// 요청 하나의 기본 시한. 기능 행이 [`RequestOptions::timeout`] 으로 바꾼다.

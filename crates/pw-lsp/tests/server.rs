@@ -328,7 +328,7 @@ async fn a_dying_server_fails_pending_requests_and_takes_its_children() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_frame_over_the_body_limit_kills_that_server_only() {
     let p = project();
-    let over = pw_lsp::transport::MAX_BODY_BYTES + 1;
+    let over = pw_wire::MAX_BODY_BYTES + 1;
     let scenario = Scenario::default().reply("big/one", Reply::silent()).on(
         "big/one",
         vec![Action::Raw {

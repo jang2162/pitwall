@@ -5699,6 +5699,7 @@ dependencies = [
  "pw-runtime",
  "pw-spawn",
  "pw-tools",
+ "pw-wire",
  "schemars 1.2.3",
  "semver",
  "serde",
@@ -5944,6 +5945,13 @@ dependencies = [
  "tracing",
  "url",
  "zip 9.5.0",
+]
+
+[[package]]
+name = "pw-wire"
+version = "0.0.0"
+dependencies = [
+ "tokio",
 ]
 
 [[package]]
