@@ -1434,3 +1434,256 @@ fn db_marks_are_unavailable_when_the_registry_cannot_write() {
     ));
     assert_eq!(newer.db_marks().unwrap().len(), 1);
 }
+
+// --- 사람이 본 실행 구성(M6-11) ---
+
+fn seen_hash(n: u8) -> run_seen::SeenHash {
+    run_seen::SeenHash::parse(&format!("sha256:{}", format!("{n:02x}").repeat(32))).unwrap()
+}
+
+fn window(id: &str, place: run_seen::SeenPlace) -> run_seen::SeenBy {
+    run_seen::SeenBy::window(&pw_rpc::ConnectionScope::Project(id.into()), id, place).unwrap()
+}
+
+/// 열쇠마다 마지막으로 본 해시 하나가 남고, 다시 연 레지스트리(앱을 다시 켬)도 같은 것을 읽는다. 프로젝트를 지우면 함께 지워진다.
+#[test]
+fn run_seen_keeps_the_last_hash_per_key_across_reopening() {
+    use run_seen::SeenPlace;
+    let f = Fixture::new();
+    let project = f.add(&f.dir("proj"));
+    let other = f.add(&f.dir("other"));
+    f.registry
+        .record_run_seen(
+            &window(&project.id, SeenPlace::Save),
+            &[
+                ("dev".into(), seen_hash(1)),
+                ("detected:npm:build".into(), seen_hash(2)),
+            ],
+        )
+        .unwrap();
+    f.registry
+        .record_run_seen(
+            &window(&project.id, SeenPlace::Run),
+            &[("dev".into(), seen_hash(3))],
+        )
+        .unwrap();
+    f.registry
+        .record_run_seen(
+            &window(&other.id, SeenPlace::Approval),
+            &[("dev".into(), seen_hash(4))],
+        )
+        .unwrap();
+
+    let reopened = Registry::new(f.paths.clone(), None, f.bus.clone());
+    let dev = reopened.run_seen(&project.id, "dev").unwrap().unwrap();
+    assert_eq!((dev.hash, dev.place), (seen_hash(3), SeenPlace::Run));
+    let detected = reopened
+        .run_seen(&project.id, "detected:npm:build")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (detected.hash, detected.place),
+        (seen_hash(2), SeenPlace::Save)
+    );
+    assert_eq!(reopened.run_seen(&project.id, "missing").unwrap(), None);
+    assert_eq!(
+        reopened.run_seen(&other.id, "dev").unwrap().unwrap().hash,
+        seen_hash(4)
+    );
+
+    reopened.delete(&project.id).unwrap();
+    assert_eq!(reopened.run_seen(&project.id, "dev").unwrap(), None);
+    assert!(matches!(
+        reopened.record_run_seen(
+            &window(&project.id, SeenPlace::Run),
+            &[("dev".into(), seen_hash(1))]
+        ),
+        Err(RegistryError::NotFound(_))
+    ));
+}
+
+/// 기록은 그 프로젝트 창의 연결에서만 쓴다 — 에이전트 범위(MCP 세션 — `run_config_upsert` 의 핸들러가 도는 범위) · Host · 다른
+/// 프로젝트 창은 증거를 만들지 못한다.
+#[test]
+fn only_the_projects_own_window_may_record_what_a_person_saw() {
+    use pw_rpc::ConnectionScope;
+    use run_seen::{SeenBy, SeenPlace};
+    for scope in [
+        ConnectionScope::Agent,
+        ConnectionScope::Host,
+        ConnectionScope::Project("other".into()),
+    ] {
+        for place in [SeenPlace::Save, SeenPlace::Run, SeenPlace::Approval] {
+            let refused = SeenBy::window(&scope, "proj", place).unwrap_err();
+            assert_eq!(refused.code, pw_rpc::code::PERMISSION_DENIED, "{scope:?}");
+        }
+    }
+    let by = SeenBy::window(
+        &ConnectionScope::Project("proj".into()),
+        "proj",
+        SeenPlace::Run,
+    )
+    .unwrap();
+    assert_eq!((by.project_id(), by.place()), ("proj", SeenPlace::Run));
+}
+
+/// 정책 자동의 재료: 신뢰 + 같은 해시일 때만. 미신뢰 프로젝트는 기록이 있어도 아니다.
+#[test]
+fn human_saw_needs_trust_and_the_same_hash() {
+    use run_seen::SeenPlace;
+    let f = Fixture::new();
+    let project = f.add(&f.dir("proj"));
+    f.registry
+        .record_run_seen(
+            &window(&project.id, SeenPlace::Save),
+            &[("dev".into(), seen_hash(1))],
+        )
+        .unwrap();
+    assert!(
+        !f.registry.human_saw(&project.id, "dev", &seen_hash(1)),
+        "untrusted"
+    );
+    f.registry.set_trust(&project.id, true).unwrap();
+    assert!(f.registry.human_saw(&project.id, "dev", &seen_hash(1)));
+    assert!(!f.registry.human_saw(&project.id, "dev", &seen_hash(2)));
+    assert!(!f.registry.human_saw(&project.id, "prod", &seen_hash(1)));
+}
+
+/// 상태 DB 를 쓰지 못하면 기록이 없다고 본다(17-m6-plan M6-11 ② · 시험 ④): 파일에 기록이 있어도 읽기 전용으로 연 레지스트리 ·
+/// 잠김으로 메모리에 떨어진 레지스트리에서는 `human_saw` 가 `false` 이고 새 기록은 `Unavailable` 이다.
+#[test]
+fn human_saw_is_false_when_the_state_database_cannot_be_written() {
+    use run_seen::SeenPlace;
+    let f = Fixture::new();
+    let project = f.add(&f.dir("proj"));
+    f.registry.set_trust(&project.id, true).unwrap();
+    f.registry
+        .record_run_seen(
+            &window(&project.id, SeenPlace::Save),
+            &[("dev".into(), seen_hash(1))],
+        )
+        .unwrap();
+    assert!(f.registry.human_saw(&project.id, "dev", &seen_hash(1)));
+    f.registry.close();
+
+    let reader = Registry::read_only(f.paths.clone(), None, f.bus.clone());
+    assert!(matches!(reader.status(), StorageStatus::ReadOnly { .. }));
+    assert_eq!(
+        reader.run_seen(&project.id, "dev").unwrap().unwrap().hash,
+        seen_hash(1)
+    );
+    assert!(
+        !reader.human_saw(&project.id, "dev", &seen_hash(1)),
+        "readOnly"
+    );
+    assert!(matches!(
+        reader.record_run_seen(
+            &window(&project.id, SeenPlace::Run),
+            &[("dev".into(), seen_hash(2))]
+        ),
+        Err(RegistryError::Unavailable(_))
+    ));
+    drop(reader);
+
+    let file = f.paths.data.join(store::FILE_NAME);
+    let holder = lock_file(&file);
+    let locked = Registry::with_timings(
+        f.paths.clone(),
+        None,
+        EventBus::new(DEFAULT_CAPACITY),
+        Timings {
+            busy: Duration::from_millis(50),
+            retry_interval: Duration::from_secs(3600),
+            retry_busy: Duration::from_millis(50),
+        },
+    );
+    assert!(matches!(locked.status(), StorageStatus::Memory { .. }));
+    assert!(
+        !locked.human_saw(&project.id, "dev", &seen_hash(1)),
+        "memory"
+    );
+    assert!(matches!(
+        locked.record_run_seen(
+            &window(&project.id, SeenPlace::Run),
+            &[("dev".into(), seen_hash(2))]
+        ),
+        Err(RegistryError::Unavailable(_))
+    ));
+    drop(holder);
+}
+
+/// v3 파일(사람이 본 구성 기록이 없던 빌드)은 v4 로 올라오며 빈 기록이다 — 프로젝트 · 신뢰 · DB 표지 기억은 그대로.
+#[test]
+fn a_v3_registry_migrates_to_an_empty_run_seen_keeping_its_rows() {
+    use run_seen::SeenPlace;
+    let f = Fixture::new();
+    let file = f.paths.data.join(store::FILE_NAME);
+    let root = f.dir("proj");
+    {
+        let v3 = store::open_with(&file, store::BUSY_TIMEOUT, &store::MIGRATIONS[..3]);
+        assert!(matches!(v3.status, StorageStatus::Ok { .. }));
+        v3.conn
+            .execute_batch(&format!(
+                "INSERT INTO projects (id, name, host, favorite, config_mode, slug, created_at)
+                     VALUES ('p1', 'proj', 'local', 0, 'repository', 'proj', 1);
+                 INSERT INTO project_roots (project_id, position, path) VALUES ('p1', 0, '{}');
+                 INSERT INTO project_trust (project_id, trusted, decided_at) VALUES ('p1', 1, 1);
+                 INSERT INTO db_marks (target, production, read_only, seen_at) VALUES ('a', 1, 0, 1);",
+                s(&root).replace('\'', "''")
+            ))
+            .unwrap();
+        let version: u32 = v3
+            .conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 3);
+        assert!(v3.conn.prepare("SELECT hash FROM run_seen").is_err());
+    }
+    let project = f.registry.get("p1").unwrap();
+    assert_eq!(f.registry.list().unwrap(), vec![project.clone()]);
+    assert!(f.registry.is_trusted(&project.id));
+    assert_eq!(f.registry.db_marks().unwrap().len(), 1);
+    assert_eq!(f.registry.run_seen(&project.id, "dev").unwrap(), None);
+    f.registry
+        .record_run_seen(
+            &window(&project.id, SeenPlace::Save),
+            &[("dev".into(), seen_hash(1))],
+        )
+        .unwrap();
+    assert!(f.registry.human_saw(&project.id, "dev", &seen_hash(1)));
+}
+
+/// 이 앱보다 새 판의 파일은 읽기만 한다 — 기록은 `Unavailable`, 판정은 `false`, 파일은 그대로.
+#[test]
+fn a_newer_registry_refuses_run_seen_writes_and_leaves_the_file_alone() {
+    use run_seen::SeenPlace;
+    let f = Fixture::new();
+    let project = f.add(&f.dir("proj"));
+    f.registry.set_trust(&project.id, true).unwrap();
+    f.registry
+        .record_run_seen(
+            &window(&project.id, SeenPlace::Save),
+            &[("dev".into(), seen_hash(1))],
+        )
+        .unwrap();
+    f.registry.close();
+    let file = f.paths.data.join(store::FILE_NAME);
+    Connection::open(&file)
+        .unwrap()
+        .pragma_update(None, "user_version", store::supported_version() + 1)
+        .unwrap();
+    let newer = Registry::new(f.paths.clone(), None, f.bus.clone());
+    assert!(matches!(newer.status(), StorageStatus::ReadOnly { .. }));
+    assert!(matches!(
+        newer.record_run_seen(
+            &window(&project.id, SeenPlace::Run),
+            &[("dev".into(), seen_hash(2))]
+        ),
+        Err(RegistryError::Unavailable(_))
+    ));
+    assert!(!newer.human_saw(&project.id, "dev", &seen_hash(1)));
+    assert_eq!(
+        newer.run_seen(&project.id, "dev").unwrap().unwrap().hash,
+        seen_hash(1)
+    );
+}

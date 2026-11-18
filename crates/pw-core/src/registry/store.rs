@@ -36,7 +36,7 @@ thread_local! {
 }
 
 /// 버전 `i` → `i + 1`. 길이가 곧 이 앱이 아는 최신 버전이다.
-pub const MIGRATIONS: &[Migration] = &[v0_to_v1, v1_to_v2, v2_to_v3];
+pub const MIGRATIONS: &[Migration] = &[v0_to_v1, v1_to_v2, v2_to_v3, v3_to_v4];
 
 /// 레지스트리가 읽는 질의. 읽기 전용으로 연 새 스키마 파일을 이 질의로 읽을 수 있는지 열 때 미리 본다(`prepare` 가 열 이름을 검사한다).
 pub const SELECT_PROJECTS: &str =
@@ -103,6 +103,22 @@ fn v2_to_v3(tx: &Transaction<'_>) -> rusqlite::Result<()> {
              production INTEGER NOT NULL CHECK (production IN (0, 1)),
              read_only  INTEGER NOT NULL CHECK (read_only IN (0, 1)),
              seen_at    INTEGER NOT NULL
+         );",
+    )
+}
+
+/// v4: 사람이 본 실행 구성(17-m6-plan M6-11 — 결정 M6-D6, [`super::run_seen`]). 프로젝트마다 구성 열쇠 하나에 마지막으로 본 내용
+/// 해시 하나다. 프로젝트를 지우면 함께 지워진다. 값 원문은 두지 않는다(해시만). `seen_by` 에 CHECK 를 두지 않는다 — 기록하는 자리를
+/// 더하는 새 판이 표를 다시 만들지 않게(이 앱은 모르는 값을 읽기 오류로 다룬다).
+fn v3_to_v4(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    tx.execute_batch(
+        "CREATE TABLE run_seen (
+             project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+             config_key TEXT NOT NULL,
+             hash       TEXT NOT NULL,
+             seen_by    TEXT NOT NULL,
+             seen_at    INTEGER NOT NULL,
+             PRIMARY KEY (project_id, config_key)
          );",
     )
 }
