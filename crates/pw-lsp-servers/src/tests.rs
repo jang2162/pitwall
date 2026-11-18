@@ -683,11 +683,17 @@ fn an_untrusted_clone_cannot_pick_a_server_through_a_committed_local_file() {
     assert_eq!(setup.config.args, Vec::<String>::new());
     assert!(!setup.config.env.contains_key("EVIL"));
 
-    // 사람이 추적을 풀면 그 파일은 사람의 개인 파일이다.
+    // 사람이 추적을 풀고 고치면 그 파일은 사람의 개인 파일이다.
     git(
         &clone,
         &["rm", "-q", "--cached", ".pitwall/project.local.toml"],
     );
+    // 그 내용은 git 이 받아 온 것이라 고쳐야 사람의 파일이다(`pw_core::config::tracked` — 내용 판정).
+    fs::write(
+        clone.join(".pitwall/project.local.toml"),
+        format!("{committed}# mine\n"),
+    )
+    .unwrap();
     let list = f.list(&id);
     let ra = server(&list, "rust-analyzer");
     assert_eq!(ra.resolution.path(), Some(evil.as_path()));

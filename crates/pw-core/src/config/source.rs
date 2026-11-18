@@ -142,7 +142,8 @@ pub enum ConfigNotice {
     BrokenLink { path: String },
     /// 저장소 안의 개인 파일(`*.local.toml`)이 git 이 추적하는(커밋되는) 파일이라 사람의 설정으로 받지 않고 공유 레이어로 읽었다
     /// — 넓히는 값(`[mcp.policy]` · 자동 승인 · 노출 · 미신뢰 프로젝트의 실행 파일)은 먹지 않는다([`super::tracked`]).
-    /// 워크트리면 메인 체크아웃의 개인 파일을 대신 읽는다. 사람의 설정으로 쓰려면 추적을 푼다(`git rm --cached`).
+    /// 인덱스에는 없어도 그 내용이 객체 DB 에 있으면(checkout 이 중간에 실패해 받아 온 파일이 남은 것) 같다. 워크트리면 메인
+    /// 체크아웃의 개인 파일을 대신 읽는다. 사람의 설정으로 쓰려면 추적을 풀고(`git rm --cached`) 내용을 고친다.
     TrackedLocal { path: String },
     /// 저장소 안의 개인 파일이 git 추적 파일인지 판정하지 못해(관리 폴더 · 인덱스를 읽지 못함) 공유 레이어로 읽었다(fail-closed).
     /// `reason` 은 사람이 읽을 까닭이다(파일 내용은 없다).
@@ -398,9 +399,16 @@ impl ConfigSource {
                 message: "is not a personal file of this project, not writing it".to_owned(),
             })?;
         super::write::prepare_repository_local(checkout, file)?;
-        // 추적 파일에 쓴 사람의 값은 개인 레이어가 아니라 먹지 않고, 다음 커밋에 실린다.
+        // 추적 파일에 쓴 사람의 값은 개인 레이어가 아니라 먹지 않고, 다음 커밋에 실린다. 받아 온 내용의 파일에 키 하나를 쓰면 내용이
+        // 바뀌어 사람의 파일이 되므로, 그 안에 남은 남의 값(넓히는 값)까지 사람의 설정이 된다 — 사람이 손으로 보고 고치게 한다.
         match super::tracked::tracking(checkout, file) {
             super::tracked::Tracking::Untracked => Ok(super::write::Links::Refuse),
+            super::tracked::Tracking::Fetched => Err(super::write::WriteError::Refused {
+                path: file.to_path_buf(),
+                message: "holds content git fetched (an interrupted clone, pull or checkout?), so it is not a \
+                          personal setting; check it and edit it by hand first"
+                    .to_owned(),
+            }),
             super::tracked::Tracking::Tracked => Err(super::write::WriteError::Refused {
                 path: file.to_path_buf(),
                 message:
@@ -435,7 +443,7 @@ impl ConfigSource {
         let path = scan.dir.join(&found.rel);
         match self.tracking(scan, &path) {
             super::tracked::Tracking::Untracked => true,
-            super::tracked::Tracking::Tracked => {
+            super::tracked::Tracking::Tracked | super::tracked::Tracking::Fetched => {
                 notices.push(ConfigNotice::TrackedLocal {
                     path: path.display().to_string(),
                 });
@@ -1027,7 +1035,7 @@ mod tests {
     }
 
     /// git 이 추적하는(커밋되는) `.local.toml` 은 개인 레이어가 아니라 공유 레이어다 — 공유 레이어를 뺀 읽기(사람의 설정)에 들지 않고,
-    /// 알림이 남는다. 추적을 풀면 개인 레이어다. 인덱스를 읽지 못하면(판정 못 함) 공유 레이어다(fail-closed).
+    /// 알림이 남는다. 추적을 풀고 고치면 개인 레이어다. 인덱스를 읽지 못하면(판정 못 함) 공유 레이어다(fail-closed).
     #[test]
     fn a_tracked_local_file_is_read_as_the_shared_layer() {
         use super::super::tracked::tests::{git, repo};
@@ -1097,6 +1105,8 @@ mod tests {
             &root,
             &["rm", "-q", "--cached", ".pitwall/project.local.toml"],
         );
+        // 그 내용은 git 이 저장한 것이라 고쳐야 사람의 파일이다(`tracked` — 내용 판정).
+        write(&local, "schema = 1\n[a]\nlocal = 3\n");
         let snap = source.load().unwrap();
         assert_eq!(
             origins_and_paths(&snap).last().unwrap().0,

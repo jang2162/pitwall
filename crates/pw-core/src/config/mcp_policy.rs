@@ -291,8 +291,9 @@ pub fn read_project_over(
         .iter()
         .filter_map(|n| match n {
             super::ConfigNotice::TrackedLocal { path } => Some(format!(
-                "{path} is tracked by git, so it is read as shared settings: it can only narrow \
-                 mcp.auto_approve and its mcp.policy has no effect; untrack it (`git rm --cached`) to use it as your own"
+                "{path} is tracked by git or holds content git fetched, so it is read as shared settings: it can \
+                 only narrow mcp.auto_approve and its mcp.policy has no effect; untrack it (`git rm --cached`) and \
+                 edit it to use it as your own"
             )),
             super::ConfigNotice::UnverifiedLocal { path, reason } => Some(format!(
                 "cannot tell whether git tracks {path} ({reason}), so it is read as shared settings: it can only \
@@ -505,7 +506,7 @@ mod tests {
     }
 
     /// git 이 추적하는(커밋된) `.local.toml` 은 사람의 설정이 아니다 — 자동 승인을 넓히지 못하고 `[mcp.policy]` 가 먹지 않으며 사람의
-    /// 화면에 경고가 간다. 좁히기는 먹는다(공유 레이어 규칙). 추적을 풀면 사람의 설정이다.
+    /// 화면에 경고가 간다. 좁히기는 먹는다(공유 레이어 규칙). 추적을 풀고 고치면 사람의 설정이다.
     #[test]
     fn a_committed_local_file_cannot_widen_the_policy() {
         use super::super::tracked::tests::{git, put, repo};
@@ -548,10 +549,10 @@ mod tests {
             [Tier::Read]
         );
 
-        // 추적을 풀면 사람의 파일이다 — 넓힌다.
+        // 추적을 풀고 고치면 사람의 파일이다 — 넓힌다.
         put(
             &root.join(local),
-            "schema = 1\n[mcp]\nauto_approve = [\"read\", \"write\", \"exec\"]\n[mcp.policy]\nproduction = \"ask\"\n",
+            "schema = 1\n[mcp]\nauto_approve = [\"read\", \"write\", \"exec\"]\n[mcp.policy]\nproduction = \"ask\"\n# mine\n",
         );
         git(&root, &["rm", "-q", "--cached", local]);
         let (policy, warnings) = read_project_over(&paths, None, &p).unwrap();

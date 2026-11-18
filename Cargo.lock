@@ -5379,6 +5379,8 @@ version = "0.0.0"
 dependencies = [
  "etcetera",
  "gix-index",
+ "gix-object",
+ "gix-odb",
  "notify",
  "pw-rpc",
  "rusqlite",

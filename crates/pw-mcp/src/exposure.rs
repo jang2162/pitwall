@@ -659,6 +659,8 @@ mod tests {
             &root,
             &["rm", "-q", "--cached", ".pitwall/project.local.toml"],
         );
+        // 그 내용은 git 이 저장한 것이라 고쳐야 사람의 파일이다(`pw_core::config::tracked` — 내용 판정).
+        std::fs::write(&local, "schema = 1\n[mcp]\npreset = \"full\"\n# mine\n").unwrap();
         assert!(of_project(&paths, &global, &project).enabled(&write_tool));
     }
 

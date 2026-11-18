@@ -86,7 +86,7 @@ fn log_notice(scope: &str, notice: &ConfigNotice) {
         ConfigNotice::TrackedLocal { path } => tracing::warn!(
             scope,
             path,
-            "personal config file is tracked by git; read as shared settings that cannot widen"
+            "personal config file is tracked by git or holds content git fetched; read as shared settings that cannot widen"
         ),
         ConfigNotice::UnverifiedLocal { path, reason } => tracing::warn!(
             scope,

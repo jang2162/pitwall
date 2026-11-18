@@ -12,6 +12,10 @@ etcetera = "0.11.0"
 # 인덱스만 읽는다. pw-git 의 `gix` 와 같은 gitoxide 릴리스다(그 `gix` 가 요구하는 버전) — pw-lang 의 `gix-attributes` · pw-fs 의
 # `gix-parallel` 과 함께 올린다. pw-git 이 이 크레이트에 의존하므로 판정을 pw-git 에 둘 수 없다.
 gix-index = { version = "0.58.0", features = ["sha1"] }
+# 인덱스에 없는 개인 파일의 내용이 객체 DB 에 있는가(`config::tracked` — checkout 이 실패해 인덱스에 오르지 못한 커밋된 파일).
+# `gix-index` 와 같은 gitoxide 릴리스(pw-git 의 `gix` 가 요구하는 판)다 — 함께 올린다.
+gix-object = { version = "0.66.1", features = ["sha1"] }
+gix-odb = { version = "0.87.0", features = ["sha1"] }
 notify = "8.2.0"
 pw-rpc = { path = "../pw-rpc" }
 # 프로젝트 레지스트리 `$DATA/state.db`. bundled: 시스템 SQLite 버전 차이(OS · 배포판)에 기대지 않는다.

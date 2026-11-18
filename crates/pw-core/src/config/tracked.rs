@@ -1,10 +1,15 @@
 //! 저장소 안의 개인 덮어쓰기(`.pitwall/**/*.local.toml`)가 **git 이 추적하는 파일인가**(17-m6-plan m6-localpolicy, 05 「권한 모델」).
 //!
 //! 개인 파일은 「사람의 설정」 이라 넓힐 수 있다(`[mcp.policy]` · `auto_approve` · 노출 · 미신뢰 프로젝트의 언어 서버 명령). 그런데
-//! 저장소가 그 파일을 강제로 커밋하면 클론 · 새 워크트리에서 남이 쓴 파일이 사람의 설정이 된다. 그래서 **인덱스에 있는** 개인 파일은
-//! 사람의 레이어로 받지 않고 공유 레이어로 읽는다([`super::ConfigSource`] — 좁히기만). 판정하지 못하면(관리 폴더를 못 찾음 ·
-//! 인덱스가 깨짐 · SHA-1 이 아닌 저장소) 역시 받지 않는다(fail-closed). `.git` 이 없는 폴더(저장소가 아님)는 추적 파일이 없다고
-//! 확정되므로 사람의 것이다. 인덱스가 아직 없는 저장소(갓 `git init`)도 추적 파일이 없다.
+//! 저장소가 그 파일을 강제로 커밋하면 클론 · 새 워크트리에서 남이 쓴 파일이 사람의 설정이 된다. 그래서 **인덱스에 있거나, 그 내용이
+//! 객체 DB 에 있는**(git 이 받아 온 내용 — checkout 이 중간에 실패한 클론 · pull · 브랜치 전환은 파일을 쓰고 인덱스에 올리지 못한다)
+//! 개인 파일은 사람의 레이어로 받지 않고 공유 레이어로 읽는다([`super::ConfigSource`] — 좁히기만). 판정하지 못하면(관리 폴더를 못
+//! 찾음 · 인덱스나 객체 DB 를 읽지 못함 · SHA-1 이 아닌 저장소 · 인덱스가 없는데 HEAD 가 커밋을 가리킴 · 객체가 다 있다고 할 수 없는
+//! shallow · partial clone 저장소에서 인덱스에 없는 파일) 역시 받지 않는다(fail-closed). `.git` 이 없는 폴더(저장소가 아님)는 추적
+//! 파일이 없다고 확정되므로 사람의 것이다. 갓 `git init` 한 저장소(인덱스도 커밋도 없음)도 그렇다.
+//!
+//! 내용 판정의 오탐은 git 이 한 번이라도 저장한 내용과 바이트가 같은 개인 파일이다(실수로 `git add` 했다가 `git rm --cached` 한 직후
+//! 등) — 좁히는 쪽이고, 그 파일을 고치면 풀린다.
 //!
 //! git 을 띄우지 않고 인덱스를 직접 읽는다(`gix-index` — split index · v4 · sparse 를 푼다). 경로는 대소문자를 가리지 않고 비교하고
 //! (대소문자를 가리지 않는 파일 시스템), 파일 자신뿐 아니라 **조상 경로가 인덱스 항목**(커밋된 링크 `.pitwall` · sparse 폴더 항목)이어도
@@ -30,6 +35,10 @@ pub enum Tracking {
     Untracked,
     /// 인덱스에 있다(또는 조상이 인덱스 항목이다). 커밋되는 파일이다.
     Tracked,
+    /// 인덱스에는 없지만 그 내용이 객체 DB 에 있다 — git 이 받아 온 내용이다(checkout 이 중간에 실패한 클론 · pull · 브랜치 전환).
+    /// 사람의 레이어로 받지 않고, Pitwall 이 쓰지도 않는다(키 하나를 쓰면 내용이 바뀌어 남은 남의 값까지 사람의 설정이 된다 —
+    /// 사람이 손으로 보고 고친다).
+    Fetched,
     /// 판정하지 못했다 — 까닭은 사람의 화면에 보일 글(파일 내용은 없다).
     Unknown(String),
 }
@@ -44,14 +53,10 @@ impl Tracking {
 /// 체크아웃 `checkout`(`.pitwall` 을 담는 폴더) 안의 파일 `file` 을 판정한다. `file` 은 `checkout` 아래 경로다(없는 파일이어도 된다 —
 /// 쓰기 전에 부른다).
 pub fn tracking(checkout: &Path, file: &Path) -> Tracking {
-    match judge(checkout, file) {
-        Ok(true) => Tracking::Tracked,
-        Ok(false) => Tracking::Untracked,
-        Err(reason) => Tracking::Unknown(reason),
-    }
+    judge(checkout, file).unwrap_or_else(Tracking::Unknown)
 }
 
-fn judge(checkout: &Path, file: &Path) -> Result<bool, String> {
+fn judge(checkout: &Path, file: &Path) -> Result<Tracking, String> {
     let real_checkout =
         fs::canonicalize(checkout).map_err(|e| format!("{}: {e}", checkout.display()))?;
     let inside = file
@@ -63,13 +68,10 @@ fn judge(checkout: &Path, file: &Path) -> Result<bool, String> {
         .find(|dir| fs::metadata(dir.join(".git")).is_ok())
     else {
         // 저장소가 아니다 — 추적 파일이 없다.
-        return Ok(false);
+        return Ok(Tracking::Untracked);
     };
     let (gitdir, common) = super::gitdir::repository_dirs(top)?;
     sha1_repository(&common)?;
-    let Some(paths) = index_paths(&gitdir.join("index"))? else {
-        return Ok(false);
-    };
     let mut rels = vec![relative(top, &lexical)?];
     // 링크를 지나면(`.pitwall` 이나 파일이 링크) 실제로 닿는 파일도 본다 — 저장소 안이면.
     if let Ok(real) = fs::canonicalize(file)
@@ -78,7 +80,184 @@ fn judge(checkout: &Path, file: &Path) -> Result<bool, String> {
     {
         rels.push(rel);
     }
-    Ok(rels.iter().any(|rel| covered(&paths, rel)))
+    match index_paths(&gitdir.join("index"))? {
+        Some(paths) if rels.iter().any(|rel| covered(&paths, rel)) => return Ok(Tracking::Tracked),
+        Some(_) => {}
+        // 인덱스가 없는데 HEAD 가 커밋을 가리킨다 — checkout 이 실패한 클론처럼 작업 트리가 반쯤 써졌을 수 있다.
+        None if head_is_born(&gitdir, &common)? => {
+            return Err(format!(
+                "{}: the index is missing although HEAD points to a commit (an interrupted clone or checkout?)",
+                gitdir.display()
+            ));
+        }
+        None => {}
+    }
+    Ok(if content_in_object_database(&common, file)? {
+        Tracking::Fetched
+    } else {
+        Tracking::Untracked
+    })
+}
+
+/// 인덱스에 없는 `file` 의 내용이 객체 DB 에 있는가(없는 파일이면 아니다). 객체가 다 있다고 할 수 없는 저장소(shallow · partial
+/// clone)와 객체 DB · 대체 저장소(alternates)를 읽지 못하면 오류(「모름」).
+fn content_in_object_database(common: &Path, file: &Path) -> Result<bool, String> {
+    let bytes = match fs::metadata(file) {
+        Ok(meta) if meta.is_file() => {
+            if meta.len() > super::robust::MAX_CONFIG_BYTES {
+                return Err(format!("{}: larger than a settings file", file.display()));
+            }
+            fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?
+        }
+        Ok(_) => return Ok(false),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(format!("{}: {e}", file.display())),
+    };
+    incomplete_object_database(common)?;
+    let objects = common.join("objects");
+    // 객체 폴더가 아예 없으면(git 이 저장소로 보지 않는 `.git`) 받아 온 내용도 없다.
+    if matches!(fs::symlink_metadata(&objects), Err(e) if e.kind() == io::ErrorKind::NotFound) {
+        return Ok(false);
+    }
+    readable_object_dirs(&objects, 0)?;
+    let id = gix_object::compute_hash(Kind::Sha1, gix_object::Kind::Blob, &bytes)
+        .map_err(|e| format!("{}: {e}", file.display()))?;
+    let odb =
+        gix_odb::at(&objects, Kind::Sha1).map_err(|e| format!("{}: {e}", objects.display()))?;
+    use gix_object::FindHeader as _;
+    match odb.try_header(&id) {
+        Ok(found) => Ok(found.is_some()),
+        Err(e) => Err(format!("{}: {e}", objects.display())),
+    }
+}
+
+/// shallow(`shallow` 파일) · partial clone(`partialclone` · `promisor` 설정, `.promisor` 팩) 저장소는 받아 온 내용이 객체 DB 에 다
+/// 있다고 할 수 없다.
+fn incomplete_object_database(common: &Path) -> Result<(), String> {
+    if fs::symlink_metadata(common.join("shallow")).is_ok() {
+        return Err(format!(
+            "{}: a shallow repository may not hold every fetched file",
+            common.display()
+        ));
+    }
+    let config = super::gitdir::read_config_or_empty(&common.join("config"))?;
+    let partial = config.lines().any(|line| {
+        let Some((key, value)) = line.split_once('=') else {
+            return false;
+        };
+        let key = key.trim();
+        let value = value.split(['#', ';']).next().unwrap_or("").trim();
+        key.eq_ignore_ascii_case("partialclone")
+            || (key.eq_ignore_ascii_case("promisor") && !value.eq_ignore_ascii_case("false"))
+    });
+    let promisor_pack = fs::read_dir(common.join("objects/pack")).is_ok_and(|dir| {
+        dir.filter_map(Result::ok)
+            .any(|e| e.file_name().to_string_lossy().ends_with(".promisor"))
+    });
+    if partial || promisor_pack {
+        return Err(format!(
+            "{}: a partial clone may not hold every fetched file",
+            common.display()
+        ));
+    }
+    Ok(())
+}
+
+/// 객체 폴더와 그 대체 저장소(`info/alternates` — 한 줄에 하나, 상대 경로는 그 객체 폴더 기준)를 다 읽을 수 있는가. 못 읽는 것을
+/// 조용히 건너뛰면 「없음」 이 되어 넓어진다.
+fn readable_object_dirs(objects: &Path, depth: usize) -> Result<(), String> {
+    if depth > 5 {
+        return Err(format!("{}: alternates nest too deep", objects.display()));
+    }
+    fs::read_dir(objects).map_err(|e| format!("{}: {e}", objects.display()))?;
+    let pack = objects.join("pack");
+    match fs::read_dir(&pack) {
+        Ok(_) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("{}: {e}", pack.display())),
+    }
+    let list = objects.join("info/alternates");
+    let text = match fs::read_to_string(&list) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("{}: {e}", list.display())),
+    };
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let path = Path::new(line);
+        let alternate = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            objects.join(path)
+        };
+        readable_object_dirs(&alternate, depth + 1)?;
+    }
+    Ok(())
+}
+
+/// HEAD 가 커밋을 가리키는가(갓 `git init` 의 태어나지 않은 브랜치면 아니다). `HEAD` 가 없으면 아니다(저장소로 보이지 않는 `.git`).
+/// ref 는 느슨한 파일(관리 폴더 · 공통 폴더)과 `packed-refs` 에서 찾는다. reftable 저장소 · 읽지 못하는 꼴은 오류(「모름」).
+fn head_is_born(gitdir: &Path, common: &Path) -> Result<bool, String> {
+    if fs::symlink_metadata(common.join("reftable")).is_ok() {
+        return Err(format!(
+            "{}: reftable ref storage is not supported",
+            common.display()
+        ));
+    }
+    let head = gitdir.join("HEAD");
+    let mut value = match fs::read_to_string(&head) {
+        Ok(text) => text.trim().to_owned(),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(format!("{}: {e}", head.display())),
+    };
+    for _ in 0..5 {
+        let Some(name) = value.strip_prefix("ref:").map(str::trim) else {
+            return ObjectId::from_hex(value.as_bytes())
+                .map(|_| true)
+                .map_err(|e| format!("{}: {e}", head.display()));
+        };
+        if !name.starts_with("refs/") || name.split('/').any(|p| p.is_empty() || p == "..") {
+            return Err(format!("{}: unexpected ref `{name}`", head.display()));
+        }
+        let mut next = None;
+        for dir in [gitdir, common] {
+            match fs::read_to_string(dir.join(name)) {
+                Ok(text) => {
+                    next = Some(text.trim().to_owned());
+                    break;
+                }
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                    ) => {}
+                Err(e) => return Err(format!("{}: {e}", dir.join(name).display())),
+            }
+        }
+        if next.is_none() {
+            let packed = common.join("packed-refs");
+            match fs::read_to_string(&packed) {
+                Ok(text) => {
+                    next = text
+                        .lines()
+                        .filter(|l| !l.starts_with('#') && !l.starts_with('^'))
+                        .filter_map(|l| l.split_once(' '))
+                        .find(|(_, refname)| refname.trim() == name)
+                        .map(|(sha, _)| sha.to_owned());
+                }
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(format!("{}: {e}", packed.display())),
+            }
+        }
+        match next {
+            Some(found) => value = found,
+            // 태어나지 않은 브랜치.
+            None => return Ok(false),
+        }
+    }
+    Err(format!("{}: symbolic refs nest too deep", head.display()))
 }
 
 /// `rel` 또는 그 조상이 인덱스 항목인가.
