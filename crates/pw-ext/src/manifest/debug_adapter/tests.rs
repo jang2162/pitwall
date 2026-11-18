@@ -131,7 +131,7 @@ fn warns_and_ignores_unknown_debug_adapter_keys() {
 /// 형식 오류. 오류가 하나라도 있으면 매니페스트가 없고, 진단은 그 값(또는 표 머리)의 줄 · 열을 가리킨다. 한 잘못에 오류 하나다.
 #[test]
 fn debug_adapter_format_errors_point_at_the_value() {
-    let cases: [(&str, &str); 16] = [
+    let cases: [(&str, &str); 21] = [
         (
             "languages = [\"rust\"]\nlaunch = {}",
             "7:29: error: debug adapter `a`: missing `command` (or `start` for an adapter a language server opens)",
@@ -150,7 +150,7 @@ fn debug_adapter_format_errors_point_at_the_value() {
         ),
         (
             "languages = [\"rust\"]\ncommand = \"x\"\ntransport = \"pipe\"\nlaunch = {}",
-            "10:13: error: debug adapter `a`: `transport` `pipe` must be `stdio` or `tcp`",
+            "10:13: error: debug adapter `a`: `transport` `pipe` must be `stdio`, `tcp` or `socket`",
         ),
         (
             "languages = [\"rust\"]\ncommand = \"x\"\ntransport = \"tcp\"\nargs = [\"--stdio\"]\nlaunch = {}",
@@ -166,7 +166,27 @@ fn debug_adapter_format_errors_point_at_the_value() {
         ),
         (
             "languages = [\"rust\"]\ncommand = \"x\"\ntransport = \"tcp\"\nargs = [\"{port}\", \"{program}\"]\nlaunch = {}",
-            "11:19: error: debug adapter `a`: `args` can only use `{port}` and `{host}`, not `{program}` — request values go in `launch` · `attach`",
+            "11:19: error: debug adapter `a`: `args` can only use `{port}`, `{host}` and `{socket}`, not `{program}` — request values go in `launch` · `attach`",
+        ),
+        (
+            "languages = [\"rust\"]\ncommand = \"x\"\ntransport = \"socket\"\nargs = [\"--port\", \"{port}\"]\nlaunch = {}",
+            "11:8: error: debug adapter `a`: a `socket` adapter takes its socket path in `args` — write \"{socket}\" where the path goes",
+        ),
+        (
+            "languages = [\"rust\"]\ncommand = \"x\"\ntransport = \"socket\"\nlaunch = {}",
+            "7:29: error: debug adapter `a`: a `socket` adapter takes its socket path in `args` — write \"{socket}\" where the path goes",
+        ),
+        (
+            "languages = [\"rust\"]\ncommand = \"x\"\ntransport = \"socket\"\nargs = [\"--listen={socket}\", \"{host}\"]\nlaunch = {}",
+            "11:8: error: debug adapter `a`: `{port}` and `{host}` are only for a `tcp` adapter",
+        ),
+        (
+            "languages = [\"rust\"]\ncommand = \"x\"\ntransport = \"tcp\"\nargs = [\"{port}\", \"{socket}\"]\nlaunch = {}",
+            "11:8: error: debug adapter `a`: `{socket}` is only for a `socket` adapter",
+        ),
+        (
+            "languages = [\"java\"]\nstart = { lsp = \"jdtls\", command = \"c\" }\ntransport = \"socket\"\nattach = {}",
+            "10:13: error: debug adapter `a`: `transport` must be `tcp` with `start` — the language server answers a port",
         ),
         (
             "languages = [\"rust\"]\ncommand = \"x\"\nlaunch = \"{program}\"",
@@ -262,5 +282,20 @@ fn fills_a_request_template_from_the_run_configuration() {
             "`{cwd}` in \"${workspaceFolder}/{cwd}\" must be a string, a number or a boolean"
                 .to_owned()
         )
+    );
+}
+
+/// `transport = "socket"`: `args` 의 `{socket}` 을 Pitwall 이 고른 소켓 경로(Windows 는 named pipe 이름)로 채운다(M6-15 리뷰 판정).
+#[test]
+fn reads_a_socket_adapter_and_fills_its_socket_path() {
+    let (manifest, diagnostics) = parse(
+        "\n[contributes.debug_adapters.sock]\nlanguages = [\"rust\"]\ncommand = \"x\"\ntransport = \"socket\"\nargs = [\"--listen\", \"unix:{socket}\"]\nlaunch = {}\n",
+    );
+    assert_eq!(diagnostics, vec![]);
+    let adapter = manifest.unwrap().contributes.debug_adapters.remove(0);
+    assert_eq!(adapter.transport, DapTransport::Socket);
+    assert_eq!(
+        adapter.args_for_socket("/tmp/pw-0700/dap.sock"),
+        ["--listen", "unix:/tmp/pw-0700/dap.sock"]
     );
 }

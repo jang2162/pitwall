@@ -61,8 +61,9 @@ attach = { hostName = "127.0.0.1", port = "{port}" }   # 실행 구성 `[debug]`
 languages = ["rust"]
 mason = "codelldb"
 command = "codelldb"
-args = ["--port", "{port}"]                 # `args` 의 자리는 `{port}` · `{host}`(늘 127.0.0.1)뿐 — tcp 어댑터는 `{port}` 가 있어야 한다
+args = ["--port", "{port}"]                 # `args` 의 자리는 `{port}` · `{host}`(늘 127.0.0.1) · `{socket}` 뿐 — tcp 어댑터는 `{port}` 가 있어야 한다
 transport = "tcp"                           # stdio(기본) | tcp — stdio 를 먼저 쓰고, tcp 는 127.0.0.1 에만 묶는다. `start` 어댑터는 tcp 다
+# transport = "socket"  args = ["--listen", "{socket}"]   # 유닉스 도메인 소켓(Windows 는 named pipe) — `{socket}` 에 Pitwall 이 0700 임시 디렉터리 안 경로(이름)를 채운다, 없으면 거절. `{port}` · `{host}` 는 tcp 만, `{socket}` 은 socket 만(연결은 pw-dap — 17-m6-plan M6-15 리뷰 판정)
 # env = { … }  requires = { python = ">=3.9" }  project_local = "…"   # (선택) 언어 서버와 같다 — requires 는 어댑터를 「돌리는」 런타임(node: 위임의 런처가 그 node 를 쓴다)
 launch = { type = "lldb", program = "{program}", args = "{args}", cwd = "{cwd}" }
 attach = { type = "lldb", pid = "{pid}" }

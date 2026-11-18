@@ -4,8 +4,9 @@
 //! 실행 파일 없이 언어 서버가 포트를 여는 어댑터의 시작(`start`)을 더한다. 내장 확장의 것만 등록한다(레지스트리).
 //!
 //! 자리 표지: `{이름}`(소문자 · 숫자 · `_`, 소문자로 시작). 틀(`launch` · `attach`)의 자리는 실행 구성 `[debug]` 의 값으로 채우고
-//! ([`fill_request`]), `args` 의 자리는 `{port}` · `{host}` 둘뿐이다 — 포트는 Pitwall 이 고르고 주소는 늘 [`ADAPTER_HOST`] 다
-//! (17-m6-plan 메인 판정 M6-P7 — 같은 기기의 다른 프로세스가 그 포트에 붙어 대상 안에서 코드를 돌리지 못하게).
+//! ([`fill_request`]), `args` 의 자리는 `{port}` · `{host}`(tcp) · `{socket}`(socket) 셋뿐이다 — 포트 · 소켓 경로는 Pitwall 이
+//! 고르고 주소는 늘 [`ADAPTER_HOST`] 다(17-m6-plan 메인 판정 M6-P7 — 같은 기기의 다른 프로세스가 그 포트에 붙어 대상 안에서 코드를
+//! 돌리지 못하게. 소켓은 Pitwall 의 0700 임시 디렉터리 안 경로, Windows 는 named pipe 이름이다 — 연결은 `pw-dap`, M6-15).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,6 +30,9 @@ pub enum DapTransport {
     /// 어댑터가 연 TCP 포트(`127.0.0.1`). 실행 파일이 있는 어댑터는 `args` 의 `{port}` 로 포트를 받고, `start` 어댑터는 언어
     /// 서버가 답한 포트다.
     Tcp,
+    /// 어댑터가 듣는 유닉스 도메인 소켓(Windows 는 named pipe). `args` 의 `{socket}` 으로 경로(이름)를 받는다 — Pitwall 이 0700
+    /// 임시 디렉터리 안의 경로를 고른다(M6-15 리뷰 판정).
+    Socket,
 }
 
 /// 실행 구성 `[debug] mode` 의 두 요청.
@@ -93,6 +97,14 @@ impl DebugAdapterDecl {
         self.args
             .iter()
             .map(|a| a.replace("{port}", &port).replace("{host}", ADAPTER_HOST))
+            .collect()
+    }
+
+    /// `socket` 어댑터의 인자: `{socket}` 을 `socket`(소켓 경로 · Windows named pipe 이름)으로 채운 것.
+    pub fn args_for_socket(&self, socket: &str) -> Vec<String> {
+        self.args
+            .iter()
+            .map(|a| a.replace("{socket}", socket))
             .collect()
     }
 }
@@ -258,10 +270,11 @@ impl Parser<'_> {
             .map(|(raw, span)| match raw.as_str() {
                 "stdio" => Some((DapTransport::Stdio, span)),
                 "tcp" => Some((DapTransport::Tcp, span)),
+                "socket" => Some((DapTransport::Socket, span)),
                 _ => {
                     self.error(
                         span,
-                        format!("{what}: `transport` `{raw}` must be `stdio` or `tcp`"),
+                        format!("{what}: `transport` `{raw}` must be `stdio`, `tcp` or `socket`"),
                     );
                     None
                 }
@@ -311,7 +324,7 @@ impl Parser<'_> {
                         );
                     }
                 }
-                if let Some(Some((DapTransport::Stdio, span))) = &transport {
+                if let Some(Some((DapTransport::Stdio | DapTransport::Socket, span))) = &transport {
                     self.error(
                         span.clone(),
                         format!(
@@ -343,28 +356,30 @@ impl Parser<'_> {
         let args_ok = args.is_some() || args_item.is_none();
         let args = args.unwrap_or_default();
         if start.is_none() && args_ok {
-            let has_port = args
+            let used: BTreeSet<&str> = args
                 .iter()
-                .any(|a| slots(a).iter().any(|(_, n)| *n == "port"));
+                .flat_map(|a| slots(a).into_iter().map(|(_, n)| n))
+                .collect();
             let span = args_item.and_then(Item::span).or_else(|| at.clone());
-            match transport {
-                DapTransport::Tcp if !has_port => self.error(
-                    span,
-                    format!(
-                        "{what}: a `tcp` adapter takes its port in `args` — write \"{{port}}\" where the port goes"
-                    ),
+            let problem = match transport {
+                DapTransport::Tcp if !used.contains("port") => Some(
+                    "a `tcp` adapter takes its port in `args` — write \"{port}\" where the port goes",
                 ),
-                DapTransport::Stdio
-                    if args.iter().any(|a| !slots(a).is_empty()) =>
+                DapTransport::Socket if !used.contains("socket") => Some(
+                    "a `socket` adapter takes its socket path in `args` — write \"{socket}\" where the path goes",
+                ),
+                DapTransport::Stdio | DapTransport::Socket
+                    if used.contains("port") || used.contains("host") =>
                 {
-                    self.error(
-                        span,
-                        format!(
-                            "{what}: `{{port}}` and `{{host}}` are only for a `tcp` adapter"
-                        ),
-                    );
+                    Some("`{port}` and `{host}` are only for a `tcp` adapter")
                 }
-                _ => {}
+                DapTransport::Stdio | DapTransport::Tcp if used.contains("socket") => {
+                    Some("`{socket}` is only for a `socket` adapter")
+                }
+                _ => None,
+            };
+            if let Some(problem) = problem {
+                self.error(span, format!("{what}: {problem}"));
             }
         }
         // 적었지만 형식이 틀린 틀(`Some(None)`)은 이미 오류다.
@@ -391,7 +406,7 @@ impl Parser<'_> {
         })
     }
 
-    /// `args`: 문자열 배열. 자리는 `{port}` · `{host}` 만.
+    /// `args`: 문자열 배열. 자리는 `{port}` · `{host}` · `{socket}` 만.
     fn adapter_args(&mut self, item: &Item, what: &str) -> Option<Vec<String>> {
         let Some(values) = item.as_array().and_then(|array| {
             array
@@ -408,12 +423,12 @@ impl Parser<'_> {
         let mut ok = true;
         for (arg, span) in &values {
             for (_, name) in slots(arg) {
-                if name != "port" && name != "host" {
+                if !["port", "host", "socket"].contains(&name) {
                     ok = false;
                     self.error(
                         span.clone().or_else(|| item.span()),
                         format!(
-                            "{what}: `args` can only use `{{port}}` and `{{host}}`, not `{{{name}}}` — request values go in `launch` · `attach`"
+                            "{what}: `args` can only use `{{port}}`, `{{host}}` and `{{socket}}`, not `{{{name}}}` — request values go in `launch` · `attach`"
                         ),
                     );
                 }
