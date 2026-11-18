@@ -31,7 +31,17 @@ schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 specta = { workspace = true, features = ["derive"] }
-tokio = { workspace = true, features = ["rt", "sync", "time", "macros", "io-util", "net", "process", "io-std"] }
+# io-util · net · process · io-std 는 가짜 어댑터 바이너리(pw-dap 의 소스)가 쓴다.
+tokio = { workspace = true, features = [
+  "rt",
+  "sync",
+  "time",
+  "macros",
+  "io-util",
+  "net",
+  "process",
+  "io-std",
+] }
 tracing = "0.1.44"
 # 가짜 어댑터 바이너리(pw-dap 의 소스)가 쓰는 것 — 판은 pw-dap 과 같다.
 pw-wire = { path = "../pw-wire" }
@@ -43,4 +53,13 @@ libc = "0.2.190"
 [dev-dependencies]
 libc = "0.2.190"
 tempfile = "3.27.0"
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "io-util", "net", "process", "io-std"] }
+tokio = { workspace = true, features = [
+  "rt",
+  "rt-multi-thread",
+  "macros",
+  "time",
+  "io-util",
+  "net",
+  "process",
+  "io-std",
+] }
