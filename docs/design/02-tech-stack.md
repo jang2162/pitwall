@@ -81,7 +81,7 @@
 
 ### 2.5 디버깅: DAP
 - 언어별 디버거를 직접 구현하지 않고 Debug Adapter Protocol만 구현
-- 기본 번들 어댑터(06-roadmap.md 결정 D65 — 17-m6-plan 결정 M6-D2): `codelldb`(Rust) · `js-debug-adapter`(JavaScript/TypeScript — Node 만, 브라우저 디버깅은 뒤로) · `debugpy`(Python) · `java-debug-adapter`(Java — jdtls 플러그인, attach 만). Kotlin 은 같은 JDWP attach 로 확인만 하고 보장하지 않는다. `delve`(Go) 등 그 밖은 사람이 `[dap.<id>] path` 로 이미 설치한 어댑터를 쓴다(`golang` purl 설치기가 없다). 어댑터 정의 · 해석(`[dap.<id>] path` 포함) · 설치기는 있다(17-m6-plan M6-16), 번들 정의와 디버그 세션은 아직 없다(M6-17 · 19)
+- 기본 번들 어댑터(06-roadmap.md 결정 D65 — 17-m6-plan 결정 M6-D2): `codelldb`(Rust) · `js-debug-adapter`(JavaScript/TypeScript — Node 만, 브라우저 디버깅은 뒤로) · `debugpy`(Python) · `java-debug-adapter`(Java — jdtls 플러그인, attach 만). Kotlin 은 같은 JDWP attach 로 확인만 하고 보장하지 않는다. `delve`(Go) 등 그 밖은 사람이 `[dap.<id>] path` 로 이미 설치한 어댑터를 쓴다(`golang` purl 설치기가 없다). 어댑터 정의 · 해석(`[dap.<id>] path` 포함) · 설치기는 있다(17-m6-plan M6-16), 디버그 세션 · 브레이크포인트 저장은 `pw-debug` 에 있다(M6-17), 번들 정의는 아직 없다(M6-19)
 
 ### 2.6 RPC 계약 우선
 - 코어 API는 Rust 타입으로 정의 → `specta`로 TS 타입 생성, MCP 툴 스키마도 같은 타입에서 `schemars`로 생성
@@ -161,6 +161,7 @@ pitwall/
 │  ├─ pw-db*/            # pw-db, pw-db-types, pw-db-sql, pw-db-driver(-pg/-mysql/-sqlite/-redis) (§2.7)
 │  ├─ pw-lsp/            # LSP 클라이언트, 서버 관리자
 │  ├─ pw-dap/            # DAP 클라이언트: 어댑터 프로세스 · 연결(stdio, 소켓 경로 — 0700 폴더의 unix 소켓 · named pipe, TCP 는 127.0.0.1 만) · 메시지 타입(직접 정의) · 세션 나무(역요청 runInTerminal · startDebugging) — 17-m6-plan M6-15
+│  ├─ pw-debug/          # Host 의 디버그: 디버그 세션 = 실행 하나(실행 관리자의 종류 `debug` — runInTerminal 은 그 실행의 PTY), 실행 구성 `[debug]` → 어댑터 해석 · 요청 틀, 브레이크포인트 저장(`$DATA/projects/<id>/breakpoints.json`), `debug.*` RPC — 17-m6-plan M6-17
 │  ├─ pw-wire/           # LSP · DAP 공용 `Content-Length` 틀: 머리 8 KiB · 본문 64 MiB 상한, 넘으면 그 프로세스를 죽인다(17-m6-plan 메인 판정 M6-P7)
 │  ├─ pw-runtime/        # 런타임 제공자 (mise · direnv · asdf · 로그인 셸), (프로젝트, 디렉터리)별 env 캐시 — 지금은 로그인 셸 환경만(03 §5-1)
 │  ├─ pw-open-with/      # 외부 도구로 열기: 도구 목록(확장 + 전역 설정) · 기본 도구 · 셸 없는 실행 (04 F8)
