@@ -152,6 +152,7 @@ impl PlannedUpsert {
             .rules(PlanRules {
                 auto_approve: false,
                 remember: Remember::Never,
+                policy_auto: false,
             })
             .build()
     }

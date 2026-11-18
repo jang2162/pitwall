@@ -109,6 +109,7 @@ fn the_plan_step_writes_nothing_and_the_diff_shows_the_old_values() {
         PlanRules {
             auto_approve: false,
             remember: Remember::Never,
+            policy_auto: false,
         }
     );
     assert_eq!(

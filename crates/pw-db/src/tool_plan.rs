@@ -34,6 +34,7 @@ use crate::script::{LineIndex, ScriptFile};
 pub const EVERY_TIME: PlanRules = PlanRules {
     auto_approve: false,
     remember: Remember::Never,
+    policy_auto: false,
 };
 
 /// DB 툴의 계획. `grant` 는 에이전트의 증거(대상 값을 해시에 넣는다), `dialect` 는 연결의 방언(SQL 드라이버). 규칙은

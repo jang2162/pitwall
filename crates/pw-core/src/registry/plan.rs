@@ -37,6 +37,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
+use super::exec::RunSpec;
+
 /// 승인 표를 싣는 입력의 예약 키. 세션만 싣고, 에이전트가 보낸 같은 키는 세션이 버린다.
 pub const APPROVAL_KEY: &str = "pitwall/approval";
 
@@ -63,6 +65,13 @@ pub struct ToolPlan {
     pub rules: PlanRules,
     /// `sha256:<hex>`. 승인은 이것에 묶인다.
     pub hash: String,
+    /// 띄울 것([`PlanBuilder::runs`] — 실행 툴만). 해시에 들고 [`Approved`] 로 넘어가 `exec::agent_run_grant` 가 띄운다. 직렬화하지
+    /// 않는다 — 사람의 화면에는 툴이 [`PlanChange`] 로 가린 꼴을 보이고(env 의 비밀 값), 직렬화한 계획(세션 · 창이 받은 것)에서
+    /// 되살린 값은 띄울 것이 없다. 이 칸은 비공개라 계획은 [`PlanBuilder`] 로만 만든다.
+    #[serde(skip)]
+    #[specta(skip)]
+    #[schemars(skip)]
+    runs: Vec<RunSpec>,
 }
 
 /// 바뀔 것 하나. 다른 꼴이 필요한 툴 행이 갈래를 더한다.
@@ -156,6 +165,11 @@ pub struct PlanRules {
     pub auto_approve: bool,
     /// 「이 세션 동안 허용」(CLI 면 「창이 열려 있는 동안 CLI 허용」)이 무엇을 기억하는가. `dangerous` 는 이것과 상관없이 없다.
     pub remember: Remember,
+    /// **정책 자동**(17-m6-plan M6-10 ③ — 결정 M6-P9): 툴이 05 「권한 모델」 의 규칙으로 「묻지 않아도 된다」 고 판정했다(`exec` 의
+    /// 「신뢰한 프로젝트 + 사람이 본 구성」, `sql` 구성의 조회만). 세션은 묻지 않고 승인 표를 실어 다시 부르고 감사 행의 승인 방식을
+    /// `policy` 로 남긴다 — 두 단계 · 선기록 · 해시 재확인은 그대로다. 판정은 툴이 하고 세션은 표지만 읽는다. `dangerous` 계획에는
+    /// 둘 수 없다(세션이 툴의 버그로 거절한다). 기본 `false`.
+    pub policy_auto: bool,
 }
 
 impl Default for PlanRules {
@@ -163,6 +177,7 @@ impl Default for PlanRules {
         Self {
             auto_approve: true,
             remember: Remember::Tool,
+            policy_auto: false,
         }
     }
 }
@@ -215,6 +230,7 @@ pub struct PlanBuilder {
     changes: Vec<PlanChange>,
     targets: Map<String, Value>,
     rules: PlanRules,
+    runs: Vec<RunSpec>,
 }
 
 impl ToolPlan {
@@ -228,6 +244,7 @@ impl ToolPlan {
             changes: Vec::new(),
             targets: Map::new(),
             rules: PlanRules::default(),
+            runs: Vec::new(),
         }
     }
 }
@@ -258,8 +275,16 @@ impl PlanBuilder {
         self
     }
 
+    /// 승인 뒤 띄울 것(실행 툴 — `exec` 머리 주석 「에이전트의 실행 허가」). 해시에 든다. 사람에게는 보이지 않으므로 툴이
+    /// [`PlanChange`] 로 그 내용을 보인다(비밀 값은 가려서). 여러 번 부르면 차례대로 더한다.
+    #[must_use]
+    pub fn runs(mut self, runs: impl IntoIterator<Item = RunSpec>) -> Self {
+        self.runs.extend(runs);
+        self
+    }
+
     pub fn build(self) -> ToolPlan {
-        let covered = serde_json::json!({
+        let mut covered = serde_json::json!({
             "method": self.method,
             "tier": self.tier,
             "input": self.input,
@@ -268,6 +293,10 @@ impl PlanBuilder {
             "changes": self.changes,
             "rules": self.rules,
         });
+        // 띄울 것이 없는 계획(실행 툴이 아닌 것)에는 그 키가 없다.
+        if !self.runs.is_empty() {
+            covered["runs"] = to_value(&self.runs);
+        }
         let mut hasher = Sha256::new();
         hasher.update(canonical(&covered).as_bytes());
         let hash = format!("sha256:{}", hex(&hasher.finalize()));
@@ -278,6 +307,7 @@ impl PlanBuilder {
             changes: self.changes,
             rules: self.rules,
             hash,
+            runs: self.runs,
         }
     }
 }
@@ -286,6 +316,8 @@ impl PlanBuilder {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Approved {
     hash: String,
+    /// 승인된 계획에 실린 띄울 것. `exec::agent_run_grant` 만 읽는다.
+    runs: Vec<RunSpec>,
 }
 
 impl Approved {
@@ -293,13 +325,20 @@ impl Approved {
     pub fn hash(&self) -> &str {
         &self.hash
     }
+
+    pub(super) fn runs(&self) -> &[RunSpec] {
+        &self.runs
+    }
 }
 
 /// 승인 표가 지금 계획과 맞으면 [`Approved`], 아니면 계획을 실은 [`APPROVAL_REQUIRED`] 오류. 툴 메서드는 계획을 만든 뒤 부작용
 /// 전에 이것을 지난다.
 pub fn approve(ticket: Option<&ApprovalTicket>, plan: ToolPlan) -> Result<Approved, RpcError> {
     match ticket {
-        Some(ticket) if ticket.hash == plan.hash => Ok(Approved { hash: plan.hash }),
+        Some(ticket) if ticket.hash == plan.hash => Ok(Approved {
+            hash: plan.hash,
+            runs: plan.runs,
+        }),
         _ => Err(approval_required(plan, ticket.is_some())),
     }
 }
@@ -460,9 +499,19 @@ mod tests {
             .rules(PlanRules {
                 auto_approve: false,
                 remember: Remember::Never,
+                policy_auto: false,
             })
             .build();
         assert_ne!(rules.hash, base.hash, "승인 규칙");
+        let policy = ToolPlan::builder("test.write", Tier::Write, &a)
+            .summary("write a file")
+            .target("content", &"x")
+            .rules(PlanRules {
+                policy_auto: true,
+                ..PlanRules::default()
+            })
+            .build();
+        assert_ne!(policy.hash, base.hash, "정책 자동 표지");
     }
 
     #[test]

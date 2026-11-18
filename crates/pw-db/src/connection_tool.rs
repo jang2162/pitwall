@@ -615,6 +615,7 @@ impl DbSessions {
                 PlanRules {
                     auto_approve: false,
                     remember: Remember::Key { key },
+                    policy_auto: false,
                 },
             )
         } else if grant.needs_approval() {
