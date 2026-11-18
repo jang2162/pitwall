@@ -32,6 +32,8 @@ pw-db-driver-sqlite = { path = "../../../crates/pw-db-driver-sqlite" }
 pw-db-sql = { path = "../../../crates/pw-db-sql" }
 # 가짜 드라이버의 객체 · 열 정의(`perf-fake-db` 에서만).
 pw-db-types = { path = "../../../crates/pw-db-types", optional = true }
+# 디버그 세션 · 브레이크포인트(`debug.*`, 17-m6-plan M6-17).
+pw-debug = { path = "../../../crates/pw-debug" }
 pw-diag = { path = "../../../crates/pw-diag" }
 pw-ext = { path = "../../../crates/pw-ext" }
 pw-fs = { path = "../../../crates/pw-fs" }

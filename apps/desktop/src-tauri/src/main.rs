@@ -195,6 +195,14 @@ fn local_host_parts(
     // 프로젝트 창이 사라지면 그 프로젝트의 실행을 끝내고(ipc.rs), 앱이 끝날 때는 `pw_run::shutdown` 이 함께 끝낸다.
     let runs = pw_run::runs::Runs::new(Arc::clone(&runtime));
     let run_methods = runs.clone();
+    // 디버그 세션 · 브레이크포인트(`debug.*`, M6-17). 디버그 세션은 실행 하나다(실행 관리자의 종류 `debug`) — 어댑터 정의 · 해석은
+    // 언어 서버와 같은 곳(`LspServers`, M6-16)을 쓴다. 끝내기는 실행의 끝내기를 따른다(창 닫기 · 앱 끝).
+    let debugger = pw_debug::Debugger::new(
+        runs.clone(),
+        Arc::clone(&runtime),
+        Arc::clone(&lsp_servers) as Arc<dyn pw_debug::Adapters>,
+    );
+    let debugger_methods = debugger.clone();
     // 구문 강조(`syntax.*`). 문법 엔진은 처음 문서를 열 때 만든다.
     let syntax = Arc::new(pw_syntax::Syntax::new(Arc::clone(&extensions)));
     // git(`git.*`, M2). 읽기는 gix, 쓰기는 런타임 환경으로 띄우는 git CLI 다.
@@ -261,6 +269,7 @@ fn local_host_parts(
         .methods(move |router| pw_run::methods::register(router, terminal_methods))
         .methods(move |router| pw_run::config::methods::register(router, run_config_methods))
         .methods(move |router| pw_run::runs::methods::register(router, run_methods))
+        .methods(move |router| pw_debug::methods::register(router, debugger_methods))
         .methods(move |router| pw_syntax::methods::register(router, syntax))
         .methods(move |router| pw_git::methods::register(router, git_methods))
         .methods(move |router| pw_git::write::register(router, git_write_methods))
@@ -345,6 +354,12 @@ fn local_host_parts(
             ));
             // 실행은 구성을 읽고(설정 경로 · 레지스트리) `run.started` · `run.exited` 를 버스로 낸다.
             runs.attach(pw_run::runs::HostParts {
+                paths: config.paths.clone(),
+                projects: projects.clone(),
+                bus: host.bus().clone(),
+            });
+            // 디버그는 실행 구성 · 레지스트리 · 앱 데이터(`breakpoints.json`)와 이벤트 버스를 쓴다.
+            debugger.attach(pw_debug::HostParts {
                 paths: config.paths.clone(),
                 projects: projects.clone(),
                 bus: host.bus().clone(),

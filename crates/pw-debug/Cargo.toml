@@ -1,0 +1,46 @@
+[package]
+name = "pw-debug"
+description = "Pitwall debug sessions on the Host: a debug session is a run, the stored breakpoints, and the debug.* RPC on top of pw-dap"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# 시험 전용 가짜 디버그 어댑터 — pw-dap 의 것과 같은 소스다(시험은 `CARGO_BIN_EXE_*` 로 같은 패키지의 바이너리만 받는다). 배포물에
+# 들지 않는다.
+[[bin]]
+name = "pw-debug-fake-adapter"
+path = "../pw-dap/src/bin/pw-dap-fake.rs"
+test = false
+
+[dependencies]
+pw-core = { path = "../pw-core" }
+# DAP 클라이언트(세션 나무 · 역요청 · 허가 — 17-m6-plan M6-15).
+pw-dap = { path = "../pw-dap" }
+# 어댑터 정의 · 요청 틀 채우기(M6-16).
+pw-ext = { path = "../pw-ext" }
+# 어댑터를 돌리는 런타임 찾기(정의의 `requires` — 언어 서버와 같은 함수, 결정 M4-D6).
+pw-lsp = { path = "../pw-lsp" }
+# 어댑터 해석 · `[dap.<id>]` 설정(M6-16).
+pw-lsp-servers = { path = "../pw-lsp-servers" }
+pw-rpc = { path = "../pw-rpc" }
+# 디버그 세션은 실행 하나다(메인 판정 M6-P15) — 실행 관리자 · 실행 구성 · `.env`(M6-01 ~ 03).
+pw-run = { path = "../pw-run" }
+pw-runtime = { path = "../pw-runtime" }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+specta = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros", "io-util", "net", "process", "io-std"] }
+tracing = "0.1.44"
+# 가짜 어댑터 바이너리(pw-dap 의 소스)가 쓰는 것 — 판은 pw-dap 과 같다.
+pw-wire = { path = "../pw-wire" }
+
+[target.'cfg(unix)'.dependencies]
+# 가짜 어댑터 바이너리(소켓 물려주기). 판은 pw-dap 과 같다.
+libc = "0.2.190"
+
+[dev-dependencies]
+libc = "0.2.190"
+tempfile = "3.27.0"
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "io-util", "net", "process", "io-std"] }

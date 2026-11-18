@@ -1,0 +1,470 @@
+//! 브레이크포인트 저장(17-m6-plan M6-17 ③ — 메인 판정 M6-P11): `$DATA/projects/<id>/breakpoints.json`.
+//!
+//! - 자리는 프로젝트의 앱 데이터 폴더다(03 「데이터 저장」 표의 `projects/<id>/`). 커밋되는 `.pitwall/` 에 두지 않는다 — 개인 상태다.
+//! - 파일 열쇠는 **프로젝트 루트 기준 상대 경로**(`/` 로 나눔)다. 워크트리는 같은 목록을 쓴다 — 세션에 보낼 때 그 세션의 워크트리
+//!   루트에 잇는다.
+//! - 한 줄에 하나(줄이 같으면 뒤의 것이 이긴다), 줄 차례로 둔다. 조건 · 로그 메시지 · hit count 는 디버그 대상 안에서 평가되는
+//!   글이다 — 사람이 화면에서 넣는 것은 이 RPC(write)로, 에이전트는 `exec` 툴(M6-20 `breakpoint_set_expr`)로만 넣는다.
+//! - 예외 필터(결정 M6-D5)는 어댑터마다 켠 필터 이름을 둔다 — 어댑터가 알린 것만 켤 수 있다(세션이 본다).
+//!
+//! 형식(`schema = 1`):
+//!
+//! ```json
+//! { "schema": 1,
+//!   "files": { "src/main.rs": [{ "line": 3, "enabled": true, "condition": "i > 3" }] },
+//!   "exceptionFilters": { "codelldb": ["rust_panic"] } }
+//! ```
+//!
+//! 쓰기는 같은 폴더의 임시 파일 → rename(원자적). 읽지 못한 파일(형식 오류 · 상한 초과)은 빈 목록으로 시작하고 경고를 남긴다 — 다음
+//! 쓰기가 그 파일을 바꾼다(개인 상태라 고칠 사람이 따로 없다).
+
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+use pw_core::registry::state::{PROJECTS_DIR, valid_id};
+use pw_rpc::RpcError;
+use serde::{Deserialize, Serialize};
+
+/// 파일 이름.
+pub const FILE: &str = "breakpoints.json";
+/// 파일의 스키마 판.
+pub const SCHEMA: u32 = 1;
+/// 파일 크기 상한(바이트). 넘는 파일은 읽지 않는다.
+pub const FILE_LIMIT: usize = 4 * 1024 * 1024;
+/// 파일 하나의 브레이크포인트 수 상한.
+pub const PER_FILE_LIMIT: usize = 1000;
+/// 조건 · 로그 메시지 · hit count 글 하나의 상한(바이트).
+pub const TEXT_LIMIT: usize = 4096;
+/// 상대 경로의 상한(바이트).
+pub const PATH_LIMIT: usize = 4096;
+
+/// 브레이크포인트 하나(줄은 1부터).
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct Breakpoint {
+    pub line: u32,
+    /// 꺼 둔 것은 어댑터에 보내지 않는다.
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// 멈출 조건 — 디버그 대상 안에서 평가되는 식.
+    #[serde(default)]
+    pub condition: Option<String>,
+    /// 멈추지 않고 이 글을 찍는다(로그포인트, `{식}` 은 대상 안에서 평가된다).
+    #[serde(default)]
+    pub log_message: Option<String>,
+    /// 몇 번째에 멈추나(어댑터의 문법 — 대상 안에서 평가된다).
+    #[serde(default)]
+    pub hit_condition: Option<String>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Breakpoint {
+    pub fn at(line: u32) -> Self {
+        Self {
+            line,
+            enabled: true,
+            condition: None,
+            log_message: None,
+            hit_condition: None,
+        }
+    }
+
+    /// 대상 안에서 평가되는 글(조건 · 로그 메시지 · hit count)이 있는가.
+    pub fn has_expressions(&self) -> bool {
+        self.condition.is_some() || self.log_message.is_some() || self.hit_condition.is_some()
+    }
+}
+
+/// 파일 하나의 브레이크포인트.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct FileBreakpoints {
+    /// 프로젝트 루트 기준 상대 경로(`/` 로 나눔).
+    pub path: String,
+    pub breakpoints: Vec<Breakpoint>,
+}
+
+/// 한 프로젝트의 저장 내용.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Stored {
+    #[serde(default)]
+    pub schema: u32,
+    #[serde(default)]
+    pub files: BTreeMap<String, Vec<Breakpoint>>,
+    #[serde(default)]
+    pub exception_filters: BTreeMap<String, Vec<String>>,
+}
+
+impl Stored {
+    pub fn file_list(&self) -> Vec<FileBreakpoints> {
+        self.files
+            .iter()
+            .map(|(path, breakpoints)| FileBreakpoints {
+                path: path.clone(),
+                breakpoints: breakpoints.clone(),
+            })
+            .collect()
+    }
+}
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// 프로젝트 루트 기준 상대 경로를 검사하고 정규형(`/` 로 나눔)으로. 절대 경로 · `..` · `.` · 빈 마디 · 너무 긴 경로는 invalid
+/// params.
+pub fn relative_path(path: &str) -> Result<String, RpcError> {
+    let bad = |why: &str| RpcError::invalid_params(format!("breakpoint path `{path}` {why}"));
+    if path.is_empty() || path.len() > PATH_LIMIT {
+        return Err(bad("must be a non-empty relative path"));
+    }
+    let unified = path.replace('\\', "/");
+    if unified.starts_with('/') || Path::new(path).is_absolute() || unified.contains(':') {
+        return Err(bad("must be relative to the project root"));
+    }
+    let parts: Vec<&str> = unified.split('/').collect();
+    if parts
+        .iter()
+        .any(|p| p.is_empty() || *p == "." || *p == "..")
+    {
+        return Err(bad("must not have empty, `.` or `..` parts"));
+    }
+    if unified.contains('\0') {
+        return Err(bad("must not contain NUL"));
+    }
+    Ok(parts.join("/"))
+}
+
+/// 목록을 정리한다: 줄 0 · 너무 긴 글 · 너무 많은 수는 invalid params, 같은 줄은 뒤의 것이 이기고, 줄 차례로.
+pub fn normalized(list: Vec<Breakpoint>) -> Result<Vec<Breakpoint>, RpcError> {
+    if list.len() > PER_FILE_LIMIT {
+        return Err(RpcError::invalid_params(format!(
+            "at most {PER_FILE_LIMIT} breakpoints per file"
+        )));
+    }
+    let mut by_line = BTreeMap::new();
+    for b in list {
+        if b.line == 0 {
+            return Err(RpcError::invalid_params("breakpoint lines start at 1"));
+        }
+        for text in [&b.condition, &b.log_message, &b.hit_condition]
+            .into_iter()
+            .flatten()
+        {
+            if text.len() > TEXT_LIMIT {
+                return Err(RpcError::invalid_params(format!(
+                    "a breakpoint condition, log message or hit count is at most {TEXT_LIMIT} bytes"
+                )));
+            }
+        }
+        let b = Breakpoint {
+            condition: b.condition.filter(|s| !s.trim().is_empty()),
+            log_message: b.log_message.filter(|s| !s.is_empty()),
+            hit_condition: b.hit_condition.filter(|s| !s.trim().is_empty()),
+            ..b
+        };
+        by_line.insert(b.line, b);
+    }
+    Ok(by_line.into_values().collect())
+}
+
+/// 저장소. 프로젝트마다 처음 쓸 때 파일을 읽어 두고, 바꿀 때마다 파일에 쓴다. 복제해도 같은 저장소다.
+#[derive(Clone)]
+pub struct Breakpoints {
+    inner: Arc<Inner>,
+}
+
+struct Inner {
+    data: PathBuf,
+    projects: Mutex<HashMap<String, Arc<Mutex<Stored>>>>,
+    /// 바뀔 때마다 오른다(세션이 시작 뒤 다시 보낼지 가른다).
+    generation: AtomicU64,
+}
+
+impl Breakpoints {
+    /// `$DATA`(앱 데이터 폴더) 아래에 둔다.
+    pub fn new(data: PathBuf) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                data,
+                projects: Mutex::default(),
+                generation: AtomicU64::new(0),
+            }),
+        }
+    }
+
+    /// `$DATA/projects/<id>/breakpoints.json`.
+    pub fn file(&self, project_id: &str) -> Result<PathBuf, RpcError> {
+        if !valid_id(project_id) {
+            return Err(RpcError::invalid_params(format!(
+                "`{project_id}` is not a project id"
+            )));
+        }
+        Ok(self
+            .inner
+            .data
+            .join(PROJECTS_DIR)
+            .join(project_id)
+            .join(FILE))
+    }
+
+    /// 바뀐 횟수.
+    pub fn generation(&self) -> u64 {
+        self.inner.generation.load(Ordering::SeqCst)
+    }
+
+    fn project(&self, project_id: &str) -> Result<Arc<Mutex<Stored>>, RpcError> {
+        let file = self.file(project_id)?;
+        let mut projects = lock(&self.inner.projects);
+        if let Some(stored) = projects.get(project_id) {
+            return Ok(Arc::clone(stored));
+        }
+        let stored = Arc::new(Mutex::new(read(&file)));
+        projects.insert(project_id.to_owned(), Arc::clone(&stored));
+        Ok(stored)
+    }
+
+    /// 그 프로젝트의 저장 내용.
+    pub fn get(&self, project_id: &str) -> Result<Stored, RpcError> {
+        let project = self.project(project_id)?;
+        let stored = lock(&project).clone();
+        Ok(stored)
+    }
+
+    /// `change` 로 고치고 파일에 쓴다. 쓰지 못하면 고친 것을 되돌리고 오류.
+    fn change<T>(
+        &self,
+        project_id: &str,
+        change: impl FnOnce(&mut Stored) -> Result<T, RpcError>,
+    ) -> Result<T, RpcError> {
+        let file = self.file(project_id)?;
+        let project = self.project(project_id)?;
+        let mut stored = lock(&project);
+        let before = stored.clone();
+        let out = change(&mut stored)?;
+        if *stored == before {
+            return Ok(out);
+        }
+        stored.schema = SCHEMA;
+        stored.files.retain(|_, list| !list.is_empty());
+        if let Err(e) = write(&file, &stored) {
+            *stored = before;
+            return Err(RpcError::internal(format!(
+                "cannot save the breakpoints: {e}"
+            )));
+        }
+        self.inner.generation.fetch_add(1, Ordering::SeqCst);
+        Ok(out)
+    }
+
+    /// 파일 하나의 목록을 통째로 바꾼다(빈 목록이면 지운다). 정리한 목록을 돌려준다.
+    pub fn set_file(
+        &self,
+        project_id: &str,
+        path: &str,
+        list: Vec<Breakpoint>,
+    ) -> Result<Vec<Breakpoint>, RpcError> {
+        let path = relative_path(path)?;
+        let list = normalized(list)?;
+        self.change(project_id, |s| {
+            s.files.insert(path, list.clone());
+            Ok(list)
+        })
+    }
+
+    /// 하나를 넣거나 같은 줄의 것을 바꾼다. 그 파일의 목록을 돌려준다.
+    pub fn upsert(
+        &self,
+        project_id: &str,
+        path: &str,
+        breakpoint: Breakpoint,
+    ) -> Result<Vec<Breakpoint>, RpcError> {
+        let path = relative_path(path)?;
+        self.change(project_id, |s| {
+            let mut list = s.files.get(&path).cloned().unwrap_or_default();
+            list.push(breakpoint);
+            let list = normalized(list)?;
+            s.files.insert(path, list.clone());
+            Ok(list)
+        })
+    }
+
+    /// 한 줄(`line` 이 없으면 그 파일 전부)을 지운다. 그 파일의 남은 목록을 돌려준다.
+    pub fn remove(
+        &self,
+        project_id: &str,
+        path: &str,
+        line: Option<u32>,
+    ) -> Result<Vec<Breakpoint>, RpcError> {
+        let path = relative_path(path)?;
+        self.change(project_id, |s| {
+            let list = s.files.entry(path).or_default();
+            match line {
+                Some(line) => list.retain(|b| b.line != line),
+                None => list.clear(),
+            }
+            Ok(list.clone())
+        })
+    }
+
+    /// 어댑터가 옮긴 줄을 저장에 반영한다: `from` 줄의 것을 `to` 로. `to` 에 이미 있으면 옮긴 것을 버린다(같은 줄에 둘은 두지 않는다).
+    /// 그 파일의 목록을 돌려준다(바뀐 것이 없으면 `None`).
+    pub fn moved(
+        &self,
+        project_id: &str,
+        path: &str,
+        moves: &[(u32, u32)],
+    ) -> Result<Option<Vec<Breakpoint>>, RpcError> {
+        let path = relative_path(path)?;
+        self.change(project_id, |s| {
+            let Some(list) = s.files.get_mut(&path) else {
+                return Ok(None);
+            };
+            let before = list.clone();
+            for &(from, to) in moves {
+                if from == to || to == 0 {
+                    continue;
+                }
+                let Some(at) = list.iter().position(|b| b.line == from) else {
+                    continue;
+                };
+                if list.iter().any(|b| b.line == to) {
+                    list.remove(at);
+                } else {
+                    list[at].line = to;
+                }
+            }
+            list.sort_by_key(|b| b.line);
+            Ok((*list != before).then(|| list.clone()))
+        })
+    }
+
+    /// 어댑터 하나에 켠 예외 필터.
+    pub fn exception_filters(&self, project_id: &str, adapter: &str) -> Vec<String> {
+        self.get(project_id)
+            .ok()
+            .and_then(|s| s.exception_filters.get(adapter).cloned())
+            .unwrap_or_default()
+    }
+
+    /// 어댑터 하나에 켤 예외 필터를 바꾼다(알린 것인지는 부른 쪽이 본다).
+    pub fn set_exception_filters(
+        &self,
+        project_id: &str,
+        adapter: &str,
+        filters: Vec<String>,
+    ) -> Result<(), RpcError> {
+        self.change(project_id, |s| {
+            if filters.is_empty() {
+                s.exception_filters.remove(adapter);
+            } else {
+                s.exception_filters.insert(adapter.to_owned(), filters);
+            }
+            Ok(())
+        })
+    }
+}
+
+fn read(file: &Path) -> Stored {
+    let bytes = match std::fs::read(file) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Stored::default(),
+        Err(e) => {
+            tracing::warn!(target: "pw_debug", file = %file.display(), error = %e, "cannot read the breakpoints; starting empty");
+            return Stored::default();
+        }
+    };
+    if bytes.len() > FILE_LIMIT {
+        tracing::warn!(target: "pw_debug", file = %file.display(), "the breakpoints file is over its size limit; starting empty");
+        return Stored::default();
+    }
+    match serde_json::from_slice::<Stored>(&bytes) {
+        Ok(mut stored) => {
+            // 손으로 고친 파일도 같은 규칙으로 — 쓸 수 없는 열쇠 · 목록은 버린다.
+            stored.files = std::mem::take(&mut stored.files)
+                .into_iter()
+                .filter_map(|(path, list)| {
+                    Some((relative_path(&path).ok()?, normalized(list).ok()?))
+                })
+                .collect();
+            stored
+        }
+        Err(e) => {
+            tracing::warn!(target: "pw_debug", file = %file.display(), error = %e, "the breakpoints file is not readable; starting empty");
+            Stored::default()
+        }
+    }
+}
+
+fn write(file: &Path, stored: &Stored) -> std::io::Result<()> {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let dir = file.parent().expect("the file has a folder");
+    std::fs::create_dir_all(dir)?;
+    let bytes = serde_json::to_vec_pretty(stored).map_err(std::io::Error::other)?;
+    let tmp = dir.join(format!(
+        ".{FILE}.{}.{}.pitwall-tmp",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result = (|| {
+        std::fs::write(&tmp, &bytes)?;
+        std::fs::File::open(&tmp)?.sync_all()?;
+        std::fs::rename(&tmp, file)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relative_paths_are_checked() {
+        assert_eq!(relative_path("src/main.rs").unwrap(), "src/main.rs");
+        assert_eq!(relative_path("src\\a.rs").unwrap(), "src/a.rs");
+        for bad in ["", "/etc/passwd", "../x", "a/../b", "a//b", "./a", "C:/x"] {
+            assert!(relative_path(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_line_holds_one_breakpoint_and_lines_are_sorted() {
+        let list = normalized(vec![
+            Breakpoint::at(9),
+            Breakpoint::at(3),
+            Breakpoint {
+                condition: Some("i > 3".into()),
+                ..Breakpoint::at(9)
+            },
+        ])
+        .unwrap();
+        assert_eq!(list.iter().map(|b| b.line).collect::<Vec<_>>(), [3, 9]);
+        assert_eq!(list[1].condition.as_deref(), Some("i > 3"));
+        assert!(normalized(vec![Breakpoint::at(0)]).is_err());
+    }
+
+    #[test]
+    fn a_moved_line_onto_an_existing_one_is_dropped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Breakpoints::new(tmp.path().to_owned());
+        store
+            .set_file("p1", "a.rs", vec![Breakpoint::at(2), Breakpoint::at(5)])
+            .unwrap();
+        let after = store.moved("p1", "a.rs", &[(2, 5)]).unwrap().unwrap();
+        assert_eq!(after, [Breakpoint::at(5)]);
+        assert_eq!(store.moved("p1", "a.rs", &[(7, 8)]).unwrap(), None);
+    }
+}

@@ -5061,6 +5061,7 @@ dependencies = [
  "pw-db-driver-sqlite",
  "pw-db-sql",
  "pw-db-types",
+ "pw-debug",
  "pw-diag",
  "pw-ext",
  "pw-fs",
@@ -5546,6 +5547,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "pw-debug"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "pw-core",
+ "pw-dap",
+ "pw-ext",
+ "pw-lsp",
+ "pw-lsp-servers",
+ "pw-rpc",
+ "pw-run",
+ "pw-runtime",
+ "pw-wire",
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+ "specta",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "pw-diag"
 version = "0.0.0"
 dependencies = [
@@ -5836,6 +5860,7 @@ dependencies = [
  "pw-db",
  "pw-db-sql",
  "pw-db-types",
+ "pw-debug",
  "pw-diag",
  "pw-ext",
  "pw-fs",

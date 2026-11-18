@@ -14,6 +14,7 @@ pw-core = { path = "../pw-core" }
 pw-db = { path = "../pw-db" }
 pw-db-sql = { path = "../pw-db-sql" }
 pw-db-types = { path = "../pw-db-types" }
+pw-debug = { path = "../pw-debug" }
 pw-diag = { path = "../pw-diag" }
 pw-ext = { path = "../pw-ext" }
 pw-fs = { path = "../pw-fs" }

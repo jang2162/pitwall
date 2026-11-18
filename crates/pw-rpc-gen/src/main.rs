@@ -12,6 +12,7 @@ use pw_core as _;
 use pw_db as _;
 use pw_db_sql as _;
 use pw_db_types as _;
+use pw_debug as _;
 use pw_diag as _;
 use pw_ext as _;
 use pw_fs as _;
