@@ -1,5 +1,5 @@
-//! 실행(`docs/design/02-tech-stack.md` 「레포 구조」 의 `pw-run`). 내장 터미널의 PTY 세션(M1-08)과 실행 구성(M6-01). 실행 관리자 ·
-//! 태스크 감지는 M6 이 같은 PTY 위에 더한다.
+//! 실행(`docs/design/02-tech-stack.md` 「레포 구조」 의 `pw-run`). 내장 터미널의 PTY 세션(M1-08), 실행 구성(M6-01), 같은 PTY 위의
+//! 실행 관리자(M6-02).
 //!
 //! - [`config`]: 실행 구성 `.pitwall/run/<id>.toml` 의 타입 · 읽기 · 쓰기 · argv · `run.config.*` RPC.
 //! - [`detect`]: 태스크 감지 — 파일 없는 가상 구성(`run.config.list` 의 `detected`)과 감지기 목록.
@@ -9,6 +9,7 @@
 //! - `integration`(유닉스): 셸의 시작 파일 뒤에 런타임 제공자의 PATH 를 다시 앞에 둔다.
 //! - [`pty`]: PTY 하나 — 상한 있는 출력 버퍼, 순서 지키는 입력, 크기, 끝내기.
 //! - [`methods`]: `terminal.*` RPC.
+//! - [`runs`]: 실행 관리자(M6-02) — Host 범위의 실행 · 로그 링 버퍼 · 프로세스 트리 끝내기, `run.*` RPC.
 //!
 //! 터미널은 그것을 연 `terminal.create` 스트림과 수명이 같다. 스트림이 어떻게 끝나든(셸 종료, `terminal.close`, `stream.cancel`,
 //! 연결이 닫혀 세션이 스트림을 버림) 셸의 세션에 든 프로세스를 모두 끝낸다. 앱이 끝날 때는 Drop 이 돌지 않으므로(Tauri 는
@@ -24,6 +25,7 @@ pub mod env;
 pub mod integration;
 pub mod methods;
 pub mod pty;
+pub mod runs;
 pub mod seen;
 pub mod shell;
 #[cfg(unix)]
@@ -48,8 +50,9 @@ use pw_runtime::Runtime;
 use crate::methods::{TerminalCreateParams, TerminalEvent, TerminalId};
 use crate::pty::{CHUNK, Pty, Spec};
 
-/// 이 프로세스가 띄운 모든 터미널의 셸과 그 세션의 프로세스를 끝낸다(SIGHUP · SIGHUP 을 무시하면 300 ms 뒤 SIGKILL). 끝날 때까지
-/// 블로킹한다. 앱이 끝나기 직전(Tauri `RunEvent::Exit`)에 부른다 — 그 뒤 `std::process::exit` 라 Drop 이 돌지 않는다.
+/// 이 프로세스가 띄운 모든 터미널의 셸 · 실행([`runs`])과 그 세션의 프로세스를 끝낸다(SIGHUP · SIGHUP 을 무시하면 300 ms 뒤
+/// SIGKILL). 끝날 때까지 블로킹한다. 앱이 끝나기 직전(Tauri `RunEvent::Exit`)에 부른다 — 그 뒤 `std::process::exit` 라 Drop 이 돌지
+/// 않는다. 실행의 PTY 도 같은 세션 목록에 들므로 중지 중(SIGTERM 의 5초 안)인 실행도 여기서 끝난다.
 pub fn shutdown() {
     pty::shutdown_all();
 }

@@ -237,6 +237,11 @@ pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
         if let Some(files) = window.try_state::<FileWindows>() {
             files.forget(window.label());
         }
+        // 프로젝트 창이 사라지면 그 프로젝트의 실행을 끝낸다(17-m6-plan M6-02 ① — 실행이 남아 있으면 창이 닫기 전에 확인한다,
+        // M6-06 ⑥). 다시 불러오기는 창을 없애지 않으므로 실행이 그대로다.
+        if let Some(project) = window.label().strip_prefix("project-") {
+            pw_run::runs::project_closed(project);
+        }
         // MCP 승인의 포커스 순서에서 뺀다(pw_mcp::approval).
         if let Some(mcp) = window.try_state::<pw_mcp::sessions::Sessions>() {
             mcp.approvals().window_closed(window.label());

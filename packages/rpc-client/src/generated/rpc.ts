@@ -1118,6 +1118,34 @@ export type UnaryMethods = {
 	 */
 	"run.config.save": { params: RunConfigSaveParams; result: RunConfigSaved };
 	/**
+	 * 실행에 입력을 보낸다. 끝난 실행이면 invalid params.
+	 */
+	"run.input": { params: RunInputParams; result: null };
+	/**
+	 * 그 프로젝트의 실행(실행 중 · 남은 끝난 실행)과 상태 · 끝 코드.
+	 */
+	"run.list": { params: RunListParams; result: RunList };
+	/**
+	 * 실행 콘솔의 PTY 크기를 바꾼다. 0 인 크기는 invalid params.
+	 */
+	"run.resize": { params: RunResizeParams; result: null };
+	/**
+	 * 다시 실행: 중지하고 프로세스 트리가 끝난 것을 본 뒤 같은 구성을 새 실행으로 띄운다(`restartOf` 가 앞 실행).
+	 */
+	"run.restart": { params: RunIdParams; result: RunInfo };
+	/**
+	 * 실행 구성 하나를 띄운다(PTY — 런타임 환경 위에 구성의 env). 실행은 Host 의 것이라 이 연결이 닫혀도 돈다 — 출력은
+	 * `run.attach`, 끝은 이벤트 `run.exited`. 그 프로젝트의 창이 아닌 연결이면 permission denied, 미신뢰 프로젝트면 띄우지 않고
+	 * permission denied(`data.reason = "untrusted"`), 없는 구성은 not found, 쓸 수 없는 구성 · 프로젝트 밖 작업 폴더 · 없는
+	 * 프로필은 invalid params.
+	 */
+	"run.start": { params: RunStartParams; result: RunInfo };
+	/**
+	 * 실행을 중지한다 — 프로세스 세션 전체에 SIGTERM, 5초 안에 끝나지 않은 것은 SIGKILL(compose 는 SIGINT 를 먼저). 기다리지
+	 * 않는다(끝나면 `run.exited`). 이미 끝난 실행이면 아무것도 하지 않는다.
+	 */
+	"run.stop": { params: RunIdParams; result: RunInfo };
+	/**
 	 * 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).
 	 * 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.
 	 */
@@ -1296,6 +1324,10 @@ export type StreamMethods = {
 	 * 연결만 줄 수 있다.
 	 */
 	"mcp.approvals": { params: McpApprovalsParams; item: McpApprovalEvent };
+	/**
+	 * 실행의 출력을 `since` 오프셋부터 보낸다(앞에 쌓인 것 → 새로 나오는 것 → 끝). 스트림을 끊어도 실행은 돈다.
+	 */
+	"run.attach": { params: RunAttachParams; item: RunAttachEvent };
 	/**
 	 * 프로젝트 안의 텍스트 검색. 결과를 파일별 묶음 청크로 보내고 마지막에 `done` 청크 하나를 보낸다. 규칙(ignore · 심링크 ·
 	 * 바이너리 · 50 MiB · 벤더/생성 제외 · 결과 상한)은 `pw_fs::search` 머리 주석. 루트 밖 경로 · 빈 질의 · 잘못된 정규식 ·
@@ -1532,9 +1564,16 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"project.tool.register": {"name":"project.tool.register","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<ProjectRegisterToolParams>","output":"ProjectRegisterToolResult","doc":" Register a folder as a Pitwall project and return what was detected in it (build files, languages, the settings\n folder). Needs approval in Pitwall: the request shows the real path that will be registered (symbolic links and\n `..` resolved), the name and where the settings live. Refused before asking: a relative path, a folder that does\n not exist, the file system root, the home folder or a folder above it, and a folder that is already a project\n root or lies inside a registered project, including a git worktree of one (use `project_open` for those). The\n new project is not trusted: only a person can trust it in Pitwall.\n","mcp":{"group":"project","name":"project_register"},"fileScope":false},
 	"project.trust": {"name":"project.trust","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ProjectIdParams","output":"ProjectTrust","doc":" 프로젝트의 신뢰. 워크트리 프로젝트는 메인 저장소 프로젝트의 신뢰를 따른다(`ownerId`). 없는 id 면 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"project.update": {"name":"project.update","kind":"unary","tier":"write","roles":["owner"],"params":"UpdateProjectParams","output":"Project","doc":" 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.\n","mcp":null,"fileScope":false},
+	"run.attach": {"name":"run.attach","kind":"stream","tier":"read","roles":["owner"],"params":"RunAttachParams","output":"RunAttachEvent","doc":" 실행의 출력을 `since` 오프셋부터 보낸다(앞에 쌓인 것 → 새로 나오는 것 → 끝). 스트림을 끊어도 실행은 돈다.\n","mcp":null,"fileScope":false},
 	"run.config.delete": {"name":"run.config.delete","kind":"unary","tier":"write","roles":["owner"],"params":"RunConfigDeleteParams","output":"RunConfigDeleted","doc":" 구성 파일을 지운다(`location` 이 없으면 공유 · 개인 둘 다). 그 프로젝트 창의 연결만. 그 id 의 구성(쓸 수 없는 것 포함)이\n 없으면 not found.\n","mcp":null,"fileScope":false},
 	"run.config.list": {"name":"run.config.list","kind":"unary","tier":"read","roles":["owner"],"params":"RunConfigListParams","output":"RunConfigList","doc":" 프로젝트의 실행 구성 목록: 쓸 수 있는 구성 · 쓸 수 없는 구성(까닭) · 감지된 태스크. 디스크에 쓰지 않는다(구버전 파일도\n 메모리에서만 올린다). 없는 프로젝트는 not found, 그 프로젝트의 것이 아닌 `worktree` 는 invalid params.\n","mcp":null,"fileScope":false},
 	"run.config.save": {"name":"run.config.save","kind":"unary","tier":"write","roles":["owner"],"params":"RunConfigSaveParams","output":"RunConfigSaved","doc":" 구성 파일(`location` 의 것 하나)을 만들거나 고친다 — 주석과 모르는 키는 그대로 두고, 개인 파일에 쓰면 공유 파일에만 있는\n 키는 그대로 비친다. 그 프로젝트 창의 연결만(아니면 permission denied). 구성이 검증(`cwd` 가 루트 안 등)을 지나지 못하거나\n id 가 틀렸으면 invalid params, 대소문자만 다른 구성이 있거나 · 파일이 TOML 이 아니거나 · 앱보다 새 `schema` 거나 · 저장소 안의\n 링크면 conflict.\n","mcp":null,"fileScope":false},
+	"run.input": {"name":"run.input","kind":"unary","tier":"exec","roles":["owner"],"params":"RunInputParams","output":"()","doc":" 실행에 입력을 보낸다. 끝난 실행이면 invalid params.\n","mcp":null,"fileScope":false},
+	"run.list": {"name":"run.list","kind":"unary","tier":"read","roles":["owner"],"params":"RunListParams","output":"RunList","doc":" 그 프로젝트의 실행(실행 중 · 남은 끝난 실행)과 상태 · 끝 코드.\n","mcp":null,"fileScope":false},
+	"run.resize": {"name":"run.resize","kind":"unary","tier":"write","roles":["owner"],"params":"RunResizeParams","output":"()","doc":" 실행 콘솔의 PTY 크기를 바꾼다. 0 인 크기는 invalid params.\n","mcp":null,"fileScope":false},
+	"run.restart": {"name":"run.restart","kind":"unary","tier":"exec","roles":["owner"],"params":"RunIdParams","output":"RunInfo","doc":" 다시 실행: 중지하고 프로세스 트리가 끝난 것을 본 뒤 같은 구성을 새 실행으로 띄운다(`restartOf` 가 앞 실행).\n","mcp":null,"fileScope":false},
+	"run.start": {"name":"run.start","kind":"unary","tier":"exec","roles":["owner"],"params":"RunStartParams","output":"RunInfo","doc":" 실행 구성 하나를 띄운다(PTY — 런타임 환경 위에 구성의 env). 실행은 Host 의 것이라 이 연결이 닫혀도 돈다 — 출력은\n `run.attach`, 끝은 이벤트 `run.exited`. 그 프로젝트의 창이 아닌 연결이면 permission denied, 미신뢰 프로젝트면 띄우지 않고\n permission denied(`data.reason = \"untrusted\"`), 없는 구성은 not found, 쓸 수 없는 구성 · 프로젝트 밖 작업 폴더 · 없는\n 프로필은 invalid params.\n","mcp":null,"fileScope":false},
+	"run.stop": {"name":"run.stop","kind":"unary","tier":"exec","roles":["owner"],"params":"RunIdParams","output":"RunInfo","doc":" 실행을 중지한다 — 프로세스 세션 전체에 SIGTERM, 5초 안에 끝나지 않은 것은 SIGKILL(compose 는 SIGINT 를 먼저). 기다리지\n 않는다(끝나면 `run.exited`). 이미 끝난 실행이면 아무것도 하지 않는다.\n","mcp":null,"fileScope":false},
 	"runtime.get": {"name":"runtime.get","kind":"unary","tier":"read","roles":["owner"],"params":"RuntimeGetParams","output":"RuntimeInfo","doc":" 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"runtime.reload": {"name":"runtime.reload","kind":"unary","tier":"write","roles":["owner"],"params":"RuntimeReloadParams","output":"()","doc":" 「환경 다시 읽기」: 로그인 셸 환경과 디렉터리별 캐시를 잊고 `runtime.changed` 를 낸다. 셸은 다음 요청에서 다시 돈다\n (백그라운드로 미리 시작한다). 이미 띄운 프로세스(열린 터미널)의 환경은 바뀌지 않는다.\n","mcp":null,"fileScope":false},
 	"search.files": {"name":"search.files","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SearchFilesParams","output":"SearchFiles","doc":" 프로젝트의 파일을 이름 · 경로로 퍼지 매칭한다(`⌘⇧O` · Search Everywhere). 목록은 창이 `fs.watch` 로 보는 루트마다 메모리에\n 있고 변경을 따라간다(`pw_fs::index` 머리 주석). 처음 만드는 중이면 다 만들 때까지 기다린다. 빈 질의는 경로순 앞에서부터다.\n","mcp":null,"fileScope":false},
@@ -6299,6 +6338,13 @@ export type LaunchProblem =
 /**  띄운 런처가 곧바로 0 이 아닌 코드로 끝났다. 신호로 끝났으면 `code` 가 없다. */
 { kind: "exited"; code: number | null };
 
+/**  실행을 띄운 자리(M6-12 ② · M6-14 ⑦ 이 읽는다 — 사람이 띄운 실행은 에이전트의 정책 자동이 닿지 않는다). */
+export type LaunchedBy = 
+/**  A person, from the project window (`window` is the window label when known). */
+{ kind: "window"; window: string | null } | 
+/**  An agent, through a run tool (`session` is the MCP session, `client` the agent's client name when it gave one). */
+{ kind: "agent"; session: string; client: string | null };
+
 export type LayerOrigin = "builtin" | 
 /**  `<id>.toml` — 커밋되는 공유 설정(전역이면 그냥 설정 파일). */
 "shared" | 
@@ -8241,6 +8287,27 @@ export type RpcError = {
 	data?: JsonValue,
 };
 
+/**  `run.attach` 스트림의 항목. */
+export type RunAttachEvent = 
+/**
+ *  첫 항목: 지금의 실행. `from` 은 처음 보낼 오프셋 — `since` 앞이 버퍼에서 버려졌으면 `since` 보다 크고, 그 차이가
+ *  `dropped` 바이트다.
+ */
+{ kind: "attached"; run: RunInfo; from: number; dropped: number } | 
+/**
+ *  출력. `data` 는 바이트의 base64(청크 경계가 UTF-8 문자 가운데일 수 있다). `offset` 이 앞 항목의 끝보다 크면 그 사이는 보내기
+ *  전에 버퍼에서 버려졌다(소비자가 느리다).
+ */
+{ kind: "output"; offset: number; data: string } | 
+/**  마지막 항목 — 실행이 끝났고 남은 출력을 다 보냈다. */
+{ kind: "exited"; exit: RunExit };
+
+export type RunAttachParams = {
+	runId: string,
+	/**  이 오프셋부터 보낸다(받은 마지막 `output` 의 `offset` + 바이트 수). 없으면 0 — 남은 처음부터. */
+	since?: number | null,
+};
+
 /**
  *  One run configuration: the common fields plus the kind (`type`, [`RunKindConfig`]). Doc comments of the configuration types are
  *  English — they become the JSON Schema descriptions an agent reads (M6-13, decision M5-D39).
@@ -8339,6 +8406,54 @@ export type RunConfigSaved = {
 	changed: boolean,
 };
 
+/**  끝난 꼴. */
+export type RunExit = {
+	/**  끝 코드. 신호로 끝났으면 `null`. */
+	code: number | null,
+	/**  끝낸 신호의 이름(예: `Terminated: 15`). 코드로 끝났으면 `null`. */
+	signal: string | null,
+};
+
+export type RunIdParams = {
+	runId: string,
+};
+
+/**  실행 하나의 정보(`run.list` · `run.start` · 이벤트 `run.started` · `run.exited`). */
+export type RunInfo = {
+	runId: string,
+	projectId: string,
+	/**  구성 열쇠(구성 id · 감지된 태스크의 열쇠). */
+	config: string,
+	/**  보이는 이름(구성의 `name`). */
+	name: string,
+	/**  종류: `process`(M6-02) · `sql`(M6-09) · `debug`(M6-17). */
+	kind: string,
+	launchedBy: LaunchedBy,
+	/**  띄운 활성 워크트리 꼭대기. 주 체크아웃이면 `null`. */
+	worktree: string | null,
+	/**  작업 폴더(정규화한 절대 경로) — 콘솔의 상대 경로 링크 기준(M6-06 ②). */
+	cwd: string | null,
+	profile: string | null,
+	pid: number | null,
+	state: RunState,
+	exit: RunExit | null,
+	/**  시작 시각(Unix 밀리초). */
+	startedAt: number,
+	endedAt: number | null,
+	/**  「다시 실행」 으로 이 실행이 이어받은 앞 실행. */
+	restartOf: string | null,
+	/**  남은 로그의 첫 오프셋(그 앞은 버려졌다). */
+	logStart: number,
+	/**  로그의 끝 오프셋(쓴 바이트 수 전체). */
+	logEnd: number,
+};
+
+export type RunInputParams = {
+	runId: string,
+	/**  보낼 글자(키 입력 · 붙여넣기). 받은 순서대로 쓰인다. */
+	data: string,
+};
+
 /**
  *  The kind of configuration (`type`) and its fields. Every kind except `shell` builds its command line from these fields, one
  *  field value per argument — nothing is joined into a shell string.
@@ -8368,6 +8483,15 @@ file?: string | null } |
 /**  `mise run <task>`. */
 { type: "mise-task"; task: string };
 
+export type RunList = {
+	/**  실행 중인 것과 남은 끝난 것(프로젝트마다 최근 20개), 시작 순. */
+	runs: RunInfo[],
+};
+
+export type RunListParams = {
+	projectId: string,
+};
+
 /**  A profile (`[profiles.<name>]`): overrides applied over the configuration when it is picked. */
 export type RunProfile = {
 	/**  Applied key by key over the configuration's `env`. */
@@ -8375,6 +8499,32 @@ export type RunProfile = {
 	/**  Replaces the kind's `args` as a whole. Only for kinds with `args` (cargo, go, python). */
 	args?: string[] | null,
 };
+
+export type RunResizeParams = {
+	runId: string,
+	cols: number,
+	rows: number,
+};
+
+export type RunStartParams = {
+	projectId: string,
+	/**
+	 *  창의 활성 워크트리 꼭대기(`ActiveWorktree.top`). 구성은 그 워크트리의 것을 읽고 작업 폴더도 그 안의 프로젝트 루트 기준이다.
+	 *  그 프로젝트의 연결 워크트리가 아니면 invalid params.
+	 */
+	worktree?: string | null,
+	/**  구성 id(`.pitwall/run/<id>.toml`). */
+	configId: string,
+	/**  고를 프로필(`[profiles.<이름>]`). */
+	profile?: string | null,
+	/**  콘솔 크기. 없으면 120 × 30(콘솔이 붙으면 `run.resize`). */
+	cols?: number | null,
+	rows?: number | null,
+};
+
+export type RunState = "running" | 
+/**  중지를 보냈고 아직 끝나지 않았다. */
+"stopping" | "exited";
 
 export type RuntimeGetParams = {
 	projectId: string,

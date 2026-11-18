@@ -1,4 +1,4 @@
-//! 터미널 세션의 프로세스 트리 끝내기(유닉스).
+//! 터미널 · 실행 세션의 프로세스 트리 끝내기(유닉스).
 //!
 //! PTY 의 셸은 `setsid` 로 새 세션의 리더가 되므로(portable-pty) 셸이 띄운 것은 모두 그 세션에 든다. 대화형 셸은 작업마다 프로세스
 //! 그룹을 따로 만들므로(`sleep 100 &`) 셸의 프로세스 그룹만 죽이면 남는다 — 세션 id(`getsid`)로 찾는다. 셸이 먼저 죽어 자식이
@@ -8,26 +8,30 @@ use std::time::{Duration, Instant};
 
 use libc::pid_t;
 
-/// 세션 `leader` 의 프로세스에 SIGHUP(멈춘 것은 SIGCONT 로 깨운다)을 보내고, `grace` 안에 다 끝나지 않으면 남은 것에 SIGKILL 을
-/// 보낸다. 끝날 때까지 블로킹한다.
-pub fn terminate_session(leader: pid_t, grace: Duration) {
-    terminate_sessions(&[leader], grace);
+/// 세션 `leaders` 의 프로세스에 SIGHUP(멈춘 것은 SIGCONT 로 깨운다)을 보내고, `grace` 안에 다 끝나지 않으면 남은 것에 SIGKILL 을
+/// 보낸다(기다림은 한 번). 끝날 때까지 블로킹한다.
+pub fn terminate_sessions(leaders: &[pid_t], grace: Duration) {
+    end_sessions(leaders, &[(libc::SIGHUP, grace)]);
 }
 
-/// [`terminate_session`] 을 여러 세션에 한꺼번에 한다(기다림은 한 번).
-pub fn terminate_sessions(leaders: &[pid_t], grace: Duration) {
-    signal_sessions(leaders, libc::SIGHUP);
-    signal_sessions(leaders, libc::SIGCONT);
-    let deadline = Instant::now() + grace;
-    while Instant::now() < deadline {
-        if members(leaders).is_empty() {
-            return;
+/// 세션 `leaders` 의 프로세스를 단계마다 신호 하나로 끝내 본다 — 단계의 신호(멈춘 것은 SIGCONT 로 깨운다)를 보내고 그 시간 안에 다
+/// 끝나면 멈춘다. 모든 단계 뒤에 남은 것에는 SIGKILL 을 보낸다. 끝날 때까지 블로킹한다. 실행(`crate::runs`)의 중지는
+/// `[(SIGTERM, 5 s)]`, compose 는 그 앞에 `(SIGINT, …)` 이고, 터미널은 `[(SIGHUP, 300 ms)]` 다.
+pub fn end_sessions(leaders: &[pid_t], steps: &[(libc::c_int, Duration)]) {
+    for &(signal, grace) in steps {
+        signal_sessions(leaders, signal);
+        signal_sessions(leaders, libc::SIGCONT);
+        let deadline = Instant::now() + grace;
+        while Instant::now() < deadline {
+            if members(leaders).is_empty() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
         }
-        std::thread::sleep(Duration::from_millis(10));
     }
     let left = members(leaders);
     if !left.is_empty() {
-        tracing::debug!(target: "pw_run", ?leaders, ?left, "killing terminal processes that ignored SIGHUP");
+        tracing::debug!(target: "pw_run", ?leaders, ?left, "killing session processes that outlived the stop signals");
     }
     signal_sessions(leaders, libc::SIGKILL);
 }
@@ -45,7 +49,7 @@ fn signal_sessions(leaders: &[pid_t], signal: libc::c_int) {
 }
 
 /// 세션 `leaders` 중 하나에 든 프로세스(좀비가 아닌 것, `getsid` 가 읽히는 것).
-fn members(leaders: &[pid_t]) -> Vec<pid_t> {
+pub fn members(leaders: &[pid_t]) -> Vec<pid_t> {
     all_pids()
         .into_iter()
         .filter(|&pid| pid > 0 && session_of(pid).is_some_and(|sid| leaders.contains(&sid)))

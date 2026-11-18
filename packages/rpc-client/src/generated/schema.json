@@ -40481,6 +40481,321 @@
       ],
       "tier": "write"
     },
+    "run.attach": {
+      "description": "실행의 출력을 `since` 오프셋부터 보낸다(앞에 쌓인 것 → 새로 나오는 것 → 끝). 스트림을 끊어도 실행은 돈다.",
+      "item": {
+        "$defs": {
+          "LaunchedBy": {
+            "description": "실행을 띄운 자리(M6-12 ② · M6-14 ⑦ 이 읽는다 — 사람이 띄운 실행은 에이전트의 정책 자동이 닿지 않는다).",
+            "oneOf": [
+              {
+                "description": "A person, from the project window (`window` is the window label when known).",
+                "properties": {
+                  "kind": {
+                    "const": "window",
+                    "type": "string"
+                  },
+                  "window": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "window"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "An agent, through a run tool (`session` is the MCP session, `client` the agent's client name when it gave one).",
+                "properties": {
+                  "client": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "kind": {
+                    "const": "agent",
+                    "type": "string"
+                  },
+                  "session": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "session",
+                  "client"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "RunExit": {
+            "description": "끝난 꼴.",
+            "properties": {
+              "code": {
+                "description": "끝 코드. 신호로 끝났으면 `null`.",
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "signal": {
+                "description": "끝낸 신호의 이름(예: `Terminated: 15`). 코드로 끝났으면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "code",
+              "signal"
+            ],
+            "type": "object"
+          },
+          "RunInfo": {
+            "description": "실행 하나의 정보(`run.list` · `run.start` · 이벤트 `run.started` · `run.exited`).",
+            "properties": {
+              "config": {
+                "description": "구성 열쇠(구성 id · 감지된 태스크의 열쇠).",
+                "type": "string"
+              },
+              "cwd": {
+                "description": "작업 폴더(정규화한 절대 경로) — 콘솔의 상대 경로 링크 기준(M6-06 ②).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "endedAt": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "exit": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RunExit"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "kind": {
+                "description": "종류: `process`(M6-02) · `sql`(M6-09) · `debug`(M6-17).",
+                "type": "string"
+              },
+              "launchedBy": {
+                "$ref": "#/$defs/LaunchedBy"
+              },
+              "logEnd": {
+                "description": "로그의 끝 오프셋(쓴 바이트 수 전체).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "logStart": {
+                "description": "남은 로그의 첫 오프셋(그 앞은 버려졌다).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "description": "보이는 이름(구성의 `name`).",
+                "type": "string"
+              },
+              "pid": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "projectId": {
+                "type": "string"
+              },
+              "restartOf": {
+                "description": "「다시 실행」 으로 이 실행이 이어받은 앞 실행.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "runId": {
+                "type": "string"
+              },
+              "startedAt": {
+                "description": "시작 시각(Unix 밀리초).",
+                "format": "int64",
+                "type": "integer"
+              },
+              "state": {
+                "$ref": "#/$defs/RunState"
+              },
+              "worktree": {
+                "description": "띄운 활성 워크트리 꼭대기. 주 체크아웃이면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "runId",
+              "projectId",
+              "config",
+              "name",
+              "kind",
+              "launchedBy",
+              "worktree",
+              "cwd",
+              "profile",
+              "pid",
+              "state",
+              "exit",
+              "startedAt",
+              "endedAt",
+              "restartOf",
+              "logStart",
+              "logEnd"
+            ],
+            "type": "object"
+          },
+          "RunState": {
+            "oneOf": [
+              {
+                "enum": [
+                  "running",
+                  "exited"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "stopping",
+                "description": "중지를 보냈고 아직 끝나지 않았다.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`run.attach` 스트림의 항목.",
+        "oneOf": [
+          {
+            "description": "첫 항목: 지금의 실행. `from` 은 처음 보낼 오프셋 — `since` 앞이 버퍼에서 버려졌으면 `since` 보다 크고, 그 차이가\n`dropped` 바이트다.",
+            "properties": {
+              "dropped": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "from": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "attached",
+                "type": "string"
+              },
+              "run": {
+                "$ref": "#/$defs/RunInfo"
+              }
+            },
+            "required": [
+              "kind",
+              "run",
+              "from",
+              "dropped"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "출력. `data` 는 바이트의 base64(청크 경계가 UTF-8 문자 가운데일 수 있다). `offset` 이 앞 항목의 끝보다 크면 그 사이는 보내기\n전에 버퍼에서 버려졌다(소비자가 느리다).",
+            "properties": {
+              "data": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "output",
+                "type": "string"
+              },
+              "offset": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "offset",
+              "data"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "마지막 항목 — 실행이 끝났고 남은 출력을 다 보냈다.",
+            "properties": {
+              "exit": {
+                "$ref": "#/$defs/RunExit"
+              },
+              "kind": {
+                "const": "exited",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "exit"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "kind": "stream",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "since": {
+            "default": null,
+            "description": "이 오프셋부터 보낸다(받은 마지막 `output` 의 `offset` + 바이트 수). 없으면 0 — 남은 처음부터.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "run.config.delete": {
       "description": "구성 파일을 지운다(`location` 이 없으면 공유 · 개인 둘 다). 그 프로젝트 창의 연결만. 그 id 의 구성(쓸 수 없는 것 포함)이\n없으면 not found.",
       "kind": "unary",
@@ -41510,6 +41825,1054 @@
         "owner"
       ],
       "tier": "write"
+    },
+    "run.input": {
+      "description": "실행에 입력을 보낸다. 끝난 실행이면 invalid params.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "data": {
+            "description": "보낼 글자(키 입력 · 붙여넣기). 받은 순서대로 쓰인다.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "data"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "run.list": {
+      "description": "그 프로젝트의 실행(실행 중 · 남은 끝난 실행)과 상태 · 끝 코드.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LaunchedBy": {
+            "description": "실행을 띄운 자리(M6-12 ② · M6-14 ⑦ 이 읽는다 — 사람이 띄운 실행은 에이전트의 정책 자동이 닿지 않는다).",
+            "oneOf": [
+              {
+                "description": "A person, from the project window (`window` is the window label when known).",
+                "properties": {
+                  "kind": {
+                    "const": "window",
+                    "type": "string"
+                  },
+                  "window": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "window"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "An agent, through a run tool (`session` is the MCP session, `client` the agent's client name when it gave one).",
+                "properties": {
+                  "client": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "kind": {
+                    "const": "agent",
+                    "type": "string"
+                  },
+                  "session": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "session",
+                  "client"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "RunExit": {
+            "description": "끝난 꼴.",
+            "properties": {
+              "code": {
+                "description": "끝 코드. 신호로 끝났으면 `null`.",
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "signal": {
+                "description": "끝낸 신호의 이름(예: `Terminated: 15`). 코드로 끝났으면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "code",
+              "signal"
+            ],
+            "type": "object"
+          },
+          "RunInfo": {
+            "description": "실행 하나의 정보(`run.list` · `run.start` · 이벤트 `run.started` · `run.exited`).",
+            "properties": {
+              "config": {
+                "description": "구성 열쇠(구성 id · 감지된 태스크의 열쇠).",
+                "type": "string"
+              },
+              "cwd": {
+                "description": "작업 폴더(정규화한 절대 경로) — 콘솔의 상대 경로 링크 기준(M6-06 ②).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "endedAt": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "exit": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RunExit"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "kind": {
+                "description": "종류: `process`(M6-02) · `sql`(M6-09) · `debug`(M6-17).",
+                "type": "string"
+              },
+              "launchedBy": {
+                "$ref": "#/$defs/LaunchedBy"
+              },
+              "logEnd": {
+                "description": "로그의 끝 오프셋(쓴 바이트 수 전체).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "logStart": {
+                "description": "남은 로그의 첫 오프셋(그 앞은 버려졌다).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "description": "보이는 이름(구성의 `name`).",
+                "type": "string"
+              },
+              "pid": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "projectId": {
+                "type": "string"
+              },
+              "restartOf": {
+                "description": "「다시 실행」 으로 이 실행이 이어받은 앞 실행.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "runId": {
+                "type": "string"
+              },
+              "startedAt": {
+                "description": "시작 시각(Unix 밀리초).",
+                "format": "int64",
+                "type": "integer"
+              },
+              "state": {
+                "$ref": "#/$defs/RunState"
+              },
+              "worktree": {
+                "description": "띄운 활성 워크트리 꼭대기. 주 체크아웃이면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "runId",
+              "projectId",
+              "config",
+              "name",
+              "kind",
+              "launchedBy",
+              "worktree",
+              "cwd",
+              "profile",
+              "pid",
+              "state",
+              "exit",
+              "startedAt",
+              "endedAt",
+              "restartOf",
+              "logStart",
+              "logEnd"
+            ],
+            "type": "object"
+          },
+          "RunState": {
+            "oneOf": [
+              {
+                "enum": [
+                  "running",
+                  "exited"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "stopping",
+                "description": "중지를 보냈고 아직 끝나지 않았다.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "runs": {
+            "description": "실행 중인 것과 남은 끝난 것(프로젝트마다 최근 20개), 시작 순.",
+            "items": {
+              "$ref": "#/$defs/RunInfo"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "run.resize": {
+      "description": "실행 콘솔의 PTY 크기를 바꾼다. 0 인 크기는 invalid params.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cols": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rows": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "runId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "cols",
+          "rows"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "run.restart": {
+      "description": "다시 실행: 중지하고 프로세스 트리가 끝난 것을 본 뒤 같은 구성을 새 실행으로 띄운다(`restartOf` 가 앞 실행).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "runId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LaunchedBy": {
+            "description": "실행을 띄운 자리(M6-12 ② · M6-14 ⑦ 이 읽는다 — 사람이 띄운 실행은 에이전트의 정책 자동이 닿지 않는다).",
+            "oneOf": [
+              {
+                "description": "A person, from the project window (`window` is the window label when known).",
+                "properties": {
+                  "kind": {
+                    "const": "window",
+                    "type": "string"
+                  },
+                  "window": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "window"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "An agent, through a run tool (`session` is the MCP session, `client` the agent's client name when it gave one).",
+                "properties": {
+                  "client": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "kind": {
+                    "const": "agent",
+                    "type": "string"
+                  },
+                  "session": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "session",
+                  "client"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "RunExit": {
+            "description": "끝난 꼴.",
+            "properties": {
+              "code": {
+                "description": "끝 코드. 신호로 끝났으면 `null`.",
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "signal": {
+                "description": "끝낸 신호의 이름(예: `Terminated: 15`). 코드로 끝났으면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "code",
+              "signal"
+            ],
+            "type": "object"
+          },
+          "RunState": {
+            "oneOf": [
+              {
+                "enum": [
+                  "running",
+                  "exited"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "stopping",
+                "description": "중지를 보냈고 아직 끝나지 않았다.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "실행 하나의 정보(`run.list` · `run.start` · 이벤트 `run.started` · `run.exited`).",
+        "properties": {
+          "config": {
+            "description": "구성 열쇠(구성 id · 감지된 태스크의 열쇠).",
+            "type": "string"
+          },
+          "cwd": {
+            "description": "작업 폴더(정규화한 절대 경로) — 콘솔의 상대 경로 링크 기준(M6-06 ②).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "endedAt": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "exit": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunExit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "description": "종류: `process`(M6-02) · `sql`(M6-09) · `debug`(M6-17).",
+            "type": "string"
+          },
+          "launchedBy": {
+            "$ref": "#/$defs/LaunchedBy"
+          },
+          "logEnd": {
+            "description": "로그의 끝 오프셋(쓴 바이트 수 전체).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "logStart": {
+            "description": "남은 로그의 첫 오프셋(그 앞은 버려졌다).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "description": "보이는 이름(구성의 `name`).",
+            "type": "string"
+          },
+          "pid": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "restartOf": {
+            "description": "「다시 실행」 으로 이 실행이 이어받은 앞 실행.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runId": {
+            "type": "string"
+          },
+          "startedAt": {
+            "description": "시작 시각(Unix 밀리초).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/$defs/RunState"
+          },
+          "worktree": {
+            "description": "띄운 활성 워크트리 꼭대기. 주 체크아웃이면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "runId",
+          "projectId",
+          "config",
+          "name",
+          "kind",
+          "launchedBy",
+          "worktree",
+          "cwd",
+          "profile",
+          "pid",
+          "state",
+          "exit",
+          "startedAt",
+          "endedAt",
+          "restartOf",
+          "logStart",
+          "logEnd"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "run.start": {
+      "description": "실행 구성 하나를 띄운다(PTY — 런타임 환경 위에 구성의 env). 실행은 Host 의 것이라 이 연결이 닫혀도 돈다 — 출력은\n`run.attach`, 끝은 이벤트 `run.exited`. 그 프로젝트의 창이 아닌 연결이면 permission denied, 미신뢰 프로젝트면 띄우지 않고\npermission denied(`data.reason = \"untrusted\"`), 없는 구성은 not found, 쓸 수 없는 구성 · 프로젝트 밖 작업 폴더 · 없는\n프로필은 invalid params.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cols": {
+            "default": null,
+            "description": "콘솔 크기. 없으면 120 × 30(콘솔이 붙으면 `run.resize`).",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "configId": {
+            "description": "구성 id(`.pitwall/run/<id>.toml`).",
+            "type": "string"
+          },
+          "profile": {
+            "default": null,
+            "description": "고를 프로필(`[profiles.<이름>]`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "rows": {
+            "default": null,
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "worktree": {
+            "default": null,
+            "description": "창의 활성 워크트리 꼭대기(`ActiveWorktree.top`). 구성은 그 워크트리의 것을 읽고 작업 폴더도 그 안의 프로젝트 루트 기준이다.\n그 프로젝트의 연결 워크트리가 아니면 invalid params.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "configId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LaunchedBy": {
+            "description": "실행을 띄운 자리(M6-12 ② · M6-14 ⑦ 이 읽는다 — 사람이 띄운 실행은 에이전트의 정책 자동이 닿지 않는다).",
+            "oneOf": [
+              {
+                "description": "A person, from the project window (`window` is the window label when known).",
+                "properties": {
+                  "kind": {
+                    "const": "window",
+                    "type": "string"
+                  },
+                  "window": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "window"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "An agent, through a run tool (`session` is the MCP session, `client` the agent's client name when it gave one).",
+                "properties": {
+                  "client": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "kind": {
+                    "const": "agent",
+                    "type": "string"
+                  },
+                  "session": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "session",
+                  "client"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "RunExit": {
+            "description": "끝난 꼴.",
+            "properties": {
+              "code": {
+                "description": "끝 코드. 신호로 끝났으면 `null`.",
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "signal": {
+                "description": "끝낸 신호의 이름(예: `Terminated: 15`). 코드로 끝났으면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "code",
+              "signal"
+            ],
+            "type": "object"
+          },
+          "RunState": {
+            "oneOf": [
+              {
+                "enum": [
+                  "running",
+                  "exited"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "stopping",
+                "description": "중지를 보냈고 아직 끝나지 않았다.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "실행 하나의 정보(`run.list` · `run.start` · 이벤트 `run.started` · `run.exited`).",
+        "properties": {
+          "config": {
+            "description": "구성 열쇠(구성 id · 감지된 태스크의 열쇠).",
+            "type": "string"
+          },
+          "cwd": {
+            "description": "작업 폴더(정규화한 절대 경로) — 콘솔의 상대 경로 링크 기준(M6-06 ②).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "endedAt": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "exit": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunExit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "description": "종류: `process`(M6-02) · `sql`(M6-09) · `debug`(M6-17).",
+            "type": "string"
+          },
+          "launchedBy": {
+            "$ref": "#/$defs/LaunchedBy"
+          },
+          "logEnd": {
+            "description": "로그의 끝 오프셋(쓴 바이트 수 전체).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "logStart": {
+            "description": "남은 로그의 첫 오프셋(그 앞은 버려졌다).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "description": "보이는 이름(구성의 `name`).",
+            "type": "string"
+          },
+          "pid": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "restartOf": {
+            "description": "「다시 실행」 으로 이 실행이 이어받은 앞 실행.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runId": {
+            "type": "string"
+          },
+          "startedAt": {
+            "description": "시작 시각(Unix 밀리초).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/$defs/RunState"
+          },
+          "worktree": {
+            "description": "띄운 활성 워크트리 꼭대기. 주 체크아웃이면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "runId",
+          "projectId",
+          "config",
+          "name",
+          "kind",
+          "launchedBy",
+          "worktree",
+          "cwd",
+          "profile",
+          "pid",
+          "state",
+          "exit",
+          "startedAt",
+          "endedAt",
+          "restartOf",
+          "logStart",
+          "logEnd"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "run.stop": {
+      "description": "실행을 중지한다 — 프로세스 세션 전체에 SIGTERM, 5초 안에 끝나지 않은 것은 SIGKILL(compose 는 SIGINT 를 먼저). 기다리지\n않는다(끝나면 `run.exited`). 이미 끝난 실행이면 아무것도 하지 않는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "runId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LaunchedBy": {
+            "description": "실행을 띄운 자리(M6-12 ② · M6-14 ⑦ 이 읽는다 — 사람이 띄운 실행은 에이전트의 정책 자동이 닿지 않는다).",
+            "oneOf": [
+              {
+                "description": "A person, from the project window (`window` is the window label when known).",
+                "properties": {
+                  "kind": {
+                    "const": "window",
+                    "type": "string"
+                  },
+                  "window": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "window"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "An agent, through a run tool (`session` is the MCP session, `client` the agent's client name when it gave one).",
+                "properties": {
+                  "client": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "kind": {
+                    "const": "agent",
+                    "type": "string"
+                  },
+                  "session": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "session",
+                  "client"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "RunExit": {
+            "description": "끝난 꼴.",
+            "properties": {
+              "code": {
+                "description": "끝 코드. 신호로 끝났으면 `null`.",
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "signal": {
+                "description": "끝낸 신호의 이름(예: `Terminated: 15`). 코드로 끝났으면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "code",
+              "signal"
+            ],
+            "type": "object"
+          },
+          "RunState": {
+            "oneOf": [
+              {
+                "enum": [
+                  "running",
+                  "exited"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "stopping",
+                "description": "중지를 보냈고 아직 끝나지 않았다.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "실행 하나의 정보(`run.list` · `run.start` · 이벤트 `run.started` · `run.exited`).",
+        "properties": {
+          "config": {
+            "description": "구성 열쇠(구성 id · 감지된 태스크의 열쇠).",
+            "type": "string"
+          },
+          "cwd": {
+            "description": "작업 폴더(정규화한 절대 경로) — 콘솔의 상대 경로 링크 기준(M6-06 ②).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "endedAt": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "exit": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunExit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "description": "종류: `process`(M6-02) · `sql`(M6-09) · `debug`(M6-17).",
+            "type": "string"
+          },
+          "launchedBy": {
+            "$ref": "#/$defs/LaunchedBy"
+          },
+          "logEnd": {
+            "description": "로그의 끝 오프셋(쓴 바이트 수 전체).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "logStart": {
+            "description": "남은 로그의 첫 오프셋(그 앞은 버려졌다).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "description": "보이는 이름(구성의 `name`).",
+            "type": "string"
+          },
+          "pid": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "restartOf": {
+            "description": "「다시 실행」 으로 이 실행이 이어받은 앞 실행.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runId": {
+            "type": "string"
+          },
+          "startedAt": {
+            "description": "시작 시각(Unix 밀리초).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/$defs/RunState"
+          },
+          "worktree": {
+            "description": "띄운 활성 워크트리 꼭대기. 주 체크아웃이면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "runId",
+          "projectId",
+          "config",
+          "name",
+          "kind",
+          "launchedBy",
+          "worktree",
+          "cwd",
+          "profile",
+          "pid",
+          "state",
+          "exit",
+          "startedAt",
+          "endedAt",
+          "restartOf",
+          "logStart",
+          "logEnd"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
     },
     "runtime.get": {
       "description": "그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.",

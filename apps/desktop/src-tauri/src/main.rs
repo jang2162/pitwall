@@ -191,6 +191,10 @@ fn local_host_parts(
     // 실행 구성(`run.config.*`, M6-01). `.pitwall/run/*.toml` 을 읽고 쓴다.
     let run_configs = Arc::new(pw_run::config::methods::RunConfigs::new());
     let run_config_methods = Arc::clone(&run_configs);
+    // 실행 관리자(`run.*`, M6-02). 실행은 연결이 아니라 Host 의 것이다 — 창을 다시 불러와도 · 에이전트가 띄웠어도 같은 실행을 본다.
+    // 프로젝트 창이 사라지면 그 프로젝트의 실행을 끝내고(ipc.rs), 앱이 끝날 때는 `pw_run::shutdown` 이 함께 끝낸다.
+    let runs = pw_run::runs::Runs::new(Arc::clone(&runtime));
+    let run_methods = runs.clone();
     // 구문 강조(`syntax.*`). 문법 엔진은 처음 문서를 열 때 만든다.
     let syntax = Arc::new(pw_syntax::Syntax::new(Arc::clone(&extensions)));
     // git(`git.*`, M2). 읽기는 gix, 쓰기는 런타임 환경으로 띄우는 git CLI 다.
@@ -256,6 +260,7 @@ fn local_host_parts(
         .methods(move |router| pw_open_with::cli::register(router, cli_check))
         .methods(move |router| pw_run::methods::register(router, terminal_methods))
         .methods(move |router| pw_run::config::methods::register(router, run_config_methods))
+        .methods(move |router| pw_run::runs::methods::register(router, run_methods))
         .methods(move |router| pw_syntax::methods::register(router, syntax))
         .methods(move |router| pw_git::methods::register(router, git_methods))
         .methods(move |router| pw_git::write::register(router, git_write_methods))
@@ -332,6 +337,12 @@ fn local_host_parts(
                 run_configs.seen(),
                 host.bus().clone(),
             ));
+            // 실행은 구성을 읽고(설정 경로 · 레지스트리) `run.started` · `run.exited` 를 버스로 낸다.
+            runs.attach(pw_run::runs::HostParts {
+                paths: config.paths.clone(),
+                projects: projects.clone(),
+                bus: host.bus().clone(),
+            });
             // git 은 전역 설정(`[git] path`) · 레지스트리를 쓰고, 쓰기를 끈 알림을 버스로 낸다.
             git.attach(pw_git::HostParts {
                 global: config.global.clone(),

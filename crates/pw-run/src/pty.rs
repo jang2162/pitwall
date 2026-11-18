@@ -70,6 +70,44 @@ pub fn shutdown_all() {
     }
 }
 
+/// 끝내는 방법([`Pty::end`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ending {
+    /// 터미널 닫기: SIGHUP, [`HANGUP_GRACE`] 뒤 남은 것에 SIGKILL. 출력은 곧바로 닫는다(남은 출력은 읽어 버린다).
+    Hangup,
+    /// 실행 중지(17-m6-plan M6-02 ④): SIGTERM, `grace` 뒤 남은 것에 SIGKILL. 출력은 세션이 끝날 때까지 계속 읽는다 — 프로그램이
+    /// 끝나며 찍는 것도 로그에 남는다.
+    Terminate { grace: Duration },
+    /// compose 의 중지(M6-01): SIGINT 로 compose 가 컨테이너를 멈추게 하고, `interrupt` 안에 끝나지 않으면 [`Ending::Terminate`].
+    InterruptThenTerminate {
+        interrupt: Duration,
+        grace: Duration,
+    },
+}
+
+impl Ending {
+    /// 세션에 보낼 (신호, 기다림) 단계(`tree::end_sessions`).
+    #[cfg(unix)]
+    fn steps(self) -> Vec<(libc::c_int, Duration)> {
+        match self {
+            Self::Hangup => vec![(libc::SIGHUP, HANGUP_GRACE)],
+            Self::Terminate { grace } => vec![(libc::SIGTERM, grace)],
+            Self::InterruptThenTerminate { interrupt, grace } => {
+                vec![(libc::SIGINT, interrupt), (libc::SIGTERM, grace)]
+            }
+        }
+    }
+}
+
+/// 셸 · 프로그램이 끝난 꼴.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PtyExit {
+    /// 끝 코드. 신호로 끝났으면 `None`.
+    pub code: Option<i32>,
+    /// 끝낸 신호의 이름(`strsignal` — 예: `Terminated: 15`). 코드로 끝났으면 `None`.
+    pub signal: Option<String>,
+}
+
 /// 띄울 것.
 #[derive(Debug, Clone)]
 pub struct Spec {
@@ -88,9 +126,11 @@ pub struct Pty {
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     pid: Option<u32>,
     output: Arc<Output>,
-    /// 셸이 끝나면 `Some(code)`. 신호로 끝났으면 code 가 `None`.
-    exit: watch::Receiver<Option<Option<i32>>>,
+    /// 셸이 끝나면 `Some`.
+    exit: watch::Receiver<Option<PtyExit>>,
     terminated: AtomicBool,
+    /// 끝내기([`Self::end`])가 다 끝났다 — 세션의 프로세스가 모두 끝났거나 SIGKILL 을 보냈다.
+    ended: watch::Sender<bool>,
 }
 
 impl Pty {
@@ -135,17 +175,23 @@ impl Pty {
             thread("pty-write", move || write_loop(writer, &queue)),
             thread("pty-wait", move || {
                 // 셸을 여기서 거둔다 — 좀비로 남아 pid 가 살아 있는 것처럼 보이지 않게.
-                let code = match child.wait() {
-                    Ok(status) if status.signal().is_none() => {
-                        i32::try_from(status.exit_code()).ok()
-                    }
-                    Ok(_) => None,
+                let exit = match child.wait() {
+                    Ok(status) => match status.signal() {
+                        None => PtyExit {
+                            code: i32::try_from(status.exit_code()).ok(),
+                            signal: None,
+                        },
+                        Some(signal) => PtyExit {
+                            code: None,
+                            signal: Some(signal.to_owned()),
+                        },
+                    },
                     Err(e) => {
                         tracing::warn!(target: "pw_run", %e, "cannot wait for the shell");
-                        None
+                        PtyExit::default()
                     }
                 };
-                let _ = exit_tx.send(Some(code));
+                let _ = exit_tx.send(Some(exit));
             }),
         ];
         #[cfg(unix)]
@@ -160,6 +206,7 @@ impl Pty {
             output,
             exit,
             terminated: AtomicBool::new(false),
+            ended: watch::channel(false).0,
         };
         if let Some(e) = started.into_iter().find_map(Result::err) {
             pty.terminate();
@@ -204,12 +251,24 @@ impl Pty {
 
     /// 셸이 끝날 때까지 기다린다. 신호로 끝났으면 `None`.
     pub async fn exited(&self) -> Option<i32> {
+        self.exit().await.code
+    }
+
+    /// 셸이 끝날 때까지 기다려 끝난 꼴(코드 · 신호)을 준다.
+    pub async fn exit(&self) -> PtyExit {
         let mut exit = self.exit.clone();
         match exit.wait_for(Option::is_some).await {
-            Ok(code) => code.flatten(),
+            Ok(exit) => exit.clone().unwrap_or_default(),
             // 보내는 쪽(종료 스레드)이 값 없이 사라졌다 — 띄우기가 실패한 경우뿐이다.
-            Err(_) => None,
+            Err(_) => PtyExit::default(),
         }
+    }
+
+    /// 끝내기([`Self::end`] · [`Self::terminate`])가 다 끝날 때까지 기다린다 — 세션의 프로세스가 모두 끝났거나 남은 것에
+    /// SIGKILL 을 보냈다. 끝내기를 시작하지 않았으면 시작될 때까지 기다린다.
+    pub async fn ended(&self) {
+        let mut ended = self.ended.subscribe();
+        let _ = ended.wait_for(|done| *done).await;
     }
 
     /// 버퍼가 가장 많이 찼을 때의 크기.
@@ -220,6 +279,12 @@ impl Pty {
     /// 셸과 그 세션의 프로세스를 모두 끝낸다(유닉스: SIGHUP, 남으면 [`HANGUP_GRACE`] 뒤 SIGKILL). 기다리지 않는다. 두 번째
     /// 부터는 아무것도 하지 않는다.
     pub fn terminate(&self) {
+        self.end(Ending::Hangup);
+    }
+
+    /// 셸(프로그램)과 그 세션의 프로세스를 `ending` 대로 끝낸다. 기다리지 않는다 — 다 끝나면 [`Self::ended`]. 두 번째부터는
+    /// 아무것도 하지 않는다(먼저 고른 방법이 이어진다).
+    pub fn end(&self, ending: Ending) {
         if self.terminated.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -227,17 +292,21 @@ impl Pty {
         // 그 writer 는 버려질 때 셸에 `\n` + ^D(EOF)를 쓴다 — 신호보다 먼저 가면 셸이 그것을 읽고 `exit 0` 으로 끝나 신호 종료가
         // 정상 종료로 보인다(시험 `closing_does_not_feed_the_shell_an_eof_before_ending_it`).
         let input = lock(&self.input).take();
-        self.output.close();
+        if ending == Ending::Hangup {
+            self.output.close();
+        }
         #[cfg(unix)]
         let leader = self.pid.and_then(|p| libc::pid_t::try_from(p).ok());
         #[cfg(unix)]
         let input = if let Some(leader) = leader {
             let input = Arc::new(Mutex::new(input));
             let held = Arc::clone(&input);
+            let ended = self.ended.clone();
             let spawned = thread("pty-terminate", move || {
-                crate::tree::terminate_session(leader, HANGUP_GRACE);
+                crate::tree::end_sessions(&[leader], &ending.steps());
                 drop(lock(&held).take());
                 forget_leader(leader);
+                ended.send_replace(true);
             });
             if spawned.is_ok() {
                 return;
@@ -253,6 +322,13 @@ impl Pty {
         if let Some(leader) = leader {
             forget_leader(leader);
         }
+        self.ended.send_replace(true);
+    }
+
+    /// 출력을 닫는다 — 읽기 스레드는 남은 출력을 [`DRAIN_AFTER_CLOSE`] 까지 읽어 버리고 끝난다. [`Ending::Hangup`] 밖의 끝내기
+    /// 뒤에 세션이 끝났는데 EOF 가 오지 않을 때(세션을 떠난 데몬이 PTY 를 쥐고 있다) 쓴다.
+    pub fn close_output(&self) {
+        self.output.close();
     }
 }
 
