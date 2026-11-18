@@ -164,7 +164,7 @@ pitwall/
 │  ├─ pw-wire/           # LSP · DAP 공용 `Content-Length` 틀: 머리 8 KiB · 본문 64 MiB 상한, 넘으면 그 프로세스를 죽인다(17-m6-plan 메인 판정 M6-P7)
 │  ├─ pw-runtime/        # 런타임 제공자 (mise · direnv · asdf · 로그인 셸), (프로젝트, 디렉터리)별 env 캐시 — 지금은 로그인 셸 환경만(03 §5-1)
 │  ├─ pw-open-with/      # 외부 도구로 열기: 도구 목록(확장 + 전역 설정) · 기본 도구 · 셸 없는 실행 (04 F8)
-│  ├─ pw-run/            # 실행 구성, 프로세스/PTY 관리, 태스크 감지 — 지금은 터미널 PTY 세션(M1-08) · 실행 구성(17-m6-plan M6-01) · 파일만 읽는 태스크 감지(M6-04)
+│  ├─ pw-run/            # 실행 구성, 프로세스/PTY 관리, 태스크 감지 — 지금은 터미널 PTY 세션(M1-08) · 실행 구성(17-m6-plan M6-01) · 파일만 읽는 태스크 감지(M6-04) · 프로세스를 띄우는 태스크 감지(mise tasks · gradle · maven — M6-05)
 │  ├─ pw-spawn/          # 자식 프로세스를 띄우는(fork) 전용 장수 스레드 — Linux `PR_SET_PDEATHSIG` 는 fork 한 스레드에 묶인다(pw-lsp 의 언어 서버 · pw-db-driver 의 ssh 터널, M3-11). pw-platform 과 따로 둔 까닭: 드라이버 계약 크레이트도 쓰므로 의존을 가볍게(tokio · tracing 만)
 │  ├─ pw-lang/           # 언어 판별 (Linguist 데이터 테이블, .gitattributes, 모드라인)
 │  ├─ pw-syntax/         # 구문 분석 서비스: tree-sitter + 네이티브 내장 문법(WASM 문법은 `wasm` 기능), 문서 세션 · 강조 구간 RPC(`syntax.*`)
