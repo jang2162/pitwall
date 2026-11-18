@@ -17189,6 +17189,13 @@
                   "null"
                 ]
               },
+              "ports": {
+                "description": "프로세스 트리가 듣는 TCP 포트(포트 순 — M6-08, [`ports`]). 끝난 실행 · 프로세스가 아닌 종류는 빈 목록.",
+                "items": {
+                  "$ref": "#/$defs/RunPort"
+                },
+                "type": "array"
+              },
               "profile": {
                 "type": [
                   "string",
@@ -17241,7 +17248,36 @@
               "endedAt",
               "restartOf",
               "logStart",
-              "logEnd"
+              "logEnd",
+              "ports"
+            ],
+            "type": "object"
+          },
+          "RunPort": {
+            "description": "A TCP port the run's process tree listens on.",
+            "properties": {
+              "addresses": {
+                "description": "The local addresses it listens on, sorted (`127.0.0.1`, `::1`, `0.0.0.0`, `::`, …).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "allAddresses": {
+                "description": "Listening on every address (`0.0.0.0` or `::`) — reachable from other machines on the network.",
+                "type": "boolean"
+              },
+              "port": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "port",
+              "allAddresses",
+              "addresses"
             ],
             "type": "object"
           },
@@ -44221,6 +44257,34 @@
             ],
             "type": "object"
           },
+          "RunPort": {
+            "description": "A TCP port the run's process tree listens on.",
+            "properties": {
+              "addresses": {
+                "description": "The local addresses it listens on, sorted (`127.0.0.1`, `::1`, `0.0.0.0`, `::`, …).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "allAddresses": {
+                "description": "Listening on every address (`0.0.0.0` or `::`) — reachable from other machines on the network.",
+                "type": "boolean"
+              },
+              "port": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "port",
+              "allAddresses",
+              "addresses"
+            ],
+            "type": "object"
+          },
           "RunState": {
             "oneOf": [
               {
@@ -44300,6 +44364,13 @@
               "null"
             ]
           },
+          "ports": {
+            "description": "프로세스 트리가 듣는 TCP 포트(포트 순 — M6-08, [`ports`]). 끝난 실행 · 프로세스가 아닌 종류는 빈 목록.",
+            "items": {
+              "$ref": "#/$defs/RunPort"
+            },
+            "type": "array"
+          },
           "profile": {
             "type": [
               "string",
@@ -44352,7 +44423,8 @@
           "endedAt",
           "restartOf",
           "logStart",
-          "logEnd"
+          "logEnd",
+          "ports"
         ],
         "type": "object"
       },
