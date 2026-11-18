@@ -17,6 +17,7 @@ use pw_core::registry::agent::agent_grant;
 use pw_core::registry::exec::{Launch, agent_run_grant, exec_grant};
 use pw_core::registry::plan::{ApprovalTicket, ToolPlan, approve};
 use pw_core::registry::{NewProject, Registry as Projects};
+use pw_rpc::RpcError;
 use pw_rpc::protocol::{
     STREAM_CHUNK, STREAM_CREDIT, STREAM_END, StreamChunk, StreamEnd, StreamOpened, StreamOutcome,
 };
@@ -38,6 +39,8 @@ const KIB: usize = 1024;
 #[derive(Default)]
 struct Fake {
     calls: AtomicUsize,
+    /// 띄우는 자리에서 곧바로 끝낸다(띄우기가 돌려주기 전에 끝나는 프로그램).
+    exit_at_launch: std::sync::atomic::AtomicBool,
     launched: Mutex<Vec<(ProcessSpec, Arc<FakeRun>)>>,
 }
 
@@ -56,6 +59,13 @@ impl ProcessLauncher for Fake {
             inputs: Mutex::default(),
         });
         lock(&self.launched).push((spec.clone(), Arc::clone(&run)));
+        if self.exit_at_launch.load(Ordering::SeqCst) {
+            run.output.write(b"bye\n");
+            run.output.exited(RunExit {
+                code: Some(0),
+                signal: None,
+            });
+        }
         Ok(run)
     }
 }
@@ -483,12 +493,12 @@ fn info(response: Response) -> RunInfo {
 
 // ---- ① 손자 프로세스까지 끝낸다 ------------------------------------------------------------------------------------------
 
-/// 완료 기준 ①: 자식이 띄운 백그라운드 `sleep`(손자)까지 중지 뒤 남지 않는다 — 세션 전체에 신호를 보낸다. 리더(자식 pid)만 죽이면
-/// 손자가 남아 실패한다.
+/// 완료 기준 ①: 자식이 띄운 백그라운드 `sleep`(손자)까지 중지 뒤 남지 않는다 — 세션 전체에 신호를 보낸다. 손자는 SIGHUP 을
+/// 무시한다 — 리더(자식 pid)만 죽이면 커널이 보내는 hangup 으로는 끝나지 않아 손자가 남고 실패한다.
 #[tokio::test(flavor = "multi_thread")]
 async fn stopping_a_run_ends_its_grandchildren() {
     let f = Fixture::real();
-    f.shell_config("dev", "sleep 300 & echo BG=$!; wait");
+    f.shell_config("dev", "(trap '' HUP; exec sleep 300) & echo BG=$!; wait");
     let mut c = f.client();
     let run = info(
         c.call(
@@ -538,7 +548,7 @@ async fn stopping_a_run_ends_its_grandchildren() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_finished_run_leaves_no_background_process_behind() {
     let f = Fixture::real();
-    f.shell_config("bg", "sleep 300 & echo BG=$!");
+    f.shell_config("bg", "(trap '' HUP; exec sleep 300) & echo BG=$!");
     let mut c = f.client();
     let run = info(
         c.call(
@@ -1063,7 +1073,7 @@ async fn started_and_exited_events_go_out_in_order() {
 #[tokio::test(flavor = "multi_thread")]
 async fn restart_waits_for_the_old_tree_then_starts_again() {
     let f = Fixture::real();
-    f.shell_config("dev", "sleep 300 & echo BG=$!; wait");
+    f.shell_config("dev", "(trap '' HUP; exec sleep 300) & echo BG=$!; wait");
     let mut c = f.client();
     let old = info(
         c.call(
@@ -1214,4 +1224,141 @@ async fn a_closed_project_window_stops_its_runs() {
         f.runs.find(&f.project, &run.run_id).unwrap().state(),
         RunState::Exited
     );
+}
+
+/// 띄우기가 돌려주기 전에 끝난 실행도 `run.started` 가 먼저, `run.exited` 가 한 번 나간다.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_run_ending_while_it_starts_still_announces_started_first() {
+    let f = Fixture::fake(RunLimits::default());
+    f.fake_launcher()
+        .exit_at_launch
+        .store(true, Ordering::SeqCst);
+    f.shell_config("job", "true");
+    let mut events = f.bus.subscribe(
+        Filter::all()
+            .scope(Scope::Project(f.project.clone()))
+            .topics([TOPIC_STARTED, TOPIC_EXITED]),
+    );
+    let run = f.start("job");
+    assert_eq!(run.state, RunState::Exited);
+    let mut topics = Vec::new();
+    while let Some(Received::Event(e)) = events.try_recv() {
+        topics.push(e.topic.clone());
+    }
+    assert_eq!(topics, [TOPIC_STARTED, TOPIC_EXITED]);
+    let mut c = f.client();
+    let mut a = c.attach(&run.run_id, None).await;
+    assert_eq!(c.exit(&mut a).await.code, Some(0));
+    assert_eq!(a.text, "bye\n");
+}
+
+/// 앱 종료 흉내(시험 [`exiting_app_ends_runs`] 가 이 시험 바이너리를 자식으로 띄울 때만 돈다): 실행 하나(SIGHUP · SIGTERM 을 무시하는
+/// 손자를 둔다)를 띄워 pid 를 찍고, `PW_RUNS_EXIT_PROBE=shutdown` 이면 [`crate::shutdown`] 을 부른 뒤 Tauri 처럼
+/// `std::process::exit` 로 끝난다(Drop 이 돌지 않는다).
+#[test]
+fn run_exit_probe() {
+    let Ok(mode) = std::env::var("PW_RUNS_EXIT_PROBE") else {
+        return;
+    };
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let pids = runtime.block_on(async {
+        let runs = Runs::new(Arc::new(Runtime::new(LoginShell::new(
+            None,
+            Duration::from_secs(1),
+        ))));
+        let spec = ProcessSpec {
+            argv: [
+                "/bin/sh",
+                "-c",
+                "(trap '' HUP TERM; exec sleep 100) & echo BG=$!; echo DONE; wait",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+            cwd: std::env::temp_dir(),
+            env: vec![("PATH".into(), "/usr/bin:/bin".into())],
+            cols: 80,
+            rows: 24,
+            ending: Ending::Terminate {
+                grace: Duration::from_secs(5),
+            },
+        };
+        let info = runs
+            .start_kind(
+                NewRun {
+                    project_id: "p".into(),
+                    config: "probe".into(),
+                    name: "probe".into(),
+                    launched_by: LaunchedBy::Window { window: None },
+                    worktree: None,
+                    cwd: Some(spec.cwd.clone()),
+                    profile: None,
+                    relaunch: Relaunch::None,
+                    size: (80, 24),
+                    restart_of: None,
+                },
+                |output| {
+                    PtyLauncher
+                        .launch(&spec, output)
+                        .map_err(RpcError::internal)
+                },
+            )
+            .unwrap();
+        let run = runs.find("p", &info.run_id).unwrap();
+        let text = loop {
+            let text =
+                run.with_log(|log| String::from_utf8_lossy(&log.read(0, 4096).bytes).into_owned());
+            if text.contains("DONE") {
+                break text;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        // 앱이 끝날 때 중지 중(SIGTERM 의 5초 안)이던 실행도 덮는다.
+        runs.stop("p", &info.run_id).unwrap();
+        [background_pid(&text), info.pid.unwrap()]
+    });
+    println!("PIDS={},{}", pids[0], pids[1]);
+    if mode == "shutdown" {
+        crate::shutdown();
+    }
+    std::process::exit(0);
+}
+
+/// 완료 기준 ①(앱 종료): 앱이 끝날 때(Drop 없이 `std::process::exit`) [`crate::shutdown`] 이 실행의 세션도 끝낸다 — 중지 중이던
+/// 실행과 SIGHUP · SIGTERM 을 무시하는 손자까지 1초 안에 사라진다.
+#[test]
+fn exiting_app_ends_runs() {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["runs::tests::run_exit_probe", "--exact", "--nocapture"])
+        .env("PW_RUNS_EXIT_PROBE", "shutdown")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let exited = Instant::now();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let pids: Vec<u32> = stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("PIDS="))
+        .unwrap_or_else(|| {
+            panic!(
+                "no pids in {stdout:?} {:?}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+        })
+        .split(',')
+        .map(|p| p.parse().unwrap())
+        .collect();
+    let left = loop {
+        let left: Vec<u32> = pids.iter().copied().filter(|&p| alive(p)).collect();
+        if left.is_empty() || exited.elapsed() > Duration::from_secs(1) {
+            break left;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    for &pid in &left {
+        kill(pid);
+    }
+    assert!(left.is_empty(), "{left:?} of {pids:?} outlived the app");
 }

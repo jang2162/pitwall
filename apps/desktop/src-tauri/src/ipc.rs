@@ -711,6 +711,59 @@ mod tests {
         assert!(send(&w, conn, json!({})).is_err());
     }
 
+    /// 프로젝트 창이 사라지면 그 프로젝트의 실행이 중지된다(17-m6-plan M6-02 ①). 다른 창이 사라져도 · 다른 프로젝트는 그대로다.
+    #[test]
+    fn closing_a_project_window_stops_that_projects_runs() {
+        use pw_run::runs::{
+            LaunchedBy, NewRun, Relaunch, RunExit, RunKind, RunOutput, RunState, Runs,
+        };
+
+        struct Stub(RunOutput);
+        impl RunKind for Stub {
+            fn kind(&self) -> &'static str {
+                "stub"
+            }
+            fn stop(&self) {
+                self.0.exited(RunExit::default());
+            }
+        }
+
+        let f = fixture();
+        let runs = Runs::new(Arc::new(pw_runtime::Runtime::new(
+            pw_runtime::LoginShell::new(None, Duration::from_secs(1)),
+        )));
+        let start = |project: &str| {
+            runs.start_kind(
+                NewRun {
+                    project_id: project.to_owned(),
+                    config: "dev".into(),
+                    name: "dev".into(),
+                    launched_by: LaunchedBy::Window { window: None },
+                    worktree: None,
+                    cwd: None,
+                    profile: None,
+                    relaunch: Relaunch::None,
+                    size: (80, 24),
+                    restart_of: None,
+                },
+                |output| Ok(Arc::new(Stub(output)) as Arc<dyn RunKind>),
+            )
+            .unwrap()
+            .run_id
+        };
+        let (mine, theirs) = (start("p1"), start("p2"));
+        let state = |project: &str, id: &str| runs.find(project, id).unwrap().state();
+
+        let welcome = window(&f.app, "welcome");
+        on_window_event(&welcome.as_ref().window(), &WindowEvent::Destroyed);
+        assert_eq!(state("p1", &mine), RunState::Running);
+
+        let project = window(&f.app, "project-p1");
+        on_window_event(&project.as_ref().window(), &WindowEvent::Destroyed);
+        assert_eq!(state("p1", &mine), RunState::Exited);
+        assert_eq!(state("p2", &theirs), RunState::Running);
+    }
+
     #[test]
     fn closing_a_window_closes_its_connections_and_cancels_their_work() {
         let f = fixture();
