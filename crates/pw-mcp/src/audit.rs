@@ -44,8 +44,10 @@ pub use pw_core::secret::{REDACTED, SECRET_WORDS};
 
 /// 값 대신 글자 수만 남기는 「원문 키」의 단어(키를 camelCase · `_` · `-` 로 가른 단어 하나가 이것과 같으면, 소문자로 견준다). SQL
 /// 원문은 짧으면 리터럴 값까지 통째로 남으므로 남기지 않는다 — `db_query` · `db_execute` 는 감사 상세에 문장 해시를 따로 남긴다
-/// (16-m5-plan.md M5-07 리뷰 F1). 비밀 키이기도 하면 [`REDACTED`] 가 앞선다(글자 수도 남기지 않는다).
-pub const CONTENT_WORDS: &[&str] = &["sql"];
+/// (16-m5-plan.md M5-07 리뷰 F1). 명령줄 원문(`command` · `args` — `open_with_upsert` 의 argv, `run_config_upsert` 의 셸 명령 ·
+/// 인자)과 env 의 값(`env` — 구성의 `env` 표 · `envFile` 의 경로까지)도 같다(17-m6-plan M6-13, 메인 판정 2026-11-18). 비밀 키이기도
+/// 하면 [`REDACTED`] 가 앞선다(글자 수도 남기지 않는다).
+pub const CONTENT_WORDS: &[&str] = &["sql", "command", "args", "env"];
 
 /// `[mcp.audit] retention_days` 가 없을 때의 보관 일수(결정 M5-D10).
 pub const DEFAULT_RETENTION_DAYS: u32 = 90;
@@ -866,6 +868,42 @@ mod tests {
             })
         );
         assert!(!summarize(&json!({ "sql": sql })).contains("123-45-6789"));
+    }
+
+    /// 명령줄 원문 · env 의 값(`command` · `args` · `env` — 17-m6-plan M6-13)도 원문 키다: 실행 구성 쓰기 툴의 셸 명령 · 인자 ·
+    /// env 표 · `envFile`, 외부 도구의 argv 가 감사 행에 남지 않는다. `environment` 처럼 한 단어 안에 든 것은 아니다.
+    #[test]
+    fn command_lines_and_env_values_keep_only_their_length() {
+        let summary: Value = serde_json::from_str(&summarize(&json!({
+            "id": "dev",
+            "config": {
+                "name": "Dev",
+                "type": "shell",
+                "command": "deploy --host prod-db-7",
+                "args": ["--bin", "secret-bin"],
+                "env": {"NODE_ENV": "development"},
+                "envFile": [".env.local"],
+                "environment": "kept",
+            },
+        })))
+        .unwrap();
+        assert_eq!(
+            summary,
+            json!({
+                "id": "dev",
+                "config": {
+                    "name": "Dev",
+                    "type": "shell",
+                    "command": "[23 chars]",
+                    "args": "[not shown]",
+                    "env": "[not shown]",
+                    "envFile": "[not shown]",
+                    "environment": "kept",
+                },
+            })
+        );
+        let argv = summarize(&json!({"id": "zed", "command": ["zed", "--wait", "{file}"]}));
+        assert_eq!(argv, r#"{"command":"[not shown]","id":"zed"}"#);
     }
 
     #[test]
