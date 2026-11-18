@@ -113,6 +113,11 @@ fn configured(value: &str, origin: LspSettingsOrigin) -> Option<ConfiguredPath> 
 fn resolution_follows_settings_project_local_path_installed_then_not_installed() {
     let ts = def("typescript-language-server");
     resolution_order("typescript-language-server", &lsp_resolver(&ts));
+}
+
+/// 디버그 어댑터도 같은 표를 같은 함수로 지난다(17-m6-plan.md 메인 판정 M6-P8 · M6-16 완료 기준 ②).
+#[test]
+fn adapter_resolution_follows_the_same_order() {
     let adapter = adapter_def("js-debug-adapter");
     resolution_order("js-debug-adapter", &dap_resolver(&adapter));
 }
@@ -237,6 +242,10 @@ fn resolution_order(name: &'static str, resolve: &Resolver<'_>) {
 fn a_configured_path_is_used_or_reported_but_never_skipped() {
     let ts = def("typescript-language-server");
     configured_path_rules("typescript-language-server", &lsp_resolver(&ts));
+}
+
+#[test]
+fn an_adapter_configured_path_is_used_or_reported_but_never_skipped() {
     let adapter = adapter_def("js-debug-adapter");
     configured_path_rules("js-debug-adapter", &dap_resolver(&adapter));
 }
