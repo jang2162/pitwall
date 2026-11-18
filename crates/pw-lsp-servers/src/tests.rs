@@ -1,6 +1,7 @@
 //! 해석 순서 · 신뢰 · 설정 합치기를 가짜 폴더(가짜 실행 파일 · 가짜 `rustup`) · 가짜 런타임 환경으로 본다. 사람의 실제 서버 ·
 //! rustup 은 부르지 않는다.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -45,37 +46,83 @@ fn env_with_path(dirs: &[&Path]) -> RuntimeEnv {
     env
 }
 
-/// 설치본 자리를 흉내 낸다.
-struct FakeTools(Located);
+/// 설치본 자리를 흉내 낸다. 패키지 · 실행 파일 이름은 둘 다 `.0` 이다.
+struct FakeTools(&'static str, Located);
 
 impl ToolLocator for FakeTools {
     fn locate(&self, package: &str, bin: &str) -> Located {
-        assert_eq!(
-            (package, bin),
-            ("typescript-language-server", "typescript-language-server")
-        );
-        self.0.clone()
+        assert_eq!((package, bin), (self.0, self.0));
+        self.1.clone()
     }
 }
 
-fn settings_path(value: &str, origin: LspSettingsOrigin) -> ServerConfig {
-    let mut config = settings::server_config(&def("typescript-language-server"), None, None);
-    config.path = Some(ConfiguredPath {
-        value: value.to_owned(),
-        origin,
-    });
-    config
+/// 해석을 부르는 길 하나: (설정 `path`, `enabled`, 문맥) → 결과. 언어 서버와 디버그 어댑터가 같은 표를 지난다(17-m6-plan.md 메인
+/// 판정 M6-P8 · M6-16 완료 기준 ② — 해석 순서를 바꾸면 둘 다 실패한다).
+type Resolver<'a> = dyn Fn(Option<ConfiguredPath>, bool, &ResolveContext<'_>) -> LspResolution + 'a;
+
+/// 언어 서버 `typescript-language-server`(내장 정의 그대로)의 해석.
+fn lsp_resolver(
+    ts: &LanguageServerDecl,
+) -> impl Fn(Option<ConfiguredPath>, bool, &ResolveContext<'_>) -> LspResolution + '_ {
+    move |path, enabled, ctx| {
+        let mut config = settings::server_config(ts, None, None);
+        config.path = path;
+        config.enabled = enabled;
+        resolve::resolve(ts, &config, ctx)
+    }
 }
 
-/// 해석의 다섯 단계(설정 경로 → 프로젝트 로컬 → PATH → 설치본 → 설치 필요)를 한 단계씩 지워 가며 본다.
+/// 실행 파일이 있는 디버그 어댑터 정의(이름 · `mason` · 실행 파일이 `name`, 프로젝트 로컬은 `node_modules/.bin/<name>`).
+fn adapter_def(name: &str) -> DebugAdapterDecl {
+    let source = format!(
+        "id = \"dev.example.dap\"\nname = \"D\"\nversion = \"1.0.0\"\nengines = {{ pitwall = \"*\" }}\n\
+         [contributes.debug_adapters.{name}]\nlanguages = [\"javascript\"]\nmason = \"{name}\"\ncommand = \"{name}\"\n\
+         project_local = \"node_modules/.bin/{name}\"\nlaunch = {{ program = \"{{program}}\" }}\n"
+    );
+    let (manifest, diagnostics) = pw_ext::manifest::parse_manifest(&source, "/x/extension.toml");
+    assert_eq!(diagnostics, vec![]);
+    manifest.unwrap().contributes.debug_adapters.remove(0)
+}
+
+/// 디버그 어댑터의 해석(`[dap.<id>]` 를 합친 값으로).
+fn dap_resolver(
+    adapter: &DebugAdapterDecl,
+) -> impl Fn(Option<ConfiguredPath>, bool, &ResolveContext<'_>) -> LspResolution + '_ {
+    move |path, enabled, ctx| {
+        let mut config = dap::adapter_config(adapter, None, None);
+        config.path = path;
+        config.enabled = enabled;
+        match dap::resolve_adapter(adapter, &config, ctx) {
+            AdapterLaunch::Process(r) => r,
+            AdapterLaunch::Disabled => LspResolution::Disabled,
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
+fn configured(value: &str, origin: LspSettingsOrigin) -> Option<ConfiguredPath> {
+    Some(ConfiguredPath {
+        value: value.to_owned(),
+        origin,
+    })
+}
+
+/// 해석의 다섯 단계(설정 경로 → 프로젝트 로컬 → PATH → 설치본 → 설치 필요)를 한 단계씩 지워 가며 본다 — 언어 서버와 디버그
+/// 어댑터가 같은 표다.
 #[test]
 fn resolution_follows_settings_project_local_path_installed_then_not_installed() {
+    let ts = def("typescript-language-server");
+    resolution_order("typescript-language-server", &lsp_resolver(&ts));
+    let adapter = adapter_def("js-debug-adapter");
+    resolution_order("js-debug-adapter", &dap_resolver(&adapter));
+}
+
+fn resolution_order(name: &'static str, resolve: &Resolver<'_>) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("project");
     let sub = root.join("packages/web");
     fs::create_dir_all(&sub).unwrap();
-    let name = "typescript-language-server";
-    let configured = executable(&tmp.path().join("opt/ts-ls"), "true");
+    let configured_exe = executable(&tmp.path().join("opt/my-exe"), "true");
     // 프로젝트 로컬은 실제 경로로 찾는다(macOS 의 /var → /private/var).
     let real = |p: PathBuf| fs::canonicalize(p).unwrap();
     let local = real(executable(
@@ -90,13 +137,14 @@ fn resolution_follows_settings_project_local_path_installed_then_not_installed()
     executable(&tmp.path().join("node_modules/.bin").join(name), "true");
     let on_path = executable(&tmp.path().join("path bin").join(name), "true");
     let installed = tmp.path().join("tools/bin").join(name);
-    let ts = def(name);
-    let defaults = settings::server_config(&ts, None, None);
     let env = env_with_path(&[&tmp.path().join("path bin")]);
-    let tools = FakeTools(Located::Installed {
-        path: installed.clone(),
-        version: "5.1.3".into(),
-    });
+    let tools = FakeTools(
+        name,
+        Located::Installed {
+            path: installed.clone(),
+            version: "5.1.3".into(),
+        },
+    );
     let ctx = |trusted| ResolveContext {
         trusted,
         project_root: &root,
@@ -111,40 +159,40 @@ fn resolution_follows_settings_project_local_path_installed_then_not_installed()
             version,
             ..
         } => (path, step, version),
-        other => panic!("{other:?}"),
+        other => panic!("{name}: {other:?}"),
     };
 
     // 1. 설정 경로가 무엇보다 먼저다.
-    let config = settings_path(configured.to_str().unwrap(), LspSettingsOrigin::Global);
+    let path = configured(configured_exe.to_str().unwrap(), LspSettingsOrigin::Global);
     assert_eq!(
-        found(resolve::resolve(&ts, &config, &ctx(true))),
-        (configured.clone(), LspResolveStep::Settings, None)
+        found(resolve(path, true, &ctx(true))),
+        (configured_exe.clone(), LspResolveStep::Settings, None)
     );
     // 2. 프로젝트 로컬 — 해석하는 디렉터리(packages/web)에서 프로젝트 루트까지 올라가며 가장 가까운 것.
     assert_eq!(
-        found(resolve::resolve(&ts, &defaults, &ctx(true))),
+        found(resolve(None, true, &ctx(true))),
         (nearest.clone(), LspResolveStep::ProjectLocal, None)
     );
     fs::remove_file(&nearest).unwrap();
     assert_eq!(
-        found(resolve::resolve(&ts, &defaults, &ctx(true))),
+        found(resolve(None, true, &ctx(true))),
         (local.clone(), LspResolveStep::ProjectLocal, None)
     );
     // 미신뢰 프로젝트는 node_modules/.bin 이 있어도 고르지 않는다.
     assert_eq!(
-        found(resolve::resolve(&ts, &defaults, &ctx(false))),
+        found(resolve(None, true, &ctx(false))),
         (on_path.clone(), LspResolveStep::Path, None)
     );
     // 3. PATH.
     fs::remove_file(&local).unwrap();
     assert_eq!(
-        found(resolve::resolve(&ts, &defaults, &ctx(true))),
+        found(resolve(None, true, &ctx(true))),
         (on_path.clone(), LspResolveStep::Path, None)
     );
     // 4. 설치본(판은 설치 기록의 것).
     fs::remove_file(&on_path).unwrap();
     assert_eq!(
-        found(resolve::resolve(&ts, &defaults, &ctx(true))),
+        found(resolve(None, true, &ctx(true))),
         (installed, LspResolveStep::Installed, Some("5.1.3".into()))
     );
     // 5. 설치 필요. 설치본이 깨졌으면 그 까닭을 싣는다.
@@ -153,20 +201,23 @@ fn resolution_follows_settings_project_local_path_installed_then_not_installed()
         ..ctx(true)
     };
     assert_eq!(
-        resolve::resolve(&ts, &defaults, &none),
+        resolve(None, true, &none),
         LspResolution::NotInstalled {
             mason: Some(name.into()),
             reinstall: None,
             skipped: vec![],
         }
     );
-    let broken = FakeTools(Located::Broken {
-        reason: "python is gone".into(),
-    });
+    let broken = FakeTools(
+        name,
+        Located::Broken {
+            reason: "python is gone".into(),
+        },
+    );
     assert_eq!(
-        resolve::resolve(
-            &ts,
-            &defaults,
+        resolve(
+            None,
+            true,
             &ResolveContext {
                 tools: &broken,
                 ..ctx(true)
@@ -180,16 +231,23 @@ fn resolution_follows_settings_project_local_path_installed_then_not_installed()
     );
 }
 
-/// 설정 경로는 절대 경로 · PATH 의 이름 · (프로젝트 설정만) 프로젝트 루트 기준 상대 경로다. 쓸 수 없으면 다음 단계로 가지 않는다.
+/// 설정 경로는 절대 경로 · PATH 의 이름 · (프로젝트 설정만) 프로젝트 루트 기준 상대 경로다. 쓸 수 없으면 다음 단계로 가지 않는다
+/// — 언어 서버와 디버그 어댑터가 같다.
 #[test]
 fn a_configured_path_is_used_or_reported_but_never_skipped() {
+    let ts = def("typescript-language-server");
+    configured_path_rules("typescript-language-server", &lsp_resolver(&ts));
+    let adapter = adapter_def("js-debug-adapter");
+    configured_path_rules("js-debug-adapter", &dap_resolver(&adapter));
+}
+
+fn configured_path_rules(name: &str, resolve: &Resolver<'_>) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("project");
-    let in_project = executable(&root.join("tools/ts-ls"), "true");
-    let named = executable(&tmp.path().join("bin/my-ts-ls"), "true");
+    let in_project = executable(&root.join("tools/my-exe"), "true");
+    let named = executable(&tmp.path().join("bin/my-named-exe"), "true");
     // PATH 에 정의의 이름이 있어도 틀린 설정 경로를 가리지 않는다.
-    executable(&tmp.path().join("bin/typescript-language-server"), "true");
-    let ts = def("typescript-language-server");
+    executable(&tmp.path().join("bin").join(name), "true");
     let env = env_with_path(&[&tmp.path().join("bin")]);
     let ctx = ResolveContext {
         trusted: true,
@@ -198,13 +256,13 @@ fn a_configured_path_is_used_or_reported_but_never_skipped() {
         env: &env,
         tools: &NoTools,
     };
-    let resolve = |value: &str, origin| resolve::resolve(&ts, &settings_path(value, origin), &ctx);
+    let at = |value: &str, origin| resolve(configured(value, origin), true, &ctx);
     assert_eq!(
-        resolve("my-ts-ls", LspSettingsOrigin::Global).path(),
+        at("my-named-exe", LspSettingsOrigin::Global).path(),
         Some(named.as_path())
     );
     assert_eq!(
-        resolve("tools/ts-ls", LspSettingsOrigin::Project).path(),
+        at("tools/my-exe", LspSettingsOrigin::Project).path(),
         Some(in_project.as_path())
     );
     let invalid = |value: &str, origin, reason: &str| LspResolution::InvalidPath {
@@ -213,33 +271,36 @@ fn a_configured_path_is_used_or_reported_but_never_skipped() {
         reason: reason.into(),
     };
     assert_eq!(
-        resolve("tools/ts-ls", LspSettingsOrigin::Global),
+        at("tools/my-exe", LspSettingsOrigin::Global),
         invalid(
-            "tools/ts-ls",
+            "tools/my-exe",
             LspSettingsOrigin::Global,
             "a relative path in the global settings has nothing to be relative to; use an absolute path or a name on PATH"
         )
     );
     assert_eq!(
-        resolve("/nowhere/ts-ls", LspSettingsOrigin::Global),
+        at("/nowhere/my-exe", LspSettingsOrigin::Global),
         invalid(
-            "/nowhere/ts-ls",
+            "/nowhere/my-exe",
             LspSettingsOrigin::Global,
             "not an executable file"
         )
     );
     assert_eq!(
-        resolve("no-such-ls", LspSettingsOrigin::Project),
+        at("no-such-exe", LspSettingsOrigin::Project),
         invalid(
-            "no-such-ls",
+            "no-such-exe",
             LspSettingsOrigin::Project,
             "not found on PATH"
         )
     );
-    let mut disabled = settings_path("my-ts-ls", LspSettingsOrigin::Global);
-    disabled.enabled = false;
+    // 꺼 두면 설정 경로가 있어도 찾지 않는다.
     assert_eq!(
-        resolve::resolve(&ts, &disabled, &ctx),
+        resolve(
+            configured("my-named-exe", LspSettingsOrigin::Global),
+            false,
+            &ctx
+        ),
         LspResolution::Disabled
     );
 }
@@ -926,4 +987,260 @@ fn a_configured_runtimes_list_wins_over_the_found_jdk() {
         jdtls.initialization_options["settings"]["java"]["configuration"]["runtimes"],
         want
     );
+}
+
+/// java-debug 처럼 언어 서버가 여는 어댑터(`start`, `bundles`).
+fn start_adapter(id: &str, server: &str) -> DebugAdapterDecl {
+    let source = format!(
+        "id = \"dev.example.dap\"\nname = \"D\"\nversion = \"1.0.0\"\nengines = {{ pitwall = \"*\" }}\n\
+         [contributes.debug_adapters.{id}]\nlanguages = [\"java\"]\nmason = \"java-debug-adapter\"\n\
+         start = {{ lsp = \"{server}\", command = \"vscode.java.startDebugSession\", bundles = [\"java-debug-adapter/a.jar\", \"java-debug-adapter/b.jar\"] }}\n\
+         attach = {{ port = \"{{port}}\" }}\n"
+    );
+    let (manifest, diagnostics) = pw_ext::manifest::parse_manifest(&source, "/x/extension.toml");
+    assert_eq!(diagnostics, vec![]);
+    manifest.unwrap().contributes.debug_adapters.remove(0)
+}
+
+/// `[dap.<id>]`: `enabled` · `path` · `args` · `env` 만 받고(언어 서버의 키는 경고), 프로젝트가 전역을 키마다 이기고, `env` 는
+/// 변수마다 덮는다. 등록되지 않은 어댑터 id 는 경고한다. 합친 값으로 정의의 실행 파일을 찾고, 어댑터 환경에 설정 `env` 가 든다.
+#[test]
+fn adapter_settings_merge_and_resolve_like_language_servers() {
+    let f = Fixture::new(
+        "schema = 1\n[dap.js-debug-adapter]\npath = \"/nowhere/js-debug\"\nargs = [\"--global\"]\nenv = { A = \"global\", B = \"global\" }\nsettings = { x = 1 }\n",
+    );
+    let (id, root) = f.project(
+        &[(
+            ".pitwall/project.toml",
+            "schema = 1\n[dap.js-debug-adapter]\nargs = [\"{port}\", \"{host}\"]\nenv = { B = \"project\" }\nfeatures = { disable = [\"hover\"] }\n[dap.ghost]\nenabled = false\n",
+        )],
+        true,
+    );
+    let view = f.servers.view(&id, None).unwrap();
+    assert_eq!(
+        view.warnings,
+        [
+            "settings: `[dap.js-debug-adapter]`: unknown key `settings` is ignored",
+            "project: `[dap.js-debug-adapter]`: unknown key `features` is ignored",
+            "`[dap.ghost]`: no debug adapter `ghost` is registered; ignored",
+            "`[dap.js-debug-adapter]`: no debug adapter `js-debug-adapter` is registered; ignored",
+        ]
+    );
+    let adapter = adapter_def("js-debug-adapter");
+    let setup = f
+        .servers
+        .adapter_setup_in(&view, "dev.example.dap", &adapter, &root);
+    assert_eq!(setup.config.args, ["{port}", "{host}"]);
+    assert_eq!(
+        setup.config.env,
+        BTreeMap::from([
+            ("A".to_owned(), "global".to_owned()),
+            ("B".to_owned(), "project".to_owned())
+        ])
+    );
+    assert_eq!(setup.env.get("B"), Some(std::ffi::OsStr::new("project")));
+    // 전역의 `path` 가 쓸 수 없는 경로라 다음 단계로 가지 않는다(언어 서버와 같은 규칙).
+    assert_eq!(
+        setup.launch,
+        AdapterLaunch::Process(LspResolution::InvalidPath {
+            path: "/nowhere/js-debug".into(),
+            origin: LspSettingsOrigin::Global,
+            reason: "not an executable file".into(),
+        })
+    );
+    // Debug 에 env 값이 나오지 않는다.
+    let shown = format!("{setup:?}");
+    assert!(
+        !shown.contains("global\"") && !shown.contains("project\""),
+        "{shown}"
+    );
+}
+
+/// 언어 서버가 여는 어댑터는 실행 파일을 찾지 않고 그 서버 · 명령을 낸다. 사람이 `[dap.<id>] path` 를 적었으면 그 실행 파일이다.
+#[test]
+fn a_start_adapter_names_its_language_server_unless_a_path_is_set() {
+    let tmp = tempfile::tempdir().unwrap();
+    let exe = executable(&tmp.path().join("java-debug"), "true");
+    let env = env_with_path(&[]);
+    let ctx = ResolveContext {
+        trusted: true,
+        project_root: tmp.path(),
+        dir: tmp.path(),
+        env: &env,
+        tools: &NoTools,
+    };
+    let adapter = start_adapter("java-debug", "jdtls");
+    let mut config = dap::adapter_config(&adapter, None, None);
+    assert_eq!(
+        dap::resolve_adapter(&adapter, &config, &ctx),
+        AdapterLaunch::LanguageServer {
+            server: "jdtls".into(),
+            command: "vscode.java.startDebugSession".into()
+        }
+    );
+    config.path = configured(exe.to_str().unwrap(), LspSettingsOrigin::Global);
+    assert!(matches!(
+        dap::resolve_adapter(&adapter, &config, &ctx),
+        AdapterLaunch::Process(LspResolution::Found {
+            step: LspResolveStep::Settings,
+            ..
+        })
+    ));
+    config.enabled = false;
+    assert_eq!(
+        dap::resolve_adapter(&adapter, &config, &ctx),
+        AdapterLaunch::Disabled
+    );
+}
+
+/// 가짜 언어 서버: `server` 가 떠 있으면 명령에 `answer` 로 답한다.
+struct FakeServers {
+    running: &'static str,
+    answer: Result<serde_json::Value, String>,
+    asked: std::sync::Mutex<Vec<(String, String)>>,
+}
+
+impl LspCommands for FakeServers {
+    fn execute_command<'a>(
+        &'a self,
+        server: &'a str,
+        command: &'a str,
+        _arguments: Vec<serde_json::Value>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Option<Result<serde_json::Value, String>>> + Send + 'a,
+        >,
+    > {
+        self.asked
+            .lock()
+            .unwrap()
+            .push((server.to_owned(), command.to_owned()));
+        let answer = (server == self.running).then(|| self.answer.clone());
+        Box::pin(async move { answer })
+    }
+}
+
+/// 완료 기준 ⑦: `start.lsp` 어댑터는 떠 있는 언어 서버에 명령을 보내 받은 포트(`127.0.0.1`)로 붙는다. 그 서버가 떠 있지 않으면
+/// 「떠야 한다」 로 거절하고, 포트가 아닌 답 · 서버의 거절은 그대로 알린다.
+#[tokio::test]
+async fn a_start_adapter_connects_to_the_port_its_language_server_answers() {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let listener = tokio::net::TcpListener::bind((pw_ext::ADAPTER_HOST, 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let adapter = start_adapter("java-debug", "jdtls");
+    let start = adapter.start.as_ref().unwrap();
+    let servers = FakeServers {
+        running: "jdtls",
+        answer: Ok(json!(port)),
+        asked: Default::default(),
+    };
+    let (got, mut stream) =
+        dap::connect_via_language_server(start, &servers, Duration::from_secs(5))
+            .await
+            .unwrap();
+    assert_eq!(got, port);
+    assert_eq!(
+        *servers.asked.lock().unwrap(),
+        [(
+            "jdtls".to_owned(),
+            "vscode.java.startDebugSession".to_owned()
+        )]
+    );
+    let (mut accepted, _) = listener.accept().await.unwrap();
+    stream
+        .write_all(b"Content-Length: 2\r\n\r\n{}")
+        .await
+        .unwrap();
+    let mut buf = [0u8; 23];
+    accepted.read_exact(&mut buf).await.unwrap();
+    assert_eq!(&buf, b"Content-Length: 2\r\n\r\n{}");
+
+    let connect = |running: &'static str, answer| {
+        let servers = FakeServers {
+            running,
+            answer,
+            asked: Default::default(),
+        };
+        async move {
+            dap::connect_via_language_server(start, &servers, Duration::from_secs(5))
+                .await
+                .map(|(port, _)| port)
+        }
+    };
+    let not_running = connect("kotlin-lsp", Ok(json!(port))).await.unwrap_err();
+    assert_eq!(
+        not_running,
+        AdapterStartError::NotRunning {
+            server: "jdtls".into()
+        }
+    );
+    assert_eq!(
+        not_running.to_string(),
+        "the language server `jdtls` must be running to start this debug adapter — open a file it handles first"
+    );
+    for answer in [json!(0), json!(70000), json!("5005"), json!(null)] {
+        assert!(
+            matches!(
+                connect("jdtls", Ok(answer.clone())).await,
+                Err(AdapterStartError::BadPort { .. })
+            ),
+            "{answer}"
+        );
+    }
+    assert_eq!(
+        connect("jdtls", Err("no debug session".into())).await,
+        Err(AdapterStartError::Command {
+            server: "jdtls".into(),
+            message: "no debug session".into()
+        })
+    );
+}
+
+/// 설치본의 `share` 를 흉내 낸다: `java-debug-adapter` 의 `a.jar` 만 있다.
+struct ShareTools;
+
+impl ToolLocator for ShareTools {
+    fn locate(&self, _package: &str, _bin: &str) -> Located {
+        Located::Absent
+    }
+
+    fn locate_share(&self, package: &str, share: &str) -> Located {
+        match (package, share) {
+            ("java-debug-adapter", "java-debug-adapter/a.jar") => Located::Installed {
+                path: PathBuf::from("/tools/java-debug-adapter/0.59.0/extension/server/a.jar"),
+                version: "0.59.0".into(),
+            },
+            _ => Located::Absent,
+        }
+    }
+}
+
+/// 언어 서버가 여는 어댑터의 `bundles` 는 설치된 것만 그 서버의 `initializationOptions.bundles` 뒤에 붙는다. 다른 서버 · 꺼 둔
+/// 어댑터의 것은 넣지 않는다.
+#[test]
+fn installed_adapter_bundles_go_to_their_language_server() {
+    let java = start_adapter("java-debug", "jdtls");
+    let other = start_adapter("other-debug", "kotlin-lsp");
+    let mut options = json!({"bundles": ["/mine.jar"], "settings": {}});
+    dap::add_bundles(
+        &mut options,
+        "jdtls",
+        [(&java, true), (&other, true)],
+        &ShareTools,
+    );
+    assert_eq!(
+        options,
+        json!({
+            "bundles": ["/mine.jar", "/tools/java-debug-adapter/0.59.0/extension/server/a.jar"],
+            "settings": {}
+        })
+    );
+    let mut options = json!({});
+    dap::add_bundles(&mut options, "jdtls", [(&java, false)], &ShareTools);
+    assert_eq!(options, json!({}));
+    dap::add_bundles(&mut options, "jdtls", [(&java, true)], &NoTools);
+    assert_eq!(options, json!({}));
 }

@@ -127,7 +127,11 @@ pub fn parse_layer(
     out
 }
 
-fn parse_server(entry: &Map<String, Json>, at: &str, warnings: &mut Vec<String>) -> ServerSettings {
+pub(crate) fn parse_server(
+    entry: &Map<String, Json>,
+    at: &str,
+    warnings: &mut Vec<String>,
+) -> ServerSettings {
     let mut s = ServerSettings::default();
     for (key, value) in entry {
         let mut bad =

@@ -1,4 +1,6 @@
-//! 실행 파일 해석(결정 M4-D2 · D7). 순서:
+//! 실행 파일 해석(결정 M4-D2 · D7). 언어 서버와 디버그 어댑터가 같은 함수([`resolve_executable`])로 찾는다(17-m6-plan.md 메인 판정
+//! M6-P8 — 사람이 고른 경로를 다른 실행 파일로 가리지 않는 규칙이 같다). 설정은 언어 서버가 `[lsp.<id>]`, 어댑터가 `[dap.<id>]` 다.
+//! 순서:
 //!
 //! 1. 사용자 설정 경로(`[lsp.<id>] path`). 적었는데 쓸 수 없으면 다음 단계로 가지 않고 [`LspResolution::InvalidPath`] 다 — 사람이
 //!    고른 경로가 틀린 것을 다른 실행 파일로 말없이 가리지 않는다.
@@ -13,7 +15,7 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use pw_ext::{LanguageServerDecl, ResolveHint};
+use pw_ext::{DebugAdapterDecl, LanguageServerDecl, RelPath, ResolveHint};
 use pw_runtime::RuntimeEnv;
 use pw_runtime::program::find_program;
 use serde::{Deserialize, Serialize};
@@ -141,26 +143,76 @@ pub struct ResolveContext<'a> {
     pub tools: &'a dyn ToolLocator,
 }
 
+/// 해석할 실행 파일의 정의 — 언어 서버 · 디버그 어댑터 정의에서 해석이 보는 칸만.
+#[derive(Debug, Clone, Copy)]
+pub struct ExecutableDef<'a> {
+    /// 실행 파일 이름(PATH 에서 찾는 이름이자 설치본의 `bin` 이름).
+    pub command: &'a str,
+    /// Mason 패키지(설치본을 찾는 곳).
+    pub mason: Option<&'a str>,
+    /// 프로젝트 안의 실행 파일(신뢰한 프로젝트만).
+    pub project_local: Option<&'a RelPath>,
+    pub resolve_hint: Option<ResolveHint>,
+}
+
+impl<'a> From<&'a LanguageServerDecl> for ExecutableDef<'a> {
+    fn from(def: &'a LanguageServerDecl) -> Self {
+        ExecutableDef {
+            command: &def.command,
+            mason: def.mason.as_deref(),
+            project_local: def.project_local.as_ref(),
+            resolve_hint: def.resolve_hint,
+        }
+    }
+}
+
+impl<'a> ExecutableDef<'a> {
+    /// 실행 파일이 있는 어댑터의 정의. 언어 서버가 여는 어댑터(`start`)는 실행 파일이 없어 `None` 이다.
+    pub fn of_adapter(def: &'a DebugAdapterDecl) -> Option<Self> {
+        Some(ExecutableDef {
+            command: def.command.as_deref()?,
+            mason: def.mason.as_deref(),
+            project_local: def.project_local.as_ref(),
+            resolve_hint: None,
+        })
+    }
+}
+
 /// 서버 하나의 실행 파일을 찾는다(머리 주석의 순서).
 pub fn resolve(
     def: &LanguageServerDecl,
     config: &ServerConfig,
     ctx: &ResolveContext<'_>,
 ) -> LspResolution {
-    if !config.enabled {
+    resolve_executable(
+        &ExecutableDef::from(def),
+        config.enabled,
+        config.path.as_ref(),
+        ctx,
+    )
+}
+
+/// 실행 파일 하나를 찾는다(머리 주석의 순서). `enabled` · `path` 는 합친 설정(`[lsp.<id>]` · `[dap.<id>]`)의 값이다.
+pub fn resolve_executable(
+    def: &ExecutableDef<'_>,
+    enabled: bool,
+    path: Option<&ConfiguredPath>,
+    ctx: &ResolveContext<'_>,
+) -> LspResolution {
+    if !enabled {
         return LspResolution::Disabled;
     }
-    if let Some(configured) = &config.path {
+    if let Some(configured) = path {
         return configured_path(configured, ctx);
     }
     let mut skipped = Vec::new();
     if ctx.trusted
-        && let Some(local) = &def.project_local
+        && let Some(local) = def.project_local
         && let Some(path) = project_local(ctx.project_root, ctx.dir, local.as_str(), ctx.env)
     {
         return found(path, LspResolveStep::ProjectLocal, None, skipped);
     }
-    if let Some(path) = find_program(&def.command, &ctx.env.path) {
+    if let Some(path) = find_program(def.command, &ctx.env.path) {
         match path_candidate(def, &path, ctx) {
             Ok(path) => return found(path, LspResolveStep::Path, None, skipped),
             Err(reason) => skipped.push(LspSkipped {
@@ -171,8 +223,8 @@ pub fn resolve(
         }
     }
     let mut reinstall = None;
-    if let Some(package) = &def.mason {
-        match ctx.tools.locate(package, &def.command) {
+    if let Some(package) = def.mason {
+        match ctx.tools.locate(package, def.command) {
             Located::Installed { path, version } => {
                 return found(path, LspResolveStep::Installed, Some(version), skipped);
             }
@@ -181,7 +233,7 @@ pub fn resolve(
         }
     }
     LspResolution::NotInstalled {
-        mason: def.mason.clone(),
+        mason: def.mason.map(str::to_owned),
         reinstall,
         skipped,
     }
@@ -287,7 +339,7 @@ fn find_at(path: &Path, env: &RuntimeEnv) -> Option<PathBuf> {
 
 /// PATH 에서 찾은 것을 쓸 수 있는지. rustup 프록시는 `rustup which` 가 성공할 때만이다.
 fn path_candidate(
-    def: &LanguageServerDecl,
+    def: &ExecutableDef<'_>,
     path: &Path,
     ctx: &ResolveContext<'_>,
 ) -> Result<PathBuf, String> {
@@ -312,7 +364,7 @@ fn path_candidate(
     }
     match rustup::which(
         &rustup,
-        &def.command,
+        def.command,
         ctx.dir,
         ctx.env,
         rustup::WHICH_TIMEOUT,

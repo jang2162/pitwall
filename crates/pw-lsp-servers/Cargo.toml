@@ -15,8 +15,9 @@ schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 specta = { workspace = true, features = ["derive"] }
-# 해석(로그인 셸 환경 기다리기 · `rustup which`)을 블로킹 스레드로 보낸다.
-tokio = { workspace = true, features = ["rt"] }
+# 해석(로그인 셸 환경 기다리기 · `rustup which`)을 블로킹 스레드로 보낸다. 언어 서버가 연 어댑터 포트에 붙는다(`net` · `time` —
+# 17-m6-plan.md M6-16 ①, `dap::connect_via_language_server`).
+tokio = { workspace = true, features = ["rt", "net", "time"] }
 # 개인 설정 파일에 키 하나를 쓴다(`LspServers::write_local` — pw_core::config::write 의 값 형식). 버전은 pw-core 와 같게 둔다.
 toml_edit = "0.25.17"
 tracing = "0.1.44"
@@ -24,4 +25,4 @@ tracing = "0.1.44"
 [dev-dependencies]
 semver = "1.0.28"
 tempfile = "3.27.0"
-tokio = { workspace = true, features = ["rt", "macros"] }
+tokio = { workspace = true, features = ["rt", "macros", "io-util"] }

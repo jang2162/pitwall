@@ -5,6 +5,8 @@
 //! - [`resolve`]: 실행 파일 해석 순서(결정 M4-D2 · D7)와 설치본을 찾는 [`ToolLocator`](설치기 M4-04 가 구현한다).
 //! - [`rustup`]: rustup 프록시 판별(결정 M4-D7).
 //! - [`methods`]: `lsp.servers.list` RPC.
+//! - [`dap`]: 디버그 어댑터의 `[dap.<id>]` 설정 · 해석(언어 서버와 같은 함수 — 17-m6-plan.md 메인 판정 M6-P8) · 언어 서버가 여는
+//!   어댑터에 붙기(M6-16). 어댑터를 띄우는 것은 디버그 세션(M6-17)이다.
 //!
 //! 서버를 띄우는 것은 서버 관리자(`pw-lsp`, M4-05)다 — 그쪽이 [`LspServers::setup`] 으로 합친 설정 · 해석 결과를 가져가고, 서버를
 //! 돌릴 런타임(`requires`, 결정 M4-D6)을 찾고, 설정이 바뀌면 [`changed_servers`] 로 「다시 시작 필요」 를 낸다. 이 크레이트는 서버
@@ -13,6 +15,7 @@
 //! 신뢰: 미신뢰 프로젝트에서는 공유 레이어(`.pitwall/project.toml`)를 읽지 않고(`ConfigSource::without_shared` — 클론한 저장소가
 //! 실행 파일 · 인자 · 환경을 고르지 못하게), 프로젝트 로컬 실행 파일 · `project_local_options` · `rustup which` 를 건너뛴다.
 
+pub mod dap;
 pub mod methods;
 pub mod resolve;
 pub mod rustup;
@@ -25,13 +28,18 @@ use std::sync::{Arc, OnceLock, RwLock};
 use pw_core::config::{AppPaths, ConfigSnapshot, ConfigStore};
 use pw_core::registry::path::{WorktreeRootError, worktree_root};
 use pw_core::registry::{Project, Registry as Projects, RegistryError};
-use pw_ext::{LanguageServerDecl, LspServerRuntime, Registry};
+use pw_ext::{DebugAdapterDecl, LanguageServerDecl, LspServerRuntime, Registry};
 use pw_rpc::{RpcError, code};
 use pw_runtime::{Runtime, RuntimeEnv};
 use serde_json::{Map, Value as Json};
 
+pub use dap::{
+    AdapterConfig, AdapterLaunch, AdapterSetup, AdapterStartError, LspCommands,
+    connect_via_language_server,
+};
 pub use resolve::{
-    Located, LspResolution, LspResolveStep, LspSkipped, NoTools, ResolveContext, ToolLocator,
+    ExecutableDef, Located, LspResolution, LspResolveStep, LspSkipped, NoTools, ResolveContext,
+    ToolLocator, resolve_executable,
 };
 pub use settings::{
     ConfiguredPath, LspLocalSetting, LspSettingsOrigin, ServerConfig, ServerSettings,
@@ -110,16 +118,25 @@ impl ServerSetup {
     /// 메인 판정 2026-11-02). 그래서 PATH 에서 고른 런처(`jdtls` 등)도 프로젝트의 JDK 가 아니라 서버용 JDK 로 뜬다. 사람이
     /// `[lsp.<id>] env` 에 `JAVA_HOME` 을 적었으면 그것을 지킨다.
     pub fn with_runtime(&mut self, found: &FoundRuntime) {
-        let mut dirs = vec![found.bin.clone()];
-        dirs.extend(std::env::split_paths(&self.env.path).filter(|d| *d != found.bin));
-        if let Ok(path) = std::env::join_paths(dirs) {
-            self.env.path = path;
-        }
-        if found.runtime == LspServerRuntime::Java && !self.config.env.contains_key("JAVA_HOME") {
-            self.env
-                .vars
-                .insert("JAVA_HOME".into(), found.home.clone().into_os_string());
-        }
+        put_runtime_first(&mut self.env, found, &self.config.env);
+    }
+}
+
+/// 찾은 런타임을 환경 PATH 맨 앞에, java 면 `JAVA_HOME` 도(사람이 `configured` 에 적었으면 그것을 지킨다). 언어 서버 · 디버그
+/// 어댑터가 함께 쓴다.
+pub(crate) fn put_runtime_first(
+    env: &mut RuntimeEnv,
+    found: &FoundRuntime,
+    configured: &BTreeMap<String, String>,
+) {
+    let mut dirs = vec![found.bin.clone()];
+    dirs.extend(std::env::split_paths(&env.path).filter(|d| *d != found.bin));
+    if let Ok(path) = std::env::join_paths(dirs) {
+        env.path = path;
+    }
+    if found.runtime == LspServerRuntime::Java && !configured.contains_key("JAVA_HOME") {
+        env.vars
+            .insert("JAVA_HOME".into(), found.home.clone().into_os_string());
     }
 }
 
@@ -190,6 +207,9 @@ struct ProjectView {
     problem: Option<String>,
     project_layer: BTreeMap<String, ServerSettings>,
     global_layer: BTreeMap<String, ServerSettings>,
+    /// `[dap.<id>]`(디버그 어댑터 — M6-16).
+    dap_project: BTreeMap<String, ServerSettings>,
+    dap_global: BTreeMap<String, ServerSettings>,
     warnings: Vec<String>,
 }
 
@@ -252,21 +272,42 @@ impl LspServers {
             "settings",
             &mut warnings,
         );
-        let (project_layer, problem) = match project_snapshot(host, &project, &root, trusted) {
-            Ok(snapshot) => (
-                settings::parse_layer(
-                    snapshot.get("project", settings::SETTINGS_KEY),
-                    "project",
-                    &mut warnings,
+        let dap_global = dap::parse_layer(
+            global.get("settings", dap::DAP_SETTINGS_KEY),
+            "settings",
+            &mut warnings,
+        );
+        let (project_layer, dap_project, problem) =
+            match project_snapshot(host, &project, &root, trusted) {
+                Ok(snapshot) => (
+                    settings::parse_layer(
+                        snapshot.get("project", settings::SETTINGS_KEY),
+                        "project",
+                        &mut warnings,
+                    ),
+                    dap::parse_layer(
+                        snapshot.get("project", dap::DAP_SETTINGS_KEY),
+                        "project",
+                        &mut warnings,
+                    ),
+                    None,
                 ),
-                None,
-            ),
-            Err(problem) => (BTreeMap::new(), Some(problem)),
-        };
+                Err(problem) => (BTreeMap::new(), BTreeMap::new(), Some(problem)),
+            };
         for id in global_layer.keys().chain(project_layer.keys()) {
             if self.extensions.language_server(id).is_none() {
                 warnings.push(format!(
                     "`[lsp.{id}]`: no language server `{id}` is registered; ignored"
+                ));
+            }
+        }
+        // 전역 · 프로젝트 둘 다 적은 id 는 한 번만 알린다.
+        let dap_ids: std::collections::BTreeSet<&String> =
+            dap_global.keys().chain(dap_project.keys()).collect();
+        for id in dap_ids {
+            if self.extensions.debug_adapter(id).is_none() {
+                warnings.push(format!(
+                    "`[dap.{id}]`: no debug adapter `{id}` is registered; ignored"
                 ));
             }
         }
@@ -281,8 +322,18 @@ impl LspServers {
             problem,
             project_layer,
             global_layer,
+            dap_project,
+            dap_global,
             warnings,
         })
+    }
+
+    fn adapter_config_in(view: &ProjectView, def: &DebugAdapterDecl) -> AdapterConfig {
+        dap::adapter_config(
+            def,
+            view.dap_global.get(&def.id),
+            view.dap_project.get(&def.id),
+        )
     }
 
     fn config_in(view: &ProjectView, def: &LanguageServerDecl) -> ServerConfig {
@@ -322,9 +373,18 @@ impl LspServers {
                 env.vars.insert(name.into(), value.into());
             }
         }
+        let mut initialization_options = initialization_options(def, view, dir);
+        dap::add_bundles(
+            &mut initialization_options,
+            &def.id,
+            self.extensions
+                .debug_adapters()
+                .map(|(_, a)| (a, Self::adapter_config_in(view, a).enabled)),
+            tools.as_ref(),
+        );
         ServerSetup {
             extension: extension.to_owned(),
-            initialization_options: initialization_options(def, view, dir),
+            initialization_options,
             definition: def.clone(),
             config,
             resolution,
@@ -357,6 +417,77 @@ impl LspServers {
             ))
         })?;
         Ok(self.setup_in(&view, &extension.manifest.id, def, &dir))
+    }
+
+    /// 등록된 디버그 어댑터 정의(확장 id, 정의). 등록 순서다.
+    pub fn adapter_definitions(&self) -> impl Iterator<Item = (&str, &DebugAdapterDecl)> {
+        self.extensions
+            .debug_adapters()
+            .map(|(e, a)| (e.manifest.id.as_str(), a))
+    }
+
+    fn adapter_setup_in(
+        &self,
+        view: &ProjectView,
+        extension: &str,
+        def: &DebugAdapterDecl,
+        dir: &Path,
+    ) -> AdapterSetup {
+        let config = Self::adapter_config_in(view, def);
+        let resolved = self.runtime.env(&view.project.id, dir);
+        let tools = self.tools();
+        let launch = dap::resolve_adapter(
+            def,
+            &config,
+            &ResolveContext {
+                trusted: view.trusted,
+                project_root: &view.root,
+                dir,
+                env: &resolved.env,
+                tools: tools.as_ref(),
+            },
+        );
+        let mut env = resolved.env.clone();
+        for (name, value) in &config.env {
+            if name == "PATH" {
+                env.path = value.into();
+            } else {
+                env.vars.insert(name.into(), value.into());
+            }
+        }
+        AdapterSetup {
+            extension: extension.to_owned(),
+            definition: def.clone(),
+            config,
+            launch,
+            env,
+        }
+    }
+
+    /// 디버그 어댑터 하나를 `dir`(프로젝트 루트 안의 있는 폴더, 절대 경로 — 보통 프로젝트 루트)에서 띄우는 데 필요한 것: 합친
+    /// `[dap.<id>]` 설정, 언어 서버와 같은 순서로 찾은 실행 파일(또는 언어 서버가 여는 어댑터면 그 서버 · 명령), 어댑터 환경.
+    /// 디버그 세션(M6-17)이 부른다. 없는 어댑터 · 프로젝트, 프로젝트 루트 밖 `dir` 은 invalid params 다([`Self::setup`] 과 같다).
+    /// 블로킹(런타임 환경 · 파일)이다.
+    pub fn adapter_setup(
+        &self,
+        project_id: &str,
+        worktree: Option<&str>,
+        adapter_id: &str,
+        dir: &Path,
+    ) -> Result<AdapterSetup, RpcError> {
+        let view = self.view(project_id, worktree)?;
+        let (extension, def) = self
+            .extensions
+            .debug_adapter(adapter_id)
+            .ok_or_else(|| RpcError::invalid_params(format!("no debug adapter `{adapter_id}`")))?;
+        let dir = dir_inside(&view.root, dir).map_err(|reason| {
+            RpcError::invalid_params(format!(
+                "`{}` {reason} (project root `{}`)",
+                dir.display(),
+                view.root.display()
+            ))
+        })?;
+        Ok(self.adapter_setup_in(&view, &extension.manifest.id, def, &dir))
     }
 
     /// 그 프로젝트의 개인 파일(`project.local.toml` — 활성 워크트리의 설정 폴더 기준, 고칠 파일은 [`ConfigSource::local_file`] 이
