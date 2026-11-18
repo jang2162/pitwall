@@ -23,3 +23,14 @@ root_markers = ["Cargo.toml", "rust-project.json"]
 resolve_hint = "rustup"
 # 작업 공간을 읽는 동안 받은 편집을 분석에 넣지 않은 채 포맷에 답한다(옛 글 기준 편집) — 그 진행 중의 포맷 답은 버린다(M4-13).
 format_unreliable_while_progress = ["Roots Scanned"]
+
+# 디버거(17-m6-plan.md M6-19 · 결정 M6-D2). codelldb 는 `--port` 없이 띄우면 표준 입출력으로 말한다(v1.12.3 `src/codelldb/src/lib.rs`
+# — 포트를 열지 않는다). 해석은 언어 서버와 같다: `[dap.codelldb] path` → 프로젝트 로컬 → PATH → Pitwall 설치본($DATA/tools).
+# 틀의 값은 실행 구성 `[debug]` 에서 온다 — `{cwd}` · `{env}` 는 Pitwall 이 실행과 같은 판정으로 채운다(M6-17). 대상은 `runInTerminal`
+# 로 실행 관리자의 PTY 에서 돈다(codelldb 의 기본 `terminal = "integrated"`).
+[contributes.debug_adapters.codelldb]
+languages = ["rust"]
+mason = "codelldb"
+command = "codelldb"
+launch = { program = "{program}", args = "{args}", cwd = "{cwd}", env = "{env}", stopOnEntry = "{stop_on_entry}", sourceLanguages = ["rust"] }
+attach = { pid = "{pid}", program = "{program}", waitFor = "{wait_for}", sourceLanguages = ["rust"] }

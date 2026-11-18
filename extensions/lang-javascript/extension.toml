@@ -12,3 +12,17 @@ linguist = "JavaScript"
 builtin_grammar = "javascript"
 queries = "queries/javascript"
 line_comment = "//"
+
+# 디버거(17-m6-plan.md M6-19 · 결정 M6-D2 — Node 만, 브라우저는 뺀다). js-debug 의 `dapDebugServer.js` 는 표준 입출력이 없고 첫 인자가
+# 수가 아니면 그 경로의 소켓에서 받는다 — `{socket}` 으로 정의한다(TCP 로 정의하지 않는다, M6-15 리뷰 F1). 런처는 띄울 때의 PATH 의
+# node 를 부르고, 서버 관리자가 `requires` 로 찾은 node 를 PATH 앞에 둔다(M6-16). 대상은 `runInTerminal` 로 실행 관리자의 PTY 에서
+# 돈다(`console = "integratedTerminal"`). attach 는 `node --inspect` 로 떠 있는 프로세스의 포트(`[debug] port`)에 붙는다.
+[contributes.debug_adapters.js-debug]
+languages = ["javascript", "typescript", "tsx"]
+mason = "js-debug-adapter"
+command = "js-debug-adapter"
+args = ["{socket}"]
+transport = "socket"
+requires = { node = ">=20" }
+launch = { type = "pwa-node", program = "{program}", args = "{args}", cwd = "{cwd}", env = "{env}", runtimeExecutable = "{runtime_executable}", runtimeArgs = "{runtime_args}", stopOnEntry = "{stop_on_entry}", console = "integratedTerminal" }
+attach = { type = "pwa-node", port = "{port}", address = "{address}", processId = "{pid}" }

@@ -1539,6 +1539,74 @@ mod tests {
         );
     }
 
+    /// 17-m6-plan.md M6-19 · 결정 M6-D2: 내장 확장이 기본 번들 디버거 넷을 경고 없이 정의한다 — js-debug 는 소켓(TCP 가 아니다 —
+    /// M6-15 리뷰 F1), java-debug 는 jdtls 가 여는 attach 만(M6-P20), 나머지 둘은 표준 입출력.
+    #[test]
+    fn the_builtin_extensions_define_the_four_bundled_debuggers() {
+        let registry = Registry::from_roots(&engine(), builtin::roots());
+        assert_eq!(messages(&registry), Vec::<String>::new());
+        let mut ids: Vec<&str> = registry
+            .debug_adapters()
+            .map(|(_, a)| a.id.as_str())
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["codelldb", "debugpy", "java-debug", "js-debug"]);
+        let get = |id: &str| registry.debug_adapter(id).unwrap().1;
+        let languages = |id: &str| -> Vec<String> {
+            get(id).languages.iter().map(|l| l.name.clone()).collect()
+        };
+
+        let lldb = get("codelldb");
+        assert_eq!(
+            (lldb.transport, lldb.mason.as_deref()),
+            (crate::manifest::DapTransport::Stdio, Some("codelldb"))
+        );
+        assert!(lldb.args.is_empty());
+        assert!(lldb.launch.is_some() && lldb.attach.is_some());
+        assert_eq!(languages("codelldb"), ["rust"]);
+
+        let js = get("js-debug");
+        assert_eq!(
+            (js.transport, js.args.as_slice()),
+            (
+                crate::manifest::DapTransport::Socket,
+                ["{socket}".to_owned()].as_slice()
+            )
+        );
+        assert_eq!(js.mason.as_deref(), Some("js-debug-adapter"));
+        assert!(
+            js.requires
+                .iter()
+                .any(|r| r.runtime == crate::manifest::LspServerRuntime::Node)
+        );
+        assert_eq!(js.launch.as_ref().unwrap()["type"], "pwa-node");
+        assert_eq!(languages("js-debug"), ["javascript", "typescript", "tsx"]);
+
+        let py = get("debugpy");
+        assert_eq!(
+            (py.transport, py.command.as_deref()),
+            (
+                crate::manifest::DapTransport::Stdio,
+                Some("debugpy-adapter")
+            )
+        );
+        assert!(py.launch.is_some() && py.attach.is_some());
+
+        let java = get("java-debug");
+        let start = java.start.as_ref().unwrap();
+        assert_eq!(
+            (start.lsp.name.as_str(), start.command.as_str()),
+            ("jdtls", "vscode.java.startDebugSession")
+        );
+        assert_eq!(
+            start.bundles,
+            ["java-debug-adapter/com.microsoft.java.debug.plugin.jar"]
+        );
+        assert!(java.launch.is_none(), "the JVM is attach only");
+        assert_eq!(java.attach.as_ref().unwrap()["hostName"], "127.0.0.1");
+        assert_eq!(languages("java-debug"), ["java", "kotlin"]);
+    }
+
     /// 서버가 가리키는 언어가 어느 확장에도 없으면 경고하고 그 언어만 뺀다(서버는 남는다).
     #[test]
     fn a_language_server_drops_languages_no_extension_provides() {
@@ -1552,7 +1620,11 @@ mod tests {
             .unwrap();
         let languages: Vec<&str> = ts.languages.iter().map(|l| l.name.as_str()).collect();
         assert_eq!(languages, ["typescript", "javascript"]);
-        let messages = messages(&registry);
+        // 내장 디버그 어댑터(js-debug — M6-19)도 tsx 를 맡아 같은 경고를 따로 낸다. 여기서는 서버의 경고만 본다.
+        let messages: Vec<String> = messages(&registry)
+            .into_iter()
+            .filter(|m| !m.contains("debug adapter `js-debug`"))
+            .collect();
         assert_eq!(messages.len(), 1, "{messages:?}");
         assert!(
             messages[0].starts_with("builtin:lang-typescript/extension.toml:")

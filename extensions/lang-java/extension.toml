@@ -41,3 +41,15 @@ initialize_timeout = 60
 # 으로 민다(M4-18). 사람이 `[lsp.jdtls.settings.java.signatureHelp] enabled = false` 로 끌 수 있다.
 [contributes.language_servers.jdtls.settings.java.signatureHelp]
 enabled = true
+
+# 디버거(17-m6-plan.md M6-19 · 결정 M6-D2 · M6-P20 — JVM 은 attach 만). java-debug 는 실행 파일이 없는 jdtls 플러그인이다: 설치돼
+# 있으면 그 jar 가 jdtls 의 `initializationOptions.bundles` 에 실리고, 디버그를 시작하면 떠 있는 jdtls 에 `vscode.java.startDebugSession`
+# 을 보내 받은 포트(127.0.0.1)로 붙는다 — jdtls 가 떠 있지 않으면 거절. 설치되는 jar 는 상류의 것이 아니라 그 서버 소켓을
+# 127.0.0.1 에만 묶도록 고친 것이다(06-roadmap.md 결정 D71 — crates/pw-tools/patches/java-debug/). attach 대상은 사람이 JDWP 를 켜고
+# 띄운 JVM(`-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:5005`)이고 `[debug] port` 로 고른다. Kotlin 은
+# 같은 JDWP attach 로 확인만 하고 보장하지 않는다(결정 D65 — 소스 찾기가 jdtls 작업 공간을 쓰고 jdtls 는 `.kt` 를 모른다).
+[contributes.debug_adapters.java-debug]
+languages = ["java", "kotlin"]
+mason = "java-debug-adapter"
+start = { lsp = "jdtls", command = "vscode.java.startDebugSession", bundles = ["java-debug-adapter/com.microsoft.java.debug.plugin.jar"] }
+attach = { hostName = "127.0.0.1", port = "{port}", projectName = "{project_name}", timeout = "{timeout}" }
