@@ -15,8 +15,9 @@
 //!   "exceptionFilters": { "codelldb": ["rust_panic"] } }
 //! ```
 //!
-//! 쓰기는 같은 폴더의 임시 파일 → rename(원자적). 읽지 못한 파일(형식 오류 · 상한 초과)은 빈 목록으로 시작하고 경고를 남긴다 — 다음
-//! 쓰기가 그 파일을 바꾼다(개인 상태라 고칠 사람이 따로 없다).
+//! 쓰기는 같은 폴더의 임시 파일 → rename(원자적)이고 읽기와 같은 크기 상한([`FILE_LIMIT`])을 넘으면 거절한다. 읽지 못한 파일(형식
+//! 오류 · 상한 초과)은 지우지 않고 `breakpoints.json.broken-<유닉스 초>` 로 옮긴 뒤 빈 목록으로 시작하고 그 까닭을 `debug.breakpoints.list`
+//! 의 `problem` 으로 알린다. 옮기지 못하면(또는 읽기 자체가 실패하면) 그 파일을 덮어쓰지 않도록 쓰기를 막는다.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -103,6 +104,12 @@ pub struct Stored {
     pub files: BTreeMap<String, Vec<Breakpoint>>,
     #[serde(default)]
     pub exception_filters: BTreeMap<String, Vec<String>>,
+    /// 읽지 못한 파일을 옆으로 옮겨 두었다(까닭 · 옮긴 자리). 다음 쓰기가 성공하면 지운다. 파일에는 쓰지 않는다.
+    #[serde(skip)]
+    pub problem: Option<String>,
+    /// 파일이 그 자리에 남아 있는데 읽지 못했다(옮기지도 못함) — 덮어쓰지 않게 쓰기를 막는다.
+    #[serde(skip)]
+    pub locked: bool,
 }
 
 impl Stored {
@@ -250,6 +257,15 @@ impl Breakpoints {
         let file = self.file(project_id)?;
         let project = self.project(project_id)?;
         let mut stored = lock(&project);
+        if stored.locked {
+            return Err(RpcError::internal(format!(
+                "the breakpoints are not saved: {}",
+                stored
+                    .problem
+                    .as_deref()
+                    .unwrap_or("the file could not be read")
+            )));
+        }
         let before = stored.clone();
         let out = change(&mut stored)?;
         if *stored == before {
@@ -257,12 +273,30 @@ impl Breakpoints {
         }
         stored.schema = SCHEMA;
         stored.files.retain(|_, list| !list.is_empty());
-        if let Err(e) = write(&file, &stored) {
+        let bytes = match serde_json::to_vec_pretty(&*stored) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                *stored = before;
+                return Err(RpcError::internal(format!(
+                    "cannot save the breakpoints: {e}"
+                )));
+            }
+        };
+        // 읽기와 같은 상한 — 넘는 파일을 쓰면 다음 시작에 읽지 못한다.
+        if bytes.len() > FILE_LIMIT {
+            *stored = before;
+            return Err(RpcError::invalid_params(format!(
+                "the breakpoints of this project would take {} bytes, over the {FILE_LIMIT} byte limit — remove some breakpoints or shorten their conditions and log messages",
+                bytes.len()
+            )));
+        }
+        if let Err(e) = write(&file, &bytes) {
             *stored = before;
             return Err(RpcError::internal(format!(
                 "cannot save the breakpoints: {e}"
             )));
         }
+        stored.problem = None;
         self.inner.generation.fetch_add(1, Ordering::SeqCst);
         Ok(out)
     }
@@ -331,20 +365,29 @@ impl Breakpoints {
                 return Ok(None);
             };
             let before = list.clone();
-            for &(from, to) in moves {
-                if from == to || to == 0 {
-                    continue;
-                }
-                let Some(at) = list.iter().position(|b| b.line == from) else {
-                    continue;
-                };
-                if list.iter().any(|b| b.line == to) {
-                    list.remove(at);
-                } else {
-                    list[at].line = to;
+            // 옮길 곳을 원래 목록 기준으로 한꺼번에 정한다 — 사슬(2→5, 5→7)을 차례로 적용하면 2 의 것이 「5 에 이미 있다」 로
+            // 버려진다. 조건 · 로그 메시지 · hit count 는 브레이크포인트와 함께 간다.
+            let target = |line: u32| {
+                moves
+                    .iter()
+                    .find(|(from, to)| *from == line && *to != 0)
+                    .map_or(line, |(_, to)| *to)
+            };
+            let mut placed: BTreeMap<u32, (bool, Breakpoint)> = BTreeMap::new();
+            for b in before.iter().cloned() {
+                let to = target(b.line);
+                let stayed = to == b.line;
+                let b = Breakpoint { line: to, ..b };
+                match placed.get(&to) {
+                    // 같은 줄에 둘이 오면 제자리에 있던 것이 이긴다(둘 다 옮겨 왔으면 먼저 온 것).
+                    Some((true, _)) => {}
+                    Some((false, _)) if !stayed => {}
+                    _ => {
+                        placed.insert(to, (stayed, b));
+                    }
                 }
             }
-            list.sort_by_key(|b| b.line);
+            *list = placed.into_values().map(|(_, b)| b).collect();
             Ok((*list != before).then(|| list.clone()))
         })
     }
@@ -380,13 +423,20 @@ fn read(file: &Path) -> Stored {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Stored::default(),
         Err(e) => {
-            tracing::warn!(target: "pw_debug", file = %file.display(), error = %e, "cannot read the breakpoints; starting empty");
-            return Stored::default();
+            // 읽지 못한 것(권한 등)은 옮기지도 않는다 — 고쳐지면 다시 읽힌다. 다음 쓰기는 실패한다.
+            tracing::warn!(target: "pw_debug", file = %file.display(), error = %e, "cannot read the breakpoints");
+            return Stored {
+                problem: Some(format!("cannot read {}: {e}", file.display())),
+                locked: true,
+                ..Stored::default()
+            };
         }
     };
     if bytes.len() > FILE_LIMIT {
-        tracing::warn!(target: "pw_debug", file = %file.display(), "the breakpoints file is over its size limit; starting empty");
-        return Stored::default();
+        return set_aside(
+            file,
+            format!("{} is over the {FILE_LIMIT} byte limit", file.display()),
+        );
     }
     match serde_json::from_slice::<Stored>(&bytes) {
         Ok(mut stored) => {
@@ -399,25 +449,40 @@ fn read(file: &Path) -> Stored {
                 .collect();
             stored
         }
-        Err(e) => {
-            tracing::warn!(target: "pw_debug", file = %file.display(), error = %e, "the breakpoints file is not readable; starting empty");
-            Stored::default()
-        }
+        Err(e) => set_aside(file, format!("{} is not readable: {e}", file.display())),
     }
 }
 
-fn write(file: &Path, stored: &Stored) -> std::io::Result<()> {
+/// 읽지 못한 파일을 지우지 않고 옆(`breakpoints.json.broken-<유닉스 초>`)으로 옮기고, 빈 목록에 그 까닭을 달아 시작한다 — 다음
+/// 쓰기가 사람의 파일을 덮어쓰지 않게. 옮기지 못하면 그 파일을 그대로 두고 쓰기를 막는다(`problem` 이 남는다).
+fn set_aside(file: &Path, why: String) -> Stored {
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let aside = file.with_file_name(format!("{FILE}.broken-{at}"));
+    let (problem, locked) = match std::fs::rename(file, &aside) {
+        Ok(()) => (format!("{why}; it was moved to {}", aside.display()), false),
+        Err(e) => (format!("{why}; it could not be moved aside: {e}"), true),
+    };
+    tracing::warn!(target: "pw_debug", %problem, "the breakpoints file was not used");
+    Stored {
+        problem: Some(problem),
+        locked,
+        ..Stored::default()
+    }
+}
+
+fn write(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let dir = file.parent().expect("the file has a folder");
     std::fs::create_dir_all(dir)?;
-    let bytes = serde_json::to_vec_pretty(stored).map_err(std::io::Error::other)?;
     let tmp = dir.join(format!(
         ".{FILE}.{}.{}.pitwall-tmp",
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
     let result = (|| {
-        std::fs::write(&tmp, &bytes)?;
+        std::fs::write(&tmp, bytes)?;
         std::fs::File::open(&tmp)?.sync_all()?;
         std::fs::rename(&tmp, file)
     })();
@@ -466,5 +531,132 @@ mod tests {
         let after = store.moved("p1", "a.rs", &[(2, 5)]).unwrap().unwrap();
         assert_eq!(after, [Breakpoint::at(5)]);
         assert_eq!(store.moved("p1", "a.rs", &[(7, 8)]).unwrap(), None);
+    }
+
+    /// 리뷰 F2: 어댑터가 사슬로 옮겨도(2→5, 5→7) 둘 다 남고, 조건은 옮긴 브레이크포인트와 함께 간다.
+    #[test]
+    fn a_chain_of_moves_keeps_every_breakpoint_and_its_condition() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Breakpoints::new(tmp.path().to_owned());
+        let conditional = Breakpoint {
+            condition: Some("x".into()),
+            log_message: Some("at {x}".into()),
+            hit_condition: Some("3".into()),
+            ..Breakpoint::at(2)
+        };
+        store
+            .set_file("p1", "a.rs", vec![conditional.clone(), Breakpoint::at(5)])
+            .unwrap();
+        let after = store
+            .moved("p1", "a.rs", &[(2, 5), (5, 7)])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            after,
+            [
+                Breakpoint {
+                    line: 5,
+                    ..conditional
+                },
+                Breakpoint::at(7)
+            ]
+        );
+    }
+
+    fn big(lines: u32) -> Vec<Breakpoint> {
+        (1..=lines)
+            .map(|line| Breakpoint {
+                condition: Some("c".repeat(TEXT_LIMIT)),
+                ..Breakpoint::at(line)
+            })
+            .collect()
+    }
+
+    /// 리뷰 F1: 읽기 상한을 넘게 하는 쓰기는 거절되고(invalid params, 무엇이 넘는지), 전에 쓴 것은 그대로 남아 다시 읽힌다.
+    #[test]
+    fn a_write_over_the_read_limit_is_refused_and_keeps_what_was_there() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Breakpoints::new(tmp.path().to_owned());
+        store
+            .set_file("p1", "small.rs", vec![Breakpoint::at(1)])
+            .unwrap();
+        let e = store.set_file("p1", "a.rs", big(1000)).unwrap_err();
+        assert_eq!(e.code, pw_rpc::code::INVALID_PARAMS);
+        let said = format!("{:?}", e.data);
+        assert!(said.contains("byte limit"), "{said}");
+        assert_eq!(store.get("p1").unwrap().files.len(), 1);
+        let again = Breakpoints::new(tmp.path().to_owned()).get("p1").unwrap();
+        assert_eq!(again.files["small.rs"], [Breakpoint::at(1)]);
+        assert_eq!(again.problem, None);
+    }
+
+    /// 상한을 넘거나 깨진 파일은 지우지 않고 옆으로 옮기고(`.broken-<시각>`) 그 까닭을 알린다. 다음 쓰기는 새 파일을 만든다.
+    #[test]
+    fn an_unreadable_file_is_set_aside_not_emptied() {
+        for (name, bytes) in [
+            ("over", vec![b' '; FILE_LIMIT + 1]),
+            ("broken", b"{ not json".to_vec()),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let store = Breakpoints::new(tmp.path().to_owned());
+            let file = store.file("p1").unwrap();
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, &bytes).unwrap();
+            let stored = store.get("p1").unwrap();
+            assert!(stored.files.is_empty(), "{name}");
+            let problem = stored.problem.expect(name);
+            assert!(problem.contains("moved to"), "{name}: {problem}");
+            let aside: Vec<_> = std::fs::read_dir(file.parent().unwrap())
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.file_name()
+                        .to_string_lossy()
+                        .starts_with("breakpoints.json.broken-")
+                })
+                .collect();
+            assert_eq!(aside.len(), 1, "{name}");
+            assert_eq!(
+                std::fs::read(aside[0].path()).unwrap(),
+                bytes,
+                "{name}: kept as it was"
+            );
+            store
+                .set_file("p1", "a.rs", vec![Breakpoint::at(1)])
+                .unwrap();
+            assert_eq!(store.get("p1").unwrap().problem, None, "{name}");
+        }
+    }
+
+    /// 리뷰 권고 1(C): 조건 · 로그 메시지 · hit count 글 하나는 상한까지만.
+    #[test]
+    fn a_text_over_its_limit_is_refused() {
+        let over = Breakpoint {
+            log_message: Some("x".repeat(TEXT_LIMIT + 1)),
+            ..Breakpoint::at(1)
+        };
+        assert!(normalized(vec![over]).is_err());
+        assert!(normalized(big(1)).is_ok());
+    }
+
+    /// 리뷰 권고 1(E): 손으로 고친 파일의 루트 밖 · 절대 경로 열쇠와 쓸 수 없는 목록(줄 0)은 버린다 — 나머지는 읽는다.
+    #[test]
+    fn a_hand_edited_file_keeps_only_usable_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Breakpoints::new(tmp.path().to_owned());
+        let file = store.file("p1").unwrap();
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &file,
+            r#"{ "schema": 1, "files": {
+                "../../outside.rs": [{ "line": 1 }],
+                "/etc/passwd": [{ "line": 1 }],
+                "zero.rs": [{ "line": 0 }],
+                "src/ok.rs": [{ "line": 4 }]
+            } }"#,
+        )
+        .unwrap();
+        let files = store.get("p1").unwrap().files;
+        assert_eq!(files.keys().collect::<Vec<_>>(), ["src/ok.rs"]);
     }
 }

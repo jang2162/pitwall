@@ -394,6 +394,7 @@ impl Tree {
             owns_process,
             capabilities: Mutex::new(Capabilities::default()),
             initialized: watch::channel(false).0,
+            configured: watch::channel(false).0,
             ending: AtomicBool::new(false),
             ended: watch::channel(None).0,
             serving: AtomicUsize::new(0),
@@ -416,7 +417,10 @@ impl Tree {
             self.emit(&parent, SessionEventKind::ChildStarted { child: id });
         }
         match configure(self, &session, request).await {
-            Ok(configured) => Ok((session, configured)),
+            Ok(configured) => {
+                session.configured.send_replace(true);
+                Ok((session, configured))
+            }
             Err(e) => {
                 tracing::info!(target: "pw_dap", adapter = %self.adapter.adapter_id, session = id, %e, "debug session failed to start");
                 session.shut(None, self.timeouts).await;
@@ -794,6 +798,8 @@ pub struct Session {
     owns_process: bool,
     capabilities: Mutex<Capabilities>,
     initialized: watch::Sender<bool>,
+    /// 시작 순서(`configurationDone` 까지)를 마쳤다.
+    configured: watch::Sender<bool>,
     /// 끊기를 시작했다 — 역요청을 거절한다.
     ending: AtomicBool,
     ended: watch::Sender<Option<Ended>>,
@@ -830,6 +836,25 @@ impl Session {
     }
 
     /// 끝났으면 그 모양.
+    /// 시작 순서를 마칠 때까지 기다린다 — 그 뒤에야 브레이크포인트 등을 다시 보낼 수 있다(`initialized` 전에 보내지 않는다).
+    /// 마치지 못하고 끝났으면 거짓.
+    pub async fn wait_configured(&self) -> bool {
+        let mut configured = self.configured.subscribe();
+        let mut ended = self.ended.subscribe();
+        loop {
+            if *configured.borrow_and_update() {
+                return true;
+            }
+            if ended.borrow_and_update().is_some() {
+                return false;
+            }
+            tokio::select! {
+                changed = configured.changed() => if changed.is_err() { return false; },
+                changed = ended.changed() => if changed.is_err() { return false; },
+            }
+        }
+    }
+
     pub fn ended(&self) -> Option<Ended> {
         self.ended.borrow().clone()
     }

@@ -212,7 +212,13 @@ impl Terminals for RunTerminals {
             .await
             .map_err(|e| e.to_string())??;
             let process_id = kind.pid();
-            lock(&debug.terminals).push(kind);
+            lock(&debug.terminals).push(Arc::clone(&kind));
+            // 띄우는 동안 끝내기가 돌았으면(위의 검사 뒤) `finish` 는 이 PTY 를 보지 못했을 수 있다 — 넣은 뒤 다시 보고 직접 끝낸다.
+            // `finish` 는 `finished` 를 세운 뒤 목록을 읽으므로, 둘 중 하나는 반드시 이 PTY 를 본다.
+            if debug.stopping.load(Ordering::SeqCst) || debug.finished.load(Ordering::SeqCst) {
+                kind.stop();
+                return Err("the debug session ended while its program was starting".to_owned());
+            }
             let run_id = debug.run_id().to_owned();
             tracing::info!(target: "pw_debug", run = %run_id, pid = ?process_id, "debug target started in the run console");
             Ok(TerminalStarted {

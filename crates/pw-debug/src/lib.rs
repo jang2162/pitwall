@@ -328,7 +328,10 @@ impl Debugger {
                     self.answered(&run, root_id, rel, args, answers);
                 }
                 if breakpoints.generation() != generation {
-                    self.push_all(&run, session.root()).await;
+                    // 시작 중에 열린 자식도 시작 때의 목록을 받았다 — 나무 전체에 지금 것을 보낸다.
+                    for s in session.sessions() {
+                        self.push_all(&run, &s).await;
+                    }
                 }
                 tokio::spawn(self.clone().supervise(Arc::clone(&run)));
                 tracing::info!(target: "pw_debug", run = %info.run_id, "debug session started");
@@ -494,7 +497,12 @@ impl Debugger {
                     if let Some(child) = run.session().and_then(|s| s.session(child)) {
                         let me = self.clone();
                         let run = Arc::clone(&run);
-                        tokio::spawn(async move { me.push_all(&run, &child).await });
+                        // 이 이벤트는 자식의 `initialize` 전에 온다 — 시작 순서를 마친 뒤에 보낸다.
+                        tokio::spawn(async move {
+                            if child.wait_configured().await {
+                                me.push_all(&run, &child).await;
+                            }
+                        });
                     }
                 }
                 SessionEventKind::Thread(_) => {}

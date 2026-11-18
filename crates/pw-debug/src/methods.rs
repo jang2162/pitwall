@@ -366,6 +366,8 @@ pub struct DebugBreakpointsListParams {
 pub struct DebugBreakpointsList {
     /// 파일(상대 경로)마다, 경로 차례.
     pub files: Vec<FileBreakpoints>,
+    /// 저장 파일을 읽지 못해 빈 목록으로 시작했다 — 그 까닭과 옮겨 둔 자리(영어). 다음 저장이 성공하면 사라진다.
+    pub problem: Option<String>,
 }
 
 #[derive(
@@ -815,6 +817,7 @@ pub fn register(router: &mut Router, debugger: Debugger) {
                     .and_then(|store| store.get(&p.project_id))
                     .map(|stored| DebugBreakpointsList {
                         files: stored.file_list(),
+                        problem: stored.problem,
                     });
                 async move { result }
             },

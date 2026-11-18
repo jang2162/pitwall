@@ -122,12 +122,20 @@ impl Adapters for FakeAdapters {
 #[derive(Default)]
 struct Counting {
     calls: AtomicUsize,
+    /// 띄우기 직전에 부른다(끝내기를 끼워 넣는 자리).
+    before: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    launched: Mutex<Vec<Arc<dyn RunKind>>>,
 }
 
 impl ProcessLauncher for Counting {
     fn launch(&self, spec: &ProcessSpec, output: RunOutput) -> Result<Arc<dyn RunKind>, RpcError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        PtyLauncher.launch(spec, output)
+        if let Some(before) = &*self.before.lock().unwrap() {
+            before();
+        }
+        let kind = PtyLauncher.launch(spec, output)?;
+        self.launched.lock().unwrap().push(Arc::clone(&kind));
+        Ok(kind)
     }
 }
 
@@ -1026,4 +1034,104 @@ async fn a_language_server_adapter_attaches_through_the_port_it_opens() {
     let run_id = started["run"]["runId"].as_str().unwrap().to_owned();
     stop(&f, &mut c, &run_id).await;
     let _ = adapter.kill().await;
+}
+
+// ---- 리뷰 F3 · 권고 1(G) -------------------------------------------------------------------------------------------------
+
+/// 리뷰 F3: `runInTerminal` 이 PTY 를 띄우는 동안 디버그 세션이 끝나면(끝내기가 이미 PTY 목록을 본 뒤), 띄운 디버그 대상을 곧바로
+/// 끝내고 어댑터에는 실패로 답한다 — 주인 없는 프로세스가 남지 않는다. 띄우기 직전에 실행을 멈추고 그 실행이 끝날 때까지 기다려
+/// 끝내기를 끼워 넣는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_program_started_after_the_session_ended_is_stopped() {
+    let f = Fixture::new();
+    f.scenario(Scenario::default().on(
+        "launch",
+        vec![Action::Request {
+            command: "runInTerminal".into(),
+            arguments: json!({
+                "cwd": f.root.to_string_lossy(),
+                "args": ["/bin/sh", "-c", "exec sleep 30"]
+            }),
+            unless_arg: None,
+        }],
+    ));
+    let runs = f.runs.clone();
+    let project = f.project.clone();
+    *f.launcher.before.lock().unwrap() = Some(Box::new(move || {
+        // 띄우기 스레드(블로킹) 안: 실행을 멈추고, 끝내기가 실행의 끝을 알릴 때까지 기다린다.
+        let run = runs.list(&project).pop().expect("the debug run");
+        runs.stop(&project, &run.run_id).unwrap();
+        let until = Instant::now() + SOON;
+        while runs.find(&project, &run.run_id).unwrap().state() != RunState::Exited {
+            assert!(Instant::now() < until, "the debug run did not end");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }));
+    let mut c = f.client();
+    let _ = c.call("debug.start", start_params(&f, "app")).await;
+    assert!(eventually(SOON, || !f.launcher.launched.lock().unwrap().is_empty()).await);
+    let pid = f.launcher.launched.lock().unwrap()[0].pid().unwrap() as i32;
+    assert!(
+        eventually(SOON, || unsafe { libc::kill(pid, 0) } != 0).await,
+        "the late program {pid} was left running"
+    );
+    let answered = || {
+        f.records()
+            .into_iter()
+            .filter_map(|r| r.get("msg").cloned())
+            .find(|m| m["type"] == "response" && m["command"] == "runInTerminal")
+    };
+    // 어댑터는 이미 끊겼을 수 있다(답이 닿지 않음) — 닿았다면 실패여야 한다.
+    if let Some(answer) = answered() {
+        assert_eq!(answer["success"], false, "{answer}");
+    }
+}
+
+/// 리뷰 권고 1(G): 세션에 예외 필터를 보낼 때 그 세션의 어댑터가 알린 것만 보낸다 — 저장에 알리지 않은 이름이 있어도(손으로 고친
+/// 파일 · 다른 판의 어댑터) 걸러진다. 자식 세션(`startDebugging`)이 열릴 때의 다시 보내기로 본다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_filters_the_session_announced_are_sent() {
+    let f = Fixture::new();
+    let file = f
+        .paths
+        .data
+        .join("projects")
+        .join(&f.project)
+        .join("breakpoints.json");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(
+        &file,
+        r#"{ "schema": 1, "exceptionFilters": { "fake": ["bogus", "uncaught"] } }"#,
+    )
+    .unwrap();
+    f.scenario(
+        Scenario {
+            capabilities: json!({
+                "exceptionBreakpointFilters": [{ "filter": "uncaught", "label": "Uncaught" }]
+            }),
+            ..Scenario::default()
+        }
+        .on(
+            "threads",
+            vec![Action::Request {
+                command: "startDebugging".into(),
+                arguments: json!({ "configuration": { "child": true }, "request": "launch" }),
+                unless_arg: None,
+            }],
+        ),
+    );
+    let mut c = f.client();
+    let run_id = start(&f, &mut c).await;
+    // 시작 뒤에 자식을 연다(어댑터가 `threads` 를 받으면).
+    c.ok("debug.threads", json!({ "runId": run_id })).await;
+    // 시작 때 하나(pw-dap 이 거름), 자식의 시작 때 하나, 자식이 열린 뒤 다시 보내기 하나 — 모두 알린 것만.
+    assert!(
+        eventually(SOON, || f.received("setExceptionBreakpoints").len() >= 3).await,
+        "{:#?}",
+        f.records()
+    );
+    for sent in f.received("setExceptionBreakpoints") {
+        assert_eq!(sent["arguments"]["filters"], json!(["uncaught"]), "{sent}");
+    }
+    stop(&f, &mut c, &run_id).await;
 }
