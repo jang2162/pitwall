@@ -11,12 +11,13 @@
 //!   읽고, 그 타입이 모르는 키(`env_file` 처럼 파일 키로 적은 것, 오타)는 거절한다(serde 는 모르는 키를 말없이 버린다 — 고치려던
 //!   필드 대신 빈 값이 저장되면 안 된다). 그 뒤 [`super::validate`](`cwd` · `envFile` 이 루트 안 등)를 지난다. 모두 승인을 묻기
 //!   전에 거절한다.
-//! - **비밀은 받지 않는다**(메인 판정 M6-P18): `env` · 프로필 `env` 의 키가 비밀 단어면([`shown::is_secret_name`]) 거절하고
-//!   `envFile` 로 가리키게 한다 — 공유 구성은 커밋된다. 값 안의 비밀(이름이 평범한 키의 토큰)은 가르지 않는다(`pw_core::secret`
-//!   머리 주석 — 첫 방어선은 설계 규칙).
-//! - **보이는 계획은 가린다**([`shown`] — M6-14 ② 와 같은 규칙): 파일 diff 의 앞뒤 글에서 비밀 단어 키의 값 · URL 비밀번호를
-//!   가리고(사람이 개인 파일에 적어 둔 값이 앞 글에 있을 수 있다), `envFile` 마다 그 파일이 낼 변수를 이름과 값(같은 가림)으로
-//!   보인다. 해시는 가리기 전의 앞뒤 내용을 대상 값으로 덮는다.
+//! - **비밀은 받지 않는다**(메인 판정 M6-P18): `env` · 프로필 `env` · `[debug]` 아래(모든 깊이)의 키가 비밀 단어면
+//!   ([`shown::is_secret_name`]) 거절하고 `envFile` 로 가리키게 한다 — 공유 구성은 커밋된다. 값 안의 비밀(이름이 평범한 키의
+//!   토큰)은 가르지 않는다(`pw_core::secret` 머리 주석 — 첫 방어선은 설계 규칙).
+//! - **보이는 계획은 env 의 값만 가린다**([`shown`] — M6-14 ② 와 같은 규칙): 파일 diff 의 앞뒤 글에서 env 표(최상위 · 프로필 ·
+//!   `[debug]` 아래)의 비밀 단어 키 값과 URL 비밀번호를 해시 앞 8자와 함께 가리고(사람이 개인 파일에 적어 둔 값이 앞 글에 있을 수
+//!   있다), `envFile` 마다 그 파일이 낼 변수를 이름과 값(같은 가림)으로 보인다. **실행될 글(명령 · 인자 · 어댑터 값)은 가리지
+//!   않는다** — 비밀처럼 보이면 「Warning」 을 덧붙인다(M6-13 리뷰 B1). 해시는 가리기 전의 앞뒤 내용을 대상 값으로 덮는다.
 //! - **git 이 추적하는 `.local.toml` 은 쓰지 않는다**(m6-localpolicy — 커밋된 파일은 사람의 개인 설정이 아니다): `location: local`
 //!   의 그 파일이 추적(또는 받아 온 내용 · 판정 못 함)이면 묻기 전에 거절한다. `apply` 도 거절하지만(`ConfigSource::
 //!   prepare_local_write`) 그것은 승인 뒤다 — 사람에게 쓸 수 없는 쓰기를 묻지 않는다.
@@ -173,31 +174,62 @@ fn unknown_key(input: &Value, known: &Value, at: &str) -> Option<String> {
     })
 }
 
-/// `env` · 프로필 `env` 의 비밀 이름을 거절한다(메인 판정 M6-P18).
+/// `env` · 프로필 `env` · `[debug]` 아래(모든 깊이 — 어댑터 템플릿의 `env` 도)의 비밀 이름을 거절한다(메인 판정 M6-P18 —
+/// `[debug]` 까지는 M6-13 리뷰 F1 메인 판정).
 fn refuse_secret_env(config: &RunConfig) -> Result<(), RpcError> {
-    let names = config.env.keys().map(|n| (n, None)).chain(
+    let mut found: Option<(String, String)> = None;
+    let names =
         config
-            .profiles
-            .iter()
-            .flat_map(|(p, profile)| profile.env.keys().map(move |n| (n, Some(p.as_str())))),
-    );
-    for (name, profile) in names {
+            .env
+            .keys()
+            .map(|n| ("env".to_owned(), n))
+            .chain(config.profiles.iter().flat_map(|(p, profile)| {
+                profile
+                    .env
+                    .keys()
+                    .map(move |n| (format!("profiles.{p}.env"), n))
+            }));
+    for (at, name) in names {
         if shown::is_secret_name(name) {
-            let at = match profile {
-                None => "env".to_owned(),
-                Some(p) => format!("profiles.{p}.env"),
-            };
-            return Err(RpcError::new(
-                code::INVALID_PARAMS,
-                format!(
-                    "`{at}.{name}` looks like a secret (its name has a secret word); Pitwall does not write secrets into \
-                     run configuration files — put it in a `.env` file that is not committed and list that file in `envFile`"
-                ),
-            )
-            .with_data(json!({ "reason": "secretEnv", "name": name })));
+            found = Some((at, name.clone()));
+            break;
         }
     }
-    Ok(())
+    if found.is_none()
+        && let Some(debug) = &config.debug
+    {
+        let value = serde_json::to_value(debug).map_err(|e| RpcError::internal(e.to_string()))?;
+        found = secret_key_in("debug", &value);
+    }
+    let Some((at, name)) = found else {
+        return Ok(());
+    };
+    Err(RpcError::new(
+        code::INVALID_PARAMS,
+        format!(
+            "`{at}.{name}` looks like a secret (its name has a secret word); Pitwall does not write secrets into run \
+             configuration files — put it in a `.env` file that is not committed and list that file in `envFile`"
+        ),
+    )
+    .with_data(json!({ "reason": "secretEnv", "name": name })))
+}
+
+/// `value`(JSON) 안의 객체 키 가운데 비밀 이름인 첫 하나의 (자리, 이름).
+fn secret_key_in(at: &str, value: &Value) -> Option<(String, String)> {
+    match value {
+        Value::Object(map) => map.iter().find_map(|(key, inner)| {
+            if shown::is_secret_name(key) {
+                Some((at.to_owned(), key.clone()))
+            } else {
+                secret_key_in(&format!("{at}.{key}"), inner)
+            }
+        }),
+        Value::Array(items) => items
+            .iter()
+            .enumerate()
+            .find_map(|(i, inner)| secret_key_in(&format!("{at}[{i}]"), inner)),
+        _ => None,
+    }
 }
 
 /// 개인 파일(`location: local`) 이 git 이 추적하는 파일이면(또는 받아 온 내용 · 판정 못 함) 묻기 전에 거절한다(모듈 문서).
@@ -310,6 +342,22 @@ impl RunConfigs {
             .target("after", &edit.after)
             .rules(rules(&p.id))
             .change(file_change(&edit));
+        // 실행될 글은 가리지 않는다 — 비밀처럼 보이면 경고만 단다(`shown` 머리 주석).
+        let warnings = edit
+            .after
+            .as_deref()
+            .map(shown::config_warnings)
+            .unwrap_or_default();
+        if !warnings.is_empty() {
+            builder = builder.change(PlanChange::Text {
+                label: "Warning".to_owned(),
+                text: format!(
+                    "These values look like secrets and are shown as written, not hidden (they run or reach the debug \
+                     adapter as they are): {}",
+                    warnings.join(", ")
+                ),
+            });
+        }
         if let Some(text) = shown::env_files_text(&p.config, &place.root) {
             builder = builder.change(PlanChange::Text {
                 label: "Environment files".to_owned(),

