@@ -1,7 +1,7 @@
 //! 「사람이 본 구성」(17-m6-plan M6-11)의 완료 기준 ① · ② · ③ · ⑤ 와 워크트리 · 빠진 정의.
 //!
-//! env 를 푸는 것(M6-03)과 명령 정의 본문을 읽는 것(M6-04 · 05)은 아직 이 크레이트에 없어, 시험은 그 둘을 작은 가짜로 채운다
-//! ([`Fixture::seen`]) — 이 모듈이 받는 것은 푼 결과뿐이라 가짜가 무엇을 푸는지는 판정과 상관없다.
+//! [`Fixture::seen`] 은 실행을 띄우는 쪽과 같은 차례로 푼다 — 구성 읽기(M6-01) → argv → env(M6-03 [`RunEnv::resolve`]) → 정의
+//! 본문(M6-04 [`detect`]) → 해시.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -76,6 +76,42 @@ impl Fixture {
             .unwrap();
     }
 
+    /// 감지된 태스크(M6-04 의 감지)를 그 열쇠로 해시한다 — 정의 본문은 감지가 낸 것.
+    fn seen_detected(&self, key: &str) -> SeenHash {
+        let detection = detect::detect(&self.root, &detect::NoExec);
+        let task = detection
+            .get(key)
+            .unwrap_or_else(|| panic!("`{key}` not detected: {:?}", detection.problems));
+        let config = &task.config;
+        let cwd = match &config.cwd {
+            Some(rel) => root::inside(&self.root, rel).unwrap(),
+            None => self.root.clone(),
+        };
+        let login_shell = ["/bin/sh".to_owned(), "-l".to_owned()];
+        let argv = argv(
+            config,
+            None,
+            &ArgvContext {
+                root: &self.root,
+                cwd: &cwd,
+                login_shell: &login_shell,
+            },
+        )
+        .unwrap();
+        let env = RunEnv::resolve(config, None, &self.root).unwrap();
+        hash(&SeenParts {
+            key: &task.key(),
+            root: &self.root,
+            config,
+            argv: &argv,
+            cwd: &cwd,
+            home: Some(&self.base),
+            env: &env,
+            definition: Some(&task.definition),
+        })
+        .unwrap()
+    }
+
     fn saw(&self, id: &str, hash: &SeenHash) -> bool {
         self.registry.human_saw(&self.project.id, id, hash)
     }
@@ -110,51 +146,22 @@ fn seen_at(
         },
     )
     .unwrap();
-    // M6-03 의 가짜: env_file(순서대로) → env → 프로필 env.
-    let files: Vec<(String, Option<Vec<u8>>)> = config
-        .env_file
-        .iter()
-        .map(|rel| (rel.clone(), fs::read(place.root.join(rel)).ok()))
-        .collect();
-    let mut env = BTreeMap::new();
-    for (_, bytes) in &files {
-        for line in String::from_utf8_lossy(bytes.as_deref().unwrap_or_default()).lines() {
-            if let Some((k, v)) = line.split_once('=') {
-                env.insert(k.trim().to_owned(), v.trim().to_owned());
-            }
-        }
-    }
-    env.extend(config.env.clone());
-    if let Some(p) = profile {
-        env.extend(config.profiles[p].env.clone());
-    }
-    // M6-04 의 가짜: npm 은 package.json 의 그 script 본문.
+    let env = RunEnv::resolve(config, profile, &place.root).unwrap();
     let definition = match &config.kind {
         RunKindConfig::Npm { script } => {
-            let manifest: serde_json::Value =
-                serde_json::from_slice(&fs::read(cwd.join("package.json")).unwrap()).unwrap();
-            manifest["scripts"][script].as_str().map(str::to_owned)
+            detect::npm::script_definition(&place.root, &cwd, script).unwrap()
         }
         RunKindConfig::MiseTask { task } => Some(format!("echo {task}")),
         _ => None,
     };
-    let reads: Vec<EnvFileRead<'_>> = files
-        .iter()
-        .map(|(path, bytes)| EnvFileRead {
-            path,
-            contents: bytes.as_deref(),
-        })
-        .collect();
     hash(&SeenParts {
         key: id,
         root: &place.root,
         config,
-        profile,
         argv: &argv,
         cwd: &cwd,
         home: Some(home),
         env: &env,
-        env_files: &reads,
         definition: definition.as_deref(),
     })
     .unwrap()
@@ -200,6 +207,7 @@ fn a_saved_config_is_seen_until_one_character_changes_outside() {
 fn comments_whitespace_and_key_order_do_not_change_the_hash() {
     let f = Fixture::new();
     f.write(".pitwall/run/dev.toml", DEV);
+    f.write(".env.local", "");
     let before = f.seen("dev", None);
     f.write(
         ".pitwall/run/dev.toml",
@@ -375,38 +383,35 @@ fn missing_parts_are_refused_without_values_in_the_error() {
         profiles: BTreeMap::new(),
         debug: None,
     };
-    let env = npm.env.clone();
+    fs::write(root.join(".env"), "TOKEN=s3cret\n").unwrap();
+    let env = RunEnv::resolve(&npm, None, root).unwrap();
+    // 다른 구성(env_file 없음)으로 푼 env — 이 구성의 것이 아니다.
+    let foreign = RunEnv::resolve(&shell("x"), None, root).unwrap();
     let argv = vec!["npm".to_owned(), "run".to_owned(), "dev".to_owned()];
-    let files = [EnvFileRead {
-        path: ".env",
-        contents: Some(b"TOKEN=s3cret"),
-    }];
-    let parts = |key, definition, env_files, cwd| SeenParts {
+    let parts = |key, definition, env, cwd| SeenParts {
         key,
         root,
         config: &npm,
-        profile: None,
         argv: &argv,
         cwd,
         home: Some(&base),
-        env: &env,
-        env_files,
+        env,
         definition,
     };
-    let ok = hash(&parts("web", Some("vite"), &files, root)).unwrap();
+    let ok = hash(&parts("web", Some("vite"), &env, root)).unwrap();
     assert!(ok.as_str().starts_with("sha256:"));
     for refused in [
-        hash(&parts("web", None, &files, root)),
-        hash(&parts("web", Some("vite"), &[], root)),
-        hash(&parts("web", Some("vite"), &files, &sibling)),
-        hash(&parts("web", Some("vite"), &files, &up)),
-        hash(&parts("web", Some("vite"), &files, &missing)),
+        hash(&parts("web", None, &env, root)),
+        hash(&parts("web", Some("vite"), &foreign, root)),
+        hash(&parts("web", Some("vite"), &env, &sibling)),
+        hash(&parts("web", Some("vite"), &env, &up)),
+        hash(&parts("web", Some("vite"), &env, &missing)),
     ] {
         let why = refused.unwrap_err();
         assert!(!why.contains("s3cret") && !why.contains("vite"), "{why}");
     }
     assert!(needs_definition(
-        &detected_key("make", "build"),
+        &detect::key("make", "build"),
         &RunKindConfig::Shell {
             command: "make build".into()
         }
@@ -419,7 +424,7 @@ fn missing_parts_are_refused_without_values_in_the_error() {
     ));
     let debug = format!(
         "{:?}",
-        content(&parts("web", Some("vite"), &files, root)).unwrap()
+        content(&parts("web", Some("vite"), &env, root)).unwrap()
     );
     assert!(
         !debug.contains("s3cret") && !debug.contains("vite"),
@@ -433,6 +438,7 @@ fn missing_parts_are_refused_without_values_in_the_error() {
 fn an_agent_connection_cannot_record_what_a_person_saw() {
     let f = Fixture::new();
     f.write(".pitwall/run/dev.toml", DEV);
+    f.write(".env.local", "");
     let hash = f.seen("dev", None);
     for place in [SeenPlace::Save, SeenPlace::Run, SeenPlace::Approval] {
         let refused = SeenBy::window(&ConnectionScope::Agent, &f.project.id, place).unwrap_err();
@@ -446,18 +452,16 @@ fn shell_parts<'a>(
     root: &'a Path,
     cwd: &'a Path,
     home: &'a Path,
-    env: &'a BTreeMap<String, String>,
+    env: &'a RunEnv,
 ) -> SeenParts<'a> {
     SeenParts {
         key: "dev",
         root,
         config,
-        profile: None,
         argv: &[],
         cwd,
         home: Some(home),
         env,
-        env_files: &[],
         definition: None,
     }
 }
@@ -534,7 +538,7 @@ fn the_working_directory_is_resolved_by_the_hash_itself() {
     }
     fs::create_dir_all(base.join("outside")).unwrap();
     let config = shell("make");
-    let env = BTreeMap::new();
+    let env = RunEnv::resolve(&config, None, &root).unwrap();
     let link = root.join("a");
     let at = |cwd: &Path| hash(&shell_parts(&config, &root, cwd, &base, &env));
 
@@ -550,4 +554,72 @@ fn the_working_directory_is_resolved_by_the_hash_itself() {
     std::os::unix::fs::symlink(base.join("outside"), &link).unwrap();
     assert!(at(&link).is_err(), "밖을 가리키는 링크");
     assert!(at(&root.join("missing")).is_err(), "없는 폴더");
+}
+
+/// 감지된 태스크는 M6-04 의 열쇠(`detect::key`)와 정의 본문으로 해시한다 — `Makefile` 은 파일 전체의 sha256 과 이름이라, 그
+/// 대상이 아닌 자리(다른 대상 · 변수)를 고쳐도 기록과 다르다(정의 본문을 빼면 실패).
+#[test]
+fn a_detected_task_is_hashed_with_its_detected_definition() {
+    let f = Fixture::new();
+    f.write(
+        "Makefile",
+        "CC = cc\nbuild:\n\t$(CC) main.c\ntest:\n\t./run-tests\n",
+    );
+    let key = detect::key("make", "build");
+    let seen = f.seen_detected(&key);
+    f.record(&key, seen.clone(), SeenPlace::Run);
+    assert!(f.saw(&key, &f.seen_detected(&key)));
+    // 그 대상의 레시피는 그대로, 변수만.
+    f.write(
+        "Makefile",
+        "CC = evil\nbuild:\n\t$(CC) main.c\ntest:\n\t./run-tests\n",
+    );
+    assert!(!f.saw(&key, &f.seen_detected(&key)));
+    f.write(
+        "Makefile",
+        "CC = cc\nbuild:\n\t$(CC) main.c\ntest:\n\t./run-tests\n",
+    );
+    assert!(f.saw(&key, &f.seen_detected(&key)));
+}
+
+/// 필드 하나만 달라도 해시가 다르고, `Debug` 에 값이 없다.
+#[test]
+fn every_content_field_is_hashed_and_debug_hides_values() {
+    let digest = |path: &str, sha: &str| EnvFileDigest {
+        path: path.into(),
+        sha256: sha.repeat(64),
+    };
+    let content = || SeenContent {
+        config: r#"{"env":{"API_TOKEN":"s3cret"}}"#.into(),
+        argv: vec!["npm".into(), "run".into(), "dev".into()],
+        cwd: ".".into(),
+        env: BTreeMap::from([("API_TOKEN".into(), "s3cret".into())]),
+        env_files: vec![digest(".env", "a")],
+        profile: None,
+        definition: Some("vite --port 3000".into()),
+        runtime_files: vec![digest("mise.toml", "b")],
+    };
+    let base = content().hash();
+    let variants: [fn(&mut SeenContent); 8] = [
+        |c| c.config.push(' '),
+        |c| c.argv.push("--x".into()),
+        |c| c.cwd = "web".into(),
+        |c| {
+            c.env.insert("API_TOKEN".into(), "other".into());
+        },
+        |c| c.env_files[0].sha256 = "c".repeat(64),
+        |c| c.profile = Some("prod".into()),
+        |c| c.definition = None,
+        |c| c.runtime_files[0].sha256 = "c".repeat(64),
+    ];
+    for change in variants {
+        let mut c = content();
+        change(&mut c);
+        assert_ne!(c.hash(), base);
+    }
+    let debug = format!("{:?}", content());
+    assert!(
+        !debug.contains("s3cret") && !debug.contains("vite"),
+        "{debug}"
+    );
 }

@@ -5,8 +5,8 @@
 //! - **자리**: `state.db` 의 `run_seen`(v4) — 프로젝트 id · 구성 열쇠 → 해시 · 기록한 자리 · 시각. 에이전트의 파일 쓰기 도구가 닿는
 //!   평문 파일에 두지 않는다(DB 표지 기억 [`super::db_marks`] 와 같은 자리, 03 「데이터 저장」). 열쇠 하나에 마지막으로 본 해시
 //!   하나다 — 사람이 고쳐 저장한 뒤 에이전트가 옛 내용으로 되돌리면 다시 묻는다.
-//! - **해시만 든다**: 기록하는 값은 [`SeenHash`] 뿐이고 그것은 [`SeenContent::hash`] 나 [`SeenHash::parse`](꼴 검사)로만 생긴다 —
-//!   구성의 값(env 값 · 명령줄)이 이 표 · 로그에 들어갈 길이 없다. [`SeenContent`] 의 `Debug` 도 값을 보이지 않는다.
+//! - **해시만 든다**: 기록하는 값은 [`SeenHash`] 뿐이고 그것은 [`SeenHash::parse`](꼴 검사 — `sha256:<64 hex>`)로만 생긴다 —
+//!   구성의 값(env 값 · 명령줄)이 이 표 · 로그에 들어갈 길이 없다.
 //! - **쓰는 쪽은 사람의 창 연결뿐이다**: [`Registry::record_run_seen`] 은 [`SeenBy`] 를 받고, 그것은 그 프로젝트 창의 연결 범위
 //!   (`ConnectionScope::Project(그 id)` — [`scope_may_write`])에서만 생긴다. 에이전트 범위(MCP 세션) · Host · 파일 창 · 다른
 //!   프로젝트 창은 `PERMISSION_DENIED` 다. 기록하는 자리는 셋이다([`SeenPlace`]): 화면의 저장(M6-07 → `run.config.save`), 화면의
@@ -16,15 +16,13 @@
 //!   기록을 더할 수 없는 저장소에서 「본 것」 을 믿지 않는다), 기록의 해시가 지금 해시와 같을 때만 `true`. 실행 툴(M6-14)은 이것을
 //!   `PlanRules::policy_auto` 의 재료로 쓴다. 복합 구성 · `before`(M6-21)는 단계마다 부르고 모두가 `true` 일 때만 자동이다.
 //!
-//! 해시에 무엇이 드는가([`SeenContent`])는 `pw_run::seen` 이 구성에서 채운다 — 이 모듈은 그 값을 해시하고 저장한다.
+//! 해시에 무엇이 드는가와 해시 계산은 `pw_run::seen`(그 `SeenContent`)이다 — 이 모듈은 해시를 저장하고 견준다.
 
-use std::collections::BTreeMap;
 use std::fmt;
 
 use pw_rpc::{ConnectionScope, RpcError, code};
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 
 use super::state::scope_may_write;
 use super::{Registry, RegistryError, now_ms};
@@ -105,7 +103,7 @@ impl SeenBy {
     }
 }
 
-/// 내용 해시(`sha256:<64 hex>`). [`SeenContent::hash`] 가 만들고, 계획 · 승인 요청에 실려 온 글은 [`SeenHash::parse`] 로 되살린다
+/// 내용 해시(`sha256:<64 hex>`). `pw_run::seen::hash` 가 만들고, 계획 · 승인 요청에 실려 온 글도 [`SeenHash::parse`] 로 되살린다
 /// — 꼴이 맞지 않는 글(값 원문 등)은 받지 않는다.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
@@ -127,92 +125,6 @@ impl SeenHash {
 impl fmt::Display for SeenHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
-    }
-}
-
-/// 해시하는 내용(17-m6-plan M6-11 ①). 채우는 것은 `pw_run::seen` 이다 — 경로는 프로젝트 루트 기준이라 같은 내용이면 워크트리가
-/// 달라도 같은 해시다.
-///
-/// 덮는 것은 「구성이 정한 명령줄과 그 명령 정의」 까지다(결정 M6-D6 ⓒ). 그 명령이 실행하는 코드(소스 · 빌드 스크립트 ·
-/// `Makefile` · `justfile` 이 부르는 스크립트)는 덮지 않는다.
-#[derive(Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SeenContent {
-    /// 구성 전체를 파싱한 값의 정규형(`pw_run::config::RunConfig::canonical` — 주석 · 공백 · 키 순서가 들지 않고 `before` ·
-    /// `configs` · `mode` · `[debug]` 를 포함한다).
-    pub config: String,
-    /// 풀린 argv(프로필을 얹은 것). 프로젝트 루트 안의 절대 경로(래퍼 등)는 루트 기준으로 적는다.
-    pub argv: Vec<String>,
-    /// 작업 폴더(프로젝트 루트 기준, `/` 구분).
-    pub cwd: String,
-    /// 런타임 환경 위에 얹는 env 의 이름과 값(`env_file` → `env` → 프로필의 `env` 를 덮은 결과 — M6-03).
-    pub env: BTreeMap<String, String>,
-    /// `env_file` 의 경로(구성에 적힌 그대로)와 각 파일 내용의 sha256, 구성의 순서대로.
-    pub env_files: Vec<EnvFileDigest>,
-    /// 고른 프로필.
-    pub profile: Option<String>,
-    /// 명령 정의 본문: `npm` 은 `package.json` 의 그 script, `mise-task` 는 `mise tasks ls --json` 의 그 태스크 `run`, 감지된
-    /// 태스크는 그 감지 출처의 본문. 정의가 따로 없는 종류는 `None`.
-    pub definition: Option<String>,
-    /// 런타임 환경의 원천 파일(`mise.toml` · `.tool-versions` 등 — `pw_run::seen::runtime_files`)의 경로와 내용 sha256, 경로 순.
-    /// 런타임 env 의 값은 넣지 않는다(로그인 셸의 값이 섞인다).
-    pub runtime_files: Vec<EnvFileDigest>,
-}
-
-/// `env_file` 하나: 구성에 적힌 경로와 그 내용의 sha256(파일이 없으면 `None`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EnvFileDigest {
-    pub path: String,
-    pub sha256: Option<String>,
-}
-
-impl EnvFileDigest {
-    /// 읽은 내용(`None` = 파일이 없다)의 다이제스트.
-    pub fn of(path: impl Into<String>, contents: Option<&[u8]>) -> Self {
-        Self {
-            path: path.into(),
-            sha256: contents.map(|bytes| hex(&Sha256::digest(bytes))),
-        }
-    }
-}
-
-/// 해시 입력의 판. 덮는 것의 꼴을 바꾸면 올린다 — 옛 기록은 새 해시와 맞지 않아 한 번 다시 묻는다.
-const CONTENT_VERSION: u32 = 2;
-
-impl SeenContent {
-    pub fn hash(&self) -> SeenHash {
-        #[derive(Serialize)]
-        struct Versioned<'a> {
-            v: u32,
-            content: &'a SeenContent,
-        }
-        // 구조체 필드 순서와 `BTreeMap` 의 순서가 고정이라 같은 내용은 같은 글이다(구성은 이미 정규형 글이다).
-        let text = serde_json::to_string(&Versioned {
-            v: CONTENT_VERSION,
-            content: self,
-        })
-        .expect("seen content serializes to JSON");
-        SeenHash(format!(
-            "{HASH_PREFIX}{}",
-            hex(&Sha256::digest(text.as_bytes()))
-        ))
-    }
-}
-
-/// 값(argv · env 값 · 정의 본문 · 구성 글)을 보이지 않는다 — 로그 · 오류에 원문을 남기지 않는다(M5 의 규약, M6-03 ③).
-impl fmt::Debug for SeenContent {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SeenContent")
-            .field("configLen", &self.config.len())
-            .field("argc", &self.argv.len())
-            .field("cwd", &self.cwd)
-            .field("envKeys", &self.env.keys().collect::<Vec<_>>())
-            .field("envFiles", &self.env_files)
-            .field("profile", &self.profile)
-            .field("definitionLen", &self.definition.as_ref().map(String::len))
-            .field("runtimeFiles", &self.runtime_files)
-            .finish()
     }
 }
 
@@ -309,35 +221,14 @@ impl Registry {
     }
 }
 
-fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write;
-    bytes.iter().fold(String::new(), |mut out, b| {
-        let _ = write!(out, "{b:02x}");
-        out
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn content() -> SeenContent {
-        SeenContent {
-            config: r#"{"env":{"API_TOKEN":"s3cret"}}"#.into(),
-            argv: vec!["npm".into(), "run".into(), "dev".into()],
-            cwd: ".".into(),
-            env: BTreeMap::from([("API_TOKEN".into(), "s3cret".into())]),
-            env_files: vec![EnvFileDigest::of(".env", Some(b"API_TOKEN=s3cret"))],
-            profile: None,
-            definition: Some("vite --port 3000".into()),
-            runtime_files: vec![EnvFileDigest::of("\0root\0mise.toml", Some(b"[env]\nA=1"))],
-        }
-    }
-
     /// 기록 · 판정이 받는 해시는 `sha256:<64 hex>` 꼴뿐이다 — 값 원문 · 다른 꼴은 표에 들어갈 수 없다.
     #[test]
     fn only_hash_shaped_text_is_a_seen_hash() {
-        let hash = content().hash();
+        let hash = SeenHash::parse(&format!("sha256:{}", "0a".repeat(32))).unwrap();
         assert_eq!(SeenHash::parse(hash.as_str()), Some(hash.clone()));
         let upper = hash.as_str().to_uppercase().replace("SHA256:", "sha256:");
         for refused in [
@@ -352,33 +243,5 @@ mod tests {
         ] {
             assert_eq!(SeenHash::parse(refused), None, "{refused:?}");
         }
-    }
-
-    /// 필드 하나만 달라도 해시가 다르고, `Debug` 에 값이 없다.
-    #[test]
-    fn every_field_is_hashed_and_debug_hides_values() {
-        let base = content().hash();
-        let variants: [fn(&mut SeenContent); 8] = [
-            |c| c.config.push(' '),
-            |c| c.argv.push("--x".into()),
-            |c| c.cwd = "web".into(),
-            |c| {
-                c.env.insert("API_TOKEN".into(), "other".into());
-            },
-            |c| c.env_files[0] = EnvFileDigest::of(".env", None),
-            |c| c.profile = Some("prod".into()),
-            |c| c.definition = None,
-            |c| c.runtime_files[0] = EnvFileDigest::of("\0root\0mise.toml", Some(b"[env]\nA=2")),
-        ];
-        for change in variants {
-            let mut c = content();
-            change(&mut c);
-            assert_ne!(c.hash(), base);
-        }
-        let debug = format!("{:?}", content());
-        assert!(
-            !debug.contains("s3cret") && !debug.contains("vite"),
-            "{debug}"
-        );
     }
 }

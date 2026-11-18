@@ -3,7 +3,7 @@
 //!
 //! - [`config`]: 실행 구성 `.pitwall/run/<id>.toml` 의 타입 · 읽기 · 쓰기 · argv · `run.config.*` RPC.
 //! - [`detect`]: 태스크 감지 — 파일 없는 가상 구성(`run.config.list` 의 `detected`)과 감지기 목록.
-//! - [`env`]: 실행의 env — `.env` 문법 · 덮는 순서(런타임 → `env_file` → `env` → 프로필) · 「사람이 본 구성」 해시의 env 몫(M6-03).
+//! - [`env`]: 실행의 env — `.env` 문법 · 덮는 순서(런타임 → `env_file` → `env` → 프로필) · 「사람이 본 구성」 해시의 env 입력(M6-03 — 해시는 [`seen`]).
 //! - [`seen`]: 「사람이 본 구성」 해시의 내용(M6-11 — 저장 · 판정은 `pw_core::registry::run_seen`).
 //! - [`shell`]: 띄울 셸의 argv 와 환경(결정 M1-D14).
 //! - `integration`(유닉스): 셸의 시작 파일 뒤에 런타임 제공자의 PATH 를 다시 앞에 둔다.
