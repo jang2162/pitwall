@@ -121,6 +121,7 @@ macOS · Linux 모두 **XDG Base Directory** 규칙을 따른다 (mise · gh · 
   - 「전체 실패」 는 메모리의 설정에 대한 것이다. **디스크의 마이그레이션은 파일 단위로 일어난다** — 다른 파일이 깨져 있어도 앞선 파일의 마이그레이션은 쓰인다(원본은 백업)
 - 워크트리 폴백: 프로젝트 루트가 연결 워크트리(`git worktree add`) 안이면 `.local.toml` 이 없을 때 메인 체크아웃의 같은 위치 `.pitwall/` 의 것을 쓴다. **파일 단위 폴백**이다 — 워크트리에 `<id>.local.toml` 이 있으면 그것만 쓰고 메인 쪽과 병합하지 않는다. 판정은 `.git` 파일 → gitdir 의 `commondir` 로 하고 git 을 실행하지 않는다(`pw_core::config::gitdir`). 워크트리로 보는 조건은 둘이다 — gitdir 의 `gitdir`(되돌림 포인터)이 그 `.git` 파일을 가리키고, gitdir 이 실제 경로로 **`<commondir>/worktrees/<이름>` 바로 아래**다(git 은 관리 폴더를 언제나 그 자리에 만든다). 둘째가 없으면 관리 폴더 · `commondir` · 되돌림 포인터를 모두 제 폴더 안에 둔 위조 `.git` 하나로 아무 폴더나 남의 저장소의 워크트리가 되어 그 프로젝트의 신뢰(§5-1 「신뢰」)와 파일 루트를 물려받는다. gitdir 에 `commondir` 이 없으면(서브모듈 · `git init/clone --separate-git-dir`) 워크트리가 아니라 그 `.git` 파일의 폴더 자신을 메인 루트로 하는 저장소이고, 받지 않는 것은 두 경우뿐이다 — gitdir 이 다른 작업 트리의 내장 `.git`(이름이 `.git` 이고 부모가 그 폴더가 아니다)이거나, gitdir 의 `config` 의 `core.worktree` 가 그 폴더가 아닌 곳을 가리킨다(서브모듈이면 git 이 그 폴더를 되가리키게 적는다). separate-git-dir 의 저장소 폴더는 git 이 되돌림을 남기지 않아 남의 것을 가리키는지 가를 수 없지만, 신뢰는 프로젝트 경로로만 정하므로(§5-1) 그 폴더는 저장소 주인 프로젝트의 신뢰를 물려받지 않는다(`pw-git` 의 저장소 해석이 이 판정을 쓴다)
 - DB 연결 설정(`db/*.toml`, 14-m3-plan.md M3-02)은 활성 워크트리를 따른다 — 공유 파일은 활성 워크트리의 것을 읽고 쓰고, 개인 `.local.toml` 은 메인 체크아웃에 하나만 쓰며, 확인 기억(`$DATA/projects/<id>/db.json`)도 프로젝트 하나에 하나다
+- 실행 구성(`run/*.toml`, 17-m6-plan M6-01 — `pw_run::config`)도 활성 워크트리를 따른다(공유 파일은 활성 워크트리의 것, 개인 `.local.toml` 은 지금 읽히는 것 — 워크트리에 없으면 메인 체크아웃의 것). 다만 **구성마다 따로 읽는다** — 위의 「파일 하나라도 실패하면 전체가 실패」 와 달리, 모르는 `type` · 형식 오류 · 앱보다 새 `schema` · 루트 밖 `cwd` 인 구성은 목록에서 빠지지 않고 「쓸 수 없음(까닭)」 으로 남는다(고치려던 구성 대신 다른 것이 돌면 안 된다). 쓰기는 `pw_run::config::write` 하나이고 주석 · 모르는 키를 지키며, 저장소 안의 구성 파일은 공유 · 개인 모두 링크를 따르지 않는다
 - 레포를 건드리고 싶지 않은 프로젝트는 "개인 전용" 모드로 전환 → 같은 파일 구조를 `$CONFIG/projects/<slug>/`에 저장 (사람이 편집하는 설정이므로 `$CONFIG`). 전환하면 저장소 `.pitwall/` 은 읽지 않는다
   - slug 는 프로젝트 레지스트리가 정하고 경로 한 칸(`[A-Za-z0-9._-]`, `.` 으로 시작하지 않음)만 받는다. 그 폴더의 마이그레이션 원본은 `$STATE/backup/projects/<slug>/`(`$CONFIG` 에 TOML 외 파일을 두지 않으므로)
   - 레지스트리가 만드는 slug 는 더 좁다: 이름에서 소문자로 만들고(대소문자를 무시하는 파일 시스템에서 `App` · `app` 이 같은 폴더다), 끝의 `.` 를 떼고, Windows 장치 이름(`con` 등)은 `_` 를 붙인다. 이름에서 아무것도 남지 않으면 `project`, 48바이트까지. 레지스트리에 있거나 **디스크에 그 폴더가 이미 있으면**(지운 프로젝트의 설정 등) `-2`, `-3` … 을 붙인다. 프로젝트 이름을 바꿔도 slug 는 그대로다. 구현: `pw_core::registry::slug`
@@ -178,17 +179,17 @@ default = "zed"      # 외부 도구 id (04 F8)
 ```
 
 ```toml
-# .pitwall/run/dev-server.toml — 스키마는 17-m6-plan M6-01 (아직 없다)
+# .pitwall/run/dev-server.toml — 스키마는 17-m6-plan M6-01(`pw_run::config`)
 schema = 1
 name = "Dev Server"
-type = "shell"                # shell | npm | gradle | maven | cargo | go | python | docker-compose | mise-task | sql | compound
-command = "./gradlew bootRun" # shell 종류만 글이다 — 로그인 셸의 -c 로. 그 밖 종류는 필드(script · tasks · module …)에서 argv 를 만든다
-cwd = "."
+type = "gradle"               # shell | npm | gradle | maven | cargo | go | python | docker-compose | mise-task (sql · compound 는 M6-09 · M6-21)
+tasks = ["bootRun"]           # shell 만 글(command — 로그인 셸의 -c)이고, 그 밖 종류는 필드 값 하나가 argv 한 칸이다(래퍼 gradlew 가 있으면 그것)
+cwd = "."                     # 프로젝트 루트 기준. 루트 밖(.. · 링크 · 절대 경로)이면 쓸 수 없다
 env = { SPRING_PROFILES_ACTIVE = "local" }
 env_file = [".env.local"]     # 목록, 프로젝트 루트 안만. 변수 확장은 하지 않는다
-[profiles.prod-like]          # 실행 선택기에서 고르는 덮어쓰기(env · args)
+[profiles.prod-like]          # 실행 선택기에서 고르는 덮어쓰기 — env 는 키별로 얹고 args 는 통째로 바꾼다(args 는 cargo · go · python 만)
 env = { SPRING_PROFILES_ACTIVE = "prod" }
-[debug]                       # ⌃D — 어댑터 정의의 launch · attach 틀이 읽는다(M6-17)
+[debug]                       # ⌃D — 어댑터 정의의 launch · attach 틀이 읽는다(M6-17). adapter · mode 밖의 키는 그대로 넘긴다
 adapter = "java-debug"
 mode = "attach"               # launch | attach — JVM 번들 어댑터는 attach 만(17-m6-plan 결정 M6-P20)
 port = 5005
