@@ -3,7 +3,8 @@
 // `toolWindow.debug`(⌘5)는 툴 윈도우 표(keymap/actions.ts 의 `toolWindowActions`)가 이미 등록한다.
 //
 // - `run.current`(⌃R): 지금 구성을 띄운다(첫 실행 확인 · `sql` 의 위험 확인을 지난다).
-// - `debug.current`(⌃D): 디버그 화면(M6-18) 전에는 꺼져 있다 — 키도 가져가지 않는다.
+// - `debug.current`(⌃D): 지금 구성의 `[debug]` 로 디버그 세션을 연다(M6-18 — `DebugSessions.start`). `[debug]` 가 없는 구성이면
+//   꺼진다 — 키도 가져가지 않는다.
 // - `run.choose`(⌃⌥R): 구성을 골라 바로 띄우는 팝업.
 // - `run.stop`(⌘F2): **`dbConsoleFocus` 밖에서만**(키맵 파일의 `when`) — DB 콘솔 안의 ⌘F2 는 쿼리 취소다(10-ui.md 「키맵」).
 // - `run.editConfigs`: 구성 편집을 연다(기본 키 없음).
@@ -25,6 +26,9 @@ export function runActions(deps: {
   /** 지금 구성이 있고 쓸 수 있다. */
   canRun(): boolean;
   runCurrent(): void;
+  /** 지금 구성이 쓸 수 있고 `[debug]` 가 있다. */
+  canDebug(): boolean;
+  debugCurrent(): void;
   chooseAndRun(): void;
   /** 멈출 실행이 있다. */
   canStop(): boolean;
@@ -44,9 +48,8 @@ export function runActions(deps: {
       id: "debug.current",
       label: T.debug,
       keywords: ["Debug"],
-      // 디버그 화면(M6-18)이 이 액션을 켠다.
-      enabled: () => false,
-      run: () => {},
+      enabled: deps.canDebug,
+      run: deps.debugCurrent,
     },
     {
       id: "run.choose",

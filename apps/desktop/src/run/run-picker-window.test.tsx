@@ -337,7 +337,7 @@ it("lists the run actions in Find Action", async () => {
     ["실행 구성 편집", ""],
   ] as const)
     expect(items, label).toContain(`${label}${key}`);
-  // 디버그(M6-18 전에는 꺼짐)는 실행할 수 없어 목록에 없다.
+  // 디버그는 지금 구성(dev)에 `[debug]` 가 없어 실행할 수 없어 목록에 없다(M6-18).
   expect(items.some((i) => i.startsWith("디버그(현재 구성)"))).toBe(false);
 });
 
@@ -513,7 +513,25 @@ it("speaks English when the UI language is English", async () => {
   await mount();
   await vi.waitFor(() => expect(byTestId("run-picker")?.textContent).toContain("Dev Server"));
   expect(byTestId("run-start")?.getAttribute("aria-label")).toBe("Run");
-  expect(byTestId("run-debug")?.getAttribute("title")).toBe("Debug (not yet available)");
+  expect(byTestId("run-debug")?.getAttribute("title")).toBe(
+    "This configuration has no [debug] section",
+  );
+});
+
+it("starts debugging the current configuration from 🐞 and ⌃D when it has [debug] (M6-18)", async () => {
+  (host.list as RunConfigList).configs[0]!.config.debug = { mode: "launch" };
+  host.handlers["debug.start"] = (p) => ({
+    error: { code: -32602, message: `no adapter for ${String(p.configId)}` },
+  });
+  await mount();
+  await vi.waitFor(() => expect(byTestId("run-debug")?.hasAttribute("disabled")).toBe(false));
+  await click(byTestId("run-debug"));
+  await press("KeyD", { ctrlKey: true }, "d");
+  await settle();
+  expect(calls("debug.start").map((c) => c.params)).toEqual([
+    { projectId: "p1", configId: "dev" },
+    { projectId: "p1", configId: "dev" },
+  ]);
 });
 
 it("shows the command definition that runs, as written, in the first run confirmation", async () => {

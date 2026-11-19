@@ -104,7 +104,9 @@ run-picker-reread-tasks = Read { $detector } tasks again
 run-picker-read-failed = Could not read the { $detector } tasks: { $message }
 run-picker-run = Run
 run-picker-debug = Debug
-run-picker-debug-later = Debug (not yet available)
+run-picker-debug-none = This configuration has no [debug] section
+# $message: the error text
+run-picker-debug-failed = Could not start debugging: { $message }
 run-picker-stop = Stop
 # $reason: why it cannot be used (the host's text)
 run-picker-unusable-reason = Cannot be used: { $reason }

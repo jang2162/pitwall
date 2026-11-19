@@ -100,7 +100,9 @@ run-picker-reread-tasks = { $detector } 태스크 다시 읽기
 run-picker-read-failed = { $detector } 태스크를 읽지 못했다: { $message }
 run-picker-run = 실행
 run-picker-debug = 디버그
-run-picker-debug-later = 디버그(아직 없다)
+run-picker-debug-none = 이 구성에는 [debug] 가 없다
+# $message: 오류 원문
+run-picker-debug-failed = 디버그를 시작하지 못했다: { $message }
 run-picker-stop = 중지
 # $reason: 쓸 수 없는 까닭(Host 의 글)
 run-picker-unusable-reason = 쓸 수 없음: { $reason }

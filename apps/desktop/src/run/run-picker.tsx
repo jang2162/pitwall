@@ -19,6 +19,7 @@ import { useRiskConfirm } from "../db/safety/risk-confirm";
 import { useKeymapPopup, useRegisterActions } from "../keymap/keymap-provider";
 import { showPanel } from "../layout/project-layout";
 import { useNotify } from "../notifications/notifications";
+import { windowDebug } from "../debug/debug-session";
 import { activeWorktreeStore } from "../open-with/active-worktree";
 import { useHost } from "../rpc/host";
 import { SEARCH_ITEM_CLASS, SearchPopup } from "../ui/search-popup";
@@ -97,7 +98,24 @@ function useLauncher(configs: RunConfigs, tabs: RunTabs, api: DockviewApi | unde
     },
     [configs, tabs, api, risk.confirm, notify, T],
   );
-  return { launch, riskElement: risk.element };
+  // 디버그(M6-18): 그 구성의 `[debug]` 로 디버그 세션을 연다 — 세션 · 툴 윈도우는 디버그 화면(src/debug/debug-session.ts)이 맡는다.
+  const debug = useCallback(
+    async (entry: RunConfigEntry, profile: string | null) => {
+      const place = configs.place();
+      if (!place) return;
+      try {
+        await windowDebug().start(entry.id, {
+          ...(place.worktree !== null &&
+            place.worktree !== undefined && { worktree: place.worktree }),
+          ...(profile !== null && { profile }),
+        });
+      } catch (e) {
+        notify({ level: "error", title: T.debugFailed(errorText(e)) });
+      }
+    },
+    [configs, notify, T],
+  );
+  return { launch, debug, riskElement: risk.element };
 }
 
 /** 구성 고르기 팝업. `mode` 가 `run` 이면 고른 구성을 곧바로 띄운다(⌃⌥R). */
@@ -264,17 +282,20 @@ export function RunToolbar({
   tabs,
   onChoose,
   onRun,
+  onDebug,
 }: {
   configs: RunConfigs;
   tabs: RunTabs;
   onChoose(): void;
   onRun(entry: RunConfigEntry, profile: string | null): void;
+  onDebug(entry: RunConfigEntry, profile: string | null): void;
 }) {
   const T = useRunStrings().picker;
   useStore(configs.store);
   const runTabs = useStore(tabs.store, (s) => s.tabs);
   const current = configs.current();
   const usable = current?.kind === "usable" ? current : undefined;
+  const debuggable = usable?.entry.config.debug ? usable : undefined;
   const label = usable
     ? targetLabel(T, usable.entry, usable.profile)
     : current?.kind === "unusable"
@@ -316,9 +337,10 @@ export function RunToolbar({
         type="button"
         className={TOOL}
         aria-label={T.debug}
-        title={T.debugLater}
+        title={reason ?? (debuggable ? T.debug : T.debugNone)}
         data-testid="run-debug"
-        disabled
+        disabled={!debuggable}
+        onClick={() => debuggable && onDebug(debuggable.entry, debuggable.profile)}
       >
         <Bug size={14} aria-hidden />
       </button>
@@ -366,7 +388,7 @@ export function RunPickerFeature({
   const { client } = useHost();
   const worktree = useStore(activeWorktreeStore, (s) => s.top ?? null);
   const [chooser, setChooser] = useState<"select" | "run">();
-  const { launch, riskElement } = useLauncher(configs, tabs, api);
+  const { launch, debug, riskElement } = useLauncher(configs, tabs, api);
   const slot = useTitlebarSlot();
 
   useEffect(
@@ -385,6 +407,15 @@ export function RunPickerFeature({
         strings,
         canRun: () => configs.current()?.kind === "usable",
         runCurrent,
+        canDebug: () => {
+          const current = configs.current();
+          return current?.kind === "usable" && Boolean(current.entry.config.debug);
+        },
+        debugCurrent: () => {
+          const current = configs.current();
+          if (current?.kind === "usable" && current.entry.config.debug)
+            void debug(current.entry, current.profile);
+        },
         chooseAndRun: () => setChooser("run"),
         canStop: () => runToStop(tabs, configs.current()?.entry.id) !== undefined,
         stop: () => {
@@ -406,7 +437,7 @@ export function RunPickerFeature({
           }
         },
       }),
-    [strings, configs, tabs, runCurrent],
+    [strings, configs, tabs, runCurrent, debug],
   );
   useRegisterActions(actions);
   // 실행 · 중지 액션의 `enabled` 가 목록 · 탭을 본다 — 바뀌면 메뉴 · 키가 다시 본다.
@@ -422,6 +453,7 @@ export function RunPickerFeature({
             tabs={tabs}
             onChoose={() => setChooser("select")}
             onRun={(entry, profile) => void launch(entry, profile)}
+            onDebug={(entry, profile) => void debug(entry, profile)}
           />,
           slot,
         )}
