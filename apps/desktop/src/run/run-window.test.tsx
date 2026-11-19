@@ -25,6 +25,8 @@ const host = vi.hoisted(() => ({
   runs: [] as unknown[],
   attaches: [] as { streamId: number; params: Record<string, unknown> }[],
   runSubscriptions: [] as number[],
+  /** 구독마다 들은 토픽 — 가짜 Host 는 들은 토픽만 보낸다. */
+  topics: new Map<number, string[]>(),
   calls: [] as string[],
   send: (_m: object) => {},
 }));
@@ -86,6 +88,7 @@ vi.mock("../tauri-transport", async () => {
           case "events.subscribe": {
             const id = next++;
             const topics = (m.params as { topics?: string[] }).topics ?? [];
+            host.topics.set(id, topics);
             if (topics.includes("run.started")) host.runSubscriptions.push(id);
             return reply({ subscriptionId: id });
           }
@@ -186,7 +189,9 @@ function chunk(streamId: number, data: object) {
 }
 
 function event(topic: string, run: RunInfo) {
-  for (const subscriptionId of host.runSubscriptions)
+  for (const subscriptionId of host.runSubscriptions.filter((id) =>
+    host.topics.get(id)?.includes(topic),
+  ))
     host.send({
       method: "events.event",
       params: { subscriptionId, projectId: "p1", topic, payload: run },
@@ -370,9 +375,17 @@ it("shows the ports a run listens on and opens them in the browser", async () =>
     "http://localhost:5173",
   ]);
 
-  // 끝나면 칩이 사라진다.
+  // 끝나면 칩이 사라진다(끝난 실행에 포트가 실려 와도 그리지 않는다).
   await act(async () =>
-    event("run.exited", runInfo({ runId: "r1", state: "exited", exit: { code: 0, signal: null } })),
+    event(
+      "run.exited",
+      runInfo({
+        runId: "r1",
+        state: "exited",
+        exit: { code: 0, signal: null },
+        ports: [{ port: 5173, allAddresses: false, addresses: ["127.0.0.1"] }],
+      }),
+    ),
   );
   await settle();
   expect(document.querySelector("[data-testid=run-tab-port]")).toBeNull();
