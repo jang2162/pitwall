@@ -185,6 +185,12 @@ run-settings-body = Run configurations belong to each project. Create and edit t
 
 ## Debug (M6-18 — the Debug tool window, the breakpoint gutter, the breakpoint editor and list, src/debug/)
 
+debug-source-outside = Outside the project
+debug-source-held = Held by the debugger
+# $adapter: debug adapter id, $name: the name the adapter gave the source (not a path)
+debug-source-adapter = { $adapter } source · { $name }
+# $path: the path the program reported, when it differs from the real one
+debug-source-reported = reported as { $path }
 debug-no-host = Not connected to the Host
 debug-no-session = No debug session. Start one with the debug button or Debug (current configuration).
 debug-sessions-label = Debug sessions

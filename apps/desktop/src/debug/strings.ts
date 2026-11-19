@@ -42,6 +42,13 @@ export function debugStrings(t: Translate) {
     readFailed: (message: string) => t("debug-read-failed", { message }),
     startFailed: t("debug-start-failed"),
     controlFailed: t("debug-control-failed"),
+    /** 디버그 소스 탭(루트 밖 프레임 — 리뷰 F1). */
+    source: {
+      outside: t("debug-source-outside"),
+      held: t("debug-source-held"),
+      adapter: (adapter: string, name: string) => t("debug-source-adapter", { adapter, name }),
+      reported: (path: string) => t("debug-source-reported", { path }),
+    },
     breakpoint: {
       title: (file: string, line: number) => t("debug-bp-title", { file, line }),
       enabled: t("debug-bp-enabled"),

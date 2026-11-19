@@ -118,9 +118,12 @@ vi.mock("../tauri-transport", async () => {
             return reply({ scopes: [] });
           case "debug.source":
             host.sources.push(m.params);
+            // 리뷰 F1 재현: 대상이 루트 안 링크(/main/src/util.rs → ~/.ssh/id_rsa)를 프레임으로 보고했다.
             return reply({
               text: "pub fn lib() {}\n",
-              path: "/rustlib/lib.rs",
+              path: "/home/me/.ssh/id_rsa",
+              reported: "/main/src/util.rs",
+              name: null,
               adapter: "codelldb",
             });
           case "fs.stat":
@@ -251,7 +254,7 @@ it("opens a frame outside the project read-only through its token and ends clean
     {
       id: 11,
       name: "lib",
-      path: "/rustlib/lib.rs",
+      path: "/main/src/util.rs",
       sourceReference: null,
       line: 1,
       column: 1,
@@ -281,15 +284,30 @@ it("opens a frame outside the project read-only through its token and ends clean
     expect(document.querySelector("[data-debug-state=stopped]")).not.toBeNull(),
   );
   expect(document.querySelectorAll("[data-frame]")).toHaveLength(2);
-  // 루트 밖 프레임은 토큰으로 읽기 전용 탭에 — 파일 RPC 로 그 경로를 읽지 않는다.
+  // 루트 밖 프레임(맨 위)은 멈출 때 저절로 열지 않는다(리뷰 F1).
+  expect(document.querySelector("[data-outside-source]")).toBeNull();
+  expect(host.sources).toEqual([]);
+  // 사람이 누르면 토큰으로 읽기 전용 탭에 — 파일 RPC 로 그 경로를 읽지 않는다.
+  await act(async () => document.querySelector<HTMLElement>("[data-frame='11']")!.click());
+  await settle();
   await vi.waitFor(() =>
     expect(document.querySelector("[data-outside-source=tok-1]")).not.toBeNull(),
   );
   expect(host.sources).toEqual([{ runId: "d1", token: "tok-1" }]);
-  expect(host.fsPaths).not.toContain("/rustlib/lib.rs");
-  expect(document.querySelector("[data-outside-source-bar]")?.textContent).toContain(
-    "디버그 소스 · 읽기 전용 · codelldb",
+  expect(host.fsPaths).not.toContain("/main/src/util.rs");
+  const bar = document.querySelector("[data-outside-source-bar]")!;
+  expect(bar.textContent).toContain("디버그 소스 · 읽기 전용 · codelldb");
+  // 머리 · 탭 제목은 읽은 파일의 실제 경로다 — 보고된 경로는 따로, 「프로젝트 밖」 표지.
+  expect(bar.querySelector("[data-outside-source-path]")?.textContent).toBe("/home/me/.ssh/id_rsa");
+  expect(bar.querySelector("[data-outside-source-badge]")?.textContent).toBe("프로젝트 밖");
+  expect(bar.querySelector("[data-outside-source-reported]")?.textContent).toBe(
+    "보고된 경로 /main/src/util.rs",
   );
+  expect(
+    [...document.querySelectorAll(".dv-default-tab, [data-testid=editor-tab]")].map(
+      (t) => t.textContent,
+    ),
+  ).toEqual(expect.arrayContaining([expect.stringContaining("id_rsa")]));
   const text = document.querySelector<HTMLElement>("[data-outside-source-text] .cm-content");
   expect(text?.textContent).toContain("pub fn lib()");
   // 창이 앞에 없을 때의 주의 요청(네이티브가 앞에 있는지 가른다).

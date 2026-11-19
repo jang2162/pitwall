@@ -181,6 +181,12 @@ run-settings-body = 실행 구성은 프로젝트마다 다르다. 프로젝트 
 
 ## 디버그(M6-18 — 「디버그」 툴 윈도우 · 브레이크포인트 거터 · 편집 · 목록, src/debug/)
 
+debug-source-outside = 프로젝트 밖
+debug-source-held = 디버거가 쥔 소스
+# $adapter: 디버그 어댑터 id, $name: 어댑터가 그 소스에 준 이름(경로가 아니다)
+debug-source-adapter = { $adapter } 소스 · { $name }
+# $path: 실제 경로와 다를 때 프로그램이 보고한 경로
+debug-source-reported = 보고된 경로 { $path }
 debug-no-host = Host 에 연결되지 않았다
 debug-no-session = 디버그 세션이 없다. 디버그 단추나 「디버그(현재 구성)」 로 시작한다.
 debug-sessions-label = 디버그 세션

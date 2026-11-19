@@ -460,8 +460,10 @@ export class DebugSessions {
     });
     if (epoch !== this.epoch) return;
     this.store.setState({ frames });
+    // 루트 밖 프레임(토큰)은 멈출 때 저절로 열지 않는다 — 사람이 그 프레임을 누를 때만(리뷰 F1: 대상이 고른 파일이 사람의 창에
+    // 저절로 뜨지 않게). 루트 안이면 그 줄로 간다.
     const top = frames[0];
-    if (top) await this.selectFrame(top.id);
+    if (top) await this.selectFrame(top.id, !top.token);
   }
 
   private showFrame(s: DebugSessionView, frame: DebugFrame, open: boolean) {

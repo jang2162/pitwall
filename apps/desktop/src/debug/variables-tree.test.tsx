@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { bundledLocalization, bundledTranslator } from "../i18n/testing";
 import { debugStrings } from "./strings";
 import { LINE_CHARS } from "./value-text";
-import { PAGE, type TreeNode, VariablesTree } from "./variables-tree";
+import { MAX_DEPTH, PAGE, type TreeNode, VariablesTree } from "./variables-tree";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -145,5 +145,26 @@ describe("the variables tree", () => {
     expect(asked).toEqual([0, PAGE]);
     expect(row(`[${PAGE + 1}]`)).not.toBeNull();
     expect(document.querySelector("[data-variables-more]")).toBeNull();
+  });
+});
+
+describe("a self-referencing value", () => {
+  it("stops expanding at the depth limit", async () => {
+    let asked = 0;
+    await draw([{ name: "node", variablesReference: 1 }], async (_ref, start, count) => {
+      asked += 1;
+      return { variables: [variable(`next${asked}`, "Node", 1)], start, count };
+    });
+    await act(async () => row("node").click());
+    await settle();
+    for (let i = 1; i < MAX_DEPTH; i++) {
+      const next = row(`next${i}`);
+      if (!next) break;
+      await act(async () => next.click());
+      await settle();
+    }
+    // 깊이 상한까지만 읽고 그 아래는 「너무 깊다」.
+    expect(asked).toBe(MAX_DEPTH - 1);
+    expect(document.body.textContent).toContain("(너무 깊어 보이지 않는다)");
   });
 });

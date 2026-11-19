@@ -72,6 +72,12 @@ export interface OutsideSpec {
   readonly worktree?: string;
   /** 디버그 프레임의 소스다(`server` 는 어댑터 id) — 내비게이션을 걸지 않는다. */
   readonly debug?: boolean;
+  /** 탭 제목(없으면 `path` 의 이름). */
+  readonly title?: string;
+  /** 머리에 눈에 띄게 다는 표지(디버그 소스 — 「프로젝트 밖」 · 「어댑터 소스」). */
+  readonly badge?: string;
+  /** 보고된 경로가 실제 경로와 다르면 그 설명(머리에 함께). */
+  readonly reported?: string;
 }
 
 /** 탭의 외부 소스 칸. 외부 소스 탭이 아니면 `undefined`. */
@@ -86,8 +92,18 @@ interface Meta {
   language: string | null;
   worktree?: string;
   /** 토큰을 읽는 길(디버그 프레임 — `debug.source`). 없으면 `lsp.document.read`. */
-  read?: () => Promise<{ text: string; path: string; server: string }>;
+  read?: () => Promise<{
+    text: string;
+    path: string;
+    server: string;
+    title?: string;
+    badge?: string;
+    reported?: string;
+  }>;
   debug?: boolean;
+  title?: string;
+  badge?: string;
+  reported?: string;
 }
 
 /** 창의 것(늦게 붙는다 — 작업 공간을 만든 뒤). */
@@ -169,12 +185,16 @@ export function createOutsideSources(): OutsideSourcesRuntime {
             ? await known.read()
             : await b.services.call("lsp.document.read", { token });
           texts.set(token, read.text);
+          const extra = read as { title?: string; badge?: string; reported?: string };
           metas.set(token, {
             path: read.path,
             server: read.server,
             language: known?.language ?? null,
             ...(known?.worktree !== undefined && { worktree: known.worktree }),
             ...(known?.debug && { debug: true }),
+            ...(extra.title !== undefined && { title: extra.title }),
+            ...(extra.badge !== undefined && { badge: extra.badge }),
+            ...(extra.reported !== undefined && { reported: extra.reported }),
           });
         } catch (e) {
           if (!travel) b.failed?.(e instanceof Error ? e.message : String(e));
@@ -193,13 +213,16 @@ export function createOutsideSources(): OutsideSourcesRuntime {
             language: meta.language,
             ...(meta.worktree !== undefined && { worktree: meta.worktree }),
             ...(meta.debug && { debug: true }),
+            ...(meta.title !== undefined && { title: meta.title }),
+            ...(meta.badge !== undefined && { badge: meta.badge }),
+            ...(meta.reported !== undefined && { reported: meta.reported }),
           } satisfies OutsideSpec,
         };
         panel = api.addPanel({
           id: nextId(api),
           component: EDITOR_PANEL,
           tabComponent: EDITOR_TAB_HEADER,
-          title: baseName(meta.path),
+          title: meta.title ?? baseName(meta.path),
           params,
           position: { referenceGroup: targetGroup(api, b.workspace.recent()).id },
         });
@@ -352,9 +375,27 @@ export function OutsideSourcePanel({ panelId, spec }: { panelId: string; spec: O
         <span className="flex-none">
           {spec.debug ? T.lsp.debugSourceBar(spec.server) : T.lsp.outsideBar(spec.server)}
         </span>
-        <span className="min-w-0 truncate font-mono" title={spec.path}>
-          {spec.path}
+        {spec.badge && (
+          <span
+            data-outside-source-badge=""
+            className="flex-none rounded-sm border border-[var(--pw-diagnostic-warning)] px-1 font-medium text-ui-foreground"
+          >
+            {spec.badge}
+          </span>
+        )}
+        {/* 앞을 잘라 파일 이름을 남긴다(경로가 길면 끝이 아니라 앞이 줄어든다). */}
+        <span
+          data-outside-source-path=""
+          className="min-w-0 truncate text-left font-mono [direction:rtl]"
+          title={spec.reported ? `${spec.path}\n${spec.reported}` : spec.path}
+        >
+          <bdi>{spec.path}</bdi>
         </span>
+        {spec.reported && (
+          <span data-outside-source-reported="" className="min-w-0 flex-none truncate">
+            {spec.reported}
+          </span>
+        )}
       </div>
       <div className="min-h-0 flex-1">
         {text === undefined ? (

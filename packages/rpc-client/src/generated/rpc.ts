@@ -4135,8 +4135,12 @@ export type DebugSessionParams = {
 export type DebugSource = {
 	/**  글 전부(5 MiB 까지, UTF-8). */
 	text: string,
-	/**  보일 경로(어댑터가 보고한 것). 어댑터가 쥔 소스면 없다. */
+	/**  읽은 파일의 실제 경로(정규화 뒤 — 화면은 이것을 보인다). 어댑터가 쥔 소스면 없다. */
 	path: string | null,
+	/**  어댑터가 보고한 경로가 실제 경로와 다르면 그것(링크 · `..` — 화면이 함께 보인다). */
+	reported: string | null,
+	/**  어댑터가 쥔 소스의 이름(어댑터의 글 — 경로가 아니다). */
+	name: string | null,
 	/**  그 세션의 어댑터 id. */
 	adapter: string,
 };

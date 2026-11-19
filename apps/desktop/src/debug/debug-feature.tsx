@@ -21,6 +21,7 @@ import { tauriDebugAttention } from "./debug-native";
 import { type DebugSessions, windowDebug } from "./debug-session";
 import { debugEditorHost } from "./editor-host";
 import { useDebugStrings } from "./strings";
+import { oneLine } from "./value-text";
 
 let windowBreakpoints: Breakpoints | undefined;
 
@@ -89,7 +90,26 @@ export function DebugFeature({
               runId: frame.runId,
               token: frame.token,
             });
-            return { text: read.text, path: read.path ?? frame.path, server: read.adapter };
+            // 보이는 이름은 읽은 파일의 실제 경로다 — 대상이 보고한 경로 · 프레임 이름은 대상이 정한 글이다(리뷰 F1).
+            if (read.path) {
+              const path = oneLine(read.path).text;
+              return {
+                text: read.text,
+                path,
+                server: read.adapter,
+                title: path.split("/").pop() ?? path,
+                badge: T.source.outside,
+                ...(read.reported && { reported: T.source.reported(oneLine(read.reported).text) }),
+              };
+            }
+            const label = T.source.adapter(read.adapter, oneLine(read.name ?? "?").text);
+            return {
+              text: read.text,
+              path: label,
+              server: read.adapter,
+              title: label,
+              badge: T.source.held,
+            };
           },
         });
         void outside.open(
