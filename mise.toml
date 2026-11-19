@@ -62,6 +62,8 @@ run = [
   "node --test scripts/tools-registry-bump.test.mjs",
   # java-debug 패치 스크립트(scripts/java-debug-patch.mjs)의 diff 읽기 · 한 줄 규칙 · registry.toml 의 [[patched]] 행 — JDK · 네트워크 없이.
   "node --test scripts/java-debug-patch.test.mjs",
+  # 실 디버그 어댑터 시험 실행 개수 검사(scripts/dap-live.mjs)의 설정 읽기 · 설치 결과 읽기 — 실 어댑터 없이 돈다.
+  "node --test scripts/dap-live.test.mjs",
 ]
 
 # 실 DB 시험(live_*)을 DB 마다 따로 돌리고 실행 개수를 하한(scripts/db-live.toml)과 견준다 — CI 의 `db-live` 잡과 같은 명령이다.
@@ -79,6 +81,14 @@ run = "node scripts/db-live.mjs"
 [tasks.test-lsp]
 description = "실 언어 서버 시험(기본 번들 여섯 서버)을 서버마다 돌리고 실행 개수 하한 검사(경로가 없는 서버는 건너뜀, --install 로 설치기로 받기)"
 run = "node scripts/lsp-live.mjs"
+
+# 실 디버그 어댑터 시험(live_dap_*)을 어댑터마다 돌리고 실행 개수를 하한(scripts/dap-live.toml)과 견준다 — CI 의 `dap-live` 잡과 같은
+# 명령이다(17-m6-plan.md M6-19). 어댑터 경로(PW_TEST_DAP_<어댑터>)가 없는 어댑터는 건너뛰고 그렇게 알린다 — 통과로 세지 않는다(모두
+# 건너뛰면 종료 코드 3). `--install` 은 Pitwall 의 설치기로 target/dap-adapters/ 에 받는다(네트워크). java-debug 는 jdtls 와 PATH 의
+# JDK 25 가 든다. 인자로 어댑터를 고른다 — 예: `mise run test-dap -- --install debugpy`.
+[tasks.test-dap]
+description = "실 디버그 어댑터 시험(codelldb · js-debug · debugpy · java-debug)을 어댑터마다 돌리고 실행 개수 하한 검사(경로가 없는 어댑터는 건너뜀, --install 로 설치기로 받기)"
+run = "node scripts/dap-live.mjs"
 
 # 「release 빌드에서만 판정」하는 시험을 모아 돈다 — 기본 `test` 는 debug 라 시간 상한(검색 취소 100 ms · `fs.list` 1만 개 100 ms ·
 # 구문 강조 16 ms)을 판정하지 않는다. `--run-ignored all` 은 release 전용 `#[ignore]` 시험도 포함한다. 벽시계를 재므로 `-j 1`,

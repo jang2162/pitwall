@@ -174,7 +174,7 @@ function vsixRow(up) {
 }
 
 /** 고정 해시의 vsix 를 받아(이미 있으면 그것) 그 안의 jar 와 클래스 경로 jar 를 꺼낸다. */
-async function upstreamJars(up) {
+export async function upstreamJars(up = upstream()) {
   const row = vsixRow(up);
   mkdirSync(WORK, { recursive: true });
   const vsix = join(WORK, `${row.sha256}.vsix`);

@@ -384,6 +384,69 @@ jobs:
         if: ${{ !cancelled() && runner.os == 'Linux' }}
         run: mise run test-lsp -- --ci --install kotlin_lsp
 
+  # 실 디버그 어댑터 시험(17-m6-plan.md M6-19). 어댑터마다 단계 하나 — scripts/dap-live.mjs 가 어댑터를 Pitwall 의 설치기로 받아
+  # (`--install` — 고정 판 · 고정 해시, java-debug 는 결정 D71 의 패치 결과 해시까지) 그 어댑터의 live 시험(`live_dap_<어댑터>_`)만
+  # 돌리고, 필터가 0개를 고르거나 실행 개수가 하한(scripts/dap-live.toml 의 [floors]) 아래면 실패한다. 「하한 아래면 실패」 를 지우는
+  # 변경은 리뷰에서 거절한다. 첫 단계는 java-debug 패치를 고정 JDK 로 다시 만들어 커밋된 클래스 · [[patched]] 해시와 견준다.
+  dap-live:
+    name: dap-live
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      MISE_TASK_RUN_AUTO_INSTALL: "false"
+      NEXTEST_PROFILE: ci
+      PW_DAP_ADAPTERS_DIR: ${{ github.workspace }}/.dap-adapters
+      # debugpy 설치용 python, jdtls · JVM 대상 · 패치 컴파일의 JDK 25(패치는 upstream.toml 의 javac 판과 같아야 한다 — mise.toml 의
+      # `java-debug-patch` 태스크와 같은 값).
+      DAP_LIVE_PYTHON: "3.13.18"
+      DAP_LIVE_JAVA: temurin-25.0.5+8.0.LTS
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: node rust aqua:nextest-rs/nextest/cargo-nextest npm:pnpm
+
+      - name: Rust toolchain components
+        shell: bash
+        run: env -u RUSTUP_TOOLCHAIN rustup toolchain install --no-self-update
+
+      # 어댑터 · 대상을 돌리는 런타임. 러너가 미리 둔 JAVA_HOME 은 지운다(lsp-live 와 같다). codelldb 의 pid attach 는 Yama 의
+      # ptrace 제한(기본 1 — 자식만)을 푼다.
+      - name: runtimes (python · JDK 25) and ptrace
+        shell: bash
+        run: |
+          mise install "python@$DAP_LIVE_PYTHON" "java@$DAP_LIVE_JAVA"
+          echo "$(mise where "java@$DAP_LIVE_JAVA")/bin" >> "$GITHUB_PATH"
+          echo "$(mise where "python@$DAP_LIVE_PYTHON")/bin" >> "$GITHUB_PATH"
+          echo "JAVA_HOME=" >> "$GITHUB_ENV"
+          sudo sysctl -w kernel.yama.ptrace_scope=0
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.PW_DAP_ADAPTERS_DIR }}
+          key: dap-adapters-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/pw-tools/registry.toml', 'crates/pw-tools/overrides/**', 'crates/pw-tools/patches/**', 'crates/pw-tools/src/install/**', 'crates/pw-tools/src/patches.rs', '!crates/pw-tools/src/install/tests/**') }}
+
+      - name: java-debug patch rebuilt from source
+        run: node scripts/java-debug-patch.mjs check
+
+      - name: live codelldb
+        if: ${{ !cancelled() }}
+        run: mise run test-dap -- --ci --install codelldb
+      - name: live js_debug
+        if: ${{ !cancelled() }}
+        run: mise run test-dap -- --ci --install js_debug
+      - name: live debugpy
+        if: ${{ !cancelled() }}
+        run: mise run test-dap -- --ci --install debugpy
+      - name: live java_debug
+        if: ${{ !cancelled() }}
+        run: mise run test-dap -- --ci --install java_debug
+
   advisories:
     name: advisories
     runs-on: ubuntu-latest

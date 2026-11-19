@@ -1,0 +1,30 @@
+# 실 디버그 어댑터 시험(live_dap_*)의 실행 개수 하한과 받을 패키지(17-m6-plan.md M6-19 — `scripts/lsp-live.toml` 과 같은 꼴).
+# `scripts/dap-live.mjs` 가 읽는다. 어댑터는 Pitwall 의 설치기(`cargo run -p pw-tools --example tools_install` — crates/pw-tools/registry.toml
+# 의 고정 판 · 해시)로 받는다.
+#
+# [floors]: 어댑터마다 그 필터(`test(/(^|::)live_dap_<어댑터>_/)`)가 고른 시험 수의 하한 — 실제로 도는 수다(낮추면 그만큼 시험이
+#   조용히 빠질 수 있다). codelldb · debugpy 는 launch · attach 둘, js-debug 는 launch 하나(Node attach 는 시험이 없다 — 시험 파일의
+#   그 자리 주석), java-debug 는 attach · 다른 주소의 거절 · 상류 jar 의 구분력 셋. 줄을 지우거나 값을 내리는 변경은 리뷰에서 거절한다.
+# [install.<어댑터>]: 받을 Mason 패키지와, 시험에 줄 경로 — 실행 파일(`bin`) 또는 jar(`share`, java-debug).
+
+[floors]
+codelldb = 2
+js_debug = 1
+debugpy = 2
+java_debug = 3
+
+[install.codelldb]
+package = "codelldb"
+bin = "codelldb"
+
+[install.js_debug]
+package = "js-debug-adapter"
+bin = "js-debug-adapter"
+
+[install.debugpy]
+package = "debugpy"
+bin = "debugpy-adapter"
+
+[install.java_debug]
+package = "java-debug-adapter"
+share = "java-debug-adapter/com.microsoft.java.debug.plugin.jar"
