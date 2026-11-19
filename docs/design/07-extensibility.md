@@ -67,6 +67,7 @@ transport = "tcp"                           # stdio(기본) | tcp — stdio 를 
 # env = { … }  requires = { python = ">=3.9" }  project_local = "…"   # (선택) 언어 서버와 같다 — requires 는 어댑터를 「돌리는」 런타임(node: 위임의 런처가 그 node 를 쓴다)
 launch = { type = "lldb", program = "{program}", args = "{args}", cwd = "{cwd}" }
 attach = { type = "lldb", pid = "{pid}" }
+# attach_connect = true                    # (선택, 기본 거짓) attach 구성이 `[debug] connect = { port }` 로 **디버그 대상이 이미 띄운 어댑터**(debugpy `--listen`)의 loopback 포트에 바로 붙을 수 있다 — 어댑터를 띄우지 않고, 붙은 상대가 이 사용자의 프로세스인지 보며, 그 어댑터의 `runInTerminal` 은 거절한다(17-m6-plan M6-19b). `attach` 틀이 있어야 한다
 
 # 확장의 태스크 감지 규칙은 M8 이후다 — M6 의 내장 감지기(package.json · Makefile · justfile · compose · mise · gradle · maven)는 코어(`pw_run::detect`)에 있다(17-m6-plan 「3」)
 

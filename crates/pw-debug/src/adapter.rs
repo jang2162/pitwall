@@ -24,8 +24,7 @@
 //!
 //! `[debug] connect = { port }`(attach 구성만, loopback 만 — `pw_run::config::DebugConfig::connect`)이면 어댑터를 띄우지 않고 디버그
 //! 대상이 이미 띄운 어댑터(debugpy `--listen`)에 붙는다(`pw_dap::Transport::Listening`). 정의가 `attach_connect = true` 여야 한다.
-//! 어댑터를 띄우지 않으므로 설치 여부 · `requires` 런타임은 보지 않는다(`[dap.<id>] enabled = false` 는 그대로 거절). `connect` 는
-//! Pitwall 이 읽는 키라 틀에는 가지 않는다.
+//! 어댑터를 띄우지 않으므로 설치 여부 · `requires` 런타임은 보지 않는다(`[dap.<id>] enabled = false` 는 그대로 거절).
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -208,7 +207,6 @@ pub fn request_arguments(
         )));
     }
     let mut values: BTreeMap<String, Value> = debug.settings.clone();
-    values.remove("connect");
     values.insert("cwd".into(), Value::String(path_text(cwd)));
     values.insert("root".into(), Value::String(path_text(root)));
     values.insert(
