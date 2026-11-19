@@ -64,7 +64,7 @@ const setCurrent = StateEffect.define<number | null>();
 
 /** `agent` 칸(M6-20 이 더한다 — 없으면 거짓). */
 function byAgent(bp: Breakpoint): boolean {
-  return (bp as { agent?: boolean }).agent === true;
+  return bp.agent === true;
 }
 
 class BreakpointMarker extends GutterMarker {
@@ -92,7 +92,11 @@ class BreakpointMarker extends GutterMarker {
     const classes = ["cm-breakpoint", `cm-breakpoint-${kind(this.bp)}`];
     if (this.bp.enabled === false) classes.push("cm-breakpoint-disabled");
     if (this.unverified !== undefined) classes.push("cm-breakpoint-unverified");
-    if (byAgent(this.bp)) classes.push("cm-breakpoint-agent");
+    if (byAgent(this.bp)) {
+      // 에이전트가 둔 것 전부에 표지, 대상 안에서 평가되는 식(조건 · hit count · 로그)이 든 것은 따로 눈에 띄게(M6-20).
+      classes.push("cm-breakpoint-agent");
+      if (kind(this.bp) !== "plain") classes.push("cm-breakpoint-agent-expression");
+    }
     el.className = classes.join(" ");
     el.dataset.breakpoint = kind(this.bp);
     el.title = this.title;
@@ -273,6 +277,10 @@ export function breakpointGutter(
       },
       ".cm-breakpoint-unverified": { opacity: "0.5" },
       ".cm-breakpoint-agent": { outline: "1px dashed currentColor", outlineOffset: "1px" },
+      ".cm-breakpoint-agent-expression": {
+        outline: "2px solid var(--pw-diagnostic-warning, #c90)",
+        outlineOffset: "1px",
+      },
       ".cm-debug-current-line": {
         backgroundColor: "color-mix(in srgb, var(--pw-diagnostic-warning, #c90) 22%, transparent)",
       },

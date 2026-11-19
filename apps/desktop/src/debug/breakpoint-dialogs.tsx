@@ -167,7 +167,8 @@ export function describe(
   if (bp.logMessage) parts.push(T.describeLog(bp.logMessage));
   if (parts.length === 0) parts.push(T.plain);
   if (bp.enabled === false) parts.push(T.disabled);
-  if ((bp as { agent?: boolean }).agent === true) parts.push(T.agent);
+  if (bp.agent === true)
+    parts.push(bp.condition || bp.hitCondition || bp.logMessage ? T.agentExpression : T.agent);
   if (unverified !== undefined) parts.push(T.unverified(unverified));
   return parts.join("\n");
 }

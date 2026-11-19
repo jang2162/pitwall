@@ -246,6 +246,7 @@ debug-bp-disabled = Disabled
 # $message: why the adapter could not verify it (may be empty)
 debug-bp-unverified = Not verified by the debugger { $message }
 debug-bp-agent = Set by an agent
+debug-bp-agent-expression = Set by an agent — its expression runs inside the program
 debug-bp-list-title = Breakpoints
 debug-bp-list-empty = No breakpoints
 debug-bp-list-unsaved = Unsaved — goes to the debugger when the file is saved

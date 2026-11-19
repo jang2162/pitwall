@@ -242,6 +242,7 @@ debug-bp-disabled = 꺼 둠
 # $message: 어댑터가 확인하지 못한 까닭(빌 수 있다)
 debug-bp-unverified = 디버거가 확인하지 못했다 { $message }
 debug-bp-agent = 에이전트가 둠
+debug-bp-agent-expression = 에이전트가 둠 — 그 식은 프로그램 안에서 돈다
 debug-bp-list-title = 브레이크포인트
 debug-bp-list-empty = 브레이크포인트가 없다
 debug-bp-list-unsaved = 저장 전 — 파일을 저장하면 디버거에 간다

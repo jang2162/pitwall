@@ -64,6 +64,7 @@ export function debugStrings(t: Translate) {
       disabled: t("debug-bp-disabled"),
       unverified: (message: string) => t("debug-bp-unverified", { message }),
       agent: t("debug-bp-agent"),
+      agentExpression: t("debug-bp-agent-expression"),
     },
     list: {
       title: t("debug-bp-list-title"),

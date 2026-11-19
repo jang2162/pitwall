@@ -150,6 +150,25 @@ describe("breakpoints in the gutter", () => {
     expect(host.sets().at(-1)).toEqual({ projectId: "p1", path: REL, breakpoints: [] });
   });
 
+  it("mark every breakpoint an agent set and those with expressions apart", async () => {
+    const { view } = await setup("a\nb\nc\n", [
+      { line: 1, agent: true },
+      { line: 2, agent: true, condition: "i > 3" },
+      { line: 3 },
+    ]);
+    const marks = [...view.dom.querySelectorAll<HTMLElement>(".cm-debug-gutter .cm-breakpoint")];
+    expect(marks.map((m) => m.classList.contains("cm-breakpoint-agent"))).toEqual([
+      true,
+      true,
+      false,
+    ]);
+    expect(marks.map((m) => m.classList.contains("cm-breakpoint-agent-expression"))).toEqual([
+      false,
+      true,
+      false,
+    ]);
+  });
+
   it("take lines the adapter moved when the document has no unsaved edits", async () => {
     const { host, breakpoints, view } = await setup("a\nb\nc\nd\n", [{ line: 1 }]);
     act(() =>
