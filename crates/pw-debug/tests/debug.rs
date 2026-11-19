@@ -1228,3 +1228,61 @@ async fn frame_sources_outside_the_root_are_read_through_tokens() {
         .await;
     assert_eq!(e.code, code::NOT_FOUND);
 }
+
+/// M6-18 리뷰 F1 · F3 · R1: 루트 안 링크가 루트 밖 파일을 가리키면 `debug.source` 는 **실제 경로**를 주고(보고한 경로는 따로),
+/// `sourceReference` 가 있으면 경로가 디스크에 있어도 어댑터의 글이다. 한 실행의 토큰을 다른 실행의 `runId` 로 부르면 없는 토큰이다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_source_shows_its_real_path_and_prefers_the_adapters_reference() {
+    let f = Fixture::new();
+    let secret = f.base().join("secret.txt");
+    fs::write(&secret, "do not show as a project file\n").unwrap();
+    let link = f.root.join("src/util.rs");
+    std::os::unix::fs::symlink(&secret, &link).unwrap();
+    let on_disk = f.base().join("bundle.js");
+    fs::write(&on_disk, "disk text\n").unwrap();
+    f.scenario(
+        Scenario::default()
+            .reply(
+                "stackTrace",
+                Reply::body(json!({ "stackFrames": [
+                    { "id": 1, "name": "util", "line": 1, "column": 1,
+                      "source": { "path": link.to_str().unwrap() } },
+                    { "id": 2, "name": "bundle", "line": 1, "column": 1,
+                      "source": { "path": on_disk.to_str().unwrap(), "sourceReference": 9, "name": "bundle.ts" } },
+                ] })),
+            )
+            .reply("source", Reply::body(json!({ "content": "adapter text\n" }))),
+    );
+    let mut c = f.client();
+    let a = start(&f, &mut c).await;
+    let b = start(&f, &mut c).await;
+    let stack = c
+        .ok("debug.stack", json!({ "runId": a, "threadId": 1 }))
+        .await;
+    let frames = stack["frames"].as_array().unwrap();
+    let linked = frames[0]["token"].as_str().unwrap().to_owned();
+    let referenced = frames[1]["token"].as_str().unwrap().to_owned();
+
+    let read = c
+        .ok("debug.source", json!({ "runId": a, "token": linked }))
+        .await;
+    assert_eq!(read["path"], secret.to_str().unwrap());
+    assert_eq!(read["reported"], link.to_str().unwrap());
+    assert_eq!(read["text"], "do not show as a project file\n");
+
+    let read = c
+        .ok("debug.source", json!({ "runId": a, "token": referenced }))
+        .await;
+    assert_eq!(read["text"], "adapter text\n");
+    assert_eq!(read["path"], Value::Null);
+    assert_eq!(read["name"], "bundle.ts");
+    assert_eq!(f.received("source")[0]["arguments"]["sourceReference"], 9);
+
+    // 같은 연결이라도 다른 실행의 runId 로는 없는 토큰이다.
+    let e = c
+        .err("debug.source", json!({ "runId": b, "token": linked }))
+        .await;
+    assert_eq!(e.code, code::NOT_FOUND);
+    stop(&f, &mut c, &a).await;
+    stop(&f, &mut c, &b).await;
+}

@@ -20,7 +20,7 @@ const SOURCE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 async fn blocking_places(
     root: std::path::PathBuf,
     paths: Vec<Option<String>>,
-) -> Vec<Option<std::path::PathBuf>> {
+) -> Vec<Option<(std::path::PathBuf, crate::source::FileId)>> {
     let n = paths.len();
     tokio::task::spawn_blocking(move || {
         paths
@@ -522,8 +522,12 @@ pub struct DebugSourceParams {
 pub struct DebugSource {
     /// 글 전부(5 MiB 까지, UTF-8).
     pub text: String,
-    /// 보일 경로(어댑터가 보고한 것). 어댑터가 쥔 소스면 없다.
+    /// 읽은 파일의 실제 경로(정규화 뒤 — 화면은 이것을 보인다). 어댑터가 쥔 소스면 없다.
     pub path: Option<String>,
+    /// 어댑터가 보고한 경로가 실제 경로와 다르면 그것(링크 · `..` — 화면이 함께 보인다).
+    pub reported: Option<String>,
+    /// 어댑터가 쥔 소스의 이름(어댑터의 글 — 경로가 아니다).
+    pub name: Option<String>,
     /// 그 세션의 어댑터 id.
     pub adapter: String,
 }
@@ -805,14 +809,15 @@ pub fn register(router: &mut Router, debugger: Debugger) {
                             .as_ref()
                             .and_then(|s| s.source_reference)
                             .filter(|r| *r > 0);
-                        (f, path, source_reference)
+                        let name = f.source.as_ref().and_then(|s| s.name.clone());
+                        (f, path, source_reference, name)
                     })
                     .collect();
                 // 루트 밖인지는 파일을 풀어 본다 — 블로킹.
                 let root = run.root.clone();
                 let places = {
                     let paths: Vec<Option<String>> =
-                        frames.iter().map(|(_, p, _)| p.clone()).collect();
+                        frames.iter().map(|(_, p, _, _)| p.clone()).collect();
                     blocking_places(root, paths).await
                 };
                 let dap = session.id();
@@ -820,15 +825,18 @@ pub fn register(router: &mut Router, debugger: Debugger) {
                     frames: frames
                         .into_iter()
                         .zip(places)
-                        .map(|((f, path, source_reference), real)| {
-                            let at = match (&path, real, source_reference) {
-                                (Some(reported), Some(real), _) => Some(SourceAt::File {
-                                    reported: reported.clone(),
-                                    real,
-                                }),
-                                (None, _, Some(reference)) => Some(SourceAt::Reference {
+                        .map(|((f, path, source_reference, name), real)| {
+                            // `sourceReference > 0` 이면 경로가 있어도 어댑터의 글이다(DAP 규약).
+                            let at = match (source_reference, &path, real) {
+                                (Some(reference), _, _) => Some(SourceAt::Reference {
                                     session: dap,
                                     reference,
+                                    name,
+                                }),
+                                (None, Some(reported), Some((real, id))) => Some(SourceAt::File {
+                                    reported: reported.clone(),
+                                    real,
+                                    id,
                                 }),
                                 _ => None,
                             };
@@ -920,18 +928,24 @@ pub fn register(router: &mut Router, debugger: Debugger) {
                 let (entry, run) = found?;
                 let adapter = run.adapter.clone();
                 match entry.at {
-                    SourceAt::File { reported, real } => {
-                        let path = reported.clone();
-                        let text = tokio::task::spawn_blocking(move || read_file(&reported, &real))
+                    SourceAt::File { reported, real, id } => {
+                        let path = real.display().to_string();
+                        let text = tokio::task::spawn_blocking(move || read_file(&real, id))
                             .await
                             .map_err(|e| RpcError::internal(e.to_string()))??;
                         Ok(DebugSource {
                             text,
+                            reported: (reported != path).then_some(reported),
                             path: Some(path),
+                            name: None,
                             adapter,
                         })
                     }
-                    SourceAt::Reference { session, reference } => {
+                    SourceAt::Reference {
+                        session,
+                        reference,
+                        name,
+                    } => {
                         let tree = run.session().ok_or_else(|| no_such_run(&p.run_id))?;
                         let s = tree
                             .session(session)
@@ -957,6 +971,8 @@ pub fn register(router: &mut Router, debugger: Debugger) {
                         Ok(DebugSource {
                             text: text.to_owned(),
                             path: None,
+                            reported: None,
+                            name,
                             adapter,
                         })
                     }
