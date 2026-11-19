@@ -11,6 +11,26 @@ use serde_json::json;
 
 use crate::Debugger;
 use crate::breakpoints::{Breakpoint, FileBreakpoints};
+use crate::source::{SOURCE_LIMIT, SourceAt, outside_file, read_file, too_large};
+
+/// `debug.source` 가 어댑터의 `source` 답을 기다리는 시한.
+const SOURCE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// 프레임 경로마다 루트 밖 일반 파일이면 그 실제 경로(블로킹으로 푼다).
+async fn blocking_places(
+    root: std::path::PathBuf,
+    paths: Vec<Option<String>>,
+) -> Vec<Option<std::path::PathBuf>> {
+    let n = paths.len();
+    tokio::task::spawn_blocking(move || {
+        paths
+            .iter()
+            .map(|p| p.as_deref().and_then(|p| outside_file(&root, p)))
+            .collect()
+    })
+    .await
+    .unwrap_or_else(|_| vec![None; n])
+}
 
 /// `debug.variables` 한 쪽의 기본 수.
 pub const VARIABLES_PAGE: u32 = 100;
@@ -133,6 +153,9 @@ pub struct DebugFrame {
     #[specta(type = pw_rpc::JsNumber)]
     pub column: i64,
     pub presentation_hint: Option<String>,
+    /// 소스가 프로젝트 루트 밖(일반 파일)이거나 어댑터가 내용을 쥔 것(`sourceReference`)이면 `debug.source` 로 읽는 토큰 — 이
+    /// 연결 · 이 실행에만 산다(M6-18). 루트 안이면 없다(창이 `fs.*` 로 연다).
+    pub token: Option<String>,
 }
 
 #[derive(
@@ -482,6 +505,29 @@ pub struct DebugEndedEvent {
     pub run_id: RunId,
 }
 
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct DebugSourceParams {
+    pub run_id: RunId,
+    /// `debug.stack` 의 프레임이 준 토큰.
+    pub token: String,
+}
+
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct DebugSource {
+    /// 글 전부(5 MiB 까지, UTF-8).
+    pub text: String,
+    /// 보일 경로(어댑터가 보고한 것). 어댑터가 쥔 소스면 없다.
+    pub path: Option<String>,
+    /// 그 세션의 어댑터 id.
+    pub adapter: String,
+}
+
 pw_rpc::rpc_type!(
     DebugBreakpointsEvent,
     DebugStoppedEvent,
@@ -548,6 +594,15 @@ rpc_method! {
         params: DebugEvaluateParams,
         result: DebugEvaluated,
         tier: Exec,
+        roles: [Owner],
+    }
+
+    /// 프레임 소스를 토큰으로 읽는다(루트 밖 파일 · 어댑터가 쥔 소스 — 결정 M4-D13 과 같은 규칙, 읽기 전용). 그 프로젝트의 창 연결만
+    /// 부른다 — 다른 연결 · 에이전트 범위는 permission denied, 이 연결이 받지 않은 토큰 · 끝난 실행의 토큰은 not found.
+    pub DebugSourceMethod: "debug.source" {
+        params: DebugSourceParams,
+        result: DebugSource,
+        tier: Read,
         roles: [Owner],
     }
 
@@ -641,7 +696,7 @@ pub fn register(router: &mut Router, debugger: Debugger) {
     );
     // 툴 메서드(M6-20 — `crate::tool`).
     crate::tool::register(router, d.clone());
-    let (list, set, remove) = (d.clone(), d.clone(), d);
+    let (list, set, remove, source) = (d.clone(), d.clone(), d.clone(), d);
     router
         .unary(DebugStart, move |ctx, params: DebugStartParams| {
             let debugger = start.clone();
@@ -719,14 +774,19 @@ pub fn register(router: &mut Router, debugger: Debugger) {
             }
         })
         .unary(DebugStackMethod, move |ctx, p: DebugStackParams| {
-            let found = viewing_project(ctx.scope(), &p.run_id)
-                .and_then(|project| stack.dap_session(project, &p.run_id, p.session));
+            let found = viewing_project(ctx.scope(), &p.run_id).and_then(|project| {
+                let run = stack.find(project, &p.run_id)?;
+                let session = stack.dap_session(project, &p.run_id, p.session)?;
+                Ok((run, session))
+            });
+            let debugger = stack.clone();
             async move {
+                let (run, session) = found?;
                 let levels = p
                     .levels
                     .unwrap_or(STACK_LEVELS)
                     .clamp(1, STACK_LEVELS_LIMIT);
-                let body = found?
+                let body = session
                     .request::<protocol::StackTrace>(&protocol::StackTraceArguments {
                         thread_id: p.thread_id,
                         start_frame: Some(i64::from(p.start_frame.unwrap_or(0))),
@@ -734,23 +794,61 @@ pub fn register(router: &mut Router, debugger: Debugger) {
                     })
                     .await
                     .map_err(adapter_error)?;
+                let frames: Vec<_> = body
+                    .stack_frames
+                    .into_iter()
+                    .take(levels as usize)
+                    .map(|f| {
+                        let path = f.source.as_ref().and_then(|s| s.path.clone());
+                        let source_reference = f
+                            .source
+                            .as_ref()
+                            .and_then(|s| s.source_reference)
+                            .filter(|r| *r > 0);
+                        (f, path, source_reference)
+                    })
+                    .collect();
+                // 루트 밖인지는 파일을 풀어 본다 — 블로킹.
+                let root = run.root.clone();
+                let places = {
+                    let paths: Vec<Option<String>> =
+                        frames.iter().map(|(_, p, _)| p.clone()).collect();
+                    blocking_places(root, paths).await
+                };
+                let dap = session.id();
                 Ok(DebugStack {
-                    frames: body
-                        .stack_frames
+                    frames: frames
                         .into_iter()
-                        .take(levels as usize)
-                        .map(|f| DebugFrame {
-                            id: f.id,
-                            name: f.name,
-                            path: f.source.as_ref().and_then(|s| s.path.clone()),
-                            source_reference: f
-                                .source
-                                .as_ref()
-                                .and_then(|s| s.source_reference)
-                                .filter(|r| *r > 0),
-                            line: f.line,
-                            column: f.column,
-                            presentation_hint: f.presentation_hint,
+                        .zip(places)
+                        .map(|((f, path, source_reference), real)| {
+                            let at = match (&path, real, source_reference) {
+                                (Some(reported), Some(real), _) => Some(SourceAt::File {
+                                    reported: reported.clone(),
+                                    real,
+                                }),
+                                (None, _, Some(reference)) => Some(SourceAt::Reference {
+                                    session: dap,
+                                    reference,
+                                }),
+                                _ => None,
+                            };
+                            DebugFrame {
+                                id: f.id,
+                                name: f.name,
+                                token: at.map(|at| {
+                                    debugger.source_tokens().mint(
+                                        &ctx,
+                                        &run.project_id,
+                                        run.run_id(),
+                                        at,
+                                    )
+                                }),
+                                path,
+                                source_reference,
+                                line: f.line,
+                                column: f.column,
+                                presentation_hint: f.presentation_hint,
+                            }
                         })
                         .collect(),
                     total_frames: body.total_frames,
@@ -806,6 +904,63 @@ pub fn register(router: &mut Router, debugger: Debugger) {
                     named_variables: body.named_variables,
                     indexed_variables: body.indexed_variables,
                 })
+            }
+        })
+        .unary(DebugSourceMethod, move |ctx, p: DebugSourceParams| {
+            let debugger = source.clone();
+            let found = controlling_project(ctx.scope()).and_then(|project| {
+                let entry = debugger.source_tokens().entry(&ctx, project, &p.token)?;
+                if entry.run != p.run_id {
+                    return Err(RpcError::new(code::NOT_FOUND, "no such source token"));
+                }
+                let run = debugger.find(project, &p.run_id)?;
+                Ok((entry, run))
+            });
+            async move {
+                let (entry, run) = found?;
+                let adapter = run.adapter.clone();
+                match entry.at {
+                    SourceAt::File { reported, real } => {
+                        let path = reported.clone();
+                        let text = tokio::task::spawn_blocking(move || read_file(&reported, &real))
+                            .await
+                            .map_err(|e| RpcError::internal(e.to_string()))??;
+                        Ok(DebugSource {
+                            text,
+                            path: Some(path),
+                            adapter,
+                        })
+                    }
+                    SourceAt::Reference { session, reference } => {
+                        let tree = run.session().ok_or_else(|| no_such_run(&p.run_id))?;
+                        let s = tree
+                            .session(session)
+                            .ok_or_else(|| no_such_run(&p.run_id))?;
+                        let body = s
+                            .request_raw(
+                                "source",
+                                json!({
+                                    "source": { "sourceReference": reference },
+                                    "sourceReference": reference,
+                                }),
+                                SOURCE_TIMEOUT,
+                            )
+                            .await
+                            .map_err(adapter_error)?;
+                        let text = body
+                            .get("content")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default();
+                        if text.len() as u64 > SOURCE_LIMIT {
+                            return Err(too_large(text.len() as u64));
+                        }
+                        Ok(DebugSource {
+                            text: text.to_owned(),
+                            path: None,
+                            adapter,
+                        })
+                    }
+                }
             }
         })
         .unary(DebugExceptionsSet, move |ctx, p: DebugExceptionsParams| {

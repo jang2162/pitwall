@@ -1149,3 +1149,82 @@ async fn only_filters_the_session_announced_are_sent() {
     }
     stop(&f, &mut c, &run_id).await;
 }
+
+// ---- M6-18 프레임 소스 토큰 -----------------------------------------------------------------------------------------------
+
+/// M6-18 ②: 루트 밖 프레임(일반 파일 · 어댑터가 쥔 소스)에만 토큰이 달리고, 그 토큰으로 이 연결만 `debug.source` 를 읽는다. 에이전트 ·
+/// Host 범위는 거절(메인 판정 — 에이전트가 루트 밖 파일을 읽는 길이 되지 않게), 다른 창 연결은 없는 토큰, 실행이 끝나면 토큰이 죽는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn frame_sources_outside_the_root_are_read_through_tokens() {
+    let f = Fixture::new();
+    let inside = f.root.join("src/main.rs");
+    fs::write(&inside, "fn main() {}\n").unwrap();
+    let outside = f.base().join("outside.rs");
+    fs::write(&outside, "pub fn lib() {}\n").unwrap();
+    f.scenario(
+        Scenario::default()
+            .reply(
+                "stackTrace",
+                Reply::body(json!({ "stackFrames": [
+                    { "id": 1, "name": "main", "line": 1, "column": 1,
+                      "source": { "path": inside.to_str().unwrap() } },
+                    { "id": 2, "name": "lib", "line": 1, "column": 1,
+                      "source": { "path": outside.to_str().unwrap() } },
+                    { "id": 3, "name": "gen", "line": 2, "column": 1,
+                      "source": { "name": "gen.js", "sourceReference": 7 } },
+                    { "id": 4, "name": "dir", "line": 1, "column": 1,
+                      "source": { "path": f.base().to_str().unwrap() } },
+                ] })),
+            )
+            .reply(
+                "source",
+                Reply::body(json!({ "content": "// generated\n" })),
+            ),
+    );
+    let mut c = f.client();
+    let run_id = start(&f, &mut c).await;
+    let stack = c
+        .ok("debug.stack", json!({ "runId": run_id, "threadId": 1 }))
+        .await;
+    let frames = stack["frames"].as_array().unwrap();
+    assert_eq!(frames[0]["token"], Value::Null, "inside the root");
+    assert_eq!(frames[3]["token"], Value::Null, "a folder is not a file");
+    let file = frames[1]["token"].as_str().unwrap().to_owned();
+    let reference = frames[2]["token"].as_str().unwrap().to_owned();
+    assert_eq!(file.len(), 32);
+
+    let read = c
+        .ok("debug.source", json!({ "runId": run_id, "token": file }))
+        .await;
+    assert_eq!(read["text"], "pub fn lib() {}\n");
+    assert_eq!(read["path"], outside.to_str().unwrap());
+    let read = c
+        .ok(
+            "debug.source",
+            json!({ "runId": run_id, "token": reference }),
+        )
+        .await;
+    assert_eq!(read["text"], "// generated\n");
+    assert_eq!(f.received("source")[0]["arguments"]["sourceReference"], 7);
+
+    // 에이전트 · Host 범위는 토큰을 알아도 거절된다.
+    for scope in [ConnectionScope::Agent, ConnectionScope::Host] {
+        let mut other = f.client_in(scope);
+        let e = other
+            .err("debug.source", json!({ "runId": run_id, "token": file }))
+            .await;
+        assert_eq!(e.code, code::PERMISSION_DENIED);
+    }
+    // 같은 프로젝트의 다른 창 연결은 그 토큰을 받은 적이 없다.
+    let mut window = f.client();
+    let e = window
+        .err("debug.source", json!({ "runId": run_id, "token": file }))
+        .await;
+    assert_eq!(e.code, code::NOT_FOUND);
+
+    stop(&f, &mut c, &run_id).await;
+    let e = c
+        .err("debug.source", json!({ "runId": run_id, "token": file }))
+        .await;
+    assert_eq!(e.code, code::NOT_FOUND);
+}

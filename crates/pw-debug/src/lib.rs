@@ -33,6 +33,7 @@ pub mod adapter;
 pub mod breakpoints;
 pub mod methods;
 pub mod run;
+mod source;
 pub mod tool;
 
 use std::collections::BTreeMap;
@@ -109,6 +110,8 @@ struct Inner {
     host: OnceLock<Host>,
     timeouts: Timeouts,
     sessions: Mutex<BTreeMap<RunId, Arc<DebugRun>>>,
+    /// 프레임 소스의 읽기 토큰(`debug.source` — [`source`]).
+    sources: source::SourceTokens,
 }
 
 /// 시작 전에 블로킹으로 푼 것.
@@ -151,6 +154,7 @@ impl Debugger {
                 host: OnceLock::new(),
                 timeouts,
                 sessions: Mutex::default(),
+                sources: source::SourceTokens::default(),
             }),
         }
     }
@@ -176,6 +180,10 @@ impl Debugger {
     /// 브레이크포인트 저장(M6-20 의 툴도 이것을 쓴다).
     pub fn breakpoints(&self) -> Result<Breakpoints, RpcError> {
         Ok(self.host()?.breakpoints.clone())
+    }
+
+    pub(crate) fn source_tokens(&self) -> &source::SourceTokens {
+        &self.inner.sources
     }
 
     /// 그 프로젝트의 디버그 세션(다른 프로젝트 · 없는 실행 · 디버그 실행이 아닌 것은 같은 「없는 실행」).
@@ -408,6 +416,7 @@ impl Debugger {
             run.output.exited(exit_of(run, adapter_exit));
         }
         lock(&self.inner.sessions).remove(run.run_id());
+        self.inner.sources.forget_run(run.run_id());
         self.publish(
             &run.project_id,
             TOPIC_ENDED,
