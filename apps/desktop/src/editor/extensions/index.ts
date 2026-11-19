@@ -32,12 +32,14 @@ import { Compartment, type Extension, type TransactionSpec } from "@codemirror/s
 import type { EditorView, Panel } from "@codemirror/view";
 import type { Judgment } from "@pitwall/rpc-client";
 
+import type { EditorDebug } from "../../debug/breakpoint-gutter";
 import type { EditorGit } from "../../git/gutter/gutter-extension";
 import type { LspDocument } from "../../lsp/lsp-sessions";
 import { base } from "./base";
 import { editorContext } from "./context";
 import { blame } from "./blame";
 import { cursorReport } from "./cursor-report";
+import { debug } from "./debug";
 import type { SyntaxSessions } from "../syntax-sessions";
 import { editing } from "./editing";
 import { gitGutter } from "./git-gutter";
@@ -106,6 +108,11 @@ export interface EditorFeatureContext {
    * 창의 파일 탭 중 편집 등급 텍스트 문서만 있다(`lspEligible`) — git · DB 문서 · 파일 창 · 시험에는 없다.
    */
   readonly lsp?: LspDocument;
+  /**
+   * 창의 디버그 호스트와 이 탭을 연 워크트리(`debug` — 브레이크포인트 거터 · 멈춘 줄, src/debug/breakpoint-gutter.ts, 17-m6-plan
+   * M6-18). 프로젝트 창의 파일 탭만 있다.
+   */
+  readonly debug?: { readonly host: EditorDebug; readonly worktree: string | undefined };
 }
 
 export interface EditorFeature {
@@ -120,6 +127,8 @@ const contextFeature: EditorFeature = { id: "context", extension: (c) => editorC
 
 export const EDITOR_FEATURES: readonly EditorFeature[] = [
   contextFeature,
+  // 거터 칸은 확장 차례로 놓인다 — 브레이크포인트 칸을 줄 번호(`base`) 왼쪽에.
+  debug,
   base,
   theme,
   highlight,

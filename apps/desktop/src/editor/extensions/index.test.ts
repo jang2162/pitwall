@@ -40,6 +40,7 @@ const context: EditorFeatureContext = {
 it("assembles one extension per feature, in list order", () => {
   expect(EDITOR_FEATURES.map((f) => f.id)).toEqual([
     "context",
+    "debug",
     "base",
     "theme",
     "highlight",

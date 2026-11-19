@@ -21,6 +21,7 @@ import { EditorView } from "@codemirror/view";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
+import { debugEditorHost } from "../debug/editor-host";
 import { gitGutterHost } from "../git/gutter/host-store";
 import { type LspDocument, lspEligible } from "../lsp/lsp-sessions";
 import { useProjectStrings } from "../layout/strings";
@@ -85,6 +86,12 @@ function useFeatureContext(
     () => (gutterHost && live ? { host: gutterHost, live } : undefined),
     [gutterHost, live],
   );
+  const debugHost = debugEditorHost((s) => s.host);
+  const { worktree } = params;
+  const debug = useMemo(
+    () => (debugHost && fileTab ? { host: debugHost, worktree } : undefined),
+    [debugHost, fileTab, worktree],
+  );
   return useMemo(
     () =>
       live && judgment && readOnly !== undefined
@@ -102,6 +109,7 @@ function useFeatureContext(
             createFindPanel,
             ...(git && { git }),
             ...(lsp && { lsp }),
+            ...(debug && { debug }),
           }
         : undefined,
     [
@@ -117,6 +125,7 @@ function useFeatureContext(
       createFindPanel,
       git,
       lsp,
+      debug,
     ],
   );
 }
