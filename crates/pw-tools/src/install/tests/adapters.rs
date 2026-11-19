@@ -422,3 +422,57 @@ async fn a_node_bin_without_node_is_refused_before_downloading() {
     assert_eq!(fx.server.hits("/adapters.tar.gz"), 0);
     assert!(!fx.layout().package_dir("adapters").exists());
 }
+
+/// 받은 배포물이 꼭대기에 `package.json` 을 가지면 commonjs 표지를 두지 않는다 — 그 파일(`"type": "module"` 이어도)은 그대로다
+/// (M6-19 리뷰 R6 — 배포물의 뜻을 덮어쓰면 ESM 배포물이 깨진다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_shipped_package_json_is_left_as_it_is() {
+    let fx = Fx::new().await;
+    fake_runtimes(&fx);
+    let shipped = b"{ \"type\": \"module\", \"name\": \"shipped\" }\n".to_vec();
+    let body = targz(&[
+        Entry::File("package.json", shipped.clone(), 0o644),
+        Entry::Dir("extension/"),
+        Entry::Dir("extension/adapter/"),
+        Entry::File("extension/adapter/codelldb", b"#!/bin/sh\n".to_vec(), 0o644),
+        Entry::Dir("js-debug/"),
+        Entry::Dir("js-debug/src/"),
+        Entry::File("js-debug/src/dapDebugServer.js", b"//".to_vec(), 0o644),
+    ]);
+    fx.server.route("/adapters.tar.gz", Reply::Body(body));
+    let (installer, layout) = installer_at(&fx, registry_of_adapters(), FAKE);
+    fx.consent(&installer, "adapters");
+    installer
+        .install(&project_grant("p1"), "adapters", None, None, false)
+        .await
+        .unwrap();
+    let dir = layout.version_dir("adapters", "1.0.0");
+    assert_eq!(std::fs::read(dir.join("package.json")).unwrap(), shipped);
+}
+
+/// 패치 행의 파일 경로가 설치 폴더 밖을 가리키면(`..` · 절대 경로) 그 파일을 읽지도 바꾸지도 않고 실패한다(M6-19 리뷰 R7 — 고정
+/// 표의 검사와 따로 설치기도 본다).
+#[test]
+fn a_patch_row_outside_the_install_folder_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("install");
+    std::fs::create_dir_all(&dir).unwrap();
+    let outside = tmp.path().join("outside.jar");
+    let jar = crate::patches::tests::upstream_like_jar();
+    std::fs::write(&outside, &jar).unwrap();
+    for file in [
+        "../outside.jar",
+        outside.to_str().unwrap(),
+        "a//b.jar",
+        "./x.jar",
+    ] {
+        let mut row = patched_row();
+        row.file = file.to_owned();
+        let mut pinned = pinned_toml(&[]);
+        pinned.patched = vec![row];
+        let e =
+            super::super::apply_patch(&dir, "java-debug-adapter", "0.59.0", &pinned).unwrap_err();
+        assert!(e.contains("not a plain relative path"), "{file}: {e}");
+    }
+    assert_eq!(std::fs::read(&outside).unwrap(), jar);
+}

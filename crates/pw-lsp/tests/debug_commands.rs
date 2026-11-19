@@ -23,11 +23,24 @@ const COMMAND: &str = "vscode.java.startDebugSession";
 
 /// 그 프로젝트의 개인 설정으로 가짜 서버를 꽂는다 — `workspace/executeCommand` 에 `answer` 로 답한다.
 fn fake_for(env: &Env, root: &Path, name: &str, answer: u16) {
-    let scenario = pw_lsp::fake::Scenario {
-        capabilities: json!({ "textDocumentSync": 2, "executeCommandProvider": { "commands": [COMMAND] } }),
+    fake_with(env, root, name, answer, None);
+}
+
+/// `initialize_delay_ms` 를 주면 그만큼 늦게 `initialize` 에 답한다(그동안 인스턴스는 시작 중이다 — 다른 메시지는 읽는다).
+fn fake_with(env: &Env, root: &Path, name: &str, answer: u16, initialize_delay_ms: Option<u64>) {
+    let capabilities =
+        json!({ "textDocumentSync": 2, "executeCommandProvider": { "commands": [COMMAND] } });
+    let mut scenario = pw_lsp::fake::Scenario {
+        capabilities: capabilities.clone(),
         ..pw_lsp::fake::Scenario::default()
     }
     .reply("workspace/executeCommand", Reply::result(json!(answer)));
+    if let Some(ms) = initialize_delay_ms {
+        scenario = scenario.reply(
+            "initialize",
+            Reply::result(json!({ "capabilities": capabilities })).delayed(ms),
+        );
+    }
     let dir = env.base.join("fake");
     fs::create_dir_all(&dir).unwrap();
     let path = scenario.write(&dir, name).unwrap();
@@ -105,4 +118,30 @@ async fn a_debug_command_reaches_only_the_server_of_that_project_and_root() {
     // 떠 있지 않은 서버 · 등록되지 않은 프로젝트.
     assert_eq!(ask(&env, &env.id, &env.root, "basedpyright").await, None);
     assert_eq!(ask(&env, "no-such-project", &env.root, SERVER).await, None);
+}
+
+/// 시작 중(`initialize` 를 기다리는 동안)인 인스턴스에는 보내지 않는다 — 떠서 준비된 뒤에만 답을 받는다(M6-19 리뷰 R1).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_starting_server_gets_no_debug_command() {
+    let env = Env::new(EnvOptions::default());
+    fake_with(&env, &env.root, "slow", 3333, Some(2_000));
+    let mut one = env.window();
+    one.open(&env, &env.file("src/main.rs", ""), "Rust", "")
+        .await;
+    // 띄웠지만 아직 `initialize` 의 답이 없다(2 s 늦게 답한다).
+    let spawned = Instant::now() + Duration::from_secs(1);
+    while env.manager.spawn_count() == 0 {
+        assert!(Instant::now() < spawned, "the server was not spawned");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(ask(&env, &env.id, &env.root, SERVER).await, None);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(answer) = ask(&env, &env.id, &env.root, SERVER).await {
+            assert_eq!(answer, Ok(3333));
+            break;
+        }
+        assert!(Instant::now() < deadline, "{:?}", env.states());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
