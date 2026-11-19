@@ -20,6 +20,7 @@ mod cli;
 mod clipboard;
 mod config_log;
 mod db;
+mod debug_attention;
 mod detach;
 mod diag;
 mod drop_import;

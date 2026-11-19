@@ -37,6 +37,8 @@ pub const COMMANDS: &[(&str, &[WindowKind])] = &[
     ("write_clipboard", &[Settings, Project]),
     // MCP 승인 요청을 듣는 창의 OS 알림(src/mcp/approval-native.ts, approval_notice.rs — 16-m5-plan M5-14).
     ("mcp_approval_notify", &[Welcome, Settings, Project]),
+    // 디버그 세션이 멈춘 창의 주의 요청(src/debug/debug-native.ts, debug_attention.rs — 17-m6-plan M6-18 ④).
+    ("debug_stopped_attention", &[Project]),
     // 열기 요청을 받는 창(src/project-open.ts).
     ("take_pending_project_opens", &[Project, File]),
     // 프로젝트 창의 파일 트리 드롭(src/file-tree/tree-drop.ts).
@@ -131,7 +133,8 @@ mod tests {
                 "import_drop",
                 "perf_report",
                 "write_clipboard",
-                "mcp_approval_notify"
+                "mcp_approval_notify",
+                "debug_stopped_attention"
             ])
         );
         assert_eq!(

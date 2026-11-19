@@ -197,7 +197,8 @@ pub fn install<R: Runtime>(builder: Builder<R>, router: Arc<HostRouter>) -> Buil
             crate::perf::perf_visible,
             crate::perf::perf_report,
             crate::update::window_close_cancelled,
-            crate::approval_notice::mcp_approval_notify
+            crate::approval_notice::mcp_approval_notify,
+            crate::debug_attention::debug_stopped_attention
         ]))
         .on_window_event(on_window_event)
         .on_page_load(|webview, payload| on_page_load(webview, payload.event()))
