@@ -4,6 +4,8 @@
 
 pub mod db;
 pub mod git;
+#[cfg(target_os = "macos")]
+pub mod instance;
 pub mod lsp;
 pub mod lsp_fake;
 pub mod marks;
