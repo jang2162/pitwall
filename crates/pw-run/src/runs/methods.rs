@@ -46,6 +46,22 @@ pub struct RunStartParams {
     pub cols: Option<u16>,
     #[serde(default)]
     pub rows: Option<u16>,
+    /// 첫 실행 확인(17-m6-plan M6-07 ⑥)에서 사람이 본 내용의 열쇠 — 앞 호출이 받은 [`RunConfirmRequired::hash`] 그대로. 지금 띄울
+    /// 내용이 그것과 다르면(그사이 파일이 바뀜) 띄우지 않고 다시 묻는다.
+    #[serde(default)]
+    pub confirmed: Option<String>,
+}
+
+/// `run.restart` 의 입력.
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RunRestartParams {
+    pub run_id: RunId,
+    /// [`RunStartParams::confirmed`] 와 같다 — 다시 읽은 구성이 사람이 본 적 없는 내용이면 확인을 받은 뒤 이것을 실어 다시 부른다.
+    #[serde(default)]
+    pub confirmed: Option<String>,
 }
 
 #[derive(
@@ -140,7 +156,9 @@ rpc_method! {
     /// `run.attach`, 끝은 이벤트 `run.exited`. 그 프로젝트의 창이 아닌 연결이면 permission denied, 미신뢰 프로젝트면 띄우지 않고
     /// permission denied(`data.reason = "untrusted"`), 작업 폴더가 푼 뒤에 바뀌었거나 사라졌으면 띄우지 않고 permission
     /// denied(`data.reason = "cwd_changed"`), 없는 구성은 not found, 쓸 수 없는 구성 · 프로젝트 밖 작업 폴더 · 없는
-    /// 프로필 · 읽지 못한 `env_file` 은 invalid params.
+    /// 프로필 · 읽지 못한 `env_file` 은 invalid params. 띄울 내용이 「사람이 본 구성」(M6-11)이 아니면 띄우지 않고
+    /// 7001(`data` 는 [`RunConfirmRequired`] — 첫 실행 확인, M6-07 ⑥): 창은 내용을 보이고 확인을 받은 뒤 그 `hash` 를 `confirmed` 로
+    /// 실어 다시 부른다. 확인 뒤 띄우면 그 내용이 「사람이 본 구성」 으로 기록된다.
     pub RunStart: "run.start" {
         params: RunStartParams,
         result: RunInfo,
@@ -157,9 +175,10 @@ rpc_method! {
         roles: [Owner],
     }
 
-    /// 다시 실행: 중지하고 프로세스 트리가 끝난 것을 본 뒤 같은 구성을 새 실행으로 띄운다(`restartOf` 가 앞 실행).
+    /// 다시 실행: 중지하고 프로세스 트리가 끝난 것을 본 뒤 같은 구성을 새 실행으로 띄운다(`restartOf` 가 앞 실행). 구성으로 띄운
+    /// 실행은 구성을 다시 읽으므로 `run.start` 와 같은 첫 실행 확인(7001)을 지난다 — 확인이 필요하면 앞 실행을 멈추지 않고 답한다.
     pub RunRestart: "run.restart" {
-        params: RunIdParams,
+        params: RunRestartParams,
         result: RunInfo,
         tier: Exec,
         roles: [Owner],
@@ -296,7 +315,7 @@ pub fn register(router: &mut Router, runs: Runs) {
                 .and_then(|project| stop.stop(project, &params.run_id));
             async move { result }
         })
-        .unary(RunRestart, move |ctx, params: RunIdParams| {
+        .unary(RunRestart, move |ctx, params: RunRestartParams| {
             let runs = restart.clone();
             let granted = controlling_project(ctx.scope())
                 .and_then(|project| exec_grant(ctx.scope(), project, &Launch::Process));
@@ -304,7 +323,16 @@ pub fn register(router: &mut Router, runs: Runs) {
                 .ok()
                 .and_then(|project| SeenBy::window(ctx.scope(), project, SeenPlace::Run).ok());
             let window = ctx.window().map(str::to_owned);
-            async move { runs.restart(&granted?, seen, window, &params.run_id).await }
+            async move {
+                runs.restart_confirmed(
+                    &granted?,
+                    seen,
+                    window,
+                    &params.run_id,
+                    params.confirmed.as_deref(),
+                )
+                .await
+            }
         })
         .unary(RunListMethod, move |ctx, params: RunListParams| {
             let result = if scope_may_write(ctx.scope(), &params.project_id) {

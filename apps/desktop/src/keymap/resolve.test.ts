@@ -49,6 +49,7 @@ import { createProjectActions, welcomeActions } from "../welcome/actions";
 import { appActions, toolWindowActions } from "./actions";
 import { DEFAULT_KEYMAP_TOML } from "./default-keymap";
 import { sharesKey } from "./keymap-provider";
+import { RUN_ACTION_IDS } from "../run/run-actions";
 import { resolveKeymap } from "./resolve";
 import { bundledTranslator, KO_APP, KO_PROJECT, KO_WELCOME } from "../i18n/testing";
 
@@ -289,7 +290,9 @@ const ACTION_IDS = new Set(
       activeTab: () => undefined,
       open() {},
     }),
-  ].map((a) => a.id),
+  ]
+    .map((a) => a.id)
+    .concat(RUN_ACTION_IDS),
 );
 
 /**

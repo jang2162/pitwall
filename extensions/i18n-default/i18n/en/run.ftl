@@ -77,3 +77,108 @@ run-close-human = Started by you
 run-close-agent = Started by an agent ({ $client })
 run-close-confirm = End and Close
 run-close-cancel = Cancel
+
+## Run selector · actions (M6-07, src/run/run-picker.tsx · run-actions.ts)
+
+run-picker-label = Run configuration
+run-picker-none = No configurations
+# $name: configuration name, $profile: profile name
+run-picker-with-profile = { $name } · { $profile }
+run-picker-choose = Choose a run configuration
+run-picker-search = Find configurations and tasks
+run-picker-empty = No matching configuration
+run-picker-group-configs = Configurations
+run-picker-group-detected = Detected
+run-picker-group-unusable = Cannot be used
+run-picker-group-more = More
+# $detector: detector (npm · make · gradle …), $source: file the task came from
+run-picker-detected-from = { $detector } · { $source }
+run-picker-save-detected = Save as configuration
+run-picker-edit = Edit configurations…
+run-picker-new = New configuration…
+# $detector: gradle · maven · mise
+run-picker-read-tasks = Read { $detector } tasks
+# $detector: as above
+run-picker-reread-tasks = Read { $detector } tasks again
+# $detector: as above, $message: why
+run-picker-read-failed = Could not read the { $detector } tasks: { $message }
+run-picker-run = Run
+run-picker-debug = Debug
+run-picker-debug-later = Debug (not yet available)
+run-picker-stop = Stop
+# $reason: why it cannot be used (the host's text)
+run-picker-unusable-reason = Cannot be used: { $reason }
+# $message: what the host reported
+run-picker-list-failed = Could not read the run configurations: { $message }
+# $message: what the host reported
+run-start-failed = Could not run: { $message }
+run-action-current = Run (current configuration)
+run-action-debug = Debug (current configuration)
+run-action-choose = Choose and run a configuration
+run-action-stop = Stop run
+run-action-edit = Edit run configurations
+
+## First run confirmation (M6-07 ⑥, src/run/run-confirm-dialog.tsx)
+
+# $name: configuration name
+run-confirm-title = Run { $name } for the first time
+run-confirm-body = You have not run this content before — an agent may have written it, or it changed outside Pitwall. Look at what will run before you choose.
+run-confirm-kind = Type
+run-confirm-command = Command
+run-confirm-definition = Definition that runs
+run-confirm-cwd = Working folder
+run-confirm-profile = Profile
+run-confirm-env = Environment variables
+run-confirm-env-none = None
+run-confirm-env-files = .env files
+run-confirm-masked = Looks like a secret, so the value is hidden
+run-confirm-secret-warning = The command holds a value that looks like a secret (an address with a password, or a value named like a secret). It is shown as written, not hidden — check what runs.
+run-confirm-not-recorded = This configuration's content cannot be recorded, so you are asked every time it runs.
+run-confirm-run = Run
+run-confirm-cancel = Cancel
+
+## Configuration editor (M6-07 ③, src/run/config-editor.tsx)
+
+run-editor-title-new = New run configuration
+# $name: configuration name
+run-editor-title-edit = Edit run configuration — { $name }
+run-editor-id = Id (file name)
+run-editor-id-hint = Letters, digits, - and _, up to 64
+run-editor-name = Name
+run-editor-type = Type
+run-editor-cwd = Working folder
+run-editor-cwd-hint = Relative to the project root. Empty means the root
+run-editor-env = Environment variables
+run-editor-env-name = Name
+run-editor-env-value = Value
+run-editor-env-add = Add variable
+# $name: variable name
+run-editor-env-remove = Remove { $name }
+run-editor-env-file = .env files
+run-editor-env-file-hint = Relative to the project root, one per line (applied in order)
+run-editor-list-hint = One per line
+run-editor-location = Save to
+run-editor-location-shared = Shared (.pitwall/run/<id>.toml — committed)
+run-editor-location-local = Personal (<id>.local.toml — this machine only)
+run-editor-form = Form
+run-editor-toml = View TOML
+run-editor-toml-hint = Saving writes this content (read-only)
+# $path: file to write
+run-editor-toml-path = { $path }
+# $message: why the preview failed
+run-editor-toml-failed = Could not make the preview: { $message }
+# $field: field name
+run-editor-required = Fill in { $field }
+run-editor-save = Save
+run-editor-cancel = Cancel
+run-editor-delete = Delete
+# $message: what the host reported
+run-editor-save-failed = Could not save: { $message }
+# $message: what the host reported
+run-editor-delete-failed = Could not delete: { $message }
+run-editor-kept = Values outside the form (profiles, [debug]) are kept as they are.
+
+## Settings window "Run" (M6-07 ③)
+
+run-settings-title = Run
+run-settings-body = Run configurations belong to each project. Create and edit them from the project window's title bar: the run configuration selector (▾) → "Edit configurations…".

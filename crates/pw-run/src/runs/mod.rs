@@ -35,6 +35,7 @@
 //! `runId` 를 받는 것은 모두 **그 실행의 프로젝트로 판정한다**. 다른 프로젝트의 `runId` 는 없는 실행과 같은 오류다
 //! ([`no_such_run`] — 있다는 것을 알리지 않는다). RPC 의 범위 판정은 [`methods`] 에 있다.
 
+pub mod confirm;
 pub mod exec_tool;
 pub mod log;
 pub mod methods;
@@ -166,15 +167,25 @@ pub(crate) struct Resolved {
     pub login_shell: Vec<String>,
     /// 띄울 argv(`keep_path_first` 앞 — 해시하는 값).
     pub argv: Vec<String>,
+    /// 명령 정의 본문 — 해시에 드는 값(`npm` 의 그 script, `mise-task` 는 감지가 낸 정의 — [`Runs::definition_of`]).
     pub definition: Option<String>,
+    /// 첫 실행 확인에 보일 정의 본문(`mise-task` 는 그 태스크를 정의한 파일의 글)과 그 파일.
+    pub definition_shown: Option<String>,
+    pub definition_source: Option<String>,
     /// 런타임 기준 환경의 `HOME`(런타임 원천 파일 찾기가 멈추는 자리).
     pub home: Option<PathBuf>,
 }
 
 impl Resolved {
-    /// 「사람이 본 구성」 해시(M6-11 — `crate::seen::hash`).
+    /// 「사람이 본 구성」 해시(M6-11 — `crate::seen::hash`). 창의 길(첫 실행 확인 · 기록 · 화면 저장)과 에이전트의 계획이 이 하나로
+    /// 해시한다.
     pub fn seen_hash(&self) -> Result<pw_core::registry::run_seen::SeenHash, String> {
-        crate::seen::hash(&crate::seen::SeenParts {
+        self.seen_content().map(|c| c.hash())
+    }
+
+    /// 해시의 재료(`crate::seen::content`).
+    pub fn seen_content(&self) -> Result<crate::seen::SeenContent, String> {
+        crate::seen::content(&crate::seen::SeenParts {
             key: &self.key,
             root: &self.root,
             config: &self.config,
@@ -624,6 +635,7 @@ impl Runs {
                 size,
                 restart_of: None,
                 seen,
+                confirmed: params.confirmed.clone(),
             },
         )
     }
@@ -634,25 +646,14 @@ impl Runs {
         launched_by: LaunchedBy,
         what: Relaunched,
     ) -> Result<RunInfo, RpcError> {
-        let (project, place) = self.config_place(project_id, what.worktree.as_deref())?;
-        let (key, config) = config_of(&place, &what.config_id)?;
-        let resolved = self.resolve_process(
-            &project.id,
-            &place.root,
-            &key,
-            &config,
-            what.profile.as_deref(),
-        )?;
-        let mut env = crate::shell::child_env(&resolved.run_env.apply(&resolved.runtime));
-        let mut argv = resolved.argv.clone();
-        keep_path_first(&mut argv, &mut env, &resolved.login_shell);
+        let ready = self.prepare_config(project_id, &what, what.seen.is_some())?;
         let new = NewRun {
-            project_id: project.id.clone(),
-            config: key.clone(),
-            name: config.name.clone(),
+            project_id: ready.project_id,
+            config: ready.key.clone(),
+            name: ready.name,
             launched_by,
             worktree: what.worktree.clone(),
-            cwd: Some(resolved.cwd.clone()),
+            cwd: Some(ready.cwd),
             profile: what.profile.clone(),
             relaunch: Relaunch::Config {
                 config_id: what.config_id,
@@ -662,16 +663,113 @@ impl Runs {
             size: what.size,
             restart_of: what.restart_of,
         };
-        let info = self.start_process(new, argv, env)?;
+        let info = self.start_process(new, ready.argv, ready.env)?;
         if let Some(by) = what.seen {
-            match resolved.seen_hash() {
-                Ok(hash) => self.record_seen(&by, &key, hash),
+            match ready.seen_hash {
+                Ok(hash) => self.record_seen(&by, &ready.key, hash),
                 Err(why) => {
-                    tracing::debug!(target: "pw_run", key, %why, "the run started but its seen hash could not be made");
+                    tracing::debug!(target: "pw_run", key = %ready.key, %why, "the run started but its seen hash could not be made");
                 }
             }
         }
         Ok(info)
+    }
+
+    /// 창의 길의 풀기: 에이전트의 계획과 같은 [`Self::resolve_process`] 로 풀고(「사람이 본 구성」 해시가 하나다 — M6-11), `check` 면 첫
+    /// 실행 확인(M6-07 ⑥ — `confirm` 머리 주석)을 지난다. 띄우지 않는다.
+    fn prepare_config(
+        &self,
+        project_id: &str,
+        what: &Relaunched,
+        check: bool,
+    ) -> Result<Prepared, RpcError> {
+        let host = self.inner.host()?;
+        let (project, place) = self.config_place(project_id, what.worktree.as_deref())?;
+        let (key, config) = config_of(&place, &what.config_id)?;
+        let resolved = self.resolve_process(
+            &project.id,
+            &place.root,
+            &key,
+            &config,
+            what.profile.as_deref(),
+        )?;
+        // 런타임 환경 · 로그인 셸 환경을 읽는 동안 작업 폴더가 사라졌거나 바뀌었으면 묻기 전에 거절한다 — 띄우기 앞의 재검사
+        // (`start_process`)와 같은 까닭이다.
+        let cwd = &resolved.cwd;
+        if !(cwd.is_dir() && normalize(cwd).ok().as_deref() == Some(cwd.as_path())) {
+            return Err(cwd_changed(
+                "the run's working directory changed while its environment loaded".to_owned(),
+            ));
+        }
+        let content = resolved.seen_content();
+        // 편집 화면이 보이는 것(구성 파일 하나)이 해시의 전부인가 — `.env` · 정의 본문 · 런타임 원천 파일이 들면 아니다(리뷰 F2).
+        let config_only = matches!(&content, Ok(c) if c.env_files.is_empty() && c.definition.is_none() && c.runtime_files.is_empty());
+        let seen_hash = content.map(|c| c.hash());
+        if check {
+            let launching = confirm::Launching {
+                resolved: &resolved,
+            };
+            let (token, saw) = match &seen_hash {
+                Ok(hash) => (
+                    hash.to_string(),
+                    host.projects.human_saw(&project.id, &key, hash),
+                ),
+                Err(_) => (launching.once_token(), false),
+            };
+            if !saw && what.confirmed.as_deref() != Some(token.as_str()) {
+                return Err(confirm::confirm_required(
+                    token,
+                    launching.shown(seen_hash.is_ok()),
+                ));
+            }
+        }
+        let mut env = crate::shell::child_env(&resolved.run_env.apply(&resolved.runtime));
+        let mut argv = resolved.argv.clone();
+        keep_path_first(&mut argv, &mut env, &resolved.login_shell);
+        Ok(Prepared {
+            project_id: project.id.clone(),
+            key,
+            name: config.name.clone(),
+            cwd: resolved.cwd.clone(),
+            argv,
+            env,
+            seen_hash,
+            config_only,
+        })
+    }
+
+    /// 구성 편집 화면이 저장한 구성의 「사람이 본 구성」 해시(17-m6-plan M6-07 ④ — `SeenPlace::Save`): 창에서 그 구성을 **프로필
+    /// 없이** 띄울 때와 같은 풀기 · 같은 해시다(기록은 열쇠마다 하나). 띄우지도 묻지도 않는다. 미신뢰 · 쓸 수 없는 구성 · 해시를 낼
+    /// 수 없는 구성은 그 까닭(부른 쪽은 기록하지 않는다).
+    ///
+    /// **편집 화면이 보인 것이 해시의 전부일 때만** 해시를 준다(리뷰 F2 — 결정 D68 「사람이 본 내용」): 해시에 `.env` 파일 · 정의
+    /// 본문(npm script · mise task) · 런타임 원천 파일이 들면 그 내용은 편집 화면에 없으므로 기록하지 않는다 — 첫 실행의 확인 화면
+    /// (그 내용을 모두 보이는 곳)이 기록한다.
+    pub fn saved_seen_hash(
+        &self,
+        project_id: &str,
+        worktree: Option<&str>,
+        config_id: &str,
+    ) -> Result<pw_core::registry::run_seen::SeenHash, String> {
+        let what = Relaunched {
+            config_id: config_id.to_owned(),
+            profile: None,
+            worktree: worktree.map(str::to_owned),
+            size: DEFAULT_SIZE,
+            restart_of: None,
+            seen: None,
+            confirmed: None,
+        };
+        let ready = self
+            .prepare_config(project_id, &what, false)
+            .map_err(|e| e.message)?;
+        if !ready.config_only {
+            return Err(
+                "the configuration draws on content the editor does not show (.env files, a command definition or runtime files)"
+                    .to_owned(),
+            );
+        }
+        ready.seen_hash
     }
 
     /// 프로젝트(레지스트리에 있고 신뢰한 것)와 그 워크트리의 구성 자리. 미신뢰 프로젝트는 구성을 읽기 전에 거절한다(M6-P6).
@@ -725,8 +823,9 @@ impl Runs {
             },
         )
         .map_err(RpcError::invalid_params)?;
-        // 정의 본문(npm script)은 띄우기 전에 읽는다 — 띄운 값으로 해시한다(`seen` 머리 주석 「다시 읽지 않는다」, 리뷰 R7).
-        let definition = npm_definition(key, config, root, &cwd);
+        // 정의 본문(npm script · mise task)은 띄우기 전에 읽는다 — 띄운 값으로 해시한다(`seen` 머리 주석 「다시 읽지 않는다」, 리뷰 R7 ·
+        // M6-07 리뷰 F1).
+        let defined = self.definition_of(project_id, key, config, root, &cwd);
         let home = self
             .inner
             .runtime
@@ -744,9 +843,54 @@ impl Runs {
             runtime: runtime.env.clone(),
             login_shell,
             argv,
-            definition,
+            definition: defined.as_ref().map(|d| d.hashed.clone()),
+            definition_shown: defined.as_ref().map(|d| d.shown.clone()),
+            definition_source: defined.and_then(|d| d.source),
             home,
         })
+    }
+
+    /// 명령 정의 본문(「사람이 본 구성」 해시와 첫 실행 확인 — M6-11 · M6-07 ⑥, M6-07 리뷰 F1): `npm` 은 `package.json` 의 그
+    /// script, `mise-task` 는 M6-05 의 감지가 낸 정의(그 태스크를 정의한 파일 전체의 sha256 과 이름 — `detect::mise`)이고 확인
+    /// 화면에는 그 파일의 글을 보인다. 읽지 못하면 `None`(해시를 못 내 「본 적 없음」 — 묻는다).
+    fn definition_of(
+        &self,
+        project_id: &str,
+        key: &str,
+        config: &crate::config::RunConfig,
+        root: &Path,
+        cwd: &Path,
+    ) -> Option<confirm::Defined> {
+        match &config.kind {
+            crate::config::RunKindConfig::Npm { .. } => {
+                npm_definition(key, config, root, cwd).map(|body| confirm::Defined {
+                    hashed: body.clone(),
+                    shown: body,
+                    source: None,
+                })
+            }
+            crate::config::RunKindConfig::MiseTask { task } => {
+                let host = self.inner.host().ok()?;
+                let projects = host.projects.clone();
+                let runtime = Arc::clone(&self.inner.runtime);
+                let exec = crate::detect::exec::TrustedExec::new(
+                    project_id,
+                    Arc::new(move |id| projects.is_trusted(id)),
+                    Arc::new(move |project, dir| runtime.env(project, dir).env.clone()),
+                    crate::detect::exec::AUTOMATIC,
+                );
+                let only: [&dyn crate::detect::TaskDetector; 1] =
+                    [&crate::detect::mise::MiseDetector];
+                let detection = crate::detect::detect_with(&only, root, &exec);
+                let found = detection.get(&crate::detect::key(crate::detect::mise::ID, task))?;
+                Some(confirm::Defined {
+                    hashed: found.definition.clone(),
+                    shown: confirm::source_text(&found.source),
+                    source: Some(found.source.display().to_string()),
+                })
+            }
+            _ => None,
+        }
     }
 
     /// 창에서 띄운 구성을 「사람이 본 구성」 으로 기록한다(17-m6-plan M6-02 ⑧ · M6-11): 띄운 값 그대로(argv · 작업 폴더 · M6-03 이 푼
@@ -1039,7 +1183,7 @@ impl Runs {
 
     /// 창의 「다시 실행」: 끝난 것을 본 뒤(프로세스 트리까지) 같은 것을 새 실행으로 띄운다. 구성으로 띄운 실행은 구성을 다시
     /// 읽고, 에이전트 허가로 띄운 실행은 그 실행 내용을 다시 띄운다(작업 폴더는 다시 본다). 새 실행은 `restartOf` 로 앞 실행을
-    /// 가리킨다. `grant` 는 그 실행의 프로젝트로 받은 창 허가다.
+    /// 가리킨다. `grant` 는 그 실행의 프로젝트로 받은 창 허가다. 확인 열쇠 없이 부른다([`Self::restart_confirmed`]).
     pub async fn restart(
         &self,
         grant: &ExecGrant,
@@ -1047,7 +1191,46 @@ impl Runs {
         window: Option<String>,
         run_id: &str,
     ) -> Result<RunInfo, RpcError> {
+        self.restart_confirmed(grant, seen, window, run_id, None)
+            .await
+    }
+
+    /// [`Self::restart`] 에 첫 실행 확인의 열쇠(`run.restart { confirmed }` — M6-07 ⑥)를 더한 것. 구성으로 띄운 실행을 창의 증거로
+    /// 다시 띄울 때는 **앞 실행을 멈추기 전에** 다시 읽은 구성이 확인을 지나는지 본다 — 확인이 필요하면 앞 실행은 그대로 돈다.
+    pub async fn restart_confirmed(
+        &self,
+        grant: &ExecGrant,
+        seen: Option<SeenBy>,
+        window: Option<String>,
+        run_id: &str,
+        confirmed: Option<&str>,
+    ) -> Result<RunInfo, RpcError> {
         let run = self.find(grant.project_id(), run_id)?;
+        if seen.is_some()
+            && let Relaunch::Config {
+                config_id,
+                profile,
+                worktree,
+            } = &run.relaunch
+        {
+            let this = self.clone();
+            let project = run.project_id.clone();
+            let what = Relaunched {
+                config_id: config_id.clone(),
+                profile: profile.clone(),
+                worktree: worktree.clone(),
+                size: DEFAULT_SIZE,
+                restart_of: None,
+                seen: None,
+                confirmed: confirmed.map(str::to_owned),
+            };
+            tokio::task::spawn_blocking(move || {
+                this.prepare_config(&project, &what, true).map(|_| ())
+            })
+            .await
+            .map_err(|e| RpcError::internal(e.to_string()))??;
+        }
+        let confirmed = confirmed.map(str::to_owned);
         if matches!(run.relaunch, Relaunch::None) {
             return Err(RpcError::invalid_params(format!(
                 "run `{run_id}` cannot be restarted"
@@ -1073,6 +1256,7 @@ impl Runs {
                     size,
                     restart_of: Some(run.id.clone()),
                     seen,
+                    confirmed,
                 },
             ),
             Relaunch::Spec(spec) => this.start_spec(
@@ -1163,8 +1347,24 @@ struct Relaunched {
     worktree: Option<String>,
     size: (u16, u16),
     restart_of: Option<RunId>,
-    /// 사람이 본 구성으로 기록할 증거(창의 연결). 에이전트 허가로 다시 띄우는 길에는 없다.
+    /// 사람이 본 구성으로 기록할 증거(창의 연결). 에이전트 허가로 다시 띄우는 길에는 없다. 있으면 첫 실행 확인을 지난다.
     seen: Option<SeenBy>,
+    /// 첫 실행 확인의 열쇠(`confirm::RunConfirmRequired::hash`).
+    confirmed: Option<String>,
+}
+
+/// [`Runs::prepare_config`] 가 푼 것.
+struct Prepared {
+    project_id: String,
+    key: String,
+    name: String,
+    cwd: PathBuf,
+    argv: Vec<String>,
+    env: Vec<(OsString, OsString)>,
+    /// 「사람이 본 구성」 해시(또는 낼 수 없는 까닭).
+    seen_hash: Result<pw_core::registry::run_seen::SeenHash, String>,
+    /// 해시의 재료가 구성 파일 하나뿐인가(`.env` · 정의 본문 · 런타임 원천 파일이 없다) — 화면 저장이 기록해도 되는가(리뷰 F2).
+    config_only: bool,
 }
 
 impl Inner {

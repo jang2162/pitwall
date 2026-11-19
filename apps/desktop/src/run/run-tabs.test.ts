@@ -230,7 +230,10 @@ describe("run tabs", () => {
     host.event(TOPIC_EXITED, runInfo({ runId: "r1", state: "exited" }));
     const list = tabs.store.getState().tabs;
     expect(list.map((t) => [t.key, t.run.runId])).toEqual([["r1", "r2"]]);
-    expect(host.calls).toContainEqual({ method: "run.restart", params: { runId: "r1" } });
+    expect(host.calls).toContainEqual({
+      method: "run.restart",
+      params: { runId: "r1", confirmed: null },
+    });
   });
 
   it("restore a reloaded window's tabs from the list and replay their output from 0", async () => {

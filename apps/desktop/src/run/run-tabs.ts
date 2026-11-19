@@ -21,6 +21,7 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import type { TerminalScreen } from "../terminal/terminal-session";
 import { xtermDeps } from "../terminal/terminal-tabs";
 import { XtermView } from "../terminal/xterm-view";
+import { withRunConfirm } from "./run-confirm";
 import { LevelHighlighter } from "./run-levels";
 import { RunStream } from "./run-stream";
 
@@ -371,7 +372,12 @@ export class RunTabs {
     const deps = this.deps;
     const tab = this.tab(key);
     if (!deps || !tab) return;
-    this.upsert(await deps.client.call("run.restart", { runId: tab.run.runId }));
+    // 구성을 다시 읽어 띄우므로 첫 실행 확인(M6-07 ⑥ — run-confirm.ts)을 지난다. 취소하면 앞 실행은 그대로 돈다.
+    const runId = tab.run.runId;
+    const next = await withRunConfirm((confirmed) =>
+      deps.client.call("run.restart", { runId, confirmed }),
+    );
+    if (next) this.upsert(next);
   }
 
   setScrollLock(key: string, on: boolean): void {

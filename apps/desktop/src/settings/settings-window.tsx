@@ -6,6 +6,7 @@ import { useState } from "react";
 
 import { useI18n } from "../i18n/i18n-provider";
 import { selectedLanguage } from "../i18n/localization";
+import { RunSettingsSection } from "../run/run-settings-section";
 import { ThemeSwitcher } from "../theme/theme-switcher";
 import { ToolsSection } from "../tools/tools-section";
 import type { SettingsNative } from "./native";
@@ -31,6 +32,9 @@ export function SettingsWindow({ native }: { native: SettingsNative }) {
       </div>
       <div className="mt-6">
         <DbSection />
+      </div>
+      <div className="mt-6">
+        <RunSettingsSection />
       </div>
       <div className="mt-6">
         <McpSection native={native} />

@@ -126,6 +126,8 @@ describe("default keymap overlaps", () => {
           ],
         ],
         // 툴 윈도우의 「에디터로 포커스」 와 에디터의 커서 하나로(M4-14 — 글자 영역에 포커스).
+        // 실행 중지(M6-07)와 SQL 콘솔의 쿼리 취소(M3-15) — 10-ui §4.2: 콘솔 안의 그 키는 쿼리 취소다.
+        ["⌘F2", ["run.stop [!dbConsoleFocus]", "db.console.cancel [dbConsoleFocus]"]],
         [
           "⎋",
           ["editor.focus [toolWindowFocus && !inputFocus]", "editor.singleCursor [editorFocus]"],
@@ -171,6 +173,8 @@ describe("default keymap overlaps", () => {
             "db.tableData.submit [dbTableDataFocus]",
           ],
         ],
+        // 실행 중지(M6-07)와 SQL 콘솔의 쿼리 취소(M3-15) — 10-ui §4.2: 콘솔 안의 그 키는 쿼리 취소다.
+        ["Ctrl+F2", ["run.stop [!dbConsoleFocus]", "db.console.cancel [dbConsoleFocus]"]],
         [
           "Esc",
           ["editor.focus [toolWindowFocus && !inputFocus]", "editor.singleCursor [editorFocus]"],
@@ -205,6 +209,8 @@ describe("default keymap overlaps", () => {
             "db.tableData.submit [dbTableDataFocus]",
           ],
         ],
+        // 실행 중지(M6-07)와 SQL 콘솔의 쿼리 취소(M3-15) — 10-ui §4.2: 콘솔 안의 그 키는 쿼리 취소다.
+        ["Ctrl+F2", ["run.stop [!dbConsoleFocus]", "db.console.cancel [dbConsoleFocus]"]],
         [
           "Esc",
           ["editor.focus [toolWindowFocus && !inputFocus]", "editor.singleCursor [editorFocus]"],

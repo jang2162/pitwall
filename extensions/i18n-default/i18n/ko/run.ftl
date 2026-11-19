@@ -73,3 +73,108 @@ run-close-human = 사람이 띄움
 run-close-agent = 에이전트가 띄움({ $client })
 run-close-confirm = 끝내고 닫기
 run-close-cancel = 취소
+
+## 실행 선택기 · 액션(M6-07, src/run/run-picker.tsx · run-actions.ts)
+
+run-picker-label = 실행 구성
+run-picker-none = 구성 없음
+# $name: 구성 이름, $profile: 프로필 이름
+run-picker-with-profile = { $name } · { $profile }
+run-picker-choose = 실행 구성 고르기
+run-picker-search = 구성 · 태스크 찾기
+run-picker-empty = 맞는 구성이 없다
+run-picker-group-configs = 구성
+run-picker-group-detected = 감지됨
+run-picker-group-unusable = 쓸 수 없음
+run-picker-group-more = 더 보기
+# $detector: 감지기(npm · make · gradle …), $source: 감지 출처 파일 이름
+run-picker-detected-from = { $detector } · { $source }
+run-picker-save-detected = 구성으로 저장
+run-picker-edit = 구성 편집…
+run-picker-new = 새 구성…
+# $detector: gradle · maven · mise
+run-picker-read-tasks = { $detector } 태스크 읽기
+# $detector: 위와 같다
+run-picker-reread-tasks = { $detector } 태스크 다시 읽기
+# $detector: 위와 같다, $message: 까닭
+run-picker-read-failed = { $detector } 태스크를 읽지 못했다: { $message }
+run-picker-run = 실행
+run-picker-debug = 디버그
+run-picker-debug-later = 디버그(아직 없다)
+run-picker-stop = 중지
+# $reason: 쓸 수 없는 까닭(Host 의 글)
+run-picker-unusable-reason = 쓸 수 없음: { $reason }
+# $message: Host 가 알린 까닭
+run-picker-list-failed = 실행 구성을 읽지 못했다: { $message }
+# $message: Host 가 알린 까닭
+run-start-failed = 실행하지 못했다: { $message }
+run-action-current = 실행(현재 구성)
+run-action-debug = 디버그(현재 구성)
+run-action-choose = 실행 구성 골라 실행
+run-action-stop = 실행 중지
+run-action-edit = 실행 구성 편집
+
+## 첫 실행 확인(M6-07 ⑥, src/run/run-confirm-dialog.tsx)
+
+# $name: 구성 이름
+run-confirm-title = { $name } 을(를) 처음 실행한다
+run-confirm-body = 이 내용으로 실행한 적이 없다 — 에이전트가 쓰거나 밖에서 바뀐 구성일 수 있다. 실행될 내용을 보고 고른다.
+run-confirm-kind = 종류
+run-confirm-command = 명령
+run-confirm-definition = 실행할 정의
+run-confirm-cwd = 작업 폴더
+run-confirm-profile = 프로필
+run-confirm-env = 환경 변수
+run-confirm-env-none = 없음
+run-confirm-env-files = .env 파일
+run-confirm-masked = 비밀로 보여 값을 가렸다
+run-confirm-secret-warning = 명령에 비밀처럼 보이는 값(비밀번호가 든 주소 · 비밀 이름의 값)이 있다. 가리지 않고 그대로 보였다 — 무엇이 도는지 확인한다.
+run-confirm-not-recorded = 이 구성은 내용을 기록할 수 없어 실행할 때마다 묻는다.
+run-confirm-run = 실행
+run-confirm-cancel = 취소
+
+## 구성 편집(M6-07 ③, src/run/config-editor.tsx)
+
+run-editor-title-new = 새 실행 구성
+# $name: 구성 이름
+run-editor-title-edit = 실행 구성 편집 — { $name }
+run-editor-id = id(파일 이름)
+run-editor-id-hint = 영문자 · 숫자 · - · _, 64자까지
+run-editor-name = 이름
+run-editor-type = 종류
+run-editor-cwd = 작업 폴더
+run-editor-cwd-hint = 프로젝트 루트 기준. 비우면 루트
+run-editor-env = 환경 변수
+run-editor-env-name = 이름
+run-editor-env-value = 값
+run-editor-env-add = 변수 더하기
+# $name: 변수 이름
+run-editor-env-remove = { $name } 빼기
+run-editor-env-file = .env 파일
+run-editor-env-file-hint = 프로젝트 루트 기준, 한 줄에 하나(차례대로 얹는다)
+run-editor-list-hint = 한 줄에 하나
+run-editor-location = 저장 위치
+run-editor-location-shared = 공유(.pitwall/run/<id>.toml — 커밋된다)
+run-editor-location-local = 개인(<id>.local.toml — 이 기기만)
+run-editor-form = 폼
+run-editor-toml = TOML 보기
+run-editor-toml-hint = 저장하면 이 내용이 된다(읽기 전용)
+# $path: 쓸 파일
+run-editor-toml-path = { $path }
+# $message: 미리보기를 만들지 못한 까닭
+run-editor-toml-failed = 미리보기를 만들지 못했다: { $message }
+# $field: 칸 이름
+run-editor-required = { $field } 을(를) 채운다
+run-editor-save = 저장
+run-editor-cancel = 취소
+run-editor-delete = 지우기
+# $message: Host 가 알린 까닭
+run-editor-save-failed = 저장하지 못했다: { $message }
+# $message: Host 가 알린 까닭
+run-editor-delete-failed = 지우지 못했다: { $message }
+run-editor-kept = 프로필 · [debug] 같은 폼 밖의 값은 그대로 둔다.
+
+## 설정 창 「실행」(M6-07 ③)
+
+run-settings-title = 실행
+run-settings-body = 실행 구성은 프로젝트마다 다르다. 프로젝트 창 타이틀바의 실행 구성 선택(▾) → 「구성 편집…」 에서 만들고 고친다.

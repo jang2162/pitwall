@@ -124,6 +124,35 @@ mac = "cmd+alt+e"
 win = "ctrl+alt+e"
 linux = "ctrl+alt+e"
 
+# 실행 · 디버그(10-ui §4.2 「실행 · 디버그」, 17-m6-plan M6-07 — src/run/run-actions.ts). 프로젝트 창에만 등록된다. `debug.current` 는
+# 디버그 화면(M6-18) 전에는 꺼져 있어 키를 가져가지 않는다. 중지(⌘F2)는 DB 콘솔 밖에서만 — 콘솔 안의 ⌘F2 는 쿼리 취소다
+# (`db.console.cancel`, 아래 DB 묶음). 터미널 · 실행 콘솔에 포커스가 있으면 Ctrl+R · Ctrl+D 는 셸로 간다(terminal-keys.ts).
+
+[[bindings]]
+action = "run.current"
+mac = "ctrl+r"
+win = "shift+f10"
+linux = "shift+f10"
+
+[[bindings]]
+action = "debug.current"
+mac = "ctrl+d"
+win = "shift+f9"
+linux = "shift+f9"
+
+[[bindings]]
+action = "run.choose"
+mac = "ctrl+alt+r"
+win = "alt+shift+f10"
+linux = "alt+shift+f10"
+
+[[bindings]]
+action = "run.stop"
+mac = "cmd+f2"
+win = "ctrl+f2"
+linux = "ctrl+f2"
+when = "!dbConsoleFocus"
+
 # 툴 윈도우 · 창
 
 [[bindings]]

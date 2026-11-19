@@ -368,6 +368,8 @@ fn local_host_parts(
                 projects: projects.clone(),
                 bus: host.bus().clone(),
             });
+            // 화면에서 저장한 실행 구성은 창의 실행과 같은 풀기로 「사람이 본 구성」 이 된다(M6-07 ④).
+            run_configs.attach_runs(runs.clone());
             // 디버그는 실행 구성 · 레지스트리 · 앱 데이터(`breakpoints.json`)와 이벤트 버스를 쓴다.
             debugger.attach(pw_debug::HostParts {
                 paths: config.paths.clone(),

@@ -11,7 +11,9 @@ use std::sync::{Arc, OnceLock};
 
 use pw_core::bus::Scope;
 use pw_core::config::AppPaths;
+use pw_core::config::LayerOrigin;
 use pw_core::registry::exec::{Launch, exec_grant};
+use pw_core::registry::run_seen::{SeenBy, SeenPlace};
 use pw_core::registry::state::{PROJECTS_DIR, scope_may_write, valid_id};
 use pw_core::registry::{Registry, RegistryError};
 use pw_core::task::{TaskProgress, TaskSpawner, TaskStatus};
@@ -118,6 +120,20 @@ pub struct RunConfigSaved {
     pub changed: bool,
 }
 
+/// `run.config.preview` 의 답 — 저장하면 그 파일이 될 글(구성 편집 화면의 「TOML 보기」, M6-07 ③).
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RunConfigPreview {
+    /// 쓸 파일.
+    pub path: String,
+    /// 저장하면 그 파일의 글(주석 · 모르는 키를 지킨 `plan` 의 결과 그대로).
+    pub text: String,
+    /// 지금 그 파일의 글. 없는 파일이면 `null`.
+    pub before: Option<String>,
+}
+
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
@@ -159,6 +175,15 @@ rpc_method! {
         params: RunConfigSaveParams,
         result: RunConfigSaved,
         tier: Write,
+        roles: [Owner],
+    }
+
+    /// `run.config.save` 가 쓸 글을 쓰지 않고 돌려준다(구성 편집 화면의 「TOML 보기」 — 저장과 같은 `plan`). 그 프로젝트 창의
+    /// 연결만. 거절은 `run.config.save` 와 같다.
+    pub RunConfigPreviewMethod: "run.config.preview" {
+        params: RunConfigSaveParams,
+        result: RunConfigPreview,
+        tier: Read,
         roles: [Owner],
     }
 
@@ -205,6 +230,9 @@ pub struct RunConfigs {
     seen: Arc<Seen>,
     /// 프로세스를 띄우는 감지의 자리. 붙기 전에는 그 감지기들이 아무것도 띄우지 않는다([`NoExec`]).
     detect: OnceLock<DetectHost>,
+    /// 실행 관리자 — 화면에서 저장한 구성의 「사람이 본 구성」 해시를 창의 실행과 같은 풀기로 낸다(M6-07 ④). 붙기 전에는 기록하지
+    /// 않는다.
+    runs: OnceLock<crate::runs::Runs>,
 }
 
 /// 그 프로젝트의 신뢰 판정을 지나는 감지 실행기. 캐시 폴더는 `$DATA/projects/<id>/`.
@@ -240,6 +268,11 @@ impl RunConfigs {
     /// 두 번째부터는 무시한다.
     pub fn attach(&self, parts: HostParts) {
         let _ = self.host.set(parts);
+    }
+
+    /// 실행 관리자를 붙인다(저장한 구성의 「사람이 본 구성」 기록 — [`Self::save`]). 두 번째부터는 무시한다.
+    pub fn attach_runs(&self, runs: crate::runs::Runs) {
+        let _ = self.runs.set(runs);
     }
 
     /// 감지 기억 — [`detect::follow_files`] 에 넘긴다.
@@ -323,7 +356,7 @@ impl RunConfigs {
                 .map(|c| RunConfigEntry {
                     id: c.id,
                     config: c.config,
-                    layers: c.layers,
+                    layers: shown_layers(&place, c.layers),
                 })
                 .collect(),
             unusable: set.unusable,
@@ -427,6 +460,23 @@ impl RunConfigs {
         })
     }
 
+    /// `run.config.preview`.
+    pub fn preview(
+        &self,
+        scope: &ConnectionScope,
+        params: &RunConfigSaveParams,
+    ) -> Result<RunConfigPreview, RpcError> {
+        require_project_window(scope, &params.project_id)?;
+        check_id(&params.id)?;
+        let place = self.place(&params.project_id, params.worktree.as_deref())?;
+        let edit = plan(&place, &params.id, params.location, Some(&params.config))?;
+        Ok(RunConfigPreview {
+            path: edit.path.display().to_string(),
+            text: edit.after.unwrap_or_default(),
+            before: edit.before,
+        })
+    }
+
     /// `run.config.save`.
     pub fn save(
         &self,
@@ -447,10 +497,37 @@ impl RunConfigs {
         }
         let edit = plan(&place, &params.id, params.location, Some(&params.config))?;
         super::write::apply(&place, &edit)?;
+        self.record_saved(scope, params);
         Ok(RunConfigSaved {
             path: edit.path.display().to_string(),
             changed: edit.changes(),
         })
+    }
+
+    /// 화면에서 저장한 구성을 「사람이 본 구성」 으로 기록한다(17-m6-plan M6-07 ④ — 결정 M6-D6, `SeenPlace::Save`): 저장 뒤 그
+    /// 구성을 **프로필 없이** 창에서 띄울 때와 같은 해시([`crate::runs::Runs::saved_seen_hash`]). 그 프로젝트 창의 연결만 기록 증거를
+    /// 만든다(`SeenBy::window`). 해시를 내지 못하거나(미신뢰 · 정의 본문 없음) 기록하지 못하면(`readOnly` · `memory`) 건너뛴다 —
+    /// 저장을 막지 않고, 처음 띄울 때 첫 실행 확인이 묻는다.
+    fn record_saved(&self, scope: &ConnectionScope, params: &RunConfigSaveParams) {
+        let (Some(runs), Ok(host)) = (self.runs.get(), self.host()) else {
+            return;
+        };
+        let Ok(by) = SeenBy::window(scope, &params.project_id, SeenPlace::Save) else {
+            return;
+        };
+        match runs.saved_seen_hash(&params.project_id, params.worktree.as_deref(), &params.id) {
+            Ok(hash) => {
+                if let Err(e) = host
+                    .projects
+                    .record_run_seen(&by, &[(params.id.clone(), hash)])
+                {
+                    tracing::debug!(target: "pw_run", key = %params.id, error = %e, "the saved run config was not recorded as seen");
+                }
+            }
+            Err(why) => {
+                tracing::debug!(target: "pw_run", key = %params.id, %why, "the saved run config has no seen hash");
+            }
+        }
     }
 
     /// `run.config.delete`.
@@ -470,12 +547,21 @@ impl RunConfigs {
             Some(location) => vec![location],
             None => vec![RunConfigLocation::Shared, RunConfigLocation::Local],
         };
-        let mut paths = Vec::new();
+        // 지울 파일마다 계획하고, git 이 추적하거나 받아 온 개인 파일이 하나라도 있으면 아무것도 지우지 않는다(M6-07 ⑤ — 지우면 커밋된
+        // 파일이 git 에 deleted 로 남는다. 공유 파일만 먼저 지우고 멈추지 않게 지우기 전에 다 본다).
+        let mut edits = Vec::new();
         for location in locations {
             if !exists(&file_of(&place, &params.id, location)) {
                 continue;
             }
             let edit = plan(&place, &params.id, location, None)?;
+            if location == RunConfigLocation::Local {
+                super::tool::refuse_tracked_file(&place, &edit.path)?;
+            }
+            edits.push(edit);
+        }
+        let mut paths = Vec::new();
+        for edit in edits {
             super::write::apply(&place, &edit)?;
             paths.push(edit.path.display().to_string());
         }
@@ -484,6 +570,23 @@ impl RunConfigs {
         }
         Ok(RunConfigDeleted { paths })
     }
+}
+
+/// 구성 편집 화면에 보일 레이어(M6-07 ⑤): git 이 추적하거나 받아 온(또는 판정 못 한) `*.local.toml` 은 개인 레이어가 아니라
+/// 공유로 보인다 — 설정 계층(`ConfigSource`)이 그런 파일을 공유 레이어로 읽는 것과 같다(`LayerOrigin::Local` 의 문서).
+fn shown_layers(place: &RunConfigPlace, layers: Vec<RunConfigLayer>) -> Vec<RunConfigLayer> {
+    layers
+        .into_iter()
+        .map(|mut layer| {
+            if layer.origin == LayerOrigin::Local
+                && !super::tool::local_tracking(place, Path::new(&layer.path))
+                    .is_ok_and(|t| t.is_personal())
+            {
+                layer.origin = LayerOrigin::Shared;
+            }
+            layer
+        })
+        .collect()
 }
 
 /// 감지된 태스크 → 목록의 항목.
@@ -569,6 +672,7 @@ async fn blocking<T: Send + 'static>(
 
 /// 핸들러를 붙인다.
 pub fn register(router: &mut Router, configs: Arc<RunConfigs>) {
+    let preview = Arc::clone(&configs);
     let (list, save, delete, refresh) = (
         Arc::clone(&configs),
         Arc::clone(&configs),
@@ -581,6 +685,13 @@ pub fn register(router: &mut Router, configs: Arc<RunConfigs>) {
             move |ctx, params: RunConfigListParams| {
                 let (c, scope) = (Arc::clone(&list), ctx.scope().clone());
                 blocking(move || c.list(&scope, &params))
+            },
+        )
+        .unary(
+            RunConfigPreviewMethod,
+            move |ctx, params: RunConfigSaveParams| {
+                let (c, scope) = (Arc::clone(&preview), ctx.scope().clone());
+                blocking(move || c.preview(&scope, &params))
             },
         )
         .unary(RunConfigSave, move |ctx, params: RunConfigSaveParams| {

@@ -1159,6 +1159,11 @@ export type UnaryMethods = {
 	 */
 	"run.config.list": { params: RunConfigListParams; result: RunConfigList };
 	/**
+	 * `run.config.save` 가 쓸 글을 쓰지 않고 돌려준다(구성 편집 화면의 「TOML 보기」 — 저장과 같은 `plan`). 그 프로젝트 창의
+	 * 연결만. 거절은 `run.config.save` 와 같다.
+	 */
+	"run.config.preview": { params: RunConfigSaveParams; result: RunConfigPreview };
+	/**
 	 * 구성 파일(`location` 의 것 하나)을 만들거나 고친다 — 주석과 모르는 키는 그대로 두고, 개인 파일에 쓰면 공유 파일에만 있는
 	 * 키는 그대로 비친다. 그 프로젝트 창의 연결만(아니면 permission denied). 구성이 검증(`cwd` 가 루트 안 등)을 지나지 못하거나
 	 * id 가 틀렸으면 invalid params, 대소문자만 다른 구성이 있거나 · 파일이 TOML 이 아니거나 · 앱보다 새 `schema` 거나 · 저장소 안의
@@ -1178,9 +1183,10 @@ export type UnaryMethods = {
 	 */
 	"run.resize": { params: RunResizeParams; result: null };
 	/**
-	 * 다시 실행: 중지하고 프로세스 트리가 끝난 것을 본 뒤 같은 구성을 새 실행으로 띄운다(`restartOf` 가 앞 실행).
+	 * 다시 실행: 중지하고 프로세스 트리가 끝난 것을 본 뒤 같은 구성을 새 실행으로 띄운다(`restartOf` 가 앞 실행). 구성으로 띄운
+	 * 실행은 구성을 다시 읽으므로 `run.start` 와 같은 첫 실행 확인(7001)을 지난다 — 확인이 필요하면 앞 실행을 멈추지 않고 답한다.
 	 */
-	"run.restart": { params: RunIdParams; result: RunInfo };
+	"run.restart": { params: RunRestartParams; result: RunInfo };
 	/**
 	 * `sql` 실행 구성 하나를 돌린다 — 프로세스를 띄우지 않고 그 DB 연결에서(실행 관리자의 실행 하나: 출력은 `run.attach`, 끝은
 	 * `run.exited`, 중지는 `run.stop`). 파일들은 지금 읽어 분류한다. 그 프로젝트의 창이 아닌 연결 · 미신뢰 프로젝트(연결하지
@@ -1194,7 +1200,9 @@ export type UnaryMethods = {
 	 * `run.attach`, 끝은 이벤트 `run.exited`. 그 프로젝트의 창이 아닌 연결이면 permission denied, 미신뢰 프로젝트면 띄우지 않고
 	 * permission denied(`data.reason = "untrusted"`), 작업 폴더가 푼 뒤에 바뀌었거나 사라졌으면 띄우지 않고 permission
 	 * denied(`data.reason = "cwd_changed"`), 없는 구성은 not found, 쓸 수 없는 구성 · 프로젝트 밖 작업 폴더 · 없는
-	 * 프로필 · 읽지 못한 `env_file` 은 invalid params.
+	 * 프로필 · 읽지 못한 `env_file` 은 invalid params. 띄울 내용이 「사람이 본 구성」(M6-11)이 아니면 띄우지 않고
+	 * 7001(`data` 는 [`RunConfirmRequired`] — 첫 실행 확인, M6-07 ⑥): 창은 내용을 보이고 확인을 받은 뒤 그 `hash` 를 `confirmed` 로
+	 * 실어 다시 부른다. 확인 뒤 띄우면 그 내용이 「사람이 본 구성」 으로 기록된다.
 	 */
 	"run.start": { params: RunStartParams; result: RunInfo };
 	/**
@@ -1699,13 +1707,14 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"run.attach": {"name":"run.attach","kind":"stream","tier":"read","roles":["owner"],"params":"RunAttachParams","output":"RunAttachEvent","doc":" 실행의 출력을 `since` 오프셋부터 보낸다(앞에 쌓인 것 → 새로 나오는 것 → 끝). 스트림을 끊어도 실행은 돈다.\n","mcp":null,"fileScope":false},
 	"run.config.delete": {"name":"run.config.delete","kind":"unary","tier":"write","roles":["owner"],"params":"RunConfigDeleteParams","output":"RunConfigDeleted","doc":" 구성 파일을 지운다(`location` 이 없으면 공유 · 개인 둘 다). 그 프로젝트 창의 연결만. 그 id 의 구성(쓸 수 없는 것 포함)이\n 없으면 not found.\n","mcp":null,"fileScope":false},
 	"run.config.list": {"name":"run.config.list","kind":"unary","tier":"read","roles":["owner"],"params":"RunConfigListParams","output":"RunConfigList","doc":" 프로젝트의 실행 구성 목록: 쓸 수 있는 구성 · 쓸 수 없는 구성(까닭) · 감지된 태스크. 디스크에 쓰지 않는다(구버전 파일도\n 메모리에서만 올린다). 없는 프로젝트는 not found, 그 프로젝트의 것이 아닌 `worktree` 는 invalid params.\n","mcp":null,"fileScope":false},
+	"run.config.preview": {"name":"run.config.preview","kind":"unary","tier":"read","roles":["owner"],"params":"RunConfigSaveParams","output":"RunConfigPreview","doc":" `run.config.save` 가 쓸 글을 쓰지 않고 돌려준다(구성 편집 화면의 「TOML 보기」 — 저장과 같은 `plan`). 그 프로젝트 창의\n 연결만. 거절은 `run.config.save` 와 같다.\n","mcp":null,"fileScope":false},
 	"run.config.save": {"name":"run.config.save","kind":"unary","tier":"write","roles":["owner"],"params":"RunConfigSaveParams","output":"RunConfigSaved","doc":" 구성 파일(`location` 의 것 하나)을 만들거나 고친다 — 주석과 모르는 키는 그대로 두고, 개인 파일에 쓰면 공유 파일에만 있는\n 키는 그대로 비친다. 그 프로젝트 창의 연결만(아니면 permission denied). 구성이 검증(`cwd` 가 루트 안 등)을 지나지 못하거나\n id 가 틀렸으면 invalid params, 대소문자만 다른 구성이 있거나 · 파일이 TOML 이 아니거나 · 앱보다 새 `schema` 거나 · 저장소 안의\n 링크면 conflict.\n","mcp":null,"fileScope":false},
 	"run.input": {"name":"run.input","kind":"unary","tier":"exec","roles":["owner"],"params":"RunInputParams","output":"()","doc":" 실행에 입력을 보낸다. 끝난 실행이면 invalid params.\n","mcp":null,"fileScope":false},
 	"run.list": {"name":"run.list","kind":"unary","tier":"read","roles":["owner"],"params":"RunListParams","output":"RunList","doc":" 그 프로젝트의 실행(실행 중 · 남은 끝난 실행)과 상태 · 끝 코드.\n","mcp":null,"fileScope":false},
 	"run.resize": {"name":"run.resize","kind":"unary","tier":"write","roles":["owner"],"params":"RunResizeParams","output":"()","doc":" 실행 콘솔의 PTY 크기를 바꾼다. 0 인 크기는 invalid params.\n","mcp":null,"fileScope":false},
-	"run.restart": {"name":"run.restart","kind":"unary","tier":"exec","roles":["owner"],"params":"RunIdParams","output":"RunInfo","doc":" 다시 실행: 중지하고 프로세스 트리가 끝난 것을 본 뒤 같은 구성을 새 실행으로 띄운다(`restartOf` 가 앞 실행).\n","mcp":null,"fileScope":false},
+	"run.restart": {"name":"run.restart","kind":"unary","tier":"exec","roles":["owner"],"params":"RunRestartParams","output":"RunInfo","doc":" 다시 실행: 중지하고 프로세스 트리가 끝난 것을 본 뒤 같은 구성을 새 실행으로 띄운다(`restartOf` 가 앞 실행). 구성으로 띄운\n 실행은 구성을 다시 읽으므로 `run.start` 와 같은 첫 실행 확인(7001)을 지난다 — 확인이 필요하면 앞 실행을 멈추지 않고 답한다.\n","mcp":null,"fileScope":false},
 	"run.sql.start": {"name":"run.sql.start","kind":"unary","tier":"exec","roles":["owner"],"params":"RunSqlStartParams","output":"RunInfo","doc":" `sql` 실행 구성 하나를 돌린다 — 프로세스를 띄우지 않고 그 DB 연결에서(실행 관리자의 실행 하나: 출력은 `run.attach`, 끝은\n `run.exited`, 중지는 `run.stop`). 파일들은 지금 읽어 분류한다. 그 프로젝트의 창이 아닌 연결 · 미신뢰 프로젝트(연결하지\n 않는다)는 permission denied, `sql` 이 아닌 구성 · 쓸 수 없는 구성은 invalid params, read-only 연결의 조회 밖 문장 ·\n 트랜잭션 제어 문장은 permission denied. 조회가 아닌 문장이 있으면 3001(`data` 는 `RunSqlConfirmRequired`) — 사람이 확인한 뒤\n `confirmed` 를 실어 다시 부른다(파일이 그사이 바뀌었으면 다시 3001). 비밀 · 확인이 필요한 연결은 3101 · 3102.\n","mcp":null,"fileScope":false},
-	"run.start": {"name":"run.start","kind":"unary","tier":"exec","roles":["owner"],"params":"RunStartParams","output":"RunInfo","doc":" 실행 구성 하나를 띄운다(PTY — 런타임 환경 위에 구성의 `env_file` · `env` · 프로필). 실행은 Host 의 것이라 이 연결이 닫혀도 돈다 — 출력은\n `run.attach`, 끝은 이벤트 `run.exited`. 그 프로젝트의 창이 아닌 연결이면 permission denied, 미신뢰 프로젝트면 띄우지 않고\n permission denied(`data.reason = \"untrusted\"`), 작업 폴더가 푼 뒤에 바뀌었거나 사라졌으면 띄우지 않고 permission\n denied(`data.reason = \"cwd_changed\"`), 없는 구성은 not found, 쓸 수 없는 구성 · 프로젝트 밖 작업 폴더 · 없는\n 프로필 · 읽지 못한 `env_file` 은 invalid params.\n","mcp":null,"fileScope":false},
+	"run.start": {"name":"run.start","kind":"unary","tier":"exec","roles":["owner"],"params":"RunStartParams","output":"RunInfo","doc":" 실행 구성 하나를 띄운다(PTY — 런타임 환경 위에 구성의 `env_file` · `env` · 프로필). 실행은 Host 의 것이라 이 연결이 닫혀도 돈다 — 출력은\n `run.attach`, 끝은 이벤트 `run.exited`. 그 프로젝트의 창이 아닌 연결이면 permission denied, 미신뢰 프로젝트면 띄우지 않고\n permission denied(`data.reason = \"untrusted\"`), 작업 폴더가 푼 뒤에 바뀌었거나 사라졌으면 띄우지 않고 permission\n denied(`data.reason = \"cwd_changed\"`), 없는 구성은 not found, 쓸 수 없는 구성 · 프로젝트 밖 작업 폴더 · 없는\n 프로필 · 읽지 못한 `env_file` 은 invalid params. 띄울 내용이 「사람이 본 구성」(M6-11)이 아니면 띄우지 않고\n 7001(`data` 는 [`RunConfirmRequired`] — 첫 실행 확인, M6-07 ⑥): 창은 내용을 보이고 확인을 받은 뒤 그 `hash` 를 `confirmed` 로\n 실어 다시 부른다. 확인 뒤 띄우면 그 내용이 「사람이 본 구성」 으로 기록된다.\n","mcp":null,"fileScope":false},
 	"run.stop": {"name":"run.stop","kind":"unary","tier":"exec","roles":["owner"],"params":"RunIdParams","output":"RunInfo","doc":" 실행을 중지한다 — 프로세스 세션 전체에 SIGTERM, 5초 안에 끝나지 않은 것은 SIGKILL(compose 는 SIGINT 를 먼저). 기다리지\n 않는다(끝나면 `run.exited`). 이미 끝난 실행이면 아무것도 하지 않는다.\n","mcp":null,"fileScope":false},
 	"run.tasks.refresh": {"name":"run.tasks.refresh","kind":"unary","tier":"exec","roles":["owner"],"params":"RunTasksRefreshParams","output":"RunTasksRefreshed","doc":" 사람이 「태스크 읽기」 를 눌렀다 — gradle · maven 은 빌드 스크립트를 돌려 태스크 목록을 읽고 캐시한다(Host 작업으로 진행 ·\n 취소가 보인다). 그 프로젝트 창의 연결만(아니면 permission denied), 미신뢰 프로젝트면 permission denied\n (`data.reason = \"untrusted\"`), 모르는 감지기는 invalid params, 취소되면 cancelled.\n","mcp":null,"fileScope":false},
 	"run.tool.configDelete": {"name":"run.tool.configDelete","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<RunToolConfigDeleteParams>","output":"RunToolConfigDelete","doc":" Delete a run configuration's file — the shared one, the personal one (`location`), or both (no `location`). The person\n sees what is deleted and approves it in Pitwall first. Detected tasks (`detected:…`) have no file and cannot be deleted.\n","mcp":{"group":"run","name":"run_config_delete"},"fileScope":false},
@@ -8829,6 +8838,16 @@ export type RunConfigLocation =
 /**  `run/<id>.local.toml`, the personal override (the main checkout's when a linked worktree has none). */
 "local";
 
+/**  `run.config.preview` 의 답 — 저장하면 그 파일이 될 글(구성 편집 화면의 「TOML 보기」, M6-07 ③). */
+export type RunConfigPreview = {
+	/**  쓸 파일. */
+	path: string,
+	/**  저장하면 그 파일의 글(주석 · 모르는 키를 지킨 `plan` 의 결과 그대로). */
+	text: string,
+	/**  지금 그 파일의 글. 없는 파일이면 `null`. */
+	before: string | null,
+};
+
 export type RunConfigSaveParams = {
 	projectId: string,
 	/**  [`RunConfigListParams::worktree`] 와 같다. 공유 파일은 그 워크트리의 것에 쓴다. */
@@ -8845,6 +8864,13 @@ export type RunConfigSaved = {
 	path: string,
 	/**  내용이 바뀌었는가(같은 내용이면 쓰지 않는다). */
 	changed: boolean,
+};
+
+/**  [`code::CONFIRM_REQUIRED`] 의 `data`. */
+export type RunConfirmRequired = {
+	/**  확인 열쇠 — 다시 부를 때 `confirmed` 로 그대로 돌려준다. */
+	hash: string,
+	shown: RunShown,
 };
 
 /**  끝난 꼴. */
@@ -8973,6 +8999,57 @@ export type RunResizeParams = {
 	rows: number,
 };
 
+/**  `run.restart` 의 입력. */
+export type RunRestartParams = {
+	runId: string,
+	/**  [`RunStartParams::confirmed`] 와 같다 — 다시 읽은 구성이 사람이 본 적 없는 내용이면 확인을 받은 뒤 이것을 실어 다시 부른다. */
+	confirmed?: string | null,
+};
+
+/**  첫 실행 확인에 보이는 것 — 띄울 그 값. */
+export type RunShown = {
+	/**  구성 열쇠(구성 id). */
+	key: string,
+	/**  구성의 `name`. */
+	name: string,
+	/**  종류(`type` — `shell` · `npm` …). */
+	kind: string,
+	/**  띄울 argv 그대로(가리지 않는다). */
+	argv: string[],
+	/**  작업 폴더(프로젝트 루트 기준, 루트면 `.`). */
+	cwd: string,
+	profile: string | null,
+	/**  얹을 env(이름순). 값은 가린 꼴이다. */
+	env: RunShownVar[],
+	/**  읽은 `.env` 파일(구성의 차례). */
+	envFiles: RunShownFile[],
+	/**  명령 정의 본문 — 실행될 글이라 그대로. `npm` 은 그 script, `mise-task` 는 그 태스크를 정의한 파일의 글. */
+	definition: string | null,
+	/**  정의 본문을 읽은 파일(`mise-task` — 절대 경로). `npm` 이면 `null`. */
+	definitionSource: string | null,
+	/**  argv · 정의 본문에 비밀처럼 보이는 것(비밀번호가 든 URL · 비밀 이름의 `NAME=값`)이 있다 — 가리지 않고 경고만. */
+	secretLooking: boolean,
+	/**  확인하면 「사람이 본 구성」 으로 기록되는가. 거짓이면(해시를 낼 수 없는 구성) 다음에도 묻는다. */
+	recordable: boolean,
+};
+
+/**  `.env` 파일 하나. */
+export type RunShownFile = {
+	/**  구성에 적힌 경로(프로젝트 루트 기준). */
+	path: string,
+	/**  내용 sha256 앞 12자. */
+	sha256: string,
+};
+
+/**  env 하나. */
+export type RunShownVar = {
+	name: string,
+	/**  보이는 값(`config::shown::env_value` — 비밀 이름이면 `••••` 와 해시 앞 8자, URL 의 비밀번호 자리도 가린다). */
+	value: string,
+	/**  값을 (일부라도) 가렸는가. */
+	masked: boolean,
+};
+
 /**
  *  [`code::CONFIRM_REQUIRED`] 의 `data` — 실행 구성 `sql` 종류의 확인(머리 주석 ③). `request` 를 SQL 콘솔의 위험 확인
  *  (`risk-confirm.tsx`)에 그대로 넘기고 `sql` 을 그 글로 준다.
@@ -9029,6 +9106,11 @@ export type RunStartParams = {
 	/**  콘솔 크기. 없으면 120 × 30(콘솔이 붙으면 `run.resize`). */
 	cols?: number | null,
 	rows?: number | null,
+	/**
+	 *  첫 실행 확인(17-m6-plan M6-07 ⑥)에서 사람이 본 내용의 열쇠 — 앞 호출이 받은 [`RunConfirmRequired::hash`] 그대로. 지금 띄울
+	 *  내용이 그것과 다르면(그사이 파일이 바뀜) 띄우지 않고 다시 묻는다.
+	 */
+	confirmed?: string | null,
 };
 
 export type RunState = "running" | 

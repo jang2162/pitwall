@@ -114,6 +114,7 @@ import { McpStatus } from "../mcp/mcp-status";
 import { RuntimeStatus } from "../runtime/runtime-status";
 import { useRunClosePrompt } from "../run/run-close";
 import { RunFeature } from "../run/run-feature";
+import { RunPickerFeature } from "../run/run-picker";
 import { windowRuns } from "../run/run-tabs";
 import { RunToolWindow } from "../run/run-tool-window";
 import {
@@ -947,6 +948,7 @@ function ProjectWindowBody({
           {projectId !== undefined && <RuntimeStatus projectId={projectId} />}
           {projectId !== undefined && <McpStatus projectId={projectId} />}
           {projectId !== undefined && <RunFeature projectId={projectId} />}
+          {projectId !== undefined && <RunPickerFeature projectId={projectId} api={api} />}
           {projectId !== undefined && (
             <DbStatus projectId={projectId} workspace={workspace} api={api} />
           )}

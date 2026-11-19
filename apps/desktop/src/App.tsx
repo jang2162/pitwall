@@ -136,6 +136,8 @@ export function App({
               {/* macOS 에서는 웹뷰가 타이틀바 자리까지 덮으므로 이 줄이 창을 옮기는 손잡이가 된다. */}
               <header className="titlebar bg-ui-toolbar" data-tauri-drag-region>
                 <WindowTitle kind={kind} />
+                {/* 창 기능이 그리는 툴바 자리(프로젝트 창의 실행 선택기 — run/run-picker.tsx). */}
+                <div className="titlebar-end" data-titlebar-end />
               </header>
               {kind === "welcome" && <Welcome native={welcomeNative} log={log} />}
               {kind === "project" && (

@@ -235,7 +235,8 @@ it("warns when mise fell back, and follows runtime.changed to the mise environme
 
 it("titles the window bar with the project's name", async () => {
   await mount();
-  expect(document.querySelector(".titlebar")?.textContent).toBe("demo");
+  // 타이틀바 끝의 툴바 자리(실행 선택기 — M6-07)는 제목이 아니다.
+  expect(document.querySelector(".titlebar > span")?.textContent).toBe("demo");
 });
 
 it("shows nothing for the plain login shell environment", async () => {

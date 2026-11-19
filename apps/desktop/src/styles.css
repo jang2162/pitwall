@@ -72,6 +72,27 @@ body {
   font-weight: 600;
 }
 
+/* 타이틀바 끝의 툴바 자리(App.tsx `[data-titlebar-end]` — 프로젝트 창의 실행 선택기). macOS 는 가운데 제목 옆 오른쪽 끝에 둔다.
+   Win/Linux 는 타이틀바가 없으므로 그 자리에 무엇이 그려졌을 때만 이 줄을 툴바로 보인다. */
+.titlebar {
+  position: relative;
+}
+.titlebar-end {
+  position: absolute;
+  right: 8px;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  font-weight: 400;
+}
+:root:not([data-platform="mac"]) .titlebar:has(.titlebar-end > *) {
+  display: flex;
+  align-items: center;
+  flex: none;
+  height: 28px;
+}
+
 /* 창 위에서 내려오는 시트(S3). macOS 는 시트가 overlay 타이틀바 아래에서 내려와 신호등 · 창 제목을 덮지 않는다. */
 .sheet-top {
   top: 0;

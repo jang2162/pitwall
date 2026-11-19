@@ -342,7 +342,23 @@ impl Client {
         }
     }
 
+    /// 요청 하나. `run.start` · `run.restart` 가 첫 실행 확인(7001 — M6-07 ⑥)으로 답하면 사람이 [실행] 을 누른 것처럼 그 `hash` 를
+    /// `confirmed` 로 실어 한 번 다시 부른다 — 이 파일의 시험은 띄우기 자체를 보고, 확인은 `confirm_tests` 가 본다.
     async fn call(&mut self, method: &str, params: Value) -> Response {
+        let response = self.call_once(method, params.clone()).await;
+        if matches!(method, "run.start" | "run.restart")
+            && let Err(e) = &response.outcome
+            && e.code == super::confirm::code::CONFIRM_REQUIRED
+        {
+            let hash = e.data.as_ref().unwrap()["hash"].clone();
+            let mut again = params;
+            again["confirmed"] = hash;
+            return self.call_once(method, again).await;
+        }
+        response
+    }
+
+    async fn call_once(&mut self, method: &str, params: Value) -> Response {
         let id = self.request(method, params);
         loop {
             if let Some(i) = self.responses.iter().position(|r| r.id == Id::Number(id)) {
@@ -1948,3 +1964,6 @@ async fn the_program_waits_at_the_gate_until_the_check() {
 
 #[path = "ports_tests.rs"]
 mod ports_tests;
+
+// 첫 실행 확인(M6-07 ⑥).
+mod confirm;

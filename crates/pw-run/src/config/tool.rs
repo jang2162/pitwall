@@ -238,21 +238,35 @@ fn refuse_tracked_local(
     location: RunConfigLocation,
     edit: &RunConfigEdit,
 ) -> Result<(), RpcError> {
-    if !place.repository || location != RunConfigLocation::Local {
+    if location != RunConfigLocation::Local {
         return Ok(());
+    }
+    refuse_tracked_file(place, &edit.path)
+}
+
+/// 개인 파일 `path` 가 git 의 것인지(추적 · 받아 온 내용 · 판정 못 함). 저장소가 아닌 프로젝트(개인 전용 폴더)면 `Untracked`.
+/// 구성 편집 화면의 읽기 · 지우기(M6-07 ⑤)도 이 판정을 쓴다.
+pub(crate) fn local_tracking(place: &RunConfigPlace, path: &Path) -> Result<Tracking, RpcError> {
+    if !place.repository {
+        return Ok(Tracking::Untracked);
     }
     let checkout = [Some(place.source.dir()), place.source.local_fallback_dir()]
         .into_iter()
         .flatten()
-        .find(|dir| edit.path.starts_with(dir))
+        .find(|dir| path.starts_with(dir))
         .and_then(Path::parent)
         .ok_or_else(|| {
             RpcError::internal(format!(
                 "{} is not inside the project's config folder",
-                edit.path.display()
+                path.display()
             ))
         })?;
-    let why = match tracking(checkout, &edit.path) {
+    Ok(tracking(checkout, path))
+}
+
+/// 개인 파일 `path` 가 git 의 것이면 conflict(`data.reason = "trackedLocalFile"`) — 쓰지도 지우지도 않는다.
+pub(crate) fn refuse_tracked_file(place: &RunConfigPlace, path: &Path) -> Result<(), RpcError> {
+    let why = match local_tracking(place, path)? {
         Tracking::Untracked => return Ok(()),
         Tracking::Tracked => {
             "is tracked by git, so it is a committed file and not a personal setting".to_owned()
@@ -266,7 +280,7 @@ fn refuse_tracked_local(
         code::CONFLICT,
         format!(
             "{} {why}; Pitwall does not write it — the person has to fix it by hand",
-            edit.path.display()
+            path.display()
         ),
     )
     .with_data(json!({ "reason": "trackedLocalFile" })))
