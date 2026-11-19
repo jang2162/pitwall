@@ -1580,6 +1580,10 @@ mod tests {
                 .any(|r| r.runtime == crate::manifest::LspServerRuntime::Node)
         );
         assert_eq!(js.launch.as_ref().unwrap()["type"], "pwa-node");
+        // js-debug 는 DAP 명령 이름이 아니라 인자의 `request` 로 launch · attach 기본값을 고른다 — 빠지면 attach 가 브레이크포인트를
+        // 묶지 않는다(17-m6-plan M6-19b, 실기는 `live_dap_js_debug_attach_to_an_inspecting_process`).
+        assert_eq!(js.launch.as_ref().unwrap()["request"], "launch");
+        assert_eq!(js.attach.as_ref().unwrap()["request"], "attach");
         assert_eq!(languages("js-debug"), ["javascript", "typescript", "tsx"]);
 
         let py = get("debugpy");

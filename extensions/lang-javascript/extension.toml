@@ -16,8 +16,10 @@ line_comment = "//"
 # 디버거(17-m6-plan.md M6-19 · 결정 M6-D2 — Node 만, 브라우저는 뺀다). js-debug 의 `dapDebugServer.js` 는 표준 입출력이 없고 첫 인자가
 # 수가 아니면 그 경로의 소켓에서 받는다 — `{socket}` 으로 정의한다(TCP 로 정의하지 않는다, M6-15 리뷰 F1). 런처는 띄울 때의 PATH 의
 # node 를 부르고, 서버 관리자가 `requires` 로 찾은 node 를 PATH 앞에 둔다(M6-16). 대상은 `runInTerminal` 로 실행 관리자의 PTY 에서
-# 돈다(`console = "integratedTerminal"`). attach 정의(`node --inspect` 로 떠 있는 프로세스의 포트 — `[debug] port`)는 있으나 브레이크포인트가
-# 묶이지 않는다 — js-debug v1.140.0 의 attach 자식 세션이 떠 있는 스크립트를 묶지 않는다(원시 DAP 로도, M6-19 보고 — 후속 M6-19b).
+# 돈다(`console = "integratedTerminal"`). attach 는 `node --inspect` 로 떠 있는 프로세스의 포트(`[debug] port` · `address`)에 붙는다.
+# 두 틀 모두 `request` 를 싣는다: js-debug 는 DAP 명령 이름(`launch` · `attach`)을 보지 않고 인자의 `request` 로 기본값을 고르며
+# (v1.140.0 `dapDebugServer.js` — 두 명령이 같은 `boot` 로 가고 `request === "attach"` 일 때만 attach 기본값), VS Code 는 구성의
+# `request` 를 늘 그대로 보낸다. 빠지면 attach 가 launch 기본값으로 붙어 자식 세션이 브레이크포인트를 묶지 않는다(M6-19b 보고).
 [contributes.debug_adapters.js-debug]
 languages = ["javascript", "typescript", "tsx"]
 mason = "js-debug-adapter"
@@ -25,5 +27,5 @@ command = "js-debug-adapter"
 args = ["{socket}"]
 transport = "socket"
 requires = { node = ">=20" }
-launch = { type = "pwa-node", program = "{program}", args = "{args}", cwd = "{cwd}", env = "{env}", runtimeExecutable = "{runtime_executable}", runtimeArgs = "{runtime_args}", stopOnEntry = "{stop_on_entry}", console = "integratedTerminal" }
-attach = { type = "pwa-node", port = "{port}", address = "{address}", processId = "{pid}" }
+launch = { type = "pwa-node", request = "launch", program = "{program}", args = "{args}", cwd = "{cwd}", env = "{env}", runtimeExecutable = "{runtime_executable}", runtimeArgs = "{runtime_args}", stopOnEntry = "{stop_on_entry}", console = "integratedTerminal" }
+attach = { type = "pwa-node", request = "attach", port = "{port}", address = "{address}", processId = "{pid}" }

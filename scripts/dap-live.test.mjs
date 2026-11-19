@@ -16,7 +16,7 @@ test("the config has a floor and an installer package for every adapter and noth
   assert.deepEqual(Object.keys(config.floors).sort(), Object.keys(TARGETS).sort());
   assert.deepEqual(Object.keys(config.install).sort(), Object.keys(TARGETS).sort());
   // 하한(17-m6-plan.md M6-19): 실제로 도는 시험 수 — 낮추면 시험이 조용히 빠질 수 있다.
-  assert.deepEqual(config.floors, { codelldb: 2, js_debug: 1, debugpy: 2, java_debug: 3 });
+  assert.deepEqual(config.floors, { codelldb: 2, js_debug: 2, debugpy: 2, java_debug: 3 });
   assert.equal(
     config.install.java_debug.share,
     "java-debug-adapter/com.microsoft.java.debug.plugin.jar",

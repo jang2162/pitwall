@@ -710,8 +710,29 @@ async fn live_dap_js_debug_launch_stops_at_a_breakpoint() {
     );
 }
 
-// Node 의 attach(`node --inspect` 의 포트)는 여기 시험이 없다 — js-debug v1.140.0 은 attach 의 자식 세션이 이미 떠 있는 프로그램의
-// 스크립트를 소스로 알리지 않고 브레이크포인트도 묶지 않았다(Pitwall 없이 DAP 를 직접 보낸 탐침에서도 같다 — M6-19 보고서 5 절).
+/// Node attach(결정 M6-P20): `node --inspect=127.0.0.1:<포트>` 로 떠 있는 프로세스에 붙어 그 줄에서 멈춘다. js-debug 는 DAP 명령
+/// 이름(`attach`)이 아니라 인자의 `request` 로 기본값을 고른다 — 그 값이 빠지면 launch 기본값으로 붙어 자식 세션이 브레이크포인트를
+/// 묶지 않는다(M6-19b 보고). 정의의 attach 틀이 `request = "attach"` 를 싣는다.
+#[cfg(pw_live_dap_js_debug)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_dap_js_debug_attach_to_an_inspecting_process() {
+    let live = js_debug();
+    live.file(
+        "wait.js",
+        "let answer = 0;\nsetInterval(() => {\n  answer = 41 + 1;\n  globalThis.shown = answer;\n}, 50);\n",
+    );
+    let port = free_port();
+    let inspect = format!("--inspect=127.0.0.1:{port}");
+    let _target = spawn(&which("node"), &[&inspect, "wait.js"], &live.root);
+    wait_port(port).await;
+    live.config(
+        "js-debug",
+        &format!("mode = \"attach\"\nport = {port}\naddress = \"127.0.0.1\""),
+    );
+    let mut c = live.client();
+    let stopped = break_and_inspect(&live, &mut c, "wait.js", 4, "answer", "42", &[port]).await;
+    stop(&live, &mut c, &stopped.run_id).await;
+}
 
 // ---- debugpy(Python) ----------------------------------------------------------------------------------------------------------
 
