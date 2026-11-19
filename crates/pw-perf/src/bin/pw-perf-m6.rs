@@ -432,6 +432,7 @@ mod drive {
                 Err(e) => {
                     // 첫 프레임 전에 창이 가려지면(사람이 기기를 쓰는 중) 회가 멎는다 — 그 회의 앱을 끄고 다음 회로 간다.
                     let strays = instance::kill_strays(&opts.binary);
+                    instance::remove_webview_store(&run);
                     instance::keep(&run, &opts.out.join(format!("run-{i}")));
                     eprintln!("pw-perf-m6: run {i}: launch failed: {e}");
                     runs.push(json!({"index": i, "error": format!("launch: {e}"), "excluded": "launch failed", "strays_killed": strays}));
@@ -606,6 +607,7 @@ mod drive {
                 Err(e) => {
                     // 첫 프레임 전에 창이 가려지면(사람이 기기를 쓰는 중) 회가 멎는다 — 그 회의 앱을 끄고 다음 회로 간다.
                     let strays = instance::kill_strays(&opts.binary);
+                    instance::remove_webview_store(&run);
                     instance::keep(&run, &opts.out.join(format!("run-{i}")));
                     eprintln!("pw-perf-m6: run {i}: launch failed: {e}");
                     runs.push(json!({"index": i, "run_started_epoch_ms": null, "error": format!("launch: {e}"), "excluded": "launch failed", "strays_killed": strays}));
@@ -798,6 +800,7 @@ mod drive {
                         Err(e) => {
                             // 첫 프레임 전에 창이 가려지면(사람이 기기를 쓰는 중) 회가 멎는다 — 그 회의 앱을 끄고 다음 회로 간다.
                             let strays = instance::kill_strays(&opts.binary);
+                            instance::remove_webview_store(&run);
                             instance::keep(&run, &opts.out.join(format!("run-{i}")));
                             eprintln!("pw-perf-m6: run {i}: launch failed: {e}");
                             runs.push(json!({"index": i, "adapter": adapter, "ending": ending, "error": format!("launch: {e}"), "excluded": "launch failed", "strays_killed": strays}));

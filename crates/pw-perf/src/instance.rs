@@ -299,7 +299,18 @@ pub fn shut_down(binary: &Path, app: &App, run: &Run) -> Result<Value, String> {
     let log = log_of(&run.paths, "core.");
     let socket_left = crate::log_field(&log, "single-instance key", "identifier")
         .is_some_and(|key| crate::single_instance_socket(&key).exists());
-    // 기본이 아닌 $DATA 의 그 회만의 웹뷰 저장소(사람의 기본 저장소는 건드리지 않는다).
+    remove_webview_store(run);
+    if !leftovers.is_empty() || socket_left {
+        return Err(format!(
+            "after shutting the app down: processes {leftovers:?} left, single-instance socket left {socket_left}"
+        ));
+    }
+    Ok(json!({"signals": signalled}))
+}
+
+/// 기본이 아닌 $DATA 의 그 회만의 웹뷰 저장소를 지운다(사람의 기본 저장소 `…/WebsiteData` 는 건드리지 않는다).
+pub fn remove_webview_store(run: &Run) {
+    let log = log_of(&run.paths, "core.");
     if let (Some(home), Some(store)) = (
         std::env::var_os("HOME"),
         crate::log_field(&log, "webview data store", "store"),
@@ -308,12 +319,6 @@ pub fn shut_down(binary: &Path, app: &App, run: &Run) -> Result<Value, String> {
         let _ = std::fs::remove_dir_all(root.join(store.to_lowercase()));
         let _ = std::fs::remove_dir(&root);
     }
-    if !leftovers.is_empty() || socket_left {
-        return Err(format!(
-            "after shutting the app down: processes {leftovers:?} left, single-instance socket left {socket_left}"
-        ));
-    }
-    Ok(json!({"signals": signalled}))
 }
 
 /// 첫 프레임을 기다리다 실패한 회가 남긴 이 번들의 앱(실행 파일이 `binary` 인 프로세스)을 끈다 — 측정 번들은 측정만 띄운다
