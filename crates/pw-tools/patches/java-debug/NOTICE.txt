@@ -23,8 +23,8 @@ Pitwall changed one file, and nothing else:
 The classes JavaDebugServer, JavaDebugServer$1 and JavaDebugServer$2 were
 compiled from the changed source; every other entry of the jar is the
 original. The changed source, the patch and the build script are in the
-Pitwall repository under crates/pw-tools/patches/java-debug/ and
-scripts/java-debug-patch.mjs.
+Pitwall repository, https://github.com/jang2162/pitwall, under
+crates/pw-tools/patches/java-debug/ and scripts/java-debug-patch.mjs.
 
 The source code of the Java Debug Server is available at
 https://github.com/microsoft/java-debug.
