@@ -17,6 +17,10 @@ use std::net::SocketAddr;
 
 /// 상대 끝의 주인.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "macos")),
+    expect(dead_code, reason = "only Linux and macOS find the other end")
+)]
 pub(crate) enum PeerOwner {
     /// 이 사용자의 프로세스다.
     Ours,
@@ -38,6 +42,7 @@ pub(crate) fn peer_owner(local: SocketAddr, peer: SocketAddr) -> PeerOwner {
 }
 
 /// v4 에 대응된 v6(`::ffff:127.0.0.1`)을 v4 로.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn canonical(addr: SocketAddr) -> SocketAddr {
     SocketAddr::new(addr.ip().to_canonical(), addr.port())
 }
@@ -269,7 +274,7 @@ mod imp {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests {
     use std::net::{TcpListener, TcpStream};
 
