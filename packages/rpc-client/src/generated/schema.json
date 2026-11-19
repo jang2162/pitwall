@@ -46977,6 +46977,34 @@
       },
       "result": {
         "$defs": {
+          "RunPort": {
+            "description": "A TCP port the run's process tree listens on.",
+            "properties": {
+              "addresses": {
+                "description": "The local addresses it listens on, sorted (`127.0.0.1`, `::1`, `0.0.0.0`, `::`, …).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "allAddresses": {
+                "description": "Listening on every address (`0.0.0.0` or `::`) — reachable from other machines on the network.",
+                "type": "boolean"
+              },
+              "port": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "port",
+              "allAddresses",
+              "addresses"
+            ],
+            "type": "object"
+          },
           "RunToolExit": {
             "properties": {
               "code": {
@@ -47078,6 +47106,13 @@
                   "null"
                 ]
               },
+              "ports": {
+                "description": "TCP ports the run's process tree listens on, read every 2 seconds while it runs. Empty once the run has ended.",
+                "items": {
+                  "$ref": "#/$defs/RunPort"
+                },
+                "type": "array"
+              },
               "profile": {
                 "type": [
                   "string",
@@ -47127,7 +47162,8 @@
               "endedAt",
               "restartOf",
               "logStart",
-              "logEnd"
+              "logEnd",
+              "ports"
             ],
             "type": "object"
           },
@@ -47215,6 +47251,34 @@
       },
       "result": {
         "$defs": {
+          "RunPort": {
+            "description": "A TCP port the run's process tree listens on.",
+            "properties": {
+              "addresses": {
+                "description": "The local addresses it listens on, sorted (`127.0.0.1`, `::1`, `0.0.0.0`, `::`, …).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "allAddresses": {
+                "description": "Listening on every address (`0.0.0.0` or `::`) — reachable from other machines on the network.",
+                "type": "boolean"
+              },
+              "port": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "port",
+              "allAddresses",
+              "addresses"
+            ],
+            "type": "object"
+          },
           "RunToolExit": {
             "properties": {
               "code": {
@@ -47316,6 +47380,13 @@
                   "null"
                 ]
               },
+              "ports": {
+                "description": "TCP ports the run's process tree listens on, read every 2 seconds while it runs. Empty once the run has ended.",
+                "items": {
+                  "$ref": "#/$defs/RunPort"
+                },
+                "type": "array"
+              },
               "profile": {
                 "type": [
                   "string",
@@ -47365,7 +47436,8 @@
               "endedAt",
               "restartOf",
               "logStart",
-              "logEnd"
+              "logEnd",
+              "ports"
             ],
             "type": "object"
           },
@@ -47689,6 +47761,34 @@
       },
       "result": {
         "$defs": {
+          "RunPort": {
+            "description": "A TCP port the run's process tree listens on.",
+            "properties": {
+              "addresses": {
+                "description": "The local addresses it listens on, sorted (`127.0.0.1`, `::1`, `0.0.0.0`, `::`, …).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "allAddresses": {
+                "description": "Listening on every address (`0.0.0.0` or `::`) — reachable from other machines on the network.",
+                "type": "boolean"
+              },
+              "port": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "port",
+              "allAddresses",
+              "addresses"
+            ],
+            "type": "object"
+          },
           "RunToolExit": {
             "properties": {
               "code": {
@@ -47790,6 +47890,13 @@
                   "null"
                 ]
               },
+              "ports": {
+                "description": "TCP ports the run's process tree listens on, read every 2 seconds while it runs. Empty once the run has ended.",
+                "items": {
+                  "$ref": "#/$defs/RunPort"
+                },
+                "type": "array"
+              },
               "profile": {
                 "type": [
                   "string",
@@ -47839,7 +47946,8 @@
               "endedAt",
               "restartOf",
               "logStart",
-              "logEnd"
+              "logEnd",
+              "ports"
             ],
             "type": "object"
           },
