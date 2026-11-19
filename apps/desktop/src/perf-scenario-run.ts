@@ -16,7 +16,7 @@
 //
 // `debug-end` 시나리오 — 디버그 어댑터가 세션과 함께 끝나는지(M6-22 ③):
 //
-// 1. `debug_starting`: 타이틀바의 디버그(`run-debug`)를 누르기 직전. 측정하는 쪽은 이 앞에 앱의 자손 프로세스가 없었는지 본다.
+// 1. `debug_starting`: 첫 프레임 `DEBUG_SETTLE_MS` 뒤, 타이틀바의 디버그(`run-debug`)를 누르기 직전. 측정하는 쪽은 이 앞에 앱의 자손 프로세스가 없었는지 본다.
 // 2. `debug_running`: 디버그 세션(windowDebug)이 생긴 때.
 // 3. `debug_ended`: 세션이 `ended` 가 된 때. 대상이 `NATURAL_END_MS` 안에 스스로 끝나면 `how: "exited"`(시각은 세션이 끝남을 본 때),
 //    아니면 그때 세션을 멈추고(`run.stop` — 디버그 툴 윈도우의 중지와 같은 함수) `how: "stopped"`(시각은 멈춤을 부른 때). 측정하는
@@ -35,6 +35,11 @@ import { windowRuns } from "./run/run-tabs";
 export const FLOOD_MEASURE_MS = 20_000;
 /** 실행이 끝난 뒤 이만큼 새 바이트가 없으면 콘솔이 따라잡은 것으로 본다. */
 export const CAUGHT_UP_MS = 1_000;
+/**
+ * 디버그를 누르기 전에 쉬는 시간 — 신뢰 프로젝트를 열면 런타임 환경을 읽는 로그인 셸이 잠깐 뜬다(0.1~0.2초). 그것이 「디버그를 누르기 전의
+ * 자손」 으로 섞이지 않게 한다(M6-22 측정에서 17회 중 3회 겹쳤다).
+ */
+export const DEBUG_SETTLE_MS = 3_000;
 /** 디버그 대상이 이 안에 스스로 끝나지 않으면 세션을 멈춘다. */
 export const NATURAL_END_MS = 4_000;
 
@@ -241,6 +246,7 @@ export async function runDebugEndScenario(env: ScenarioEnv): Promise<void> {
   });
   try {
     await step("debug_running", async () => {
+      await env.sleep(DEBUG_SETTLE_MS);
       await env.report("debug_starting", { epochMs: env.epochNow() });
       await pressAndConfirm(env, "run-debug", () => debug.store.getState().sessions.length > 0);
       await env.report("debug_running", {

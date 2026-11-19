@@ -18,7 +18,7 @@ test("the empty project is pw-perf as at the end of M5 and the M6 steps run the 
   const steps = measurements({ short: false });
   assert.deepEqual(
     steps.map((s) => s.kind),
-    ["empty", "idle-procs", "run-flood", "debug-end"],
+    ["empty", "idle-procs", "idle-procs-trusted", "run-flood", "debug-end"],
   );
   const by = Object.fromEntries(steps.map((s) => [s.kind, s]));
   for (const s of steps) assert.equal(arg(s.args, "--app"), APP, s.kind);
@@ -26,9 +26,11 @@ test("the empty project is pw-perf as at the end of M5 and the M6 steps run the 
   assert.equal(by.empty.tool, "pw-perf");
   assert.equal(arg(by.empty.args, "--scenario"), undefined);
   assert.equal(arg(by.empty.args, "--runs"), undefined);
-  for (const kind of ["idle-procs", "run-flood", "debug-end"]) {
+  assert.ok(by["idle-procs-trusted"].args.includes("--trusted"));
+  assert.ok(!by["idle-procs"].args.includes("--trusted"));
+  for (const kind of ["idle-procs", "idle-procs-trusted", "run-flood", "debug-end"]) {
     assert.equal(by[kind].tool, "driver", kind);
-    assert.ok(by[kind].args.includes(kind), kind);
+    assert.ok(by[kind].args.includes(kind.replace("-trusted", "")), kind);
     assert.equal(arg(by[kind].args, "--runs"), "3", kind);
   }
   // 번들 어댑터 넷 중 따로 뜨는 어댑터 프로세스가 있는 셋(java-debug 는 jdtls 안에서 돈다).

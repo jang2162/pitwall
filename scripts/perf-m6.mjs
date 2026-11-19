@@ -58,6 +58,12 @@ export function measurements({ short, only }) {
       ],
     },
     { kind: "idle-procs", tool: "driver", args: [...app, "idle-procs", ...runs(3)] },
+    // 신뢰 프로젝트(실행 구성 없음) — 열 때 런타임 환경의 로그인 셸이 잠깐 뜨는 것이 M5 부터의 동작이다.
+    {
+      kind: "idle-procs-trusted",
+      tool: "driver",
+      args: [...app, "idle-procs", "--trusted", ...runs(3)],
+    },
     { kind: "run-flood", tool: "driver", args: [...app, "run-flood", ...runs(3)] },
     {
       kind: "debug-end",

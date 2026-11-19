@@ -391,6 +391,8 @@ mod drive {
         pub dap_dir: PathBuf,
         pub adapters: Vec<String>,
         pub endings: Vec<String>,
+        /// `idle-procs` 의 프로젝트를 신뢰로 등록한다(실행 구성 없이 — 신뢰 프로젝트는 열 때 런타임 환경을 읽는다).
+        pub trusted: bool,
     }
 
     fn scenario(name: &str) -> [(OsString, OsString); 1] {
@@ -421,7 +423,7 @@ mod drive {
     ) -> Result<Vec<Value>, String> {
         let mut runs = Vec::new();
         for i in 0..opts.runs {
-            let run = instance::setup(scratch, &format!("run-{i}"), false)?;
+            let run = instance::setup(scratch, &format!("run-{i}"), opts.trusted)?;
             let load_start = instance::load1();
             let app = match instance::launch(&opts.binary, &run, &[]) {
                 Ok(app) => app,
@@ -847,7 +849,9 @@ mod drive {
                         }
                         std::thread::sleep(Duration::from_millis(25));
                     }
-                    let starting = mark_data(&run, "debug_starting").map(|m| m.epoch_ms);
+                    // 웹뷰가 누르기 직전에 잰 벽시계(표시가 앱에 닿은 때보다 IPC 하나만큼 이르다).
+                    let starting =
+                        mark_data(&run, "debug_starting").and_then(|m| m.data?["epochMs"].as_f64());
                     let ended = mark_data(&run, "debug_ended");
                     let error = scenario_error(&run);
                     let judgement = match (
@@ -915,6 +919,7 @@ fn parse(args: &[String]) -> Result<drive::Opts, String> {
         dap_dir: std::path::PathBuf::from("target/dap-adapters"),
         adapters: vec!["codelldb".into(), "js-debug".into(), "debugpy".into()],
         endings: vec!["exit".into(), "stop".into()],
+        trusted: false,
     };
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -933,6 +938,7 @@ fn parse(args: &[String]) -> Result<drive::Opts, String> {
             "--flood-rate" => opts.flood_rate = number("--flood-rate")?,
             "--flood-secs" => opts.flood_secs = number("--flood-secs")?.max(1),
             "--after-secs" => opts.after_secs = number("--after-secs")?,
+            "--trusted" => opts.trusted = true,
             "--dap-dir" => opts.dap_dir = std::path::PathBuf::from(value()?),
             "--adapters" => opts.adapters = value()?.split(',').map(str::to_owned).collect(),
             "--endings" => opts.endings = value()?.split(',').map(str::to_owned).collect(),
@@ -956,8 +962,11 @@ fn measure(opts: &drive::Opts) -> Result<u8, String> {
     std::fs::create_dir_all(&scratch).map_err(|e| e.to_string())?;
     let definition = match opts.kind.as_str() {
         "idle-procs" => format!(
-            "per run a fresh app on an empty untrusted project (no run configuration, no debug); from first frame + {}s for {}s: `pitwall` (the app process — the Host is in it) idle and interrupt wakeups and CPU time (rusage deltas), its threads by name, and the app's descendant processes every 1 s; {} runs",
-            opts.settle_secs, opts.window_secs, opts.runs
+            "per run a fresh app on an empty {} project (no run configuration, no debug); from first frame + {}s for {}s: `pitwall` (the app process — the Host is in it) idle and interrupt wakeups and CPU time (rusage deltas), its threads by name, and the app's descendant processes every 1 s; {} runs",
+            if opts.trusted { "trusted" } else { "untrusted" },
+            opts.settle_secs,
+            opts.window_secs,
+            opts.runs
         ),
         "run-flood" => format!(
             "per run a fresh app on an empty trusted project with one shell run configuration `pw-perf-flood --rate {} --secs {}` started from the title bar (in-app scenario run-flood); the webview measures rAF intervals for 20 s from the first console output; the driver samples `pitwall` and WebContent phys_footprint every 1 s from launch until {}s after the console caught up; Host growth = max − the last sample before `run_started`; {} runs",
