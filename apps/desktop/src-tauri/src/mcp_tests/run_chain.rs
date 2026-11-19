@@ -538,7 +538,8 @@ async fn a_step_changed_by_an_earlier_step_stops_with_plan_changed() {
     assert!(runs_of(&host, &alpha, "server").await.is_empty());
 }
 
-/// ⑥ 사람이 본 구성의 `before` 에 본 적 없는 구성을 더하면 `run_start` 가 묻는다(`before` 가 해시 · 계획에 든다). 사람이 본 사슬을
+/// ⑥ 사람이 본 구성의 `before` 에 구성을 더하면 `run_start` 가 묻는다 — 더한 구성을 사람이 따로 본 적 있어도(`before` 가 해시 ·
+/// 계획에 든다). 사람이 본 사슬을
 /// 이룬 `before` 대상의 내용을 바꿔치기해도 묻는다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn adding_an_unseen_before_to_a_seen_config_asks() {
@@ -547,6 +548,9 @@ async fn adding_an_unseen_before_to_a_seen_config_asks() {
     let (alpha, root) = trusted(&host, "alpha");
     sleeper(&root, "server", "one");
     shell(&root, "prep", "true", &[]);
+    // 사람이 둘을 따로 돌렸다 — 둘 다 본 구성이다. 그래도 `server` 에 `before = ["prep"]` 를 더한 것은 본 적 없는 내용이다(`before`
+    // 가 `server` 의 해시에 든다 — 빼면 이 시험이 실패한다).
+    window_chain(&host, &alpha, "prep").await;
     window_chain(&host, &alpha, "server").await;
     stop_all(&alpha);
     let session = host.session(SessionRequest::default()).await;
