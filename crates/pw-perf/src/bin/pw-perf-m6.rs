@@ -154,9 +154,11 @@ mod report {
 
     /// 자손 기록(pid → 이름 · 처음 · 마지막으로 본 때 · 처음 없어진 때)에서 세션의 판정.
     pub(super) fn debug_judgement(procs: &[Value], starting: f64, ended: f64) -> Value {
+        // 누르기 전에 떠 있던 자손 — 그 앞에 이미 끝난 것(신뢰 프로젝트를 열 때 런타임 환경을 읽는 로그인 셸)은 세지 않는다.
         let before: Vec<&Value> = procs
             .iter()
             .filter(|p| p["first_ms"].as_f64().is_some_and(|t| t < starting))
+            .filter(|p| p["gone_ms"].as_f64().is_none_or(|g| g > starting))
             .collect();
         let session: Vec<&Value> = procs
             .iter()
@@ -1019,10 +1021,64 @@ fn measure(opts: &drive::Opts) -> Result<u8, String> {
     Ok(if valid * 2 < runs.len() { 3 } else { 0 })
 }
 
+/// `pw-perf-m6 resummarize <result.json>`: 저장된 회 기록(자손 · 표시)으로 판정과 요약을 다시 계산해 그 폴더의 `result.json` ·
+/// `summary.md` 를 고쳐 쓴다 — 판정 규칙을 고친 뒤 다시 재지 않고 같은 기록에 적용한다.
+#[cfg(target_os = "macos")]
+fn resummarize(path: &std::path::Path) -> Result<u8, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut result: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let mut runs = result["runs"].as_array().cloned().unwrap_or_default();
+    let kind = result["kind"].as_str().unwrap_or_default().to_owned();
+    if kind == "debug-end" {
+        for r in &mut runs {
+            let (Some(procs), Some(start), Some(end)) = (
+                r["processes"].as_array().cloned(),
+                r["starting_epoch_ms"].as_f64(),
+                r["ended"]["epochMs"].as_f64(),
+            ) else {
+                continue;
+            };
+            r["judgement"] = debug_judgement(&procs, start, end);
+        }
+    }
+    result["summary"] = match kind.as_str() {
+        "idle-procs" => idle_summary(&runs),
+        "run-flood" => flood_summary(&runs),
+        _ => debug_summary(&runs),
+    };
+    result["runs"] = json!(runs);
+    result["resummarized"] = json!(true);
+    let dir = path.parent().unwrap_or(std::path::Path::new("."));
+    std::fs::write(
+        path,
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&result).unwrap_or_default()
+        ),
+    )
+    .and_then(|()| std::fs::write(dir.join("summary.md"), markdown(&result)))
+    .map_err(|e| e.to_string())?;
+    eprint!("{}", markdown(&result));
+    Ok(0)
+}
+
 fn main() -> std::process::ExitCode {
     #[cfg(target_os = "macos")]
     {
         let args: Vec<String> = std::env::args().skip(1).collect();
+        if args.first().map(String::as_str) == Some("resummarize") {
+            return match args
+                .get(1)
+                .ok_or_else(|| "resummarize <result.json>".to_owned())
+                .and_then(|p| resummarize(std::path::Path::new(p)))
+            {
+                Ok(code) => std::process::ExitCode::from(code),
+                Err(e) => {
+                    eprintln!("pw-perf-m6: {e}");
+                    std::process::ExitCode::from(1)
+                }
+            };
+        }
         match parse(&args).and_then(|o| measure(&o)) {
             Ok(code) => std::process::ExitCode::from(code),
             Err(e) => {
@@ -1072,6 +1128,15 @@ mod tests {
         assert_eq!(
             debug_judgement(&[p(110.0, None)], 100.0, 1000.0)["pass"],
             json!(false)
+        );
+        // 누르기 전에 끝난 자손(프로젝트를 열 때의 로그인 셸)은 「시작 전의 자손」 이 아니다.
+        assert_eq!(
+            debug_judgement(
+                &[p(20.0, Some(80.0)), p(110.0, Some(1100.0))],
+                100.0,
+                1000.0
+            )["pass"],
+            json!(true)
         );
         // 디버그를 시작하기 전에 이미 자손이 있었다 — 「debug.start 때만 뜬다」 가 아니다.
         assert_eq!(
