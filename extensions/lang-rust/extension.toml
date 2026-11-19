@@ -32,5 +32,9 @@ format_unreliable_while_progress = ["Roots Scanned"]
 languages = ["rust"]
 mason = "codelldb"
 command = "codelldb"
-launch = { program = "{program}", args = "{args}", cwd = "{cwd}", env = "{env}", stopOnEntry = "{stop_on_entry}", sourceLanguages = ["rust"] }
-attach = { pid = "{pid}", program = "{program}", waitFor = "{wait_for}", sourceLanguages = ["rust"] }
+launch = { program = "{program}", args = "{args}", cwd = "{cwd}", env = "{env}", stopOnEntry = "{stop_on_entry}", sourceLanguages = [
+  "rust",
+] }
+attach = { pid = "{pid}", program = "{program}", waitFor = "{wait_for}", sourceLanguages = [
+  "rust",
+] }

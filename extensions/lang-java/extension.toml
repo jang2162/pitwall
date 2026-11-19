@@ -51,5 +51,7 @@ enabled = true
 [contributes.debug_adapters.java-debug]
 languages = ["java", "kotlin"]
 mason = "java-debug-adapter"
-start = { lsp = "jdtls", command = "vscode.java.startDebugSession", bundles = ["java-debug-adapter/com.microsoft.java.debug.plugin.jar"] }
+start = { lsp = "jdtls", command = "vscode.java.startDebugSession", bundles = [
+  "java-debug-adapter/com.microsoft.java.debug.plugin.jar",
+] }
 attach = { hostName = "127.0.0.1", port = "{port}", projectName = "{project_name}", timeout = "{timeout}" }
