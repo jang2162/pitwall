@@ -34,10 +34,14 @@ root_markers = ["pyproject.toml", "ruff.toml", ".ruff.toml"]
 # 디버거(17-m6-plan.md M6-19 · 결정 M6-D2). debugpy 는 Pitwall 이 만든 전용 venv 에 설치되고(`pyvenv:` — 런처가 `python -I -m
 # debugpy.adapter` 로 띄운다) 표준 입출력으로 말한다. 대상을 돌리는 python 은 `[debug] python` 이다 — 없으면 debugpy 는 어댑터의
 # python(전용 venv — 프로젝트의 패키지가 없다)을 쓴다. 대상은 `runInTerminal` 로 실행 관리자의 PTY 에서 돈다(debugpy 의 기본 `console`).
+# attach 는 둘이다(M6-19 실측): ① `[debug] listen = { port = 5678 }` — 어댑터가 127.0.0.1:5678 에서 기다리고, 대상을
+# `python -m debugpy --connect 127.0.0.1:5678 app.py` 로 띄우면 붙어 온다 ② `[debug] pid = …` — 떠 있는 프로세스에 주입(gdb/lldb 필요).
+# `python -m debugpy --listen` 으로 띄운 대상에는 붙지 못한다 — 그 포트에는 대상이 띄운 어댑터가 듣고, debugpy 어댑터의 `connect`
+# 는 그 대상이 띄운 어댑터에서만 쓰는 모드다.
 [contributes.debug_adapters.debugpy]
 languages = ["python"]
 mason = "debugpy"
 command = "debugpy-adapter"
 requires = { python = ">=3.9" }
 launch = { program = "{program}", module = "{module}", args = "{args}", cwd = "{cwd}", env = "{env}", python = "{python}", justMyCode = "{just_my_code}", stopOnEntry = "{stop_on_entry}", console = "integratedTerminal" }
-attach = { host = "{host}", port = "{port}", processId = "{pid}", justMyCode = "{just_my_code}" }
+attach = { listen = "{listen}", processId = "{pid}", justMyCode = "{just_my_code}" }

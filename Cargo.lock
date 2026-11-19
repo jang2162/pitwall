@@ -5562,12 +5562,15 @@ dependencies = [
  "pw-runtime",
  "pw-wire",
  "schemars 1.2.3",
+ "semver",
  "serde",
  "serde_json",
  "specta",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
