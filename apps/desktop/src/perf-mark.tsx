@@ -26,6 +26,8 @@ export const PERF_SCENARIOS = [
   "lsp-idle",
   "symbols",
   "classes",
+  "run-flood",
+  "debug-end",
 ] as const;
 export type PerfScenario = (typeof PERF_SCENARIOS)[number];
 

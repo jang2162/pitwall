@@ -229,6 +229,12 @@ pub fn exe_path(pid: u32) -> Option<PathBuf> {
 pub struct Usage {
     pub footprint: u64,
     pub resident: u64,
+    /// 패키지 유휴에서 깨운 횟수(누적 — Activity Monitor 의 「유휴 깨우기」).
+    pub idle_wakeups: u64,
+    /// 인터럽트로 깨운 횟수(누적).
+    pub interrupt_wakeups: u64,
+    /// 사용자 + 시스템 CPU 시간(누적, ns).
+    pub cpu_ns: u64,
 }
 
 /// `phys_footprint`(Activity Monitor 의 「메모리」) 와 RSS.
@@ -248,8 +254,84 @@ pub fn usage(pid: u32) -> Option<Usage> {
         Usage {
             footprint: info.ri_phys_footprint,
             resident: info.ri_resident_size,
+            idle_wakeups: info.ri_pkg_idle_wkups,
+            interrupt_wakeups: info.ri_interrupt_wkups,
+            cpu_ns: mach_to_ns(info.ri_user_time.saturating_add(info.ri_system_time)),
         }
     })
+}
+
+/// `<mach/mach_time.h>` 의 `mach_timebase_info_data_t`(libc 의 것은 deprecated 다).
+#[repr(C)]
+struct Timebase {
+    numer: u32,
+    denom: u32,
+}
+
+unsafe extern "C" {
+    fn mach_timebase_info(info: *mut Timebase) -> libc::c_int;
+}
+
+/// `rusage_info` 의 시간(mach 절대 시간 단위 — Apple 실리콘은 ns 가 아니다)을 ns 로.
+fn mach_to_ns(t: u64) -> u64 {
+    static BASE: OnceLock<(u32, u32)> = OnceLock::new();
+    let (numer, denom) = *BASE.get_or_init(|| {
+        let mut info = Timebase { numer: 0, denom: 0 };
+        // SAFETY: 구조체 하나를 채운다.
+        let code = unsafe { mach_timebase_info(&mut info) };
+        if code == 0 && info.denom != 0 {
+            (info.numer, info.denom)
+        } else {
+            (1, 1)
+        }
+    });
+    (u128::from(t) * u128::from(numer) / u128::from(denom)) as u64
+}
+
+/// `PROC_PIDLISTTHREADS`(libc 에 없다 — `<sys/proc_info.h>` 의 값).
+const PROC_PIDLISTTHREADS: libc::c_int = 6;
+
+/// 프로세스의 스레드 이름(이름 없는 스레드는 빈 글). 끝났거나 다른 사용자의 프로세스면 빈 목록.
+pub fn thread_names(pid: u32) -> Vec<String> {
+    let mut ids = vec![0u64; 4096];
+    // SAFETY: 버퍼 크기를 그대로 넘기고, 돌려준 바이트 수만큼만 읽는다.
+    let n = unsafe {
+        libc::proc_pidinfo(
+            pid as libc::c_int,
+            PROC_PIDLISTTHREADS,
+            0,
+            ids.as_mut_ptr().cast(),
+            (ids.len() * size_of::<u64>()) as libc::c_int,
+        )
+    };
+    ids.truncate(n.max(0) as usize / size_of::<u64>());
+    ids.into_iter()
+        .filter_map(|id| {
+            let mut info = std::mem::MaybeUninit::<libc::proc_threadinfo>::zeroed();
+            let size = size_of::<libc::proc_threadinfo>() as libc::c_int;
+            // SAFETY: PROC_PIDTHREADINFO 는 그 스레드의 proc_threadinfo 하나를 채운다.
+            let got = unsafe {
+                libc::proc_pidinfo(
+                    pid as libc::c_int,
+                    libc::PROC_PIDTHREADINFO,
+                    id,
+                    info.as_mut_ptr().cast(),
+                    size,
+                )
+            };
+            (got == size).then(|| {
+                // SAFETY: 크기만큼 채워졌다.
+                let info = unsafe { info.assume_init() };
+                let bytes: Vec<u8> = info
+                    .pth_name
+                    .iter()
+                    .take_while(|&&c| c != 0)
+                    .map(|&c| c as u8)
+                    .collect();
+                String::from_utf8_lossy(&bytes).into_owned()
+            })
+        })
+        .collect()
 }
 
 /// 부모 pid. 끝났거나 다른 사용자의 프로세스면 `None`.
@@ -354,6 +436,27 @@ mod tests {
         assert_eq!(parent_pid(u32::MAX >> 1), None);
     }
 
+    /// 이름을 준 스레드가 그 이름으로 보인다 — 실행 관리자의 `run-ports` 같은 스레드를 이 이름으로 찾는다.
+    #[test]
+    fn a_named_thread_is_listed_by_its_name() {
+        // 이름은 새 스레드가 시작하며 스스로 붙인다 — 시작을 알린 뒤에 읽는다.
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
+        let t = std::thread::Builder::new()
+            .name("pw-perf-probe".into())
+            .spawn(move || {
+                let _ = ready_tx.send(());
+                rx.recv()
+            })
+            .unwrap();
+        ready_rx.recv().unwrap();
+        let names = thread_names(std::process::id());
+        drop(tx);
+        let _ = t.join();
+        assert!(names.iter().any(|n| n == "pw-perf-probe"), "{names:?}");
+        assert!(thread_names(u32::MAX >> 1).is_empty());
+    }
+
     #[test]
     fn this_process_is_listed_with_its_path_and_memory() {
         let me = std::process::id();
@@ -363,7 +466,7 @@ mod tests {
             std::env::current_exe().unwrap().canonicalize().unwrap()
         );
         let usage = usage(me).unwrap();
-        assert!(usage.footprint > 0 && usage.resident > 0);
+        assert!(usage.footprint > 0 && usage.resident > 0 && usage.cpu_ns > 0);
         assert!(sysctl_u64("hw.memsize").unwrap() > 0);
         assert!(!sysctl_string("kern.osproductversion").unwrap().is_empty());
     }

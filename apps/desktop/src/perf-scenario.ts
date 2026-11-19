@@ -42,6 +42,8 @@ export const SCENARIOS = [
   "lsp-idle",
   "symbols",
   "classes",
+  "run-flood",
+  "debug-end",
 ] as const;
 export type Scenario = (typeof SCENARIOS)[number];
 
@@ -561,6 +563,10 @@ export async function runScenario(
       // DB 시나리오(perf-scenario-db.ts)는 그때 불러온다.
       const db = await import("./perf-scenario-db");
       await (scenario === "db" ? db.runDbScenario(env) : db.runDbIdleScenario(env));
+    } else if (scenario === "run-flood" || scenario === "debug-end") {
+      // 실행 · 디버그 시나리오(perf-scenario-run.ts, M6-22)도 그때 불러온다.
+      const run = await import("./perf-scenario-run");
+      await run.runRunScenario(env, scenario);
     } else {
       // LSP · 심볼 시나리오(perf-scenario-lsp.ts)도 그때 불러온다.
       const lsp = await import("./perf-scenario-lsp");

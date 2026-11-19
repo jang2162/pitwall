@@ -30,8 +30,8 @@ pub const PARENT_ENV: &str = "PITWALL_PERF_PARENT";
 /// 프로젝트 창이 첫 프레임 뒤에 돌릴 시나리오. 측정 모드([`MARK_ENV`])에서만 읽는다.
 pub const SCENARIO_ENV: &str = "PITWALL_PERF_SCENARIO";
 
-/// 아는 시나리오(src/perf-scenario.ts 의 `SCENARIOS` — `db` · `db-idle` 은 src/perf-scenario-db.ts, `lsp` 부터는
-/// src/perf-scenario-lsp.ts). 모르는 이름은 무시한다 — 창 주소에는 이 목록의 값만 들어간다.
+/// 아는 시나리오(src/perf-scenario.ts 의 `SCENARIOS` — `db` · `db-idle` 은 src/perf-scenario-db.ts, `lsp` 부터 `classes` 까지는
+/// src/perf-scenario-lsp.ts, `run-flood` · `debug-end` 는 src/perf-scenario-run.ts). 모르는 이름은 무시한다 — 창 주소에는 이 목록의 값만 들어간다.
 pub const SCENARIOS: &[&str] = &[
     "git",
     "db",
@@ -42,6 +42,8 @@ pub const SCENARIOS: &[&str] = &[
     "lsp-idle",
     "symbols",
     "classes",
+    "run-flood",
+    "debug-end",
 ];
 
 /// 시나리오가 남기는 표시 이름(src/perf-scenario.ts · src/perf-scenario-db.ts · src/perf-scenario-lsp.ts 의 `env.report` — 시험이 그 두 파일과 같은지 본다). 하네스가 판정에 쓰는
@@ -87,6 +89,13 @@ pub const SCENARIO_EVENTS: &[&str] = &[
     "typing_keys",
     // 유휴 중에 그리기 갱신을 거는 출처(15-m4-plan §3 「rust-analyzer 창이 유휴에도 다시 그리는 까닭」).
     "idle_sources",
+    // 실행 · 디버그 시나리오(M6-22, src/perf-scenario-run.ts).
+    "run_started",
+    "flood_frames",
+    "flood_done",
+    "debug_starting",
+    "debug_running",
+    "debug_ended",
 ];
 
 /// 시나리오 표시 하나의 `data` 상한(JSON 바이트). 가장 큰 것(스크롤 통계)이 1 KiB 남짓이다.
@@ -293,6 +302,7 @@ mod tests {
             include_str!("../../src/perf-scenario.ts"),
             include_str!("../../src/perf-scenario-db.ts"),
             include_str!("../../src/perf-scenario-lsp.ts"),
+            include_str!("../../src/perf-scenario-run.ts"),
         ];
         let mut used: Vec<&str> = sources
             .iter()
