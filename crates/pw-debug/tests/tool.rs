@@ -762,6 +762,13 @@ fn stopping_scenario() -> Scenario {
             }],
         )
         .on(
+            "threads",
+            vec![Action::Event {
+                event: "continued".into(),
+                body: json!({ "threadId": 1, "allThreadsContinued": true }),
+            }],
+        )
+        .on(
             "continue",
             vec![Action::Event {
                 event: "continued".into(),
@@ -822,6 +829,27 @@ async fn without_a_session_or_while_running_the_state_says_so() {
     assert!(eventually(SOON, || run.stops().is_empty()).await);
     let again = c.ok(STATE, json!({ "projectId": f.project })).await;
     assert_eq!(again["state"], "running");
+
+    // 어댑터의 `continued` 이벤트만으로도(사람의 요청 없이 — 여기서는 `threads` 에 딸려 온다) 다시 돈다.
+    pause(&f, &run_id).await;
+    f.window(&f.project)
+        .ok("debug.threads", json!({ "runId": run_id }))
+        .await;
+    assert!(
+        eventually(SOON, || run.stops().is_empty()).await,
+        "the continued event was not seen"
+    );
+
+    // 어댑터가 `continued` 를 알리지 않는 스텝(DAP 는 요청의 답으로 갈음한다)도 사람의 스텝이 지운다.
+    pause(&f, &run_id).await;
+    f.window(&f.project)
+        .ok(
+            "debug.control",
+            json!({ "runId": run_id, "threadId": 1, "action": "next" }),
+        )
+        .await;
+    let stepped = c.ok(STATE, json!({ "projectId": f.project })).await;
+    assert_eq!(stepped["state"], "running");
 
     f.stop(&f.project, &run_id).await;
     let ended = c
