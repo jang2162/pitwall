@@ -31,6 +31,7 @@ const host = vi.hoisted(() => ({
   calls: [] as string[],
   frames: [] as unknown[],
   sources: [] as unknown[],
+  stacks: [] as unknown[],
   fsPaths: [] as string[],
   send: (_m: object) => {},
 }));
@@ -111,6 +112,7 @@ vi.mock("../tauri-transport", async () => {
           case "debug.threads":
             return reply({ threads: [{ id: 1, name: "main" }] });
           case "debug.stack":
+            host.stacks.push(m.params);
             return reply({ frames: host.frames, totalFrames: null });
           case "debug.scopes":
             return reply({ scopes: [] });
@@ -173,6 +175,7 @@ beforeEach(() => {
   host.calls = [];
   host.frames = [];
   host.sources = [];
+  host.stacks = [];
   host.fsPaths = [];
   invoked.length = 0;
   localStorage.clear();
@@ -228,11 +231,11 @@ function event(topic: string, payload: unknown) {
 const debugRun = (patch: Partial<RunInfo> = {}) =>
   runInfo({ runId: "d1", kind: "debug", name: "app", config: "app", ...patch });
 
-function stopped() {
+function stopped(session = 1) {
   return {
     projectId: "p1",
     runId: "d1",
-    session: 1,
+    session,
     reason: "breakpoint",
     description: null,
     threadId: 1,
@@ -335,4 +338,27 @@ it("ends the session when its run exits without a debug.ended (the adapter died)
   expect(document.querySelector("[data-debug-state=ended]")).not.toBeNull();
   expect(windowDebug().current.getState().frame).toBeUndefined();
   expect(windowDebug().debugging()).toBe(false);
+});
+
+it("asks the child session that stopped (startDebugging)", async () => {
+  host.runs = [debugRun()];
+  host.frames = [
+    {
+      id: 12,
+      name: "main",
+      path: "/main/src/main.js",
+      sourceReference: null,
+      line: 2,
+      column: 1,
+      presentationHint: null,
+      token: null,
+    },
+  ];
+  await mount();
+  await vi.waitFor(() => expect(host.runSubscriptions.length).toBeGreaterThan(0));
+  await settle();
+  await act(async () => event("debug.stopped", stopped(7)));
+  await settle();
+  await vi.waitFor(() => expect(host.stacks).toHaveLength(1));
+  expect(host.stacks[0]).toMatchObject({ runId: "d1", session: 7, threadId: 1 });
 });

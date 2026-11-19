@@ -5,7 +5,8 @@
 // - 창이 Host 에 붙으면 `debug.stopped` · `debug.continued` · `debug.ended` · `debug.output` · `run.started` · `run.exited` 를 듣고,
 //   `run.list` 에서 돌고 있는 디버그 실행을 세션으로 만든다(창을 다시 불러와도 이어진다 — 멈춰 있던 세션은 다음 멈춤부터 보인다).
 // - 멈추면(`debug.stopped`) 그 세션을 고르고 스레드 · 그 스레드의 콜스택을 읽고 맨 위 프레임을 고른다 — 에디터가 그 줄로 가고 줄을
-//   칠한다. 루트 밖 프레임은 토큰으로 읽기 전용 탭을 연다(결정 M4-D13 과 같은 규칙 — `debug.source`).
+//   칠한다. 루트 밖 프레임은 토큰으로 읽기 전용 탭을 연다(결정 M4-D13 과 같은 규칙 — `debug.source`). 멈춘 곳이 세션 나무의
+//   자식(`startDebugging` — js-debug 등)이면 그 세션(`debug.stopped.session`)에 묻는다.
 // - 변수는 범위만 처음에 읽고 그 안은 펼칠 때 읽는다(variables-tree.tsx). 워치는 사람이 적은 식이라 멈출 때마다 다시 평가한다.
 // - 세션이 끝나거나(`debug.ended`) 어댑터가 죽어 실행이 끝나면(`run.exited`) 그 세션은 「끝남」 이고, 스레드 · 프레임 · 멈춘 줄을
 //   걷는다. 끝난 세션은 다음 세션이 열릴 때까지 툴 윈도우에 남는다(그 콘솔 기록을 볼 수 있게).
@@ -61,6 +62,8 @@ export interface DebugSessionView {
   state: SessionState;
   /** 멈춘 스레드와 까닭. */
   stopped: { threadId: number | null; reason: string; description: string | null } | null;
+  /** 멈춘 세션 나무의 세션(`startDebugging` 의 자식이면 그 id — js-debug 등). 모르면 `null`(뿌리). */
+  session: number | null;
   console: ConsoleLine[];
 }
 
@@ -173,6 +176,14 @@ export class DebugSessions {
     };
   }
 
+  /** `debug.*` 의 세션 인자: 그 실행과 멈춘 세션(자식이면). */
+  private at(runId: string): { runId: string; session?: number } {
+    const s = this.store.getState().sessions.find((x) => x.runId === runId);
+    return s?.session !== null && s?.session !== undefined
+      ? { runId, session: s.session }
+      : { runId };
+  }
+
   /** 지금 고른 세션. */
   active(): DebugSessionView | undefined {
     const s = this.store.getState();
@@ -226,11 +237,11 @@ export class DebugSessions {
     const threadId = st.threadId ?? s.stopped?.threadId ?? st.threads[0]?.id;
     let thread = threadId;
     if (thread === undefined || thread === null) {
-      const { threads } = await deps.client.call("debug.threads", { runId: s.runId });
+      const { threads } = await deps.client.call("debug.threads", this.at(s.runId));
       thread = threads[0]?.id;
     }
     if (thread === undefined || thread === null) return;
-    await deps.client.call("debug.control", { runId: s.runId, threadId: thread, action });
+    await deps.client.call("debug.control", { ...this.at(s.runId), threadId: thread, action });
   }
 
   /** 디버그 실행을 끝낸다(`run.stop` — 디버그 실행도 실행이다). */
@@ -249,7 +260,10 @@ export class DebugSessions {
     this.store.setState({ frameId, scopes: [] });
     this.showFrame(s, frame, open);
     try {
-      const { scopes } = await this.need().client.call("debug.scopes", { runId: s.runId, frameId });
+      const { scopes } = await this.need().client.call("debug.scopes", {
+        ...this.at(s.runId),
+        frameId,
+      });
       if (epoch === this.epoch && this.store.getState().frameId === frameId)
         this.store.setState({ scopes });
     } catch (e) {
@@ -263,7 +277,7 @@ export class DebugSessions {
     const s = this.active();
     if (!s) return { variables: [], start, count };
     return this.need().client.call("debug.variables", {
-      runId: s.runId,
+      ...this.at(s.runId),
       variablesReference,
       start,
       count,
@@ -279,7 +293,7 @@ export class DebugSessions {
     this.log(s.runId, { kind: "input", text });
     try {
       const result = await this.need().client.call("debug.evaluate", {
-        runId: s.runId,
+        ...this.at(s.runId),
         expression: text,
         frameId: this.store.getState().frameId ?? null,
         context: "repl",
@@ -381,6 +395,7 @@ export class DebugSessions {
           worktree: run.worktree,
           state: run.state === "exited" ? "ended" : "running",
           stopped: null,
+          session: null,
           console: [],
         },
       ],
@@ -395,6 +410,7 @@ export class DebugSessions {
     this.patch(e.runId, {
       state: "stopped",
       stopped: { threadId: e.threadId, reason: e.reason, description: e.description },
+      session: e.session,
     });
     this.clearFrames();
     this.store.setState({ activeRunId: e.runId });
@@ -416,7 +432,7 @@ export class DebugSessions {
     const deps = this.need();
     const epoch = ++this.epoch;
     try {
-      const { threads } = await deps.client.call("debug.threads", { runId });
+      const { threads } = await deps.client.call("debug.threads", this.at(runId));
       if (epoch !== this.epoch) return;
       const thread = threadId ?? threads[0]?.id;
       this.store.setState({ threads, threadId: thread });
@@ -438,7 +454,7 @@ export class DebugSessions {
 
   private async readStack(runId: string, threadId: number, epoch: number) {
     const { frames } = await this.need().client.call("debug.stack", {
-      runId,
+      ...this.at(runId),
       threadId,
       levels: STACK_LEVELS,
     });
@@ -502,7 +518,7 @@ export class DebugSessions {
       st.watches.map(async (w): Promise<WatchValue> => {
         try {
           const result = await this.need().client.call("debug.evaluate", {
-            runId: s.runId,
+            ...this.at(s.runId),
             expression: w.expression,
             frameId: st.frameId ?? null,
             context: "watch",
