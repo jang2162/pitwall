@@ -154,7 +154,8 @@ pub fn registry(packages: Vec<Value>, rows: &[Row]) -> Arc<ToolsRegistry> {
     registry_with_overrides(packages, rows, &[])
 }
 
-/// 패치 고정 행(결정 D71)을 함께 둔 registry.
+/// 패치 고정 행(결정 D71)을 함께 둔 registry. 쓰는 곳(`adapters`)이 unix 만이다.
+#[cfg(unix)]
 pub fn registry_patched(
     packages: Vec<Value>,
     rows: &[Row],
