@@ -185,8 +185,12 @@ pub(crate) struct ChainStepRun {
     ///
     /// 띄운 실행은 그 자리에서(블로킹 작업 안에서도) [`attach_or_stop`] 으로 사슬에 넣는다 — 호출이 버려진 뒤 끝난 띄우기도 멈춘
     /// 사슬을 보고 그 실행을 멈춘다(리뷰 F4).
-    pub launch: Box<dyn FnOnce(bool, Arc<ChainCtl>) -> BoxFuture<Result<RunInfo, RpcError>> + Send>,
+    pub launch: StepLaunch,
 }
+
+/// [`ChainStepRun::launch`] — (다시 볼까, 사슬) → 띄운 실행.
+pub(crate) type StepLaunch =
+    Box<dyn FnOnce(bool, Arc<ChainCtl>) -> BoxFuture<Result<RunInfo, RpcError>> + Send>;
 
 /// 띄운 실행을 사슬에 넣는다. 사슬이 이미 멈췄으면 그 실행을 멈추고 `chainStopped`.
 pub(crate) fn attach_or_stop(

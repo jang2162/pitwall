@@ -541,7 +541,7 @@ impl Runs {
             .ok_or_else(|| RpcError::internal("the chain started nothing"))?;
         Ok(RunToolStarted {
             run: tool_run(last),
-            sql: (!summaries.is_empty()).then(|| Value::Object(summaries)),
+            sql: (!summaries.is_empty()).then_some(Value::Object(summaries)),
             audit,
             chain: launched.into_iter().map(tool_run).collect(),
         })
