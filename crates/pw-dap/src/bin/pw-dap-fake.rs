@@ -86,7 +86,7 @@ impl Conn {
         }
         #[cfg(not(unix))]
         {
-            let _ = seconds;
+            let _ = (seconds, self.fd);
             eprintln!("pw-dap-fake: hold is unix only");
         }
     }

@@ -447,6 +447,7 @@ fn an_agent_connection_cannot_record_what_a_person_saw() {
     assert!(!f.saw("dev", &hash));
 }
 
+#[cfg(unix)]
 fn shell_parts<'a>(
     config: &'a RunConfig,
     root: &'a Path,

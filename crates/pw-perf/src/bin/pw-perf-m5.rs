@@ -16,253 +16,266 @@
 //! 썼지만 유효한 회(화면 잠금 · 가려진 창 제외)가 요청의 절반보다 적다. 1 — 측정이 실패했다. 앱은 `PITWALL_PERF_PARENT` 로 이
 //! 프로세스를 보고 있어 이 프로세스가 신호로 끝나면 스스로 정상 종료한다.
 
-use serde_json::{Value, json};
+/// 회 결과의 계산과 요약 글. macOS 의 `drive` · `measure` 와 시험만 쓴다(다른 OS 에서는 `main` 이 곧바로 끝난다).
+#[cfg(any(target_os = "macos", test))]
+mod report {
+    use serde_json::{Value, json};
 
-/// 회 하나의 차례: 준비 회(대조) 뒤 세션 · 대조를 번갈아(세션이 먼저 — 첫 측정과 같다).
-fn run_order(warmup: usize, pairs: usize) -> Vec<(bool, bool)> {
-    let mut order: Vec<(bool, bool)> = (0..warmup).map(|_| (true, false)).collect();
-    for _ in 0..pairs {
-        order.push((false, true));
-        order.push((false, false));
+    /// 회 하나의 차례: 준비 회(대조) 뒤 세션 · 대조를 번갈아(세션이 먼저 — 첫 측정과 같다).
+    pub(super) fn run_order(warmup: usize, pairs: usize) -> Vec<(bool, bool)> {
+        let mut order: Vec<(bool, bool)> = (0..warmup).map(|_| (true, false)).collect();
+        for _ in 0..pairs {
+            order.push((false, true));
+            order.push((false, false));
+        }
+        order
     }
-    order
-}
 
-fn median(values: &[f64]) -> Option<f64> {
-    pw_perf::stats::summarize(values).map(|s| s.median)
-}
-
-fn stats(values: &[f64]) -> Value {
-    match pw_perf::stats::summarize(values) {
-        Some(s) => json!({"n": values.len(), "median": s.median, "min": s.min, "max": s.max}),
-        None => json!({"n": 0, "median": null, "min": null, "max": null}),
+    pub(super) fn median(values: &[f64]) -> Option<f64> {
+        pw_perf::stats::summarize(values).map(|s| s.median)
     }
-}
 
-/// 회의 값: 붙은 뒤 `from_secs` 이후 표본(`offset_s` ≥ `from_secs`)의 footprint 중앙값.
-fn settled_mb(samples: &[Value], from_secs: f64) -> Option<f64> {
-    let late: Vec<f64> = samples
-        .iter()
-        .filter(|s| s["offset_s"].as_f64().is_some_and(|o| o >= from_secs))
-        .filter_map(|s| s["footprint_mb"].as_f64())
-        .collect();
-    median(&late)
-}
-
-fn at_offset(samples: &[Value], offset: f64) -> Option<f64> {
-    samples
-        .iter()
-        .find(|s| s["offset_s"].as_f64() == Some(offset))
-        .and_then(|s| s["footprint_mb"].as_f64())
-}
-
-/// 프로세스 이름이 `name` 인 것의 footprint 합(표본 하나).
-fn process_mb(sample: &Value, name: &str) -> f64 {
-    sample["processes"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|p| p["name"].as_str().is_some_and(|n| n.contains(name)))
-        .filter_map(|p| p["footprint_mb"].as_f64())
-        .sum()
-}
-
-/// `mcp-idle` 의 요약: 준비 · 제외 아닌 회만, 세션 · 대조 각각의 회 값(붙은 뒤 `from_secs` 이후 중앙값)과 그 중앙값의 차. 참고로
-/// 붙은 뒤 10초 표본도 같은 꼴로 싣는다.
-fn mcp_summary(runs: &[Value], from_secs: f64) -> Value {
-    let valid = |mcp: bool| {
-        runs.iter()
-            .filter(move |r| {
-                !r["warmup"].as_bool().unwrap_or(false)
-                    && r["excluded"].is_null()
-                    && r["mcp"].as_bool() == Some(mcp)
-            })
-            .collect::<Vec<_>>()
-    };
-    let side = |mcp: bool| {
-        let rs = valid(mcp);
-        let settled: Vec<f64> = rs
-            .iter()
-            .filter_map(|r| settled_mb(r["samples"].as_array()?, from_secs))
-            .collect();
-        let at10: Vec<f64> = rs
-            .iter()
-            .filter_map(|r| at_offset(r["samples"].as_array()?, 10.0))
-            .collect();
-        let at0: Vec<f64> = rs
-            .iter()
-            .filter_map(|r| at_offset(r["samples"].as_array()?, 0.0))
-            .collect();
-        (settled, at10, at0)
-    };
-    let (s_settled, s_10, s_0) = side(true);
-    let (c_settled, c_10, c_0) = side(false);
-    let delta = |a: &[f64], b: &[f64]| match (median(a), median(b)) {
-        (Some(x), Some(y)) => json!(((x - y) * 100.0).round() / 100.0),
-        _ => Value::Null,
-    };
-    let proxies: Vec<f64> = valid(true)
-        .iter()
-        .filter_map(|r| r["session"]["proxy"]["footprint_mb"].as_f64())
-        .collect();
-    json!({
-        "from_secs": from_secs,
-        "session": {"settled": stats(&s_settled), "at10": stats(&s_10), "at0": stats(&s_0)},
-        "control": {"settled": stats(&c_settled), "at10": stats(&c_10), "at0": stats(&c_0)},
-        "settled_delta_mb": delta(&s_settled, &c_settled),
-        "at10_delta_mb": delta(&s_10, &c_10),
-        "proxy_footprint_mb": stats(&proxies),
-    })
-}
-
-/// 준비 회를 뺀 벽시계의 요약과 준비 회 값.
-fn cli_summary(calls: &[Value]) -> Value {
-    let ms: Vec<f64> = calls
-        .iter()
-        .filter(|c| !c["warmup"].as_bool().unwrap_or(false))
-        .filter_map(|c| c["ms"].as_f64())
-        .collect();
-    let warmup = calls
-        .iter()
-        .find(|c| c["warmup"].as_bool() == Some(true))
-        .and_then(|c| c["ms"].as_f64());
-    json!({"wall_ms": stats(&ms), "warmup_ms": warmup})
-}
-
-/// CLI 회 하나가 쓸 만한가: 종료 0 이고 출력에 등록한 프로젝트 폴더가 있다.
-fn cli_call_ok(exit: Option<i32>, stdout: &str, project: &str) -> Result<(), String> {
-    if exit != Some(0) {
-        return Err(format!("exited {exit:?}"));
+    pub(super) fn stats(values: &[f64]) -> Value {
+        match pw_perf::stats::summarize(values) {
+            Some(s) => json!({"n": values.len(), "median": s.median, "min": s.min, "max": s.max}),
+            None => json!({"n": 0, "median": null, "min": null, "max": null}),
+        }
     }
-    let listed: Value =
-        serde_json::from_str(stdout).map_err(|e| format!("output is not JSON: {e}"))?;
-    let canonical = std::fs::canonicalize(project)
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| project.to_owned());
-    if !(has_string(&listed, project) || has_string(&listed, &canonical)) {
-        return Err(format!(
-            "the registered project {project} is not in the output"
+
+    /// 회의 값: 붙은 뒤 `from_secs` 이후 표본(`offset_s` ≥ `from_secs`)의 footprint 중앙값.
+    pub(super) fn settled_mb(samples: &[Value], from_secs: f64) -> Option<f64> {
+        let late: Vec<f64> = samples
+            .iter()
+            .filter(|s| s["offset_s"].as_f64().is_some_and(|o| o >= from_secs))
+            .filter_map(|s| s["footprint_mb"].as_f64())
+            .collect();
+        median(&late)
+    }
+
+    pub(super) fn at_offset(samples: &[Value], offset: f64) -> Option<f64> {
+        samples
+            .iter()
+            .find(|s| s["offset_s"].as_f64() == Some(offset))
+            .and_then(|s| s["footprint_mb"].as_f64())
+    }
+
+    /// 프로세스 이름이 `name` 인 것의 footprint 합(표본 하나).
+    pub(super) fn process_mb(sample: &Value, name: &str) -> f64 {
+        sample["processes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|p| p["name"].as_str().is_some_and(|n| n.contains(name)))
+            .filter_map(|p| p["footprint_mb"].as_f64())
+            .sum()
+    }
+
+    /// `mcp-idle` 의 요약: 준비 · 제외 아닌 회만, 세션 · 대조 각각의 회 값(붙은 뒤 `from_secs` 이후 중앙값)과 그 중앙값의 차. 참고로
+    /// 붙은 뒤 10초 표본도 같은 꼴로 싣는다.
+    pub(super) fn mcp_summary(runs: &[Value], from_secs: f64) -> Value {
+        let valid = |mcp: bool| {
+            runs.iter()
+                .filter(move |r| {
+                    !r["warmup"].as_bool().unwrap_or(false)
+                        && r["excluded"].is_null()
+                        && r["mcp"].as_bool() == Some(mcp)
+                })
+                .collect::<Vec<_>>()
+        };
+        let side = |mcp: bool| {
+            let rs = valid(mcp);
+            let settled: Vec<f64> = rs
+                .iter()
+                .filter_map(|r| settled_mb(r["samples"].as_array()?, from_secs))
+                .collect();
+            let at10: Vec<f64> = rs
+                .iter()
+                .filter_map(|r| at_offset(r["samples"].as_array()?, 10.0))
+                .collect();
+            let at0: Vec<f64> = rs
+                .iter()
+                .filter_map(|r| at_offset(r["samples"].as_array()?, 0.0))
+                .collect();
+            (settled, at10, at0)
+        };
+        let (s_settled, s_10, s_0) = side(true);
+        let (c_settled, c_10, c_0) = side(false);
+        let delta = |a: &[f64], b: &[f64]| match (median(a), median(b)) {
+            (Some(x), Some(y)) => json!(((x - y) * 100.0).round() / 100.0),
+            _ => Value::Null,
+        };
+        let proxies: Vec<f64> = valid(true)
+            .iter()
+            .filter_map(|r| r["session"]["proxy"]["footprint_mb"].as_f64())
+            .collect();
+        json!({
+            "from_secs": from_secs,
+            "session": {"settled": stats(&s_settled), "at10": stats(&s_10), "at0": stats(&s_0)},
+            "control": {"settled": stats(&c_settled), "at10": stats(&c_10), "at0": stats(&c_0)},
+            "settled_delta_mb": delta(&s_settled, &c_settled),
+            "at10_delta_mb": delta(&s_10, &c_10),
+            "proxy_footprint_mb": stats(&proxies),
+        })
+    }
+
+    /// 준비 회를 뺀 벽시계의 요약과 준비 회 값.
+    pub(super) fn cli_summary(calls: &[Value]) -> Value {
+        let ms: Vec<f64> = calls
+            .iter()
+            .filter(|c| !c["warmup"].as_bool().unwrap_or(false))
+            .filter_map(|c| c["ms"].as_f64())
+            .collect();
+        let warmup = calls
+            .iter()
+            .find(|c| c["warmup"].as_bool() == Some(true))
+            .and_then(|c| c["ms"].as_f64());
+        json!({"wall_ms": stats(&ms), "warmup_ms": warmup})
+    }
+
+    /// CLI 회 하나가 쓸 만한가: 종료 0 이고 출력에 등록한 프로젝트 폴더가 있다.
+    pub(super) fn cli_call_ok(
+        exit: Option<i32>,
+        stdout: &str,
+        project: &str,
+    ) -> Result<(), String> {
+        if exit != Some(0) {
+            return Err(format!("exited {exit:?}"));
+        }
+        let listed: Value =
+            serde_json::from_str(stdout).map_err(|e| format!("output is not JSON: {e}"))?;
+        let canonical = std::fs::canonicalize(project)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| project.to_owned());
+        if !(has_string(&listed, project) || has_string(&listed, &canonical)) {
+            return Err(format!(
+                "the registered project {project} is not in the output"
+            ));
+        }
+        Ok(())
+    }
+
+    /// JSON 값 어딘가에 문자열 `s` 가 그대로 있는가.
+    pub(super) fn has_string(v: &Value, s: &str) -> bool {
+        match v {
+            Value::String(x) => x == s,
+            Value::Array(a) => a.iter().any(|x| has_string(x, s)),
+            Value::Object(o) => o.values().any(|x| has_string(x, s)),
+            _ => false,
+        }
+    }
+
+    pub(super) fn f1(v: &Value) -> String {
+        v.as_f64().map_or("—".into(), |x| format!("{x:.1}"))
+    }
+
+    pub(super) fn range(s: &Value) -> String {
+        format!(
+            "**{}** ({} – {}, n={})",
+            f1(&s["median"]),
+            f1(&s["min"]),
+            f1(&s["max"]),
+            s["n"]
+        )
+    }
+
+    pub(super) fn markdown(result: &Value) -> String {
+        let mut out = String::new();
+        let head = &result["environment"];
+        out.push_str(&format!(
+            "## M5 record-only measurement: {}\n\n",
+            result["kind"].as_str().unwrap_or("?")
         ));
-    }
-    Ok(())
-}
-
-/// JSON 값 어딘가에 문자열 `s` 가 그대로 있는가.
-fn has_string(v: &Value, s: &str) -> bool {
-    match v {
-        Value::String(x) => x == s,
-        Value::Array(a) => a.iter().any(|x| has_string(x, s)),
-        Value::Object(o) => o.values().any(|x| has_string(x, s)),
-        _ => false,
-    }
-}
-
-fn f1(v: &Value) -> String {
-    v.as_f64().map_or("—".into(), |x| format!("{x:.1}"))
-}
-
-fn range(s: &Value) -> String {
-    format!(
-        "**{}** ({} – {}, n={})",
-        f1(&s["median"]),
-        f1(&s["min"]),
-        f1(&s["max"]),
-        s["n"]
-    )
-}
-
-fn markdown(result: &Value) -> String {
-    let mut out = String::new();
-    let head = &result["environment"];
-    out.push_str(&format!(
-        "## M5 record-only measurement: {}\n\n",
-        result["kind"].as_str().unwrap_or("?")
-    ));
-    out.push_str(&format!(
-        "- commit: `{}` (dirty {})\n- os: {}\n- hardware: {}\n- app: `{}`\n- definition: {}\n\n",
-        head["commit"].as_str().unwrap_or("?"),
-        head["dirty"],
-        head["os"].as_str().unwrap_or("?"),
-        head["hardware"].as_str().unwrap_or("?"),
-        result["app"].as_str().unwrap_or("?"),
-        result["definition"].as_str().unwrap_or(""),
-    ));
-    match result["kind"].as_str() {
-        Some("mcp-idle") => {
-            let s = &result["summary"];
-            out.push_str(&format!(
-                "| | after {}s+ (per-run median) | 10 s after attach | at attach (first frame + settle) |\n|---|---|---|---|\n",
-                s["from_secs"]
-            ));
-            for side in ["session", "control"] {
+        out.push_str(&format!(
+            "- commit: `{}` (dirty {})\n- os: {}\n- hardware: {}\n- app: `{}`\n- definition: {}\n\n",
+            head["commit"].as_str().unwrap_or("?"),
+            head["dirty"],
+            head["os"].as_str().unwrap_or("?"),
+            head["hardware"].as_str().unwrap_or("?"),
+            result["app"].as_str().unwrap_or("?"),
+            result["definition"].as_str().unwrap_or(""),
+        ));
+        match result["kind"].as_str() {
+            Some("mcp-idle") => {
+                let s = &result["summary"];
                 out.push_str(&format!(
-                    "| {side} | {} | {} | {} |\n",
-                    range(&s[side]["settled"]),
-                    range(&s[side]["at10"]),
-                    range(&s[side]["at0"])
+                    "| | after {}s+ (per-run median) | 10 s after attach | at attach (first frame + settle) |\n|---|---|---|---|\n",
+                    s["from_secs"]
                 ));
+                for side in ["session", "control"] {
+                    out.push_str(&format!(
+                        "| {side} | {} | {} | {} |\n",
+                        range(&s[side]["settled"]),
+                        range(&s[side]["at10"]),
+                        range(&s[side]["at0"])
+                    ));
+                }
+                out.push_str(&format!(
+                    "\n- session − control, settled: **{} MB** (10 s after attach: {} MB)\n- `pitwall mcp` proxy process itself: {} MB footprint\n\n",
+                    f1(&s["settled_delta_mb"]),
+                    f1(&s["at10_delta_mb"]),
+                    range(&s["proxy_footprint_mb"]),
+                ));
+                out.push_str("| Run | kind | samples after attach (MB, every step) | pitwall MB first → last | load 1-min start → end | excluded |\n|---|---|---|---|---|---|\n");
+                for r in result["runs"].as_array().into_iter().flatten() {
+                    let samples = r["samples"].as_array().cloned().unwrap_or_default();
+                    let fps: Vec<String> = samples.iter().map(|x| f1(&x["footprint_mb"])).collect();
+                    let (first, last) = (samples.first(), samples.last());
+                    out.push_str(&format!(
+                        "| {} | {} | {} | {} → {} | {} → {} | {} |\n",
+                        r["index"],
+                        if r["warmup"].as_bool() == Some(true) {
+                            "warm-up"
+                        } else if r["mcp"].as_bool() == Some(true) {
+                            "session"
+                        } else {
+                            "control"
+                        },
+                        fps.join(" / "),
+                        first.map_or("—".into(), |x| format!("{:.1}", process_mb(x, "pitwall"))),
+                        last.map_or("—".into(), |x| format!("{:.1}", process_mb(x, "pitwall"))),
+                        f1(&r["load1_start"]),
+                        f1(&r["load1_end"]),
+                        r["excluded"].as_str().unwrap_or(""),
+                    ));
+                }
             }
-            out.push_str(&format!(
-                "\n- session − control, settled: **{} MB** (10 s after attach: {} MB)\n- `pitwall mcp` proxy process itself: {} MB footprint\n\n",
-                f1(&s["settled_delta_mb"]),
-                f1(&s["at10_delta_mb"]),
-                range(&s["proxy_footprint_mb"]),
-            ));
-            out.push_str("| Run | kind | samples after attach (MB, every step) | pitwall MB first → last | load 1-min start → end | excluded |\n|---|---|---|---|---|---|\n");
-            for r in result["runs"].as_array().into_iter().flatten() {
-                let samples = r["samples"].as_array().cloned().unwrap_or_default();
-                let fps: Vec<String> = samples.iter().map(|x| f1(&x["footprint_mb"])).collect();
-                let (first, last) = (samples.first(), samples.last());
+            _ => {
+                let s = &result["summary"];
                 out.push_str(&format!(
-                    "| {} | {} | {} | {} → {} | {} → {} | {} |\n",
-                    r["index"],
-                    if r["warmup"].as_bool() == Some(true) {
-                        "warm-up"
-                    } else if r["mcp"].as_bool() == Some(true) {
-                        "session"
-                    } else {
-                        "control"
-                    },
-                    fps.join(" / "),
-                    first.map_or("—".into(), |x| format!("{:.1}", process_mb(x, "pitwall"))),
-                    last.map_or("—".into(), |x| format!("{:.1}", process_mb(x, "pitwall"))),
-                    f1(&r["load1_start"]),
-                    f1(&r["load1_end"]),
-                    r["excluded"].as_str().unwrap_or(""),
+                    "- wall clock (spawn → exit): {} ms, warm-up {} ms\n- CLI log: `connected to the running app` × {}, `serving headless` × {}\n\n",
+                    range(&s["wall_ms"]),
+                    f1(&s["warmup_ms"]),
+                    result["log_connected"],
+                    result["log_headless"],
                 ));
+                out.push_str(
+                    "| Call | ms | exit | stdout bytes | load 1-min |\n|---|---|---|---|---|\n",
+                );
+                for c in result["calls"].as_array().into_iter().flatten() {
+                    out.push_str(&format!(
+                        "| {}{} | {} | {} | {} | {} |\n",
+                        c["i"],
+                        if c["warmup"].as_bool() == Some(true) {
+                            " (warm-up)"
+                        } else {
+                            ""
+                        },
+                        f1(&c["ms"]),
+                        c["exit"],
+                        c["stdout_bytes"],
+                        f1(&c["load1"]),
+                    ));
+                }
             }
         }
-        _ => {
-            let s = &result["summary"];
-            out.push_str(&format!(
-                "- wall clock (spawn → exit): {} ms, warm-up {} ms\n- CLI log: `connected to the running app` × {}, `serving headless` × {}\n\n",
-                range(&s["wall_ms"]),
-                f1(&s["warmup_ms"]),
-                result["log_connected"],
-                result["log_headless"],
-            ));
-            out.push_str(
-                "| Call | ms | exit | stdout bytes | load 1-min |\n|---|---|---|---|---|\n",
-            );
-            for c in result["calls"].as_array().into_iter().flatten() {
-                out.push_str(&format!(
-                    "| {}{} | {} | {} | {} | {} |\n",
-                    c["i"],
-                    if c["warmup"].as_bool() == Some(true) {
-                        " (warm-up)"
-                    } else {
-                        ""
-                    },
-                    f1(&c["ms"]),
-                    c["exit"],
-                    c["stdout_bytes"],
-                    f1(&c["load1"]),
-                ));
-            }
-        }
+        out
     }
-    out
 }
+
+#[cfg(any(target_os = "macos", test))]
+use report::*;
+#[cfg(any(target_os = "macos", test))]
+use serde_json::{Value, json};
 
 #[cfg(target_os = "macos")]
 mod drive {

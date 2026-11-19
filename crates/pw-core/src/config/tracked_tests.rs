@@ -7,6 +7,7 @@ use std::process::Command;
 use super::*;
 
 /// [`git`] 과 같되 실패해도 멈추지 않고 성공 여부를 돌려준다(일부러 실패시키는 checkout).
+#[cfg(unix)]
 pub(crate) fn git_may_fail(dir: &Path, args: &[&str]) -> bool {
     command(dir)
         .args(args)

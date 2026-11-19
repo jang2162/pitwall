@@ -403,14 +403,14 @@ fn paths_outside_the_root_make_the_config_unusable() {
         assert!(reason.starts_with(field), "`{body}`: {reason}");
     }
 
-    let mut accepted = vec![
+    let accepted = [
         "cwd = 'app/sub'",
         "cwd = './app/../app/sub'",
         "cwd = 'build/out'",
         "env_file = ['.env.local', 'app/.env']",
+        #[cfg(unix)]
+        "cwd = 'in-link/sub'",
     ];
-    #[cfg(unix)]
-    accepted.push("cwd = 'in-link/sub'");
     for body in accepted {
         assert_eq!(unusable_reason(&f, body), None, "`{body}` was refused");
     }

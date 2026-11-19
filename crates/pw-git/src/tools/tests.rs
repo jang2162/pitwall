@@ -3,7 +3,6 @@
 //! 응답 상한은 진짜 MCP 세션으로 데스크톱 크레이트의 `mcp_tests::git` 이 본다.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use pw_rpc::{Caller, EventHub, Role, Router, RpcError, Session, code};
 use serde::Serialize;
@@ -586,7 +585,7 @@ async fn untrusted_projects_run_no_process_through_the_tools() {
     let (marks_dir, fake) = plant(&r);
     // 내용은 그대로이고 stat(시각)만 바뀐 추적 파일 — status 가 내용을 견주려면 clean 필터를 거쳐야 한다(크기가 달라지면 내용을
     // 읽지 않고 바뀐 것으로 본다).
-    let later = std::time::SystemTime::now() + Duration::from_secs(5);
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
     std::fs::File::options()
         .write(true)
         .open(r.root().join(fx_repo.path))

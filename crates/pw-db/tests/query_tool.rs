@@ -429,19 +429,19 @@ async fn file_input_reads_only_regular_utf8_files_inside_the_root() {
         assert!(status.success());
     }
     let outside = e.f.base.join("outside.sql").display().to_string();
-    let mut cases: Vec<(String, &str)> = vec![
+    let cases: Vec<(String, &str)> = vec![
         ("../outside.sql".into(), "outside the project roots"),
         (outside, "outside the project roots"),
         ("q/big.sql".into(), "larger than"),
         ("q/latin1.sql".into(), "not UTF-8"),
         ("q".into(), "is a folder"),
+        #[cfg(unix)]
+        ("q/link.sql".into(), "symlink that points outside"),
+        #[cfg(unix)]
+        ("up/outside.sql".into(), "symlink that points outside"),
+        #[cfg(unix)]
+        ("q/fifo.sql".into(), "not a regular file"),
     ];
-    #[cfg(unix)]
-    {
-        cases.push(("q/link.sql".into(), "symlink that points outside"));
-        cases.push(("up/outside.sql".into(), "symlink that points outside"));
-        cases.push(("q/fifo.sql".into(), "not a regular file"));
-    }
     for (file, needle) in &cases {
         let result = e.query(&mut agent, "dev", json!({ "file": file })).await;
         invalid(&result, needle);
