@@ -29,6 +29,7 @@
 //!   「사람이 본 구성」 해시(M6-11)의 「구성 전체를 파싱한 값」 이 이것이다.
 
 pub mod argv;
+pub mod graph;
 pub mod methods;
 pub mod read;
 pub mod root;
@@ -80,6 +81,11 @@ pub struct RunConfig {
     /// How to debug this configuration. Without it the configuration cannot be debugged.
     #[serde(default)]
     pub debug: Option<DebugConfig>,
+    /// Configuration ids that run first, in this order, each to its end: this configuration starts only after every one of
+    /// them exited with code 0 (an `sql` configuration fits here — seed or migrate, then the server). A failure stops there
+    /// and nothing after it starts. A reference that does not exist or that loops back makes the configuration unusable.
+    #[serde(default)]
+    pub before: Vec<String>,
 }
 
 /// The kind of configuration (`type`) and its fields. Every kind except `shell` builds its command line from these fields, one
@@ -148,6 +154,48 @@ pub enum RunKindConfig {
         #[serde(default)]
         transaction: SqlTransaction,
     },
+    /// Other configurations run together as one: `sequence` starts each one after the one before it exited with code 0 (a
+    /// failure stops there), `parallel` starts them all at once. No process of its own — `cwd`, `env`, `envFile`, profiles
+    /// and `[debug]` do not apply.
+    Compound {
+        /// Configuration ids, in order.
+        configs: Vec<String>,
+        #[serde(default)]
+        mode: CompoundMode,
+    },
+}
+
+/// How a `compound` configuration starts its configurations.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    specta::Type,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum CompoundMode {
+    /// One after another: each starts after the one before it exited with code 0.
+    #[default]
+    Sequence,
+    /// All at once.
+    Parallel,
+}
+
+impl CompoundMode {
+    /// 파일의 값(`sequence` · `parallel`).
+    pub fn name(self) -> &'static str {
+        match self {
+            CompoundMode::Sequence => "sequence",
+            CompoundMode::Parallel => "parallel",
+        }
+    }
 }
 
 /// `sql` 구성의 파일 수 상한(17-m6-plan M6-09 ①). 합계 크기 상한(5 MiB — `db_query` · `db_execute` 의 `file` 하나와 같다)은 실행할
@@ -205,6 +253,7 @@ impl RunKindConfig {
             RunKindConfig::DockerCompose { .. } => "docker-compose",
             RunKindConfig::MiseTask { .. } => "mise-task",
             RunKindConfig::Sql { .. } => "sql",
+            RunKindConfig::Compound { .. } => "compound",
         }
     }
 
@@ -271,10 +320,17 @@ pub enum DebugMode {
 
 impl RunConfig {
     /// 정규형: 파싱한 값을 RPC 의 키 이름(camelCase)으로 JSON 으로 쓴 것 — 객체 키는 모든 깊이에서 사전순, 공백 없음, 빈 값도
-    /// 적는다(없는 `cwd` 는 `null`, 빈 `env` 는 `{}`). 같은 구성(주석 · 공백 · 키 순서 · `env` 를 인라인 표로 쓰든 `[env]` 로
+    /// 적는다(없는 `cwd` 는 `null`, 빈 `env` 는 `{}`). 예외는 빈 `before` 하나다(M6-21 이 더한 필드 — 없는 것과 같은 글이라 그 전에
+    /// 기록한 해시가 그대로 맞는다). 같은 구성(주석 · 공백 · 키 순서 · `env` 를 인라인 표로 쓰든 `[env]` 로
     /// 쓰든, 어느 레이어에 적었든)이면 같은 글이다. 「사람이 본 구성」 해시(M6-11)의 「구성 전체를 파싱한 값」 이다.
     pub fn canonical(&self) -> String {
-        let value = serde_json::to_value(self).expect("a run config serializes to JSON");
+        let mut value = serde_json::to_value(self).expect("a run config serializes to JSON");
+        // 빈 `before` 는 적지 않는다 — `before` 가 생기기 전에 기록한 「사람이 본 구성」 해시가 그대로 맞는다.
+        if self.before.is_empty()
+            && let Value::Object(map) = &mut value
+        {
+            map.remove("before");
+        }
         let mut out = String::new();
         write_sorted(&value, &mut out);
         out
@@ -374,6 +430,33 @@ pub fn validate(config: &RunConfig, root: &std::path::Path) -> Result<(), String
     {
         text("debug.adapter", adapter)?;
     }
+    references("before", &config.before)?;
+    if matches!(config.kind, RunKindConfig::Compound { .. }) {
+        let unused = [
+            ("cwd", config.cwd.is_some()),
+            ("env", !config.env.is_empty()),
+            ("env_file", !config.env_file.is_empty()),
+            ("profiles", !config.profiles.is_empty()),
+            ("debug", config.debug.is_some()),
+        ];
+        if let Some((key, _)) = unused.iter().find(|(_, set)| *set) {
+            return Err(format!(
+                "a compound config runs no process of its own, so `{key}` does not apply — set it on the configurations it runs"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// 다른 구성을 가리키는 id 목록(`before` · 복합 구성의 `configs`) — 꼴만 본다. 있는지 · 순환은 [`graph`] 가 구성 전체로 본다.
+fn references(what: &str, ids: &[String]) -> Result<(), String> {
+    for (i, id) in ids.iter().enumerate() {
+        if !valid_id(id) {
+            return Err(format!(
+                "{what}[{i}] must be a run configuration id (1-64 letters, digits, `-` or `_`)"
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -446,6 +529,12 @@ fn validate_kind(kind: &RunKindConfig, root: &std::path::Path) -> Result<(), Str
                 root::inside(root, file).map_err(|why| format!("files[{i}] {why}"))?;
             }
             Ok(())
+        }
+        RunKindConfig::Compound { configs, .. } => {
+            if configs.is_empty() {
+                return Err("configs is empty".to_owned());
+            }
+            references("configs", configs)
         }
     }
 }

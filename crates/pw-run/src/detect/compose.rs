@@ -69,6 +69,7 @@ impl TaskDetector for ComposeDetector {
                     env_file: Vec::new(),
                     profiles: Default::default(),
                     debug: None,
+                    before: Vec::new(),
                 },
                 name: service,
                 source: path.clone(),

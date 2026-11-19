@@ -398,7 +398,7 @@ async fn editing_package_json_changes_the_listed_detection() {
     assert_eq!(list["detected"][0]["detector"], "npm");
     assert_eq!(
         list["detected"][0]["config"],
-        json!({"name": "dev", "type": "npm", "script": "dev", "cwd": null, "env": {}, "envFile": [], "profiles": {}, "debug": null})
+        json!({"name": "dev", "type": "npm", "script": "dev", "cwd": null, "env": {}, "envFile": [], "profiles": {}, "debug": null, "before": []})
     );
     assert_eq!(list["detectProblems"], json!([]));
 

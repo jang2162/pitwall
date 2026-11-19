@@ -48,7 +48,9 @@ use crate::session::{DbSessions, blocking, db_error};
 use crate::tool_plan::sql_grade;
 
 mod agent;
+mod window_chain;
 pub use agent::AgentSqlRuns;
+pub use window_chain::WindowSqlChain;
 
 /// 한 실행이 읽는 파일 합계의 상한(바이트) — `db_query` · `db_execute` 의 `file` 하나와 같은 5 MiB(결정 D33,
 /// `crate::script::MAX_FILE_BYTES`). 파일 수의 상한은 `pw_run::config::SQL_MAX_FILES`(64). 넘으면 띄우기 전에 거절한다.
@@ -210,8 +212,10 @@ impl SqlRunPlan {
             hasher.update((bytes.len() as u64).to_le_bytes());
             hasher.update(bytes);
         };
-        part(b"pitwall.run.sql.confirm.v2");
+        part(b"pitwall.run.sql.confirm.v3");
         part(&epoch.to_le_bytes());
+        // 구성 열쇠 — 내용이 같은 다른 구성에 그 확인이 쓰이지 않게(M6-21 — 사슬의 단계마다 확인).
+        part(self.target.config.as_bytes());
         part(self.target.connection.as_bytes());
         part(self.target_key.as_deref().unwrap_or("").as_bytes());
         part(&[
@@ -1332,6 +1336,12 @@ async fn start_from_window(
                 format!("run config `{id}` does not exist"),
             ));
         };
+        // `before` 가 있는 구성은 사슬이다 — 이 길로 돌리면 `before` 를 건너뛴다(M6-21 — `run.start` 가 사슬을 띄운다).
+        if !loaded.config.before.is_empty() {
+            return Err(RpcError::invalid_params(format!(
+                "run config `{id}` runs other configurations first (`before`); start it with run.start"
+            )));
+        }
         SqlRunTarget::of(&project.id, worktree.as_deref(), &loaded.id, &loaded.config).ok_or_else(
             || {
                 RpcError::invalid_params(format!(
@@ -1362,6 +1372,8 @@ async fn start_from_window(
 pub fn register(router: &mut Router, sessions: Arc<DbSessions>, runs: Runs) {
     // 에이전트의 `run_start` · `run_restart` 가 `sql` 구성을 이 길로 돌린다(M6-14 — pw-run 은 pw-db 에 의존하지 않는다).
     runs.attach_sql_tool(Arc::new(AgentSqlRuns::new(Arc::clone(&sessions))));
+    // 창의 사슬(`before` · 복합 구성)의 `sql` 단계(M6-21).
+    runs.attach_sql_window(Arc::new(WindowSqlChain::new(Arc::clone(&sessions))));
     router.unary(RunSqlStart, move |ctx, params: RunSqlStartParams| {
         let (sessions, runs) = (Arc::clone(&sessions), runs.clone());
         let granted = db_grant(ctx.scope(), &params.project_id);

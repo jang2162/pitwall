@@ -122,9 +122,10 @@ pub struct RunToolConfigDelete {
 rpc_method! {
     /// Create or change a run configuration — `.pitwall/run/<id>.toml` (shared, committed; the default) or `<id>.local.toml`
     /// (personal, `location: "local"`). `config` is the whole configuration of that file, checked against the run
-    /// configuration schema (`type`: shell, npm, gradle, maven, cargo, go, python, docker-compose, mise-task) before anything is
-    /// asked: `cwd` and `envFile` must stay inside the project root, and `env` takes no secrets (names with a secret word are
-    /// refused — use `envFile`). The person sees the file's diff and approves it in Pitwall first. Saving does not approve
+    /// configuration schema (`type`: shell, npm, gradle, maven, cargo, go, python, docker-compose, mise-task, sql, compound)
+    /// before anything is asked: `cwd` and `envFile` must stay inside the project root, `env` takes no secrets (names with a
+    /// secret word are refused — use `envFile`), and `before` / a compound's `configs` must name existing configurations
+    /// without a loop. The person sees the file's diff and approves it in Pitwall first. Saving does not approve
     /// running: `run_start` still asks the person for a configuration an agent created or changed.
     pub RunToolConfigUpsertMethod: "run.tool.configUpsert" {
         params: Planned<RunToolConfigUpsertParams>,
@@ -232,6 +233,40 @@ fn secret_key_in(at: &str, value: &Value) -> Option<(String, String)> {
     }
 }
 
+/// `before` · 복합 구성의 `configs` 가 가리키는 것을 묻기 전에 본다(17-m6-plan M6-21 ⑦): 이 구성을 쓴 뒤의 구성들로 사슬을 펴서
+/// 없는 구성 · 쓸 수 없는 구성 · 순환(자기 자신 포함 — 이 구성을 거쳐 도는 다른 구성의 순환도) · 깊이 · 단계 수 · 같은 `sql`
+/// 구성 두 번이면 거절한다(`data.reason = "badReference"`). **사람이 본 적 없는 구성은 가리켜도 된다** — 쓰기는 실행을 허락하지
+/// 않고, `run_start` 는 사슬의 어느 단계든 사람이 본 적 없으면 묻는다(결정 D68). 개인 파일이 덮는 구성은 이 입력이 그 구성의 전부라고
+/// 보고 판정한다(쓴 뒤의 `unusable` 이 최종 판정이다).
+fn refuse_bad_references(
+    place: &RunConfigPlace,
+    id: &str,
+    config: &RunConfig,
+) -> Result<(), RpcError> {
+    let set = read(place);
+    let mut configs: std::collections::BTreeMap<String, RunConfig> = set
+        .configs
+        .iter()
+        .map(|c| (c.id.clone(), c.config.clone()))
+        .collect();
+    // 지금 쓸 수 없는 구성이 이 구성 때문에(이 구성을 가리키는 순환 등) 쓸 수 없었다면 다시 판정한다 — 꼴이 깨진 것만 남긴다.
+    let mut unusable = std::collections::BTreeSet::new();
+    for u in &set.unusable {
+        unusable.insert(u.id.clone());
+    }
+    unusable.remove(id);
+    configs.insert(id.to_owned(), config.clone());
+    let broken = super::graph::check(&configs, &unusable);
+    match broken.get(id) {
+        None => Ok(()),
+        Some(why) => Err(RpcError::new(
+            code::INVALID_PARAMS,
+            format!("run config `{id}` cannot be used as written: {why}"),
+        )
+        .with_data(json!({ "reason": "badReference" }))),
+    }
+}
+
 /// 개인 파일(`location: local`) 이 git 이 추적하는 파일이면(또는 받아 온 내용 · 판정 못 함) 묻기 전에 거절한다(모듈 문서).
 fn refuse_tracked_local(
     place: &RunConfigPlace,
@@ -329,6 +364,7 @@ impl RunConfigs {
         check_id(&p.id)?;
         refuse_secret_env(&p.config)?;
         let place = self.place(agent.project_id(), p.worktree.as_deref())?;
+        refuse_bad_references(&place, &p.id, &p.config)?;
         if let Some(twin) = read(&place).case_twin(&p.id) {
             return Err(RpcError::new(
                 code::CONFLICT,

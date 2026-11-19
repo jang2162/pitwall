@@ -8,6 +8,14 @@ expression: "serde_json::to_string_pretty(&json_schema()).unwrap()"
   "description": "One run configuration: the common fields plus the kind (`type`, [`RunKindConfig`]). Doc comments of the configuration types are\nEnglish — they become the JSON Schema descriptions an agent reads (M6-13, decision M5-D39).",
   "type": "object",
   "properties": {
+    "before": {
+      "description": "Configuration ids that run first, in this order, each to its end: this configuration starts only after every one of\nthem exited with code 0 (an `sql` configuration fits here — seed or migrate, then the server). A failure stops there\nand nothing after it starts. A reference that does not exist or that loops back makes the configuration unusable.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
     "cwd": {
       "description": "Working directory, relative to the project root (inside the active worktree). Defaults to the project root. A path that\nresolves outside the root (`..`, a symbolic link) makes the configuration unusable.",
       "type": [
@@ -296,12 +304,52 @@ expression: "serde_json::to_string_pretty(&json_schema()).unwrap()"
         "connection",
         "files"
       ]
+    },
+    {
+      "description": "Other configurations run together as one: `sequence` starts each one after the one before it exited with code 0 (a\nfailure stops there), `parallel` starts them all at once. No process of its own — `cwd`, `env`, `envFile`, profiles\nand `[debug]` do not apply.",
+      "type": "object",
+      "properties": {
+        "configs": {
+          "description": "Configuration ids, in order.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mode": {
+          "$ref": "#/$defs/CompoundMode",
+          "default": "sequence"
+        },
+        "type": {
+          "type": "string",
+          "const": "compound"
+        }
+      },
+      "required": [
+        "type",
+        "configs"
+      ]
     }
   ],
   "required": [
     "name"
   ],
   "$defs": {
+    "CompoundMode": {
+      "description": "How a `compound` configuration starts its configurations.",
+      "oneOf": [
+        {
+          "description": "One after another: each starts after the one before it exited with code 0.",
+          "type": "string",
+          "const": "sequence"
+        },
+        {
+          "description": "All at once.",
+          "type": "string",
+          "const": "parallel"
+        }
+      ]
+    },
     "DebugConfig": {
       "description": "`[debug]`. Keys other than `adapter` and `mode` (`program`, `port`, `pid` …) fill the debug adapter's launch or attach\ntemplate and are kept as written.",
       "type": "object",

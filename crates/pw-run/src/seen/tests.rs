@@ -382,6 +382,7 @@ fn missing_parts_are_refused_without_values_in_the_error() {
         env_file: vec![".env".into()],
         profiles: BTreeMap::new(),
         debug: None,
+        before: Vec::new(),
     };
     fs::write(root.join(".env"), "TOKEN=s3cret\n").unwrap();
     let env = RunEnv::resolve(&npm, None, root).unwrap();
@@ -478,6 +479,7 @@ fn shell(command: &str) -> RunConfig {
         env_file: Vec::new(),
         profiles: BTreeMap::new(),
         debug: None,
+        before: Vec::new(),
     }
 }
 

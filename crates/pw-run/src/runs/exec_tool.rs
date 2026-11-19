@@ -99,6 +99,10 @@ pub struct RunToolStarted {
     pub sql: Option<Value>,
     /// Audit details: the configuration id, its content hash and the run id (no command line or values).
     pub audit: String,
+    /// For a configuration with `before` or a `compound` configuration: every run the chain started, in the order it started
+    /// them (`run` is the last). Empty otherwise.
+    #[serde(default)]
+    pub chain: Vec<RunToolRun>,
 }
 
 /// What `run_stop` did.
@@ -120,7 +124,11 @@ rpc_method! {
     /// configuration content in a trusted project, or the `sql` configuration only queries. A configuration changed since
     /// (its file, its `.env` files, the script it names, the runtime files) is asked again. Untrusted projects do not run.
     /// An `sql` configuration's connection must have been opened by the person in Pitwall, and every statement that is not
-    /// a query is approved each time.
+    /// a query is approved each time. A configuration with `before`, or a `compound` one, starts a chain: every step is in
+    /// the plan, each step before the last waits until the one before it exited with code 0 (a failure stops the chain and
+    /// nothing after it starts; a step whose content changed while an earlier step ran stops with `planChanged`), and this
+    /// returns once every step started (`chain` lists the runs). It runs without asking only when the person saw every
+    /// configuration of the chain in this content.
     pub RunToolStartMethod: "run.tool.start" {
         params: Planned<RunToolStartParams>,
         result: RunToolStarted,
@@ -216,7 +224,9 @@ pub struct SqlToolStarted {
 // --- 계획 ----------------------------------------------------------------------------------------------------------
 
 /// 띄울 것 하나의 계획(승인 뒤 띄우는 쪽이 쓴다).
-enum Prepared {
+pub(super) enum Prepared {
+    /// 사슬(`before` · 복합 구성 — M6-21, `super::chain_tool`).
+    Chain(Box<super::chain_tool::ChainPlanned>),
     Process {
         spec: RunSpec,
         content: String,
@@ -228,9 +238,11 @@ enum Prepared {
 }
 
 /// 다시 실행의 앞 실행(사람이 띄웠는지 · 그 id).
-struct Before {
-    run_id: RunId,
-    by_person: bool,
+pub(super) struct Before {
+    pub(super) run_id: RunId,
+    pub(super) by_person: bool,
+    /// 앞 실행의 구성 열쇠(사슬을 다시 띄우면 이 열쇠의 단계가 `restartOf` 를 받는다).
+    pub(super) config: String,
 }
 
 impl Runs {
@@ -277,6 +289,11 @@ impl Runs {
         };
         let (key, config) = config_of(&place, &config_id)?;
         let human = before.is_some_and(|b| b.by_person);
+        if crate::config::graph::is_chain(&config) {
+            return self
+                .plan_chain(ctx, method, planned, agent, target, before, &place, &key)
+                .await;
+        }
         if matches!(config.kind, RunKindConfig::Sql { .. }) {
             let Some(sql) = self.inner.sql_tool.get().cloned() else {
                 return Err(RpcError::invalid_params(
@@ -413,7 +430,7 @@ impl Runs {
     }
 
     /// [`Self::plan_process`] 의 몸(관문의 프로젝트로).
-    fn plan_process_for(
+    pub(super) fn plan_process_for(
         &self,
         agent: &AgentGrantRef<'_>,
         worktree: Option<&str>,
@@ -445,6 +462,10 @@ impl Runs {
             client: None,
         };
         match prepared {
+            Prepared::Chain(chain) => {
+                self.launch_chain(ctx, agent, approved, *chain, worktree, before)
+                    .await
+            }
             Prepared::Process { spec, content } => {
                 let grant = agent_run_grant(agent, &approved)?;
                 let runs = self.clone();
@@ -463,6 +484,7 @@ impl Runs {
                     run: tool_run(info),
                     sql: None,
                     audit,
+                    chain: Vec::new(),
                 })
             }
             Prepared::Sql { launch, audit } => {
@@ -500,6 +522,7 @@ impl Runs {
                     run: tool_run(info),
                     sql: Some(summary),
                     audit: format!("{audit} runId={run_id}"),
+                    chain: Vec::new(),
                 })
             }
         }
@@ -556,6 +579,7 @@ impl Runs {
         let before = Before {
             run_id: run.id().to_owned(),
             by_person: run.launched_by_person(),
+            config: run.config().to_owned(),
         };
         let (config, worktree, profile) = (
             run.config().to_owned(),
@@ -648,19 +672,19 @@ impl Runs {
 const SQL_KIND: &str = "sql";
 
 /// 띄울 구성(`run_start` 의 입력, `run_restart` 의 앞 실행).
-struct StartTarget<'a> {
-    worktree: Option<&'a str>,
-    config_id: &'a str,
-    profile: Option<&'a str>,
+pub(super) struct StartTarget<'a> {
+    pub(super) worktree: Option<&'a str>,
+    pub(super) config_id: &'a str,
+    pub(super) profile: Option<&'a str>,
 }
 
 /// 관문을 지난 프로젝트(블로킹 스레드로 넘기는 꼴).
-struct AgentGrantRef<'a>(&'a pw_core::registry::Project);
+pub(super) struct AgentGrantRef<'a>(pub(super) &'a pw_core::registry::Project);
 
 /// 사람이 띄운 실행을 다시 띄우는 허용의 열쇠 `human:<runId>:<내용 해시>`(결정 D69 · M6-14 ⑦ ⑧): 「이 세션 동안 허용」 은 그 실행
 /// 하나를 **그 내용으로** 다시 띄우는 것에만 닿는다 — 허용 뒤 구성 · `.env` · `sql` 파일이 바뀌면 다른 열쇠라 다시 묻는다(그 실행은
 /// 끝난 뒤에도 표에 남아 같은 `runId` 로 또 부를 수 있다). `run_stop` 은 띄우는 것이 없어 `human:<runId>` 다.
-fn human_key(before: Option<&Before>, content: &str) -> String {
+pub(super) fn human_key(before: Option<&Before>, content: &str) -> String {
     format!(
         "{HUMAN_KEY_PREFIX}{}:{content}",
         before.map(|b| b.run_id.as_str()).unwrap_or_default()
@@ -669,7 +693,7 @@ fn human_key(before: Option<&Before>, content: &str) -> String {
 
 /// 「사람이 본 구성」 해시를 만들지 못한 구성(정의 본문이 없는 `mise-task` 등)의 내용 해시 — 띄울 것과 `.env` 다이제스트 · 구성
 /// 정규형. 해시의 꼴(`sha256:`)만 같고 기록과 견주지 않는다(늘 묻는다).
-fn fallback_content(resolved: &Resolved) -> String {
+pub(super) fn fallback_content(resolved: &Resolved) -> String {
     let covered = json!({
         "v": "pitwall.run.plan.content.v1",
         "config": resolved.config.canonical(),
@@ -712,7 +736,7 @@ fn summary(key: &str, config: &RunConfig, before: Option<&Before>) -> String {
 }
 
 /// 사람이 보는 계획(머리 주석 「계획 = 띄울 것 그대로」): 띄울 것 · env · `.env` 파일, 그리고 argv 가 비밀처럼 보이면 경고.
-fn shown_changes(resolved: &Resolved, config: &RunConfig) -> Vec<PlanChange> {
+pub(super) fn shown_changes(resolved: &Resolved, config: &RunConfig) -> Vec<PlanChange> {
     let mut changes = Vec::new();
     let argv = serde_json::to_string(&resolved.argv).unwrap_or_default();
     let mut run = format!(
@@ -771,7 +795,7 @@ fn shown_changes(resolved: &Resolved, config: &RunConfig) -> Vec<PlanChange> {
 }
 
 /// 오류 `data` 의 최상위 `audit` 에 감사 상세를 싣는다(`pw_mcp` 의 「툴 메서드 규약」).
-fn with_audit(mut error: RpcError, audit: &str) -> RpcError {
+pub(super) fn with_audit(mut error: RpcError, audit: &str) -> RpcError {
     let data = match error.data.take() {
         Some(Value::Object(mut map)) => {
             map.entry("audit").or_insert_with(|| audit.into());
@@ -807,7 +831,7 @@ impl Drop for StopOnDrop {
 }
 
 /// 블로킹 스레드에서 돌린다.
-async fn blocking<T: Send + 'static>(
+pub(super) async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> Result<T, RpcError> + Send + 'static,
 ) -> Result<T, RpcError> {
     tokio::task::spawn_blocking(f)

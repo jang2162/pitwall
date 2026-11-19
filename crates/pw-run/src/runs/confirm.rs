@@ -38,7 +38,15 @@ pub mod code {
 pub struct RunConfirmRequired {
     /// 확인 열쇠 — 다시 부를 때 `confirmed` 로 그대로 돌려준다.
     pub hash: String,
+    /// 띄울 구성(사슬이면 그 마지막 프로세스 단계 — 모든 단계는 `steps`).
     pub shown: RunShown,
+    /// 사슬(`before` · 복합 구성 — 17-m6-plan M6-21)이면 띄울 단계 모두, 띄우는 차례로. `sql` 단계는 연결과 파일만 보인다 — 그
+    /// 문장은 이 확인 뒤의 위험 확인(`3001`)이 보인다. 사슬이 아니면 비었다.
+    #[serde(default)]
+    pub steps: Vec<RunShown>,
+    /// 사슬의 차례 한 줄(예: `seed, then (api and web together)`).
+    #[serde(default)]
+    pub order: Option<String>,
 }
 
 /// 첫 실행 확인에 보이는 것 — 띄울 그 값.
@@ -236,7 +244,16 @@ impl Launching<'_> {
 
 /// 확인이 필요하다는 오류.
 pub(super) fn confirm_required(hash: String, shown: RunShown) -> RpcError {
-    let data = RunConfirmRequired { hash, shown };
+    confirm_required_with(RunConfirmRequired {
+        hash,
+        shown,
+        steps: Vec::new(),
+        order: None,
+    })
+}
+
+/// [`confirm_required`] 의 꼴 그대로(사슬은 `steps` · `order` 를 채운다).
+pub(super) fn confirm_required_with(data: RunConfirmRequired) -> RpcError {
     RpcError::new(
         code::CONFIRM_REQUIRED,
         format!(

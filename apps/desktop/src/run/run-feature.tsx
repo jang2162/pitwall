@@ -14,6 +14,7 @@ import { useHost } from "../rpc/host";
 import { STATUS_SLOTS, useStatusBarItem } from "../status-bar/status-bar";
 import { useTheme } from "../theme/theme-switcher";
 import { terminalTheme } from "../terminal/terminal-theme";
+import { RunChainNotices } from "./run-chain";
 import { RunStatusPorts } from "./run-ports";
 import { isLive, type RunTabs, windowRuns } from "./run-tabs";
 import { useRunStrings } from "./strings";
@@ -86,5 +87,5 @@ export function RunFeature({
   }, [tabs, theme, appearance]);
 
   useStatusBarItem({ id: "run", ...STATUS_SLOTS.run, component: RunStatusItem });
-  return null;
+  return client ? <RunChainNotices client={client} projectId={projectId} /> : null;
 }

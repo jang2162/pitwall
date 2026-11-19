@@ -105,9 +105,15 @@ pub fn argv(
         }
         // 프로세스를 띄우지 않는다 — DB 실행 경로(`pw_db::run_sql`)로 돈다(M6-09, D55).
         RunKindConfig::Sql { .. } => return Err(NOT_A_PROCESS.to_owned()),
+        // 프로세스가 없다 — 실행 관리자가 그 구성들을 차례로 · 함께 띄운다(M6-21 — `runs::chain`).
+        RunKindConfig::Compound { .. } => return Err(NOT_A_COMPOUND_PROCESS.to_owned()),
     }
     Ok(out)
 }
+
+/// `compound` 구성의 argv 를 청했을 때의 까닭.
+pub const NOT_A_COMPOUND_PROCESS: &str =
+    "a `compound` configuration runs no process of its own; it starts the configurations it lists";
 
 /// `sql` 구성의 argv 를 청했을 때의 까닭(창의 `run.start` · 에이전트의 프로세스 계획이 받는다).
 pub const NOT_A_PROCESS: &str =

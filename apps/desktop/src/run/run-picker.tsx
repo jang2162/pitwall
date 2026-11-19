@@ -26,11 +26,11 @@ import { SEARCH_ITEM_CLASS, SearchPopup } from "../ui/search-popup";
 import { formOf, formOfEntry, idFromName, newForm } from "./config-form";
 import { openRunConfigEditor, RunConfigEditorHost } from "./config-editor";
 import { runActions } from "./run-actions";
-import { withRunConfirm } from "./run-confirm";
+import { withRunConfirms } from "./run-confirm";
 import { RunConfirmHost } from "./run-confirm-dialog";
 import { errorText, type RunConfigs, windowRunConfigs } from "./run-configs";
 import { isLive, type RunTabs, windowRuns } from "./run-tabs";
-import { startSqlRun } from "./sql-run";
+import { sqlRunQuestion, startSqlRun } from "./sql-run";
 import { type RunStrings, useRunStrings } from "./strings";
 
 const TOOL = "flex items-center rounded-sm p-1 hover:bg-ui-hover disabled:opacity-40";
@@ -68,7 +68,7 @@ function useLauncher(configs: RunConfigs, tabs: RunTabs, api: DockviewApi | unde
       const { client, projectId, worktree } = place;
       try {
         let run: RunInfo | undefined;
-        if (entry.config.type === "sql") {
+        if (entry.config.type === "sql" && (entry.config.before ?? []).length === 0) {
           const started = await startSqlRun(
             (params) => client.call("run.sql.start", params),
             { projectId, worktree, configId: entry.id },
@@ -76,14 +76,21 @@ function useLauncher(configs: RunConfigs, tabs: RunTabs, api: DockviewApi | unde
           );
           run = started.kind === "started" ? started.run : undefined;
         } else {
-          run = await withRunConfirm((confirmed) =>
-            client.call("run.start", {
-              projectId,
-              worktree,
-              configId: entry.id,
-              profile,
-              confirmed,
-            }),
+          // 사슬(`before` · 복합 구성)이면 `sql` 단계의 위험 확인도 이 루프가 받는다(run-confirm.ts).
+          run = await withRunConfirms(
+            (confirmed, sqlConfirmed) =>
+              client.call("run.start", {
+                projectId,
+                worktree,
+                configId: entry.id,
+                profile,
+                confirmed,
+                sqlConfirmed,
+              }),
+            async (data) => {
+              const answer = await risk.confirm(sqlRunQuestion(data));
+              return answer === undefined || answer === "busy" ? undefined : answer;
+            },
           );
         }
         if (!run) return;

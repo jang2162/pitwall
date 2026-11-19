@@ -33,6 +33,10 @@ describe("the run config form", () => {
           "args:list",
           "command*:text",
         ],
+        "compound": [
+          "configs*:list",
+          "mode:enum",
+        ],
         "docker-compose": [
           "file:text",
           "services:list",
@@ -112,6 +116,7 @@ describe("the run config form", () => {
       cwd: null,
       env: {},
       envFile: [],
+      before: [],
       command: "run",
       args: ["--release"],
       profiles: { fast: { args: ["-q"] } },
@@ -140,6 +145,7 @@ describe("the run config form", () => {
           { name: " ", value: "ignored" },
         ],
         envFile: ".env\n\n .env.local \n",
+        before: "migrate\n\n seed \n",
         kind: { module: "app", script: "", args: "--reload\n" },
       },
       schema,
@@ -150,9 +156,21 @@ describe("the run config form", () => {
       cwd: "app",
       env: { PORT: "3000" },
       envFile: [".env", ".env.local"],
+      before: ["migrate", "seed"],
       module: "app",
       script: null,
       args: ["--reload"],
     });
   });
+});
+
+it("keeps `before` through the form, one id per line", () => {
+  const form = formOf("app", {
+    name: "App",
+    type: "shell",
+    command: "serve",
+    before: ["migrate", "seed"],
+  });
+  expect(form.before).toBe("migrate\nseed");
+  expect(newForm("x").before).toBe("");
 });

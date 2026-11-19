@@ -132,6 +132,7 @@ run-confirm-env-files = .env 파일
 run-confirm-masked = 비밀로 보여 값을 가렸다
 run-confirm-secret-warning = 명령에 비밀처럼 보이는 값(비밀번호가 든 주소 · 비밀 이름의 값)이 있다. 가리지 않고 그대로 보였다 — 무엇이 도는지 확인한다.
 run-confirm-not-recorded = 이 구성은 내용을 기록할 수 없어 실행할 때마다 묻는다.
+run-confirm-order = 차례:
 run-confirm-run = 실행
 run-confirm-cancel = 취소
 
@@ -154,6 +155,8 @@ run-editor-env-add = 변수 더하기
 run-editor-env-remove = { $name } 빼기
 run-editor-env-file = .env 파일
 run-editor-env-file-hint = 프로젝트 루트 기준, 한 줄에 하나(차례대로 얹는다)
+run-editor-before = 먼저 실행
+run-editor-before-hint = 구성 id, 한 줄에 하나 — 차례대로 끝 코드 0 으로 끝나야 이 구성을 띄운다
 run-editor-list-hint = 한 줄에 하나
 run-editor-location = 저장 위치
 run-editor-location-shared = 공유(.pitwall/run/<id>.toml — 커밋된다)
@@ -258,3 +261,7 @@ action-debug-pause = 프로그램 일시 정지
 action-debug-toggle-breakpoint = 줄 브레이크포인트 토글
 action-debug-view-breakpoints = 브레이크포인트 보기
 action-debug-evaluate = 식 평가
+
+## 사슬(before · 복합 구성 — run-chain.tsx)
+run-chain-failed = { $config } 이(가) { $step } 에서 멈췄다 — 남은 것은 띄우지 않았다: { $message }
+run-chain-stopped = { $config } 을(를) { $step } 에서 멈췄다 — 남은 것은 띄우지 않았다

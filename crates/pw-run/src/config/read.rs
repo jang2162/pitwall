@@ -181,10 +181,39 @@ pub fn read(place: &RunConfigPlace) -> RunConfigSet {
             Err(unusable) => set.unusable.push(*unusable),
         }
     }
+    unusable_references(&mut set);
     if !problems.is_empty() {
         set.problem = Some(problems.join("; "));
     }
     set
+}
+
+/// 구성 사이의 참조(`before` · 복합 구성 — `super::graph`)가 깨진 구성을 「쓸 수 없음」 으로 옮긴다(없는 구성 · 쓸 수 없는 구성 ·
+/// 순환 · 깊이 · 단계 수).
+fn unusable_references(set: &mut RunConfigSet) {
+    let configs: BTreeMap<String, RunConfig> = set
+        .configs
+        .iter()
+        .map(|c| (c.id.clone(), c.config.clone()))
+        .collect();
+    let unusable = set.unusable.iter().map(|u| u.id.clone()).collect();
+    let broken = super::graph::check(&configs, &unusable);
+    if broken.is_empty() {
+        return;
+    }
+    let (keep, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut set.configs)
+        .into_iter()
+        .partition(|c| !broken.contains_key(&c.id));
+    set.configs = keep;
+    for loaded in gone {
+        set.unusable.push(UnusableRunConfig {
+            reason: broken[&loaded.id].clone(),
+            name: Some(loaded.config.name),
+            id: loaded.id,
+            layers: loaded.layers,
+        });
+    }
+    set.unusable.sort_by(|a, b| a.id.cmp(&b.id));
 }
 
 fn layers_of(files: &Files) -> Vec<RunConfigLayer> {
@@ -351,6 +380,10 @@ pub fn to_file_value(config: &RunConfig) -> Map<String, Value> {
         if let Some(v) = map.remove(*rpc) {
             map.insert((*file).to_owned(), v);
         }
+    }
+    // 빈 `before` 는 파일에 적지 않는다(M6-21 전의 파일과 같은 글).
+    if config.before.is_empty() {
+        map.remove("before");
     }
     map
 }

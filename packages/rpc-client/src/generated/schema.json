@@ -43243,6 +43243,21 @@
       },
       "result": {
         "$defs": {
+          "CompoundMode": {
+            "description": "How a `compound` configuration starts its configurations.",
+            "oneOf": [
+              {
+                "const": "sequence",
+                "description": "One after another: each starts after the one before it exited with code 0.",
+                "type": "string"
+              },
+              {
+                "const": "parallel",
+                "description": "All at once.",
+                "type": "string"
+              }
+            ]
+          },
           "DebugConfig": {
             "additionalProperties": true,
             "description": "`[debug]`. Keys other than `adapter` and `mode` (`program`, `port`, `pid` …) fill the debug adapter's launch or attach\ntemplate and are kept as written.",
@@ -43589,9 +43604,43 @@
                   "transaction"
                 ],
                 "type": "object"
+              },
+              {
+                "description": "Other configurations run together as one: `sequence` starts each one after the one before it exited with code 0 (a\nfailure stops there), `parallel` starts them all at once. No process of its own — `cwd`, `env`, `envFile`, profiles\nand `[debug]` do not apply.",
+                "properties": {
+                  "configs": {
+                    "description": "Configuration ids, in order.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "mode": {
+                    "$ref": "#/$defs/CompoundMode",
+                    "default": "sequence"
+                  },
+                  "type": {
+                    "const": "compound",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "configs",
+                  "mode"
+                ],
+                "type": "object"
               }
             ],
             "properties": {
+              "before": {
+                "default": [],
+                "description": "Configuration ids that run first, in this order, each to its end: this configuration starts only after every one of\nthem exited with code 0 (an `sql` configuration fits here — seed or migrate, then the server). A failure stops there\nand nothing after it starts. A reference that does not exist or that loops back makes the configuration unusable.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "cwd": {
                 "default": null,
                 "description": "Working directory, relative to the project root (inside the active worktree). Defaults to the project root. A path that\nresolves outside the root (`..`, a symbolic link) makes the configuration unusable.",
@@ -43647,7 +43696,8 @@
               "env",
               "envFile",
               "profiles",
-              "debug"
+              "debug",
+              "before"
             ],
             "type": "object"
           },
@@ -43878,6 +43928,21 @@
       "kind": "unary",
       "params": {
         "$defs": {
+          "CompoundMode": {
+            "description": "How a `compound` configuration starts its configurations.",
+            "oneOf": [
+              {
+                "const": "sequence",
+                "description": "One after another: each starts after the one before it exited with code 0.",
+                "type": "string"
+              },
+              {
+                "const": "parallel",
+                "description": "All at once.",
+                "type": "string"
+              }
+            ]
+          },
           "DebugConfig": {
             "additionalProperties": true,
             "description": "`[debug]`. Keys other than `adapter` and `mode` (`program`, `port`, `pid` …) fill the debug adapter's launch or attach\ntemplate and are kept as written.",
@@ -44146,9 +44211,42 @@
                   "files"
                 ],
                 "type": "object"
+              },
+              {
+                "description": "Other configurations run together as one: `sequence` starts each one after the one before it exited with code 0 (a\nfailure stops there), `parallel` starts them all at once. No process of its own — `cwd`, `env`, `envFile`, profiles\nand `[debug]` do not apply.",
+                "properties": {
+                  "configs": {
+                    "description": "Configuration ids, in order.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "mode": {
+                    "$ref": "#/$defs/CompoundMode",
+                    "default": "sequence"
+                  },
+                  "type": {
+                    "const": "compound",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "configs"
+                ],
+                "type": "object"
               }
             ],
             "properties": {
+              "before": {
+                "default": [],
+                "description": "Configuration ids that run first, in this order, each to its end: this configuration starts only after every one of\nthem exited with code 0 (an `sql` configuration fits here — seed or migrate, then the server). A failure stops there\nand nothing after it starts. A reference that does not exist or that loops back makes the configuration unusable.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "cwd": {
                 "default": null,
                 "description": "Working directory, relative to the project root (inside the active worktree). Defaults to the project root. A path that\nresolves outside the root (`..`, a symbolic link) makes the configuration unusable.",
@@ -44334,6 +44432,21 @@
       "kind": "unary",
       "params": {
         "$defs": {
+          "CompoundMode": {
+            "description": "How a `compound` configuration starts its configurations.",
+            "oneOf": [
+              {
+                "const": "sequence",
+                "description": "One after another: each starts after the one before it exited with code 0.",
+                "type": "string"
+              },
+              {
+                "const": "parallel",
+                "description": "All at once.",
+                "type": "string"
+              }
+            ]
+          },
           "DebugConfig": {
             "additionalProperties": true,
             "description": "`[debug]`. Keys other than `adapter` and `mode` (`program`, `port`, `pid` …) fill the debug adapter's launch or attach\ntemplate and are kept as written.",
@@ -44602,9 +44715,42 @@
                   "files"
                 ],
                 "type": "object"
+              },
+              {
+                "description": "Other configurations run together as one: `sequence` starts each one after the one before it exited with code 0 (a\nfailure stops there), `parallel` starts them all at once. No process of its own — `cwd`, `env`, `envFile`, profiles\nand `[debug]` do not apply.",
+                "properties": {
+                  "configs": {
+                    "description": "Configuration ids, in order.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "mode": {
+                    "$ref": "#/$defs/CompoundMode",
+                    "default": "sequence"
+                  },
+                  "type": {
+                    "const": "compound",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "configs"
+                ],
+                "type": "object"
               }
             ],
             "properties": {
+              "before": {
+                "default": [],
+                "description": "Configuration ids that run first, in this order, each to its end: this configuration starts only after every one of\nthem exited with code 0 (an `sql` configuration fits here — seed or migrate, then the server). A failure stops there\nand nothing after it starts. A reference that does not exist or that loops back makes the configuration unusable.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "cwd": {
                 "default": null,
                 "description": "Working directory, relative to the project root (inside the active worktree). Defaults to the project root. A path that\nresolves outside the root (`..`, a symbolic link) makes the configuration unusable.",
@@ -45142,6 +45288,15 @@
           },
           "runId": {
             "type": "string"
+          },
+          "sqlConfirmed": {
+            "additionalProperties": true,
+            "default": null,
+            "description": "[`RunStartParams::sql_confirmed`] 와 같다(다시 띄우는 구성이 사슬이고 `sql` 단계가 확인을 청할 때).",
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "required": [
@@ -45800,6 +45955,15 @@
               "null"
             ]
           },
+          "sqlConfirmed": {
+            "additionalProperties": true,
+            "default": null,
+            "description": "사슬(`before` · 복합 구성 — 17-m6-plan M6-21)의 `sql` 단계마다 사람이 한 위험 확인: 구성 열쇠 → 앞 호출의 `3001`(`data.config`\n가 그 열쇠)에 사람이 답한 `DbConfirmed` 그대로. 사슬을 띄울 때 모두 쓰인다 — 다시 실으면 다시 묻는다.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "worktree": {
             "default": null,
             "description": "창의 활성 워크트리 꼭대기(`ActiveWorktree.top`). 구성은 그 워크트리의 것을 읽고 작업 폴더도 그 안의 프로젝트 루트 기준이다.\n그 프로젝트의 연결 워크트리가 아니면 invalid params.",
@@ -46364,6 +46528,21 @@
       },
       "result": {
         "$defs": {
+          "CompoundMode": {
+            "description": "How a `compound` configuration starts its configurations.",
+            "oneOf": [
+              {
+                "const": "sequence",
+                "description": "One after another: each starts after the one before it exited with code 0.",
+                "type": "string"
+              },
+              {
+                "const": "parallel",
+                "description": "All at once.",
+                "type": "string"
+              }
+            ]
+          },
           "DebugConfig": {
             "additionalProperties": true,
             "description": "`[debug]`. Keys other than `adapter` and `mode` (`program`, `port`, `pid` …) fill the debug adapter's launch or attach\ntemplate and are kept as written.",
@@ -46690,9 +46869,43 @@
                   "transaction"
                 ],
                 "type": "object"
+              },
+              {
+                "description": "Other configurations run together as one: `sequence` starts each one after the one before it exited with code 0 (a\nfailure stops there), `parallel` starts them all at once. No process of its own — `cwd`, `env`, `envFile`, profiles\nand `[debug]` do not apply.",
+                "properties": {
+                  "configs": {
+                    "description": "Configuration ids, in order.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "mode": {
+                    "$ref": "#/$defs/CompoundMode",
+                    "default": "sequence"
+                  },
+                  "type": {
+                    "const": "compound",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "configs",
+                  "mode"
+                ],
+                "type": "object"
               }
             ],
             "properties": {
+              "before": {
+                "default": [],
+                "description": "Configuration ids that run first, in this order, each to its end: this configuration starts only after every one of\nthem exited with code 0 (an `sql` configuration fits here — seed or migrate, then the server). A failure stops there\nand nothing after it starts. A reference that does not exist or that loops back makes the configuration unusable.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "cwd": {
                 "default": null,
                 "description": "Working directory, relative to the project root (inside the active worktree). Defaults to the project root. A path that\nresolves outside the root (`..`, a symbolic link) makes the configuration unusable.",
@@ -46748,7 +46961,8 @@
               "env",
               "envFile",
               "profiles",
-              "debug"
+              "debug",
+              "before"
             ],
             "type": "object"
           },
@@ -46991,6 +47205,21 @@
       },
       "result": {
         "$defs": {
+          "CompoundMode": {
+            "description": "How a `compound` configuration starts its configurations.",
+            "oneOf": [
+              {
+                "const": "sequence",
+                "description": "One after another: each starts after the one before it exited with code 0.",
+                "type": "string"
+              },
+              {
+                "const": "parallel",
+                "description": "All at once.",
+                "type": "string"
+              }
+            ]
+          },
           "DebugConfig": {
             "additionalProperties": true,
             "description": "`[debug]`. Keys other than `adapter` and `mode` (`program`, `port`, `pid` …) fill the debug adapter's launch or attach\ntemplate and are kept as written.",
@@ -47272,9 +47501,43 @@
                   "transaction"
                 ],
                 "type": "object"
+              },
+              {
+                "description": "Other configurations run together as one: `sequence` starts each one after the one before it exited with code 0 (a\nfailure stops there), `parallel` starts them all at once. No process of its own — `cwd`, `env`, `envFile`, profiles\nand `[debug]` do not apply.",
+                "properties": {
+                  "configs": {
+                    "description": "Configuration ids, in order.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "mode": {
+                    "$ref": "#/$defs/CompoundMode",
+                    "default": "sequence"
+                  },
+                  "type": {
+                    "const": "compound",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "configs",
+                  "mode"
+                ],
+                "type": "object"
               }
             ],
             "properties": {
+              "before": {
+                "default": [],
+                "description": "Configuration ids that run first, in this order, each to its end: this configuration starts only after every one of\nthem exited with code 0 (an `sql` configuration fits here — seed or migrate, then the server). A failure stops there\nand nothing after it starts. A reference that does not exist or that loops back makes the configuration unusable.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "cwd": {
                 "default": null,
                 "description": "Working directory, relative to the project root (inside the active worktree). Defaults to the project root. A path that\nresolves outside the root (`..`, a symbolic link) makes the configuration unusable.",
@@ -47330,7 +47593,8 @@
               "env",
               "envFile",
               "profiles",
-              "debug"
+              "debug",
+              "before"
             ],
             "type": "object"
           },
@@ -47611,10 +47875,25 @@
       "tier": "read"
     },
     "run.tool.configUpsert": {
-      "description": "Create or change a run configuration — `.pitwall/run/<id>.toml` (shared, committed; the default) or `<id>.local.toml`\n(personal, `location: \"local\"`). `config` is the whole configuration of that file, checked against the run\nconfiguration schema (`type`: shell, npm, gradle, maven, cargo, go, python, docker-compose, mise-task) before anything is\nasked: `cwd` and `envFile` must stay inside the project root, and `env` takes no secrets (names with a secret word are\nrefused — use `envFile`). The person sees the file's diff and approves it in Pitwall first. Saving does not approve\nrunning: `run_start` still asks the person for a configuration an agent created or changed.",
+      "description": "Create or change a run configuration — `.pitwall/run/<id>.toml` (shared, committed; the default) or `<id>.local.toml`\n(personal, `location: \"local\"`). `config` is the whole configuration of that file, checked against the run\nconfiguration schema (`type`: shell, npm, gradle, maven, cargo, go, python, docker-compose, mise-task, sql, compound)\nbefore anything is asked: `cwd` and `envFile` must stay inside the project root, `env` takes no secrets (names with a\nsecret word are refused — use `envFile`), and `before` / a compound's `configs` must name existing configurations\nwithout a loop. The person sees the file's diff and approves it in Pitwall first. Saving does not approve\nrunning: `run_start` still asks the person for a configuration an agent created or changed.",
       "kind": "unary",
       "params": {
         "$defs": {
+          "CompoundMode": {
+            "description": "How a `compound` configuration starts its configurations.",
+            "oneOf": [
+              {
+                "const": "sequence",
+                "description": "One after another: each starts after the one before it exited with code 0.",
+                "type": "string"
+              },
+              {
+                "const": "parallel",
+                "description": "All at once.",
+                "type": "string"
+              }
+            ]
+          },
           "DebugConfig": {
             "additionalProperties": true,
             "description": "`[debug]`. Keys other than `adapter` and `mode` (`program`, `port`, `pid` …) fill the debug adapter's launch or attach\ntemplate and are kept as written.",
@@ -47883,9 +48162,42 @@
                   "files"
                 ],
                 "type": "object"
+              },
+              {
+                "description": "Other configurations run together as one: `sequence` starts each one after the one before it exited with code 0 (a\nfailure stops there), `parallel` starts them all at once. No process of its own — `cwd`, `env`, `envFile`, profiles\nand `[debug]` do not apply.",
+                "properties": {
+                  "configs": {
+                    "description": "Configuration ids, in order.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "mode": {
+                    "$ref": "#/$defs/CompoundMode",
+                    "default": "sequence"
+                  },
+                  "type": {
+                    "const": "compound",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "configs"
+                ],
+                "type": "object"
               }
             ],
             "properties": {
+              "before": {
+                "default": [],
+                "description": "Configuration ids that run first, in this order, each to its end: this configuration starts only after every one of\nthem exited with code 0 (an `sql` configuration fits here — seed or migrate, then the server). A failure stops there\nand nothing after it starts. A reference that does not exist or that loops back makes the configuration unusable.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "cwd": {
                 "default": null,
                 "description": "Working directory, relative to the project root (inside the active worktree). Defaults to the project root. A path that\nresolves outside the root (`..`, a symbolic link) makes the configuration unusable.",
@@ -48490,6 +48802,14 @@
             "description": "Audit details: the configuration id, its content hash and the run id (no command line or values).",
             "type": "string"
           },
+          "chain": {
+            "default": [],
+            "description": "For a configuration with `before` or a `compound` configuration: every run the chain started, in the order it started\nthem (`run` is the last). Empty otherwise.",
+            "items": {
+              "$ref": "#/$defs/RunToolRun"
+            },
+            "type": "array"
+          },
           "run": {
             "$ref": "#/$defs/RunToolRun",
             "description": "The new run. A process run is returned as soon as it started — read its output with `run_logs`."
@@ -48501,7 +48821,8 @@
         "required": [
           "run",
           "sql",
-          "audit"
+          "audit",
+          "chain"
         ],
         "type": "object"
       },
@@ -48511,7 +48832,7 @@
       "tier": "dangerous"
     },
     "run.tool.start": {
-      "description": "Start a run configuration (see `run_config_list`) in Pitwall. A process configuration is started and returned at\nonce with its `runId` (read the output with `run_logs`, stop it with `run_stop`); an `sql` configuration runs its\nfiles on its DB connection and this waits until it ends. The person approves what runs in Pitwall first — the\ncommand line, working directory, profile and environment values — unless they already saw and ran this exact\nconfiguration content in a trusted project, or the `sql` configuration only queries. A configuration changed since\n(its file, its `.env` files, the script it names, the runtime files) is asked again. Untrusted projects do not run.\nAn `sql` configuration's connection must have been opened by the person in Pitwall, and every statement that is not\na query is approved each time.",
+      "description": "Start a run configuration (see `run_config_list`) in Pitwall. A process configuration is started and returned at\nonce with its `runId` (read the output with `run_logs`, stop it with `run_stop`); an `sql` configuration runs its\nfiles on its DB connection and this waits until it ends. The person approves what runs in Pitwall first — the\ncommand line, working directory, profile and environment values — unless they already saw and ran this exact\nconfiguration content in a trusted project, or the `sql` configuration only queries. A configuration changed since\n(its file, its `.env` files, the script it names, the runtime files) is asked again. Untrusted projects do not run.\nAn `sql` configuration's connection must have been opened by the person in Pitwall, and every statement that is not\na query is approved each time. A configuration with `before`, or a `compound` one, starts a chain: every step is in\nthe plan, each step before the last waits until the one before it exited with code 0 (a failure stops the chain and\nnothing after it starts; a step whose content changed while an earlier step ran stops with `planChanged`), and this\nreturns once every step started (`chain` lists the runs). It runs without asking only when the person saw every\nconfiguration of the chain in this content.",
       "kind": "unary",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -48764,6 +49085,14 @@
             "description": "Audit details: the configuration id, its content hash and the run id (no command line or values).",
             "type": "string"
           },
+          "chain": {
+            "default": [],
+            "description": "For a configuration with `before` or a `compound` configuration: every run the chain started, in the order it started\nthem (`run` is the last). Empty otherwise.",
+            "items": {
+              "$ref": "#/$defs/RunToolRun"
+            },
+            "type": "array"
+          },
           "run": {
             "$ref": "#/$defs/RunToolRun",
             "description": "The new run. A process run is returned as soon as it started — read its output with `run_logs`."
@@ -48775,7 +49104,8 @@
         "required": [
           "run",
           "sql",
-          "audit"
+          "audit",
+          "chain"
         ],
         "type": "object"
       },

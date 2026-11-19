@@ -199,6 +199,20 @@ pub fn hash(parts: &SeenParts<'_>) -> Result<SeenHash, String> {
     content(parts).map(|c| c.hash())
 }
 
+/// 복합 구성(17-m6-plan M6-21)의 「사람이 본 구성」 해시. 복합 구성은 프로세스가 없어 [`content`] 의 풀린 내용이 없다 — 덮는
+/// 것은 열쇠와 구성 전체를 파싱한 값([`RunConfig::canonical`] — `configs` · `mode` · `before`)이다. 그것이 부르는 구성은 각자의
+/// 해시로 본다(결정 D68 — 사슬이 자동이려면 모두가 사람이 본 것이어야 한다).
+pub fn compound_hash(key: &str, config: &RunConfig) -> SeenHash {
+    let text = serde_json::json!({
+        "v": "pitwall.run.compound.v1",
+        "key": key,
+        "config": config.canonical(),
+    })
+    .to_string();
+    SeenHash::parse(&format!("sha256:{}", hex(&Sha256::digest(text.as_bytes()))))
+        .expect("a sha256 hex digest is a seen hash")
+}
+
 /// 런타임 원천 파일 하나의 상한. mise 설정은 작다 — 넘으면 해시하지 않는다(본 적 없음 — 묻는다).
 const MAX_RUNTIME_FILE: u64 = 5 * 1024 * 1024;
 

@@ -365,6 +365,14 @@ export function RunConfigEditor({
                 {...register("envFile")}
               />
             </Row>
+            <Row label={T.before} hint={T.beforeHint}>
+              <textarea
+                rows={2}
+                className={`${INPUT} font-mono`}
+                data-field="before"
+                {...register("before")}
+              />
+            </Row>
             <fieldset className="flex flex-col gap-1">
               <legend className="mb-1">{T.location}</legend>
               <label className="flex items-center gap-2">

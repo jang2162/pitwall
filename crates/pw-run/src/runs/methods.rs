@@ -50,6 +50,11 @@ pub struct RunStartParams {
     /// 내용이 그것과 다르면(그사이 파일이 바뀜) 띄우지 않고 다시 묻는다.
     #[serde(default)]
     pub confirmed: Option<String>,
+    /// 사슬(`before` · 복합 구성 — 17-m6-plan M6-21)의 `sql` 단계마다 사람이 한 위험 확인: 구성 열쇠 → 앞 호출의 `3001`(`data.config`
+    /// 가 그 열쇠)에 사람이 답한 `DbConfirmed` 그대로. 사슬을 띄울 때 모두 쓰인다 — 다시 실으면 다시 묻는다.
+    #[serde(default)]
+    #[specta(type = Option<std::collections::BTreeMap<String, pw_rpc::JsonValue>>)]
+    pub sql_confirmed: Option<std::collections::BTreeMap<String, serde_json::Value>>,
 }
 
 /// `run.restart` 의 입력.
@@ -62,6 +67,10 @@ pub struct RunRestartParams {
     /// [`RunStartParams::confirmed`] 와 같다 — 다시 읽은 구성이 사람이 본 적 없는 내용이면 확인을 받은 뒤 이것을 실어 다시 부른다.
     #[serde(default)]
     pub confirmed: Option<String>,
+    /// [`RunStartParams::sql_confirmed`] 와 같다(다시 띄우는 구성이 사슬이고 `sql` 단계가 확인을 청할 때).
+    #[serde(default)]
+    #[specta(type = Option<std::collections::BTreeMap<String, pw_rpc::JsonValue>>)]
+    pub sql_confirmed: Option<std::collections::BTreeMap<String, serde_json::Value>>,
 }
 
 #[derive(
@@ -274,15 +283,6 @@ async fn attach(
     }
 }
 
-/// 블로킹 스레드에서 돌린다(구성 · 레지스트리 읽기, 로그인 셸 기다리기).
-async fn blocking<T: Send + 'static>(
-    f: impl FnOnce() -> Result<T, RpcError> + Send + 'static,
-) -> Result<T, RpcError> {
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| RpcError::internal(e.to_string()))?
-}
-
 /// 핸들러를 붙인다. 입력은 핸들러의 동기 구간에서 큐에 넣는다 — 세션은 요청이 온 순서대로 그 구간을 부르므로 키 입력 순서가
 /// 지켜진다(터미널과 같다).
 pub fn register(router: &mut Router, runs: Runs) {
@@ -305,9 +305,10 @@ pub fn register(router: &mut Router, runs: Runs) {
             // 사람이 그 프로젝트 창에서 띄운다 — 띄운 값이 「사람이 본 구성」 이 된다(M6-02 ⑧ · M6-11).
             let seen = SeenBy::window(ctx.scope(), &params.project_id, SeenPlace::Run).ok();
             let window = ctx.window().map(str::to_owned);
+            let scope = ctx.scope().clone();
             async move {
                 let grant = granted?;
-                blocking(move || runs.start(&grant, seen, window, &params)).await
+                runs.start_window(grant, scope, seen, window, params).await
             }
         })
         .unary(RunStop, move |ctx, params: RunIdParams| {
@@ -323,15 +324,10 @@ pub fn register(router: &mut Router, runs: Runs) {
                 .ok()
                 .and_then(|project| SeenBy::window(ctx.scope(), project, SeenPlace::Run).ok());
             let window = ctx.window().map(str::to_owned);
+            let scope = ctx.scope().clone();
             async move {
-                runs.restart_confirmed(
-                    &granted?,
-                    seen,
-                    window,
-                    &params.run_id,
-                    params.confirmed.as_deref(),
-                )
-                .await
+                runs.restart_window(granted?, scope, seen, window, params)
+                    .await
             }
         })
         .unary(RunListMethod, move |ctx, params: RunListParams| {

@@ -20,26 +20,26 @@ use super::{ToolHost, ToolSession, structured, text};
 
 /// 실행 툴을 켠다 — `run_start` · `run_restart` 는 선언 `dangerous` 라 기본 프리셋(`standard`)에서 보이지 않는다(`db_execute` 와
 /// 같다 — 노출은 선언 등급). `extra` 는 그 뒤에 붙는 설정.
-fn enable(host: &ToolHost, extra: &str) {
+pub(super) fn enable(host: &ToolHost, extra: &str) {
     host.global_settings(&format!(
         "{extra}\n[mcp.tools]\nrun_start = true\nrun_restart = true\nrun_stop = true\n"
     ));
 }
 
 /// 신뢰한 프로젝트 하나와 그 루트.
-fn trusted(host: &ToolHost, name: &str) -> (String, PathBuf) {
+pub(super) fn trusted(host: &ToolHost, name: &str) -> (String, PathBuf) {
     let id = host.project(name);
     host.host.registry().unwrap().set_trust(&id, true).unwrap();
     (id, host.base.join("work").join(name))
 }
 
-fn write_config(root: &Path, id: &str, body: &str) {
+pub(super) fn write_config(root: &Path, id: &str, body: &str) {
     std::fs::create_dir_all(root.join(".pitwall/run")).unwrap();
     std::fs::write(root.join(format!(".pitwall/run/{id}.toml")), body).unwrap();
 }
 
 /// 오래 도는 셸 구성(`sleep`) — 끄는 시험이 쓴다.
-fn sleeper(root: &Path, id: &str, marker: &str) {
+pub(super) fn sleeper(root: &Path, id: &str, marker: &str) {
     write_config(
         root,
         id,
@@ -47,14 +47,14 @@ fn sleeper(root: &Path, id: &str, marker: &str) {
     );
 }
 
-fn listen(host: &ToolHost, project: &str) -> Listener {
+pub(super) fn listen(host: &ToolHost, project: &str) -> Listener {
     host.services
         .sessions
         .approvals()
         .listen(Some(project), None, Connection::named("window"))
 }
 
-async fn next_request(listener: &mut Listener) -> McpApprovalRequest {
+pub(super) async fn next_request(listener: &mut Listener) -> McpApprovalRequest {
     loop {
         let event = tokio::time::timeout(Duration::from_secs(20), listener.recv())
             .await
@@ -67,7 +67,7 @@ async fn next_request(listener: &mut Listener) -> McpApprovalRequest {
 }
 
 /// 허브로 답한다(「사람이 본 구성」 은 기록되지 않는 길 — 기록은 `mcp.approval.answer` RPC 에 있다).
-async fn hub_answers(
+pub(super) async fn hub_answers(
     host: &ToolHost,
     listener: &mut Listener,
     project: &str,
@@ -90,7 +90,7 @@ async fn hub_answers(
 }
 
 /// 그 프로젝트 창이 `mcp.approval.answer` RPC 로 답한다(앱의 길 — 허용이면 「사람이 본 구성」 을 기록한다).
-async fn window_answers(
+pub(super) async fn window_answers(
     host: &ToolHost,
     listener: &mut Listener,
     project: &str,
@@ -109,7 +109,7 @@ async fn window_answers(
 
 /// 사람이 창에서 띄운다(`run.start` — 「사람이 본 구성」 을 기록한다). 본 적 없는 내용이면 첫 실행 확인(7001 — M6-07 ⑥)이 오고,
 /// 사람이 [실행] 을 누른 것처럼 그 `hash` 를 `confirmed` 로 실어 다시 부른다.
-async fn window_starts(host: &ToolHost, project: &str, config: &str) -> String {
+pub(super) async fn window_starts(host: &ToolHost, project: &str, config: &str) -> String {
     let mut params = json!({ "projectId": project, "configId": config });
     let info = match host.window_call(project, "run.start", params.clone()).await {
         Ok(info) => info,
@@ -125,7 +125,7 @@ async fn window_starts(host: &ToolHost, project: &str, config: &str) -> String {
 }
 
 /// 창의 첫 실행 확인(7001)이 묻는 열쇠(`hash`). 묻지 않으면(이미 본 내용) 패닉한다 — 띄우지 않는다.
-async fn window_asks(host: &ToolHost, project: &str, config: &str) -> Value {
+pub(super) async fn window_asks(host: &ToolHost, project: &str, config: &str) -> Value {
     let e = host
         .window_call(
             project,
@@ -138,12 +138,12 @@ async fn window_asks(host: &ToolHost, project: &str, config: &str) -> Value {
     e["data"].clone()
 }
 
-fn ok(result: &CallToolResult) -> serde_json::Map<String, Value> {
+pub(super) fn ok(result: &CallToolResult) -> serde_json::Map<String, Value> {
     assert_ne!(result.is_error, Some(true), "{}", text(result));
     structured(result)
 }
 
-fn mark(result: &CallToolResult) -> Option<pw_mcp::marker::Mark> {
+pub(super) fn mark(result: &CallToolResult) -> Option<pw_mcp::marker::Mark> {
     result
         .meta
         .as_ref()
@@ -151,7 +151,10 @@ fn mark(result: &CallToolResult) -> Option<pw_mcp::marker::Mark> {
 }
 
 /// 감사 행의 (툴, 결과, 승인 방식) — `count` 개가 되고 모두 끝 기록을 받을 때까지.
-async fn approvals(host: &ToolHost, count: usize) -> Vec<(String, String, Option<String>)> {
+pub(super) async fn approvals(
+    host: &ToolHost,
+    count: usize,
+) -> Vec<(String, String, Option<String>)> {
     let read = || -> Vec<(String, String, Option<String>)> {
         let Ok(conn) = rusqlite::Connection::open_with_flags(
             host.services.audit.file(),
@@ -183,11 +186,11 @@ async fn approvals(host: &ToolHost, count: usize) -> Vec<(String, String, Option
 }
 
 /// 마지막 감사 행의 승인 방식.
-async fn last_approval(host: &ToolHost, count: usize) -> Option<String> {
+pub(super) async fn last_approval(host: &ToolHost, count: usize) -> Option<String> {
     approvals(host, count).await.pop().and_then(|(_, _, a)| a)
 }
 
-async fn start(session: &ToolSession, project: &str, config: &str) -> CallToolResult {
+pub(super) async fn start(session: &ToolSession, project: &str, config: &str) -> CallToolResult {
     session
         .call(
             "run_start",
@@ -690,7 +693,11 @@ async fn the_run_gets_the_approved_env_values() {
 // --- sql 구성 ------------------------------------------------------------------------------------------------------
 
 /// SQLite 파일 · 연결 `lite`(`production` 이면 표지) · `sql` 구성 `seed`(파일 `seed.sql`).
-fn sql_project(host: &ToolHost, production: bool, transaction: &str) -> (String, PathBuf) {
+pub(super) fn sql_project(
+    host: &ToolHost,
+    production: bool,
+    transaction: &str,
+) -> (String, PathBuf) {
     let (alpha, root) = trusted(host, "alpha");
     {
         let setup = rusqlite::Connection::open(root.join("app.db")).unwrap();
@@ -723,7 +730,7 @@ fn sql_project(host: &ToolHost, production: bool, transaction: &str) -> (String,
     (alpha, root)
 }
 
-async fn open_in_window(host: &ToolHost, project: &str) {
+pub(super) async fn open_in_window(host: &ToolHost, project: &str) {
     host.window_call(
         project,
         "db.schema.objects",

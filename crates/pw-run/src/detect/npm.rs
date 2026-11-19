@@ -58,6 +58,7 @@ impl TaskDetector for NpmDetector {
                     env_file: Vec::new(),
                     profiles: Default::default(),
                     debug: None,
+                    before: Vec::new(),
                 },
                 definition,
             });

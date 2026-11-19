@@ -1264,9 +1264,10 @@ export type UnaryMethods = {
 	/**
 	 * Create or change a run configuration — `.pitwall/run/<id>.toml` (shared, committed; the default) or `<id>.local.toml`
 	 * (personal, `location: "local"`). `config` is the whole configuration of that file, checked against the run
-	 * configuration schema (`type`: shell, npm, gradle, maven, cargo, go, python, docker-compose, mise-task) before anything is
-	 * asked: `cwd` and `envFile` must stay inside the project root, and `env` takes no secrets (names with a secret word are
-	 * refused — use `envFile`). The person sees the file's diff and approves it in Pitwall first. Saving does not approve
+	 * configuration schema (`type`: shell, npm, gradle, maven, cargo, go, python, docker-compose, mise-task, sql, compound)
+	 * before anything is asked: `cwd` and `envFile` must stay inside the project root, `env` takes no secrets (names with a
+	 * secret word are refused — use `envFile`), and `before` / a compound's `configs` must name existing configurations
+	 * without a loop. The person sees the file's diff and approves it in Pitwall first. Saving does not approve
 	 * running: `run_start` still asks the person for a configuration an agent created or changed.
 	 */
 	"run.tool.configUpsert": { params: RunToolConfigUpsertParams; result: RunToolConfigUpsert };
@@ -1293,7 +1294,11 @@ export type UnaryMethods = {
 	 * configuration content in a trusted project, or the `sql` configuration only queries. A configuration changed since
 	 * (its file, its `.env` files, the script it names, the runtime files) is asked again. Untrusted projects do not run.
 	 * An `sql` configuration's connection must have been opened by the person in Pitwall, and every statement that is not
-	 * a query is approved each time.
+	 * a query is approved each time. A configuration with `before`, or a `compound` one, starts a chain: every step is in
+	 * the plan, each step before the last waits until the one before it exited with code 0 (a failure stops the chain and
+	 * nothing after it starts; a step whose content changed while an earlier step ran stops with `planChanged`), and this
+	 * returns once every step started (`chain` lists the runs). It runs without asking only when the person saw every
+	 * configuration of the chain in this content.
 	 */
 	"run.tool.start": { params: RunToolStartParams; result: RunToolStarted };
 	/**
@@ -1757,10 +1762,10 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"run.tasks.refresh": {"name":"run.tasks.refresh","kind":"unary","tier":"exec","roles":["owner"],"params":"RunTasksRefreshParams","output":"RunTasksRefreshed","doc":" 사람이 「태스크 읽기」 를 눌렀다 — gradle · maven 은 빌드 스크립트를 돌려 태스크 목록을 읽고 캐시한다(Host 작업으로 진행 ·\n 취소가 보인다). 그 프로젝트 창의 연결만(아니면 permission denied), 미신뢰 프로젝트면 permission denied\n (`data.reason = \"untrusted\"`), 모르는 감지기는 invalid params, 취소되면 cancelled.\n","mcp":null,"fileScope":false},
 	"run.tool.configDelete": {"name":"run.tool.configDelete","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<RunToolConfigDeleteParams>","output":"RunToolConfigDelete","doc":" Delete a run configuration's file — the shared one, the personal one (`location`), or both (no `location`). The person\n sees what is deleted and approves it in Pitwall first. Detected tasks (`detected:…`) have no file and cannot be deleted.\n","mcp":{"group":"run","name":"run_config_delete"},"fileScope":false},
 	"run.tool.configList": {"name":"run.tool.configList","kind":"unary","tier":"read","roles":["owner"],"params":"RunToolConfigListParams","output":"RunToolConfigList","doc":" This project's run configurations: usable ones (merged from the shared `.pitwall/run/<id>.toml` and the\n person's `<id>.local.toml`), files that cannot be used and why, and tasks detected from project files (npm\n scripts, Make targets, just recipes, compose services — with the file they came from). `env` values whose name\n points to a secret are `[redacted]` and URL passwords in `env` values are masked. Runs nothing and writes nothing.\n","mcp":{"group":"run","name":"run_config_list"},"fileScope":false},
-	"run.tool.configUpsert": {"name":"run.tool.configUpsert","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<RunToolConfigUpsertParams>","output":"RunToolConfigUpsert","doc":" Create or change a run configuration — `.pitwall/run/<id>.toml` (shared, committed; the default) or `<id>.local.toml`\n (personal, `location: \"local\"`). `config` is the whole configuration of that file, checked against the run\n configuration schema (`type`: shell, npm, gradle, maven, cargo, go, python, docker-compose, mise-task) before anything is\n asked: `cwd` and `envFile` must stay inside the project root, and `env` takes no secrets (names with a secret word are\n refused — use `envFile`). The person sees the file's diff and approves it in Pitwall first. Saving does not approve\n running: `run_start` still asks the person for a configuration an agent created or changed.\n","mcp":{"group":"run","name":"run_config_upsert"},"fileScope":false},
+	"run.tool.configUpsert": {"name":"run.tool.configUpsert","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<RunToolConfigUpsertParams>","output":"RunToolConfigUpsert","doc":" Create or change a run configuration — `.pitwall/run/<id>.toml` (shared, committed; the default) or `<id>.local.toml`\n (personal, `location: \"local\"`). `config` is the whole configuration of that file, checked against the run\n configuration schema (`type`: shell, npm, gradle, maven, cargo, go, python, docker-compose, mise-task, sql, compound)\n before anything is asked: `cwd` and `envFile` must stay inside the project root, `env` takes no secrets (names with a\n secret word are refused — use `envFile`), and `before` / a compound's `configs` must name existing configurations\n without a loop. The person sees the file's diff and approves it in Pitwall first. Saving does not approve\n running: `run_start` still asks the person for a configuration an agent created or changed.\n","mcp":{"group":"run","name":"run_config_upsert"},"fileScope":false},
 	"run.tool.logs": {"name":"run.tool.logs","kind":"unary","tier":"read","roles":["owner"],"params":"RunToolLogsParams","output":"RunToolLogs","doc":" Read a run's output (also of runs a person started). By default the last 200 lines; `tail` sets the count,\n `since` reads on from an offset (`nextSince` of an earlier call — poll with it for new output), `grep` keeps\n only lines matching a regular expression. Terminal escapes are removed. The result is cut to about 192 KiB\n (`truncated`). Output is kept in memory only: the last 8 MiB while running, the last 1 MiB after the run ends,\n and only for the latest 20 finished runs of the project — older output is gone (`logStart`, `dropped`). A\n `runId` that is not a run of this project is `not found`.\n","mcp":{"group":"run","name":"run_logs"},"fileScope":false},
 	"run.tool.restart": {"name":"run.tool.restart","kind":"unary","tier":"dangerous","roles":["owner"],"params":"Planned<RunToolRunParams>","output":"RunToolStarted","doc":" Stop a run of this project, wait until it ended, and start its configuration again as a new run (`restartOf` points\n to the old one). The configuration is read again, so the person approves what runs now, the same way as\n `run_start`. A run a person started is always asked about.\n","mcp":{"group":"run","name":"run_restart"},"fileScope":false},
-	"run.tool.start": {"name":"run.tool.start","kind":"unary","tier":"dangerous","roles":["owner"],"params":"Planned<RunToolStartParams>","output":"RunToolStarted","doc":" Start a run configuration (see `run_config_list`) in Pitwall. A process configuration is started and returned at\n once with its `runId` (read the output with `run_logs`, stop it with `run_stop`); an `sql` configuration runs its\n files on its DB connection and this waits until it ends. The person approves what runs in Pitwall first — the\n command line, working directory, profile and environment values — unless they already saw and ran this exact\n configuration content in a trusted project, or the `sql` configuration only queries. A configuration changed since\n (its file, its `.env` files, the script it names, the runtime files) is asked again. Untrusted projects do not run.\n An `sql` configuration's connection must have been opened by the person in Pitwall, and every statement that is not\n a query is approved each time.\n","mcp":{"group":"run","name":"run_start"},"fileScope":false},
+	"run.tool.start": {"name":"run.tool.start","kind":"unary","tier":"dangerous","roles":["owner"],"params":"Planned<RunToolStartParams>","output":"RunToolStarted","doc":" Start a run configuration (see `run_config_list`) in Pitwall. A process configuration is started and returned at\n once with its `runId` (read the output with `run_logs`, stop it with `run_stop`); an `sql` configuration runs its\n files on its DB connection and this waits until it ends. The person approves what runs in Pitwall first — the\n command line, working directory, profile and environment values — unless they already saw and ran this exact\n configuration content in a trusted project, or the `sql` configuration only queries. A configuration changed since\n (its file, its `.env` files, the script it names, the runtime files) is asked again. Untrusted projects do not run.\n An `sql` configuration's connection must have been opened by the person in Pitwall, and every statement that is not\n a query is approved each time. A configuration with `before`, or a `compound` one, starts a chain: every step is in\n the plan, each step before the last waits until the one before it exited with code 0 (a failure stops the chain and\n nothing after it starts; a step whose content changed while an earlier step ran stops with `planChanged`), and this\n returns once every step started (`chain` lists the runs). It runs without asking only when the person saw every\n configuration of the chain in this content.\n","mcp":{"group":"run","name":"run_start"},"fileScope":false},
 	"run.tool.status": {"name":"run.tool.status","kind":"unary","tier":"read","roles":["owner"],"params":"RunToolStatusParams","output":"RunToolStatus","doc":" This project's runs: running ones and the finished ones Pitwall still keeps (the latest 20 per project) — state,\n exit code or signal, pid, working directory, start and end times, and whether a person (from the Pitwall window)\n or an agent started it. With `runId`, that run only (`not found` if it is not a run of this project).\n","mcp":{"group":"run","name":"run_status"},"fileScope":false},
 	"run.tool.stop": {"name":"run.tool.stop","kind":"unary","tier":"exec","roles":["owner"],"params":"Planned<RunToolRunParams>","output":"RunToolStopped","doc":" Stop a run of this project (also one a person started — then the person is asked). The process tree gets SIGTERM,\n then SIGKILL after 5 seconds; an `sql` run is interrupted and its open transaction rolled back. Returns at once.\n","mcp":{"group":"run","name":"run_stop"},"fileScope":false},
 	"runtime.get": {"name":"runtime.get","kind":"unary","tier":"read","roles":["owner"],"params":"RuntimeGetParams","output":"RuntimeInfo","doc":" 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.\n","mcp":null,"fileScope":false},
@@ -2097,6 +2102,13 @@ export type ColumnMeta = {
 	/**  Whether the column accepts NULL. `None` if the driver does not know. */
 	nullable: boolean | null,
 };
+
+/**  How a `compound` configuration starts its configurations. */
+export type CompoundMode = 
+/**  One after another: each starts after the one before it exited with code 0. */
+"sequence" | 
+/**  All at once. */
+"parallel";
 
 /**  마지막 읽기의 실패. 성공하면 사라진다. */
 export type ConfigFault = {
@@ -8996,6 +9008,33 @@ export type RunAttachParams = {
 	since?: number | null,
 };
 
+/**  이벤트 `run.chain`(머리 주석 「보이기」). */
+export type RunChainEvent = {
+	chainId: string,
+	projectId: string,
+	/**  사슬을 띄운 구성(맨 위 구성 열쇠). */
+	config: string,
+	state: RunChainState,
+	/**  지금까지 띄운 실행(띄운 차례). */
+	runs: string[],
+	/**  실패한 · 멈춘 단계의 구성 열쇠. */
+	step: string | null,
+	/**  실패한 까닭(영어 한 줄 — 값 없음). */
+	message: string | null,
+	launchedBy: LaunchedBy,
+};
+
+/**  사슬의 상태. */
+export type RunChainState = 
+/**  단계를 띄우는 중(앞 단계의 끝을 기다리는 중 포함). */
+"running" | 
+/**  모든 단계를 띄웠다. */
+"done" | 
+/**  한 단계가 실패했다 — 남은 단계는 띄우지 않았다. */
+"failed" | 
+/**  멈췄다(사슬의 실행을 멈춤 · 호출 취소). */
+"stopped";
+
 /**
  *  One run configuration: the common fields plus the kind (`type`, [`RunKindConfig`]). Doc comments of the configuration types are
  *  English — they become the JSON Schema descriptions an agent reads (M6-13, decision M5-D39).
@@ -9016,6 +9055,12 @@ export type RunConfig = {
 	profiles?: { [key in string]: RunProfile },
 	/**  How to debug this configuration. Without it the configuration cannot be debugged. */
 	debug?: DebugConfig | null,
+	/**
+	 *  Configuration ids that run first, in this order, each to its end: this configuration starts only after every one of
+	 *  them exited with code 0 (an `sql` configuration fits here — seed or migrate, then the server). A failure stops there
+	 *  and nothing after it starts. A reference that does not exist or that loops back makes the configuration unusable.
+	 */
+	before?: string[],
 } & RunKindConfig;
 
 export type RunConfigDeleteParams = {
@@ -9110,7 +9155,15 @@ export type RunConfigSaved = {
 export type RunConfirmRequired = {
 	/**  확인 열쇠 — 다시 부를 때 `confirmed` 로 그대로 돌려준다. */
 	hash: string,
+	/**  띄울 구성(사슬이면 그 마지막 프로세스 단계 — 모든 단계는 `steps`). */
 	shown: RunShown,
+	/**
+	 *  사슬(`before` · 복합 구성 — 17-m6-plan M6-21)이면 띄울 단계 모두, 띄우는 차례로. `sql` 단계는 연결과 파일만 보인다 — 그
+	 *  문장은 이 확인 뒤의 위험 확인(`3001`)이 보인다. 사슬이 아니면 비었다.
+	 */
+	steps?: RunShown[],
+	/**  사슬의 차례 한 줄(예: `seed, then (api and web together)`). */
+	order?: string | null,
 };
 
 /**  끝난 꼴. */
@@ -9205,7 +9258,15 @@ connection: string;
  */
 files: string[]; 
 /**  How the files are grouped into transactions. A failing statement always stops the run. */
-transaction?: SqlTransaction };
+transaction?: SqlTransaction } | 
+/**
+ *  Other configurations run together as one: `sequence` starts each one after the one before it exited with code 0 (a
+ *  failure stops there), `parallel` starts them all at once. No process of its own — `cwd`, `env`, `envFile`, profiles
+ *  and `[debug]` do not apply.
+ */
+{ type: "compound"; 
+/**  Configuration ids, in order. */
+configs: string[]; mode?: CompoundMode };
 
 export type RunList = {
 	/**  실행 중인 것과 남은 끝난 것(프로젝트마다 최근 20개), 시작 순. */
@@ -9244,6 +9305,8 @@ export type RunRestartParams = {
 	runId: string,
 	/**  [`RunStartParams::confirmed`] 와 같다 — 다시 읽은 구성이 사람이 본 적 없는 내용이면 확인을 받은 뒤 이것을 실어 다시 부른다. */
 	confirmed?: string | null,
+	/**  [`RunStartParams::sql_confirmed`] 와 같다(다시 띄우는 구성이 사슬이고 `sql` 단계가 확인을 청할 때). */
+	sqlConfirmed?: { [key in string]: JsonValue } | null,
 };
 
 /**  첫 실행 확인에 보이는 것 — 띄울 그 값. */
@@ -9351,6 +9414,11 @@ export type RunStartParams = {
 	 *  내용이 그것과 다르면(그사이 파일이 바뀜) 띄우지 않고 다시 묻는다.
 	 */
 	confirmed?: string | null,
+	/**
+	 *  사슬(`before` · 복합 구성 — 17-m6-plan M6-21)의 `sql` 단계마다 사람이 한 위험 확인: 구성 열쇠 → 앞 호출의 `3001`(`data.config`
+	 *  가 그 열쇠)에 사람이 답한 `DbConfirmed` 그대로. 사슬을 띄울 때 모두 쓰인다 — 다시 실으면 다시 묻는다.
+	 */
+	sqlConfirmed?: { [key in string]: JsonValue } | null,
 };
 
 export type RunState = "running" | 
@@ -9631,6 +9699,11 @@ export type RunToolStarted = {
 	sql: JsonValue | null,
 	/**  Audit details: the configuration id, its content hash and the run id (no command line or values). */
 	audit: string,
+	/**
+	 *  For a configuration with `before` or a `compound` configuration: every run the chain started, in the order it started
+	 *  them (`run` is the last). Empty otherwise.
+	 */
+	chain?: RunToolRun[],
 };
 
 export type RunToolState = "running" | 

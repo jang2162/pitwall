@@ -69,6 +69,7 @@ impl TaskDetector for JustDetector {
                     env_file: Vec::new(),
                     profiles: Default::default(),
                     debug: None,
+                    before: Vec::new(),
                 },
                 definition: file_definition(&sha, &recipe),
                 name: recipe,

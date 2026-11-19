@@ -3,6 +3,8 @@
 // - 실행될 내용을 **가리지 않고** 보인다(M6-13 리뷰 B1 판정): 명령(argv)과 정의 본문(npm script)은 Host 가 준 그대로다. 가린 것은
 //   env 의 값뿐이고 Host 가 가려서 준다(`pw_run::config::shown` — 승인 화면과 같은 부품). 명령에 비밀처럼 보이는 것이 있으면 경고만
 //   단다.
+// - 사슬(`before` · 복합 구성 — 17-m6-plan M6-21)이면 띄울 단계를 모두 차례대로 보인다(`steps` · `order`). `sql` 단계는 연결과
+//   파일만 — 그 문장은 이 확인 뒤의 위험 확인이 보인다.
 // - 처음 포커스는 [취소]다. Esc · 바깥 누르기도 취소다. 떠 있는 동안 창의 키맵은 쉰다(창 팝업 규칙).
 
 import type { RunConfirmRequired, RunShown } from "@pitwall/rpc-client";
@@ -33,11 +35,83 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+/** 띄울 구성 하나의 내용. */
+function StepRows({ shown }: { shown: RunShown }) {
+  const T = useRunStrings().confirm;
+  return (
+    <div className="flex flex-col gap-2 text-[12px]">
+      <Row label={T.kind}>
+        <span className="font-mono">{shown.kind}</span>
+      </Row>
+      <Row label={T.command}>
+        <pre data-testid="run-confirm-command" className={CODE}>
+          {shown.argv.map(shownArg).join(" ")}
+        </pre>
+      </Row>
+      {shown.definition !== null && (
+        <Row label={T.definition}>
+          {shown.definitionSource !== null && (
+            <p
+              data-testid="run-confirm-definition-source"
+              className="mb-0.5 font-mono text-[11px] break-all text-ui-muted-foreground"
+            >
+              {shown.definitionSource}
+            </p>
+          )}
+          <pre data-testid="run-confirm-definition" className={CODE}>
+            {shown.definition}
+          </pre>
+        </Row>
+      )}
+      <Row label={T.cwd}>
+        <span data-testid="run-confirm-cwd" className="font-mono">
+          {shown.cwd}
+        </span>
+      </Row>
+      {shown.profile !== null && (
+        <Row label={T.profile}>
+          <span className="font-mono">{shown.profile}</span>
+        </Row>
+      )}
+      <Row label={T.env}>
+        {shown.env.length === 0 ? (
+          <span className="text-ui-muted-foreground">{T.envNone}</span>
+        ) : (
+          <ul data-testid="run-confirm-env" className="flex flex-col font-mono">
+            {shown.env.map((v) => (
+              <li key={v.name} data-masked={v.masked} className="break-all">
+                {v.name}={v.value}
+                {v.masked && <span className="sr-only"> ({T.masked})</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Row>
+      {shown.envFiles.length > 0 && (
+        <Row label={T.envFiles}>
+          <ul className="flex flex-col font-mono">
+            {shown.envFiles.map((f) => (
+              <li key={f.path}>
+                {f.path} <span className="text-ui-muted-foreground">sha256 {f.sha256}</span>
+              </li>
+            ))}
+          </ul>
+        </Row>
+      )}
+    </div>
+  );
+}
+
 export function RunConfirmDialog({
   shown,
+  steps = [],
+  order = null,
   onAnswer,
 }: {
   shown: RunShown;
+  /** 사슬(`before` · 복합 구성)이면 띄울 단계 모두(띄우는 차례). */
+  steps?: RunShown[];
+  order?: string | null;
   onAnswer(run: boolean): void;
 }) {
   const T = useRunStrings().confirm;
@@ -62,67 +136,30 @@ export function RunConfirmDialog({
               {T.secretWarning}
             </p>
           )}
-          <div className="flex flex-col gap-2 text-[12px]">
-            <Row label={T.kind}>
-              <span className="font-mono">{shown.kind}</span>
-            </Row>
-            <Row label={T.command}>
-              <pre data-testid="run-confirm-command" className={CODE}>
-                {shown.argv.map(shownArg).join(" ")}
-              </pre>
-            </Row>
-            {shown.definition !== null && (
-              <Row label={T.definition}>
-                {shown.definitionSource !== null && (
-                  <p
-                    data-testid="run-confirm-definition-source"
-                    className="mb-0.5 font-mono text-[11px] break-all text-ui-muted-foreground"
-                  >
-                    {shown.definitionSource}
-                  </p>
-                )}
-                <pre data-testid="run-confirm-definition" className={CODE}>
-                  {shown.definition}
-                </pre>
-              </Row>
-            )}
-            <Row label={T.cwd}>
-              <span data-testid="run-confirm-cwd" className="font-mono">
-                {shown.cwd}
-              </span>
-            </Row>
-            {shown.profile !== null && (
-              <Row label={T.profile}>
-                <span className="font-mono">{shown.profile}</span>
-              </Row>
-            )}
-            <Row label={T.env}>
-              {shown.env.length === 0 ? (
-                <span className="text-ui-muted-foreground">{T.envNone}</span>
-              ) : (
-                <ul data-testid="run-confirm-env" className="flex flex-col font-mono">
-                  {shown.env.map((v) => (
-                    <li key={v.name} data-masked={v.masked} className="break-all">
-                      {v.name}={v.value}
-                      {v.masked && <span className="sr-only"> ({T.masked})</span>}
-                    </li>
-                  ))}
-                </ul>
+          {steps.length > 0 ? (
+            <>
+              {order !== null && (
+                <p data-testid="run-confirm-order" className="text-[12px]">
+                  <span className="text-ui-muted-foreground">{T.order} </span>
+                  <span className="font-mono">{order}</span>
+                </p>
               )}
-            </Row>
-            {shown.envFiles.length > 0 && (
-              <Row label={T.envFiles}>
-                <ul className="flex flex-col font-mono">
-                  {shown.envFiles.map((f) => (
-                    <li key={f.path}>
-                      {f.path} <span className="text-ui-muted-foreground">sha256 {f.sha256}</span>
-                    </li>
-                  ))}
-                </ul>
-              </Row>
-            )}
-          </div>
-          {!shown.recordable && (
+              <ol data-testid="run-confirm-steps" className="flex flex-col gap-3">
+                {steps.map((step, i) => (
+                  <li key={`${i}-${step.key}`} data-step={step.key} className="flex flex-col gap-1">
+                    <p className="text-[12px] font-semibold">
+                      {i + 1}. {step.name}{" "}
+                      <span className="font-mono text-ui-muted-foreground">({step.key})</span>
+                    </p>
+                    <StepRows shown={step} />
+                  </li>
+                ))}
+              </ol>
+            </>
+          ) : (
+            <StepRows shown={shown} />
+          )}
+          {!shown.recordable && steps.length === 0 && (
             <p className="text-[12px] text-ui-muted-foreground">{T.notRecorded}</p>
           )}
           <div className="flex justify-end gap-2">
@@ -180,6 +217,11 @@ export function RunConfirmHost() {
     };
   }, [ask]);
   return question ? (
-    <RunConfirmDialog shown={question.data.shown} onAnswer={question.answer} />
+    <RunConfirmDialog
+      shown={question.data.shown}
+      steps={question.data.steps}
+      order={question.data.order}
+      onAnswer={question.answer}
+    />
   ) : null;
 }

@@ -38,7 +38,7 @@ export interface RunFormSchema {
 }
 
 /** 폼이 직접 그리는 공통 칸. 스키마의 공통 칸은 모두 이것이거나 [`KEPT`] 다(config-form.test.ts). */
-export const COMMON = ["name", "cwd", "env", "envFile"] as const;
+export const COMMON = ["name", "cwd", "env", "envFile", "before"] as const;
 /** 폼 밖에 두고 그대로 보내는 공통 칸. */
 export const KEPT = ["profiles", "debug"] as const;
 
@@ -113,6 +113,8 @@ export interface RunConfigForm {
   cwd: string;
   env: { name: string; value: string }[];
   envFile: string;
+  /** 먼저 끝까지 돌릴 구성 id(한 줄에 하나 — 17-m6-plan M6-21). */
+  before: string;
   /** 종류의 칸(`RunKindSpec.fields` 의 `key`). */
   kind: Record<string, string>;
   location: RunConfigLocation;
@@ -146,6 +148,7 @@ export function formOf(
     cwd: config.cwd ?? "",
     env: Object.entries(config.env ?? {}).map(([name, value]) => ({ name, value })),
     envFile: (config.envFile ?? []).join("\n"),
+    before: (config.before ?? []).join("\n"),
     kind,
     location,
   };
@@ -168,6 +171,7 @@ export function newForm(id: string): RunConfigForm {
     cwd: "",
     env: [],
     envFile: "",
+    before: "",
     kind: {},
     location: "shared",
   };
@@ -193,6 +197,7 @@ export function configOf(form: RunConfigForm, schema: RunFormSchema, kept?: RunC
       form.env.filter((v) => v.name.trim() !== "").map((v) => [v.name.trim(), v.value]),
     ),
     envFile: lines(form.envFile),
+    before: lines(form.before),
   };
   for (const key of KEPT) {
     const value = (kept as unknown as Record<string, unknown> | undefined)?.[key];

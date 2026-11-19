@@ -560,3 +560,47 @@ it("shows the command definition that runs, as written, in the first run confirm
   expect(byTestId("run-confirm-definition-source")?.textContent).toBe("/main/mise.toml");
   await click(document.activeElement);
 });
+
+it("shows every step of a chain in the first-run confirmation, in order (M6-21)", async () => {
+  await mount();
+  const chain: RunConfirmRequired = {
+    ...CONFIRM,
+    hash: "sha256:" + "c".repeat(64),
+    steps: [
+      {
+        ...CONFIRM.shown,
+        key: "seed",
+        name: "Seed",
+        kind: "sql",
+        argv: [],
+        cwd: ".",
+        env: [],
+        envFiles: [],
+        definition: "connection: lite\nfiles: seed.sql\ntransaction: all",
+        secretLooking: false,
+        recordable: false,
+      },
+      CONFIRM.shown,
+    ],
+    order: "seed, then dev",
+  };
+  host.handlers["run.start"] = (p) => {
+    if (p.confirmed !== chain.hash)
+      return { error: { code: 7001, message: "not seen", data: chain } };
+    return { result: runInfo({ runId: "r10", config: "seed", name: "Seed" }) };
+  };
+  await click(byTestId("run-start"));
+  await vi.waitFor(() => expect(byTestId("run-confirm-dialog")).not.toBeNull());
+  expect(byTestId("run-confirm-order")?.textContent).toContain("seed, then dev");
+  const steps = [...byTestId("run-confirm-steps")!.querySelectorAll("li[data-step]")];
+  expect(steps.map((s) => s.getAttribute("data-step"))).toEqual(["seed", "dev"]);
+  expect(steps[0]?.textContent).toContain("files: seed.sql");
+  expect(steps[1]?.textContent).toContain("psql postgres://u:pw@db/x");
+  await click(
+    [...byTestId("run-confirm-dialog")!.querySelectorAll("button")].find(
+      (b) => b.textContent === "실행",
+    )!,
+  );
+  expect(calls("run.start").map((c) => c.params.confirmed)).toEqual([null, chain.hash]);
+  expect(calls("run.start")[1]?.params).toMatchObject({ sqlConfirmed: null });
+});

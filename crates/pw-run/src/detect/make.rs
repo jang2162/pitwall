@@ -55,6 +55,7 @@ impl TaskDetector for MakeDetector {
                     env_file: Vec::new(),
                     profiles: Default::default(),
                     debug: None,
+                    before: Vec::new(),
                 },
                 source: path.clone(),
                 definition: file_definition(&sha, &target),

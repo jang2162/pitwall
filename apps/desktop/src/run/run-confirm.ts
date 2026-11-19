@@ -4,7 +4,15 @@
 //
 // 묻는 쪽(대화상자)은 창에 하나다 — 실행 선택기 · `⌃R` · 「실행」 툴 윈도우의 다시 실행이 같은 것을 쓴다(`setRunConfirmAsker`).
 
-import { type JsonValue, RpcCallError, type RunConfirmRequired } from "@pitwall/rpc-client";
+import {
+  type DbConfirmed,
+  type JsonValue,
+  RpcCallError,
+  type RunConfirmRequired,
+  type RunSqlConfirmRequired,
+} from "@pitwall/rpc-client";
+
+import { sqlRunConfirmOf } from "./sql-run";
 
 /** `pw_run::runs::confirm::code`. */
 export const RUN_ERROR_CODE = { CONFIRM_REQUIRED: 7001 } as const;
@@ -53,6 +61,51 @@ export async function withRunConfirm<T>(
       if (!data || !ask || asked >= MAX_ASKS) throw e;
       if (!(await ask(data))) return undefined;
       confirmed = data.hash;
+    }
+  }
+}
+
+/** 사슬의 `sql` 단계 위험 확인에 답한다(sql-run.ts 와 같은 다이얼로그). 취소 · 다른 확인이 떠 있으면 `undefined`. */
+export type SqlStepAsker = (data: RunSqlConfirmRequired) => Promise<DbConfirmed | undefined>;
+
+/** 사슬(`before` · 복합 구성 — 단계가 여럿이라 확인도 여럿)을 다시 묻는 횟수의 상한. */
+const MAX_CHAIN_ASKS = 16;
+
+/**
+ * 사슬도 띄우는 `run.start`(17-m6-plan M6-21 — crates/pw-run/src/runs/chain.rs 「창의 길」): Host 는 모든 확인을 첫 단계를 띄우기
+ * 전에 받는다 — 첫 실행 확인(`7001`, 모든 단계)과 `sql` 단계마다의 위험 확인(`3001`, `data.config` 가 그 단계). 받은 것을 모두 실어
+ * 다시 부른다(앞에서 받은 확인은 Host 가 아직 쓰지 않았다). 사람이 하나라도 취소하면 `undefined` — 아무것도 돌지 않았다.
+ */
+export async function withRunConfirms<T>(
+  call: (confirmed: string | null, sqlConfirmed: Record<string, DbConfirmed> | null) => Promise<T>,
+  askSql: SqlStepAsker,
+  ask: RunConfirmAsker | undefined = asker,
+): Promise<T | undefined> {
+  let confirmed: string | null = null;
+  const sqlConfirmed: Record<string, DbConfirmed> = {};
+  for (let asked = 0; ; asked++) {
+    try {
+      return await call(
+        confirmed,
+        Object.keys(sqlConfirmed).length > 0 ? { ...sqlConfirmed } : null,
+      );
+    } catch (e) {
+      if (asked >= MAX_CHAIN_ASKS) throw e;
+      const run = runConfirmOf(e);
+      if (run) {
+        if (!ask) throw e;
+        if (!(await ask(run))) return undefined;
+        confirmed = run.hash;
+        continue;
+      }
+      const sql = sqlRunConfirmOf(e);
+      const config = (e instanceof RpcCallError ? e.data : undefined) as
+        | { config?: unknown }
+        | undefined;
+      if (!sql || typeof config?.config !== "string") throw e;
+      const answer = await askSql(sql);
+      if (answer === undefined) return undefined;
+      sqlConfirmed[config.config] = answer;
     }
   }
 }

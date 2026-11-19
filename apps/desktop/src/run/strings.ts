@@ -95,6 +95,12 @@ export function runStrings(t: Translate) {
       listFailed: (message: string) => t("run-picker-list-failed", { message }),
       startFailed: (message: string) => t("run-start-failed", { message }),
     },
+    /** 사슬(`before` · 복합 구성 — M6-21, run-chain.tsx). */
+    chain: {
+      failed: (config: string, step: string, message: string) =>
+        t("run-chain-failed", { config, step, message }),
+      stopped: (config: string, step: string) => t("run-chain-stopped", { config, step }),
+    },
     /** 키맵 액션(M6-07 ② — run-actions.ts). */
     actions: {
       current: t("run-action-current"),
@@ -118,6 +124,7 @@ export function runStrings(t: Translate) {
       masked: t("run-confirm-masked"),
       secretWarning: t("run-confirm-secret-warning"),
       notRecorded: t("run-confirm-not-recorded"),
+      order: t("run-confirm-order"),
       run: t("run-confirm-run"),
       cancel: t("run-confirm-cancel"),
     },
@@ -138,6 +145,8 @@ export function runStrings(t: Translate) {
       envRemove: (name: string) => t("run-editor-env-remove", { name }),
       envFile: t("run-editor-env-file"),
       envFileHint: t("run-editor-env-file-hint"),
+      before: t("run-editor-before"),
+      beforeHint: t("run-editor-before-hint"),
       listHint: t("run-editor-list-hint"),
       location: t("run-editor-location"),
       locationShared: t("run-editor-location-shared"),

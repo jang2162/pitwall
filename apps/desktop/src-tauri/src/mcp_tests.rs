@@ -37,6 +37,7 @@ mod plan_tiers;
 mod project;
 mod project_write;
 mod run;
+mod run_chain;
 mod run_exec;
 mod run_read;
 

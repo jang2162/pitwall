@@ -136,6 +136,7 @@ run-confirm-env-files = .env files
 run-confirm-masked = Looks like a secret, so the value is hidden
 run-confirm-secret-warning = The command holds a value that looks like a secret (an address with a password, or a value named like a secret). It is shown as written, not hidden — check what runs.
 run-confirm-not-recorded = This configuration's content cannot be recorded, so you are asked every time it runs.
+run-confirm-order = Order:
 run-confirm-run = Run
 run-confirm-cancel = Cancel
 
@@ -158,6 +159,8 @@ run-editor-env-add = Add variable
 run-editor-env-remove = Remove { $name }
 run-editor-env-file = .env files
 run-editor-env-file-hint = Relative to the project root, one per line (applied in order)
+run-editor-before = Before launch
+run-editor-before-hint = Configuration ids, one per line — each must exit with code 0, in order, before this one starts
 run-editor-list-hint = One per line
 run-editor-location = Save to
 run-editor-location-shared = Shared (.pitwall/run/<id>.toml — committed)
@@ -262,3 +265,7 @@ action-debug-pause = Pause Program
 action-debug-toggle-breakpoint = Toggle Line Breakpoint
 action-debug-view-breakpoints = View Breakpoints
 action-debug-evaluate = Evaluate Expression
+
+## 사슬(before · 복합 구성 — run-chain.tsx)
+run-chain-failed = { $config } stopped at { $step }; the rest did not start: { $message }
+run-chain-stopped = { $config } was stopped at { $step }; the rest did not start

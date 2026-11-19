@@ -179,6 +179,7 @@ pub fn tasks(stdout: &str) -> Result<Found, String> {
                 env_file: Vec::new(),
                 profiles: Default::default(),
                 debug: None,
+                before: Vec::new(),
             },
             definition: file_definition(&digest, &name),
         });

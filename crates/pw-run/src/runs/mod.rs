@@ -35,6 +35,8 @@
 //! `runId` 를 받는 것은 모두 **그 실행의 프로젝트로 판정한다**. 다른 프로젝트의 `runId` 는 없는 실행과 같은 오류다
 //! ([`no_such_run`] — 있다는 것을 알리지 않는다). RPC 의 범위 판정은 [`methods`] 에 있다.
 
+pub mod chain;
+mod chain_tool;
 pub mod confirm;
 pub mod exec_tool;
 pub mod log;
@@ -340,6 +342,8 @@ pub struct Run {
     ports: Mutex<Vec<RunPort>>,
     /// 앞선 폴링에서 찾은 프로세스 트리. 중지(`process`)도 함께 쥐어 그 후손까지 끝낸다.
     known: Arc<Mutex<ports::Known>>,
+    /// 이 실행을 띄운 사슬(`before` · 복합 구성 — [`chain`]). 사슬이 아직 띄우는 중이면 이 실행의 중지가 사슬 전체를 멈춘다.
+    chain: Mutex<Option<Arc<chain::ChainCtl>>>,
 }
 
 #[derive(Default)]
@@ -541,6 +545,8 @@ struct Inner {
     host: OnceLock<HostParts>,
     /// `sql` 구성의 에이전트 실행(M6-14 — pw-db 가 `pw_db::run_sql::register` 에서 붙인다). 없으면 `run_start` 가 `sql` 구성을 거절한다.
     sql_tool: OnceLock<Arc<dyn exec_tool::SqlRunTool>>,
+    /// 창의 사슬의 `sql` 단계(M6-21 — pw-db 가 붙인다). 없으면 창이 `sql` 단계가 든 사슬을 거절한다.
+    sql_window: OnceLock<Arc<dyn chain::SqlWindowChain>>,
     limits: RunLimits,
     meter: Meter,
     table: Mutex<Table>,
@@ -574,6 +580,7 @@ impl Runs {
                 launcher,
                 host: OnceLock::new(),
                 sql_tool: OnceLock::new(),
+                sql_window: OnceLock::new(),
                 limits,
                 meter: Meter::default(),
                 table: Mutex::default(),
@@ -625,6 +632,20 @@ impl Runs {
         params: &RunStartParams,
     ) -> Result<RunInfo, RpcError> {
         let size = size_of(params.cols, params.rows)?;
+        // 사슬(`before` · 복합 구성)은 이 길로 띄우지 않는다 — `before` 를 건너뛰게 된다. `run.start` 는 [`Self::start_window`].
+        if self
+            .chain_of(
+                grant.project_id(),
+                params.worktree.as_deref(),
+                &params.config_id,
+            )?
+            .is_some()
+        {
+            return Err(RpcError::invalid_params(format!(
+                "run config `{}` starts other configurations first (`before` or a compound configuration); start it with run.start",
+                params.config_id
+            )));
+        }
         self.start_config(
             grant.project_id(),
             LaunchedBy::Window { window },
@@ -705,23 +726,19 @@ impl Runs {
         // 편집 화면이 보이는 것(구성 파일 하나)이 해시의 전부인가 — `.env` · 정의 본문 · 런타임 원천 파일이 들면 아니다(리뷰 F2).
         let config_only = matches!(&content, Ok(c) if c.env_files.is_empty() && c.definition.is_none() && c.runtime_files.is_empty());
         let seen_hash = content.map(|c| c.hash());
-        if check {
-            let launching = confirm::Launching {
-                resolved: &resolved,
-            };
-            let (token, saw) = match &seen_hash {
-                Ok(hash) => (
-                    hash.to_string(),
-                    host.projects.human_saw(&project.id, &key, hash),
-                ),
-                Err(_) => (launching.once_token(), false),
-            };
-            if !saw && what.confirmed.as_deref() != Some(token.as_str()) {
-                return Err(confirm::confirm_required(
-                    token,
-                    launching.shown(seen_hash.is_ok()),
-                ));
-            }
+        let launching = confirm::Launching {
+            resolved: &resolved,
+        };
+        let (token, saw) = match &seen_hash {
+            Ok(hash) => (
+                hash.to_string(),
+                host.projects.human_saw(&project.id, &key, hash),
+            ),
+            Err(_) => (launching.once_token(), false),
+        };
+        let shown = launching.shown(seen_hash.is_ok());
+        if check && !saw && what.confirmed.as_deref() != Some(token.as_str()) {
+            return Err(confirm::confirm_required(token, shown));
         }
         let mut env = crate::shell::child_env(&resolved.run_env.apply(&resolved.runtime));
         let mut argv = resolved.argv.clone();
@@ -735,6 +752,9 @@ impl Runs {
             env,
             seen_hash,
             config_only,
+            token,
+            saw,
+            shown,
         })
     }
 
@@ -1086,6 +1106,7 @@ impl Runs {
             announced: Mutex::default(),
             ports: Mutex::default(),
             known: Arc::default(),
+            chain: Mutex::default(),
         });
         // 띄우는 동안 나온 출력 · 곧바로 끝난 실행도 받도록 표에 먼저 넣는다.
         lock(&self.inner.table)
@@ -1365,6 +1386,12 @@ struct Prepared {
     seen_hash: Result<pw_core::registry::run_seen::SeenHash, String>,
     /// 해시의 재료가 구성 파일 하나뿐인가(`.env` · 정의 본문 · 런타임 원천 파일이 없다) — 화면 저장이 기록해도 되는가(리뷰 F2).
     config_only: bool,
+    /// 첫 실행 확인의 열쇠(해시 · 해시를 낼 수 없으면 `confirm::Launching::once_token`).
+    token: String,
+    /// 그 해시가 「사람이 본 구성」 인가.
+    saw: bool,
+    /// 첫 실행 확인에 보일 것.
+    shown: confirm::RunShown,
 }
 
 impl Inner {
@@ -1374,7 +1401,7 @@ impl Inner {
             .ok_or_else(|| RpcError::internal("runs are not attached to a host"))
     }
 
-    fn publish(&self, project_id: &str, topic: &str, info: &RunInfo) {
+    fn publish(&self, project_id: &str, topic: &str, info: &impl Serialize) {
         let Some(host) = self.host.get() else {
             return;
         };
@@ -1455,6 +1482,11 @@ fn stop_run(run: &Run) {
         kind.stop();
     }
     run.bump();
+    // 띄우는 중인 사슬의 실행이면 사슬 전체를 멈춘다(`chain` 머리 주석 「중지」).
+    let chain = lock(&run.chain).clone();
+    if let Some(chain) = chain {
+        chain.stop();
+    }
 }
 
 /// 에이전트 허가의 작업 폴더를 먼저 본다 — 런타임 환경(로그인 셸 · mise)을 기다리기 전에 일찍 거절하는 자리다. 지금 정규화한
