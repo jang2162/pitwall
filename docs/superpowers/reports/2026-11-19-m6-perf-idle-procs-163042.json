@@ -1,0 +1,290 @@
+{
+  "app": "target/release/perf-m6/Pitwall.app",
+  "definition": "per run a fresh app on an empty untrusted project (no run configuration, no debug); from first frame + 10s for 30s: `pitwall` (the app process — the Host is in it) idle and interrupt wakeups and CPU time (rusage deltas), its threads by name, and the app's descendant processes every 1 s; 3 runs",
+  "environment": {
+    "commit": "2b1754942eaeaee74d10f1a18030be83ec5efd46",
+    "dirty": false,
+    "hardware": "Mac17,9 · Apple M5 Pro · 15 CPU",
+    "os": "macOS 27.2.1 (26B131)"
+  },
+  "hid_idle_now_s": 0.0,
+  "hid_idle_start_s": 1.0,
+  "kind": "idle-procs",
+  "runs": [
+    {
+      "app_pid": 41053,
+      "cold_start_ms": 519.050048828125,
+      "descendants": [],
+      "excluded": "window hidden",
+      "footprint_mb": 232.362496,
+      "group": {
+        "epoch_ms": 1795073667590.6812,
+        "footprint_mb": 232.362496,
+        "processes": [
+          {
+            "footprint_mb": 130.90924,
+            "name": "com.apple.WebKit.WebContent",
+            "pid": 41056,
+            "rss_mb": 273.219584
+          },
+          {
+            "footprint_mb": 70.780248,
+            "name": "pitwall",
+            "pid": 41053,
+            "rss_mb": 169.82016
+          },
+          {
+            "footprint_mb": 18.088776,
+            "name": "com.apple.WebKit.GPU",
+            "pid": 41055,
+            "rss_mb": 27.099136
+          },
+          {
+            "footprint_mb": 5.505528,
+            "name": "com.apple.audio.SandboxHelper",
+            "pid": 41058,
+            "rss_mb": 11.534336
+          },
+          {
+            "footprint_mb": 4.882888,
+            "name": "com.apple.WebKit.Networking",
+            "pid": 41057,
+            "rss_mb": 9.240576
+          },
+          {
+            "footprint_mb": 2.195816,
+            "name": "SetStoreUpdateService",
+            "pid": 41054,
+            "rss_mb": 9.207808
+          }
+        ],
+        "rss_mb": 500.1216
+      },
+      "host": {
+        "cpu_ms_per_s": 0.42,
+        "idle_wakeups_per_s": 0.2,
+        "interrupt_wakeups_per_s": 5.49,
+        "thread_names": {
+          "(unnamed)": 2,
+          "Log work queue": 1,
+          "WebCore: Scrolling": 1,
+          "com.apple.NSEventThread": 1,
+          "main": 1,
+          "notify-rs fsevents loop": 2,
+          "pw-fs-watch": 1,
+          "pw-index-events": 1,
+          "tokio-rt-worker": 15
+        },
+        "threads_end": 25,
+        "threads_start": 32,
+        "window_s": 30.038161708
+      },
+      "index": 0,
+      "load1_end": 2.4,
+      "load1_start": 1.78,
+      "pitwall_mb": 70.780248,
+      "ports_thread_seen": false,
+      "shutdown": {
+        "signals": []
+      }
+    },
+    {
+      "app_pid": 42562,
+      "cold_start_ms": 576.364013671875,
+      "descendants": [],
+      "excluded": "window hidden",
+      "footprint_mb": 228.626968,
+      "group": {
+        "epoch_ms": 1795073708469.464,
+        "footprint_mb": 228.626968,
+        "processes": [
+          {
+            "footprint_mb": 129.107072,
+            "name": "com.apple.WebKit.WebContent",
+            "pid": 42565,
+            "rss_mb": 239.501312
+          },
+          {
+            "footprint_mb": 69.961048,
+            "name": "pitwall",
+            "pid": 42562,
+            "rss_mb": 167.755776
+          },
+          {
+            "footprint_mb": 17.072848,
+            "name": "com.apple.WebKit.GPU",
+            "pid": 42564,
+            "rss_mb": 30.982144
+          },
+          {
+            "footprint_mb": 5.505528,
+            "name": "com.apple.audio.SandboxHelper",
+            "pid": 42568,
+            "rss_mb": 11.534336
+          },
+          {
+            "footprint_mb": 4.702736,
+            "name": "com.apple.WebKit.Networking",
+            "pid": 42566,
+            "rss_mb": 12.419072
+          },
+          {
+            "footprint_mb": 2.277736,
+            "name": "SetStoreUpdateService",
+            "pid": 42563,
+            "rss_mb": 9.273344
+          }
+        ],
+        "rss_mb": 471.465984
+      },
+      "host": {
+        "cpu_ms_per_s": 0.46,
+        "idle_wakeups_per_s": 0.07,
+        "interrupt_wakeups_per_s": 6.03,
+        "thread_names": {
+          "(unnamed)": 4,
+          "JavaScriptCore libpas scavenger": 1,
+          "Log work queue": 1,
+          "WebCore: Scrolling": 1,
+          "com.apple.NSEventThread": 1,
+          "main": 1,
+          "notify-rs fsevents loop": 2,
+          "pw-fs-watch": 1,
+          "pw-index-events": 1,
+          "tokio-rt-worker": 15
+        },
+        "threads_end": 28,
+        "threads_start": 32,
+        "window_s": 30.032976666
+      },
+      "index": 1,
+      "load1_end": 4.49,
+      "load1_start": 2.4,
+      "pitwall_mb": 69.961048,
+      "ports_thread_seen": false,
+      "shutdown": {
+        "signals": []
+      }
+    },
+    {
+      "app_pid": 44040,
+      "cold_start_ms": 506.548095703125,
+      "descendants": [],
+      "excluded": "window hidden",
+      "footprint_mb": 224.268824,
+      "group": {
+        "epoch_ms": 1795073749272.971,
+        "footprint_mb": 224.268824,
+        "processes": [
+          {
+            "footprint_mb": 126.289,
+            "name": "com.apple.WebKit.WebContent",
+            "pid": 44043,
+            "rss_mb": 248.152064
+          },
+          {
+            "footprint_mb": 67.913024,
+            "name": "pitwall",
+            "pid": 44040,
+            "rss_mb": 167.133184
+          },
+          {
+            "footprint_mb": 17.48252,
+            "name": "com.apple.WebKit.GPU",
+            "pid": 44042,
+            "rss_mb": 27.131904
+          },
+          {
+            "footprint_mb": 5.505528,
+            "name": "com.apple.audio.SandboxHelper",
+            "pid": 44045,
+            "rss_mb": 11.534336
+          },
+          {
+            "footprint_mb": 4.784632,
+            "name": "com.apple.WebKit.Networking",
+            "pid": 44044,
+            "rss_mb": 9.09312
+          },
+          {
+            "footprint_mb": 2.29412,
+            "name": "SetStoreUpdateService",
+            "pid": 44041,
+            "rss_mb": 9.306112
+          }
+        ],
+        "rss_mb": 472.35072
+      },
+      "host": {
+        "cpu_ms_per_s": 0.95,
+        "idle_wakeups_per_s": 0.2,
+        "interrupt_wakeups_per_s": 8.56,
+        "thread_names": {
+          "(unnamed)": 4,
+          "JavaScriptCore libpas scavenger": 1,
+          "Log work queue": 1,
+          "WebCore: Scrolling": 1,
+          "com.apple.NSEventThread": 1,
+          "main": 1,
+          "notify-rs fsevents loop": 2,
+          "pw-fs-watch": 1,
+          "pw-index-events": 1,
+          "tokio-rt-worker": 16
+        },
+        "threads_end": 29,
+        "threads_start": 32,
+        "window_s": 30.035196166
+      },
+      "index": 2,
+      "load1_end": 3.22,
+      "load1_start": 4.49,
+      "pitwall_mb": 67.913024,
+      "ports_thread_seen": false,
+      "shutdown": {
+        "signals": []
+      }
+    }
+  ],
+  "schema": "pitwall-perf-m6/1",
+  "summary": {
+    "cpu_ms_per_s": {
+      "max": 0.95,
+      "median": 0.46,
+      "min": 0.42,
+      "n": 3
+    },
+    "descendants": [],
+    "footprint_mb": {
+      "max": null,
+      "median": null,
+      "min": null,
+      "n": 0
+    },
+    "idle_wakeups_per_s": {
+      "max": 0.2,
+      "median": 0.2,
+      "min": 0.07,
+      "n": 3
+    },
+    "interrupt_wakeups_per_s": {
+      "max": 8.56,
+      "median": 6.03,
+      "min": 5.49,
+      "n": 3
+    },
+    "pitwall_mb": {
+      "max": null,
+      "median": null,
+      "min": null,
+      "n": 0
+    },
+    "ports_thread_seen": false,
+    "threads": {
+      "max": 29.0,
+      "median": 28.0,
+      "min": 25.0,
+      "n": 3
+    },
+    "verdict": "nothing spawned"
+  }
+}

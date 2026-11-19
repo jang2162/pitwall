@@ -1,0 +1,3434 @@
+{
+  "app": "target/release/perf-m6/Pitwall.app",
+  "definition": "per run a fresh app on an empty trusted project with one shell run configuration `pw-perf-flood --rate 10000000 --secs 30` started from the title bar (in-app scenario run-flood); the webview measures rAF intervals for 20 s from the first console output; the driver samples `pitwall` and WebContent phys_footprint every 1 s from launch until 15s after the console caught up; Host growth = max − the last sample before `run_started`; 3 runs",
+  "environment": {
+    "commit": "4ea6d998e8281fd8d0602c80bd142958f97d3bbe",
+    "dirty": false,
+    "hardware": "Mac17,9 · Apple M5 Pro · 15 CPU",
+    "os": "macOS 27.2.1 (26B131)"
+  },
+  "hid_idle_now_s": 1.0,
+  "hid_idle_start_s": 0.0,
+  "kind": "run-flood",
+  "runs": [
+    {
+      "app_pid": 3105,
+      "cold_start_ms": 498.041015625,
+      "done": {
+        "epochMs": 1795072587143,
+        "exitedSeenEpochMs": 1795072584098,
+        "notes": [
+          "[앞 출력 6,121,165 바이트가 버려졌다]",
+          "[앞 출력 5,774,949 바이트가 버려졌다]",
+          "[앞 출력 11,992,807 바이트가 버려졌다]",
+          "[앞 출력 5,573,061 바이트가 버려졌다]",
+          "[앞 출력 12,093,752 바이트가 버려졌다]",
+          "[앞 출력 5,573,051 바이트가 버려졌다]",
+          "[앞 출력 12,093,761 바이트가 버려졌다]",
+          "[앞 출력 11,730,664 바이트가 버려졌다]",
+          "[앞 출력 5,573,060 바이트가 버려졌다]",
+          "[앞 출력 12,093,752 바이트가 버려졌다]",
+          "[앞 출력 5,573,061 바이트가 버려졌다]",
+          "[앞 출력 12,093,751 바이트가 버려졌다]",
+          "[앞 출력 11,831,609 바이트가 버려졌다]",
+          "[앞 출력 5,648,836 바이트가 버려졌다]",
+          "[앞 출력 12,118,921 바이트가 버려졌다]",
+          "[앞 출력 5,472,115 바이트가 버려졌다]",
+          "[앞 출력 12,093,752 바이트가 버려졌다]",
+          "[앞 출력 11,930,928 바이트가 버려졌다]",
+          "[앞 출력 5,656,605 바이트가 버려졌다]",
+          "[앞 출력 12,011,831 바이트가 버려졌다]"
+        ],
+        "renderedBytes": 22154692
+      },
+      "error": null,
+      "excluded": null,
+      "flood": {
+        "bytes": 300000000,
+        "end_epoch_ms": 1795072584067.8,
+        "late_ticks": 0,
+        "lines": 2830189,
+        "rate": 10000000,
+        "secs": 30.001,
+        "start_epoch_ms": 1795072554066.6,
+        "ticks": 3000
+      },
+      "frames": {
+        "blocks": {
+          "maxMs": 34,
+          "over50": 0,
+          "samples": 828
+        },
+        "interval": {
+          "max": 39,
+          "n": 1480,
+          "over18": 0.51,
+          "p50": 19,
+          "p95": 25,
+          "p99": 29,
+          "vsyncMs": 19,
+          "within16_7": 0.45,
+          "withinVsync": 0.99
+        },
+        "measureMs": 20005,
+        "renderedBytes": 13932212,
+        "stalls": 0,
+        "timeline": [
+          {
+            "bytes": 1013538,
+            "s": 1
+          },
+          {
+            "bytes": 1693364,
+            "s": 2
+          },
+          {
+            "bytes": 2365108,
+            "s": 3
+          },
+          {
+            "bytes": 3053236,
+            "s": 4
+          },
+          {
+            "bytes": 3724980,
+            "s": 5
+          },
+          {
+            "bytes": 4413108,
+            "s": 6
+          },
+          {
+            "bytes": 5084852,
+            "s": 7
+          },
+          {
+            "bytes": 5772980,
+            "s": 8
+          },
+          {
+            "bytes": 6461108,
+            "s": 9
+          },
+          {
+            "bytes": 7132852,
+            "s": 10
+          },
+          {
+            "bytes": 7820980,
+            "s": 11
+          },
+          {
+            "bytes": 8509108,
+            "s": 12
+          },
+          {
+            "bytes": 9180852,
+            "s": 13
+          },
+          {
+            "bytes": 9852596,
+            "s": 14
+          },
+          {
+            "bytes": 10540724,
+            "s": 15
+          },
+          {
+            "bytes": 11212468,
+            "s": 16
+          },
+          {
+            "bytes": 11900596,
+            "s": 17
+          },
+          {
+            "bytes": 12572340,
+            "s": 18
+          },
+          {
+            "bytes": 13260468,
+            "s": 19
+          },
+          {
+            "bytes": 13932212,
+            "s": 20
+          }
+        ],
+        "work": {
+          "max": 4,
+          "n": 2082,
+          "over18": 0,
+          "p50": 0,
+          "p95": 1,
+          "p99": 1,
+          "vsyncMs": 0,
+          "within16_7": 1,
+          "withinVsync": 0.83
+        }
+      },
+      "frames_pass": false,
+      "host": {
+        "base_mb": 53.478696,
+        "last_mb": 84.575576,
+        "max_delta_mb": 48.81,
+        "max_mb": 102.28668
+      },
+      "index": 0,
+      "load1_end": 2.19,
+      "load1_start": 1.8,
+      "ports_thread_at_end": false,
+      "ports_thread_during_run": true,
+      "run_started_epoch_ms": 1795072553734.3298,
+      "samples": [
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072553477.467,
+          "footprint_mb": 329.437456,
+          "pitwall_mb": 53.478696,
+          "ports_thread": false,
+          "threads": 36,
+          "webcontent_mb": 169.690144
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072554478.948,
+          "footprint_mb": 818.2386,
+          "pitwall_mb": 69.387608,
+          "ports_thread": true,
+          "threads": 42,
+          "webcontent_mb": 516.048192
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072555480.612,
+          "footprint_mb": 819.844256,
+          "pitwall_mb": 79.070552,
+          "ports_thread": true,
+          "threads": 42,
+          "webcontent_mb": 508.29856
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072556484.741,
+          "footprint_mb": 805.721248,
+          "pitwall_mb": 82.347352,
+          "ports_thread": true,
+          "threads": 42,
+          "webcontent_mb": 491.09536
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072557490.592,
+          "footprint_mb": 804.344992,
+          "pitwall_mb": 83.395928,
+          "ports_thread": true,
+          "threads": 42,
+          "webcontent_mb": 488.654144
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072558490.597,
+          "footprint_mb": 807.916704,
+          "pitwall_mb": 84.723032,
+          "ports_thread": true,
+          "threads": 39,
+          "webcontent_mb": 491.406656
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072559492.333,
+          "footprint_mb": 806.737056,
+          "pitwall_mb": 86.197592,
+          "ports_thread": true,
+          "threads": 38,
+          "webcontent_mb": 491.537728
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072560493.885,
+          "footprint_mb": 808.604832,
+          "pitwall_mb": 87.180632,
+          "ports_thread": true,
+          "threads": 37,
+          "webcontent_mb": 492.553536
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072561494.852,
+          "footprint_mb": 817.304736,
+          "pitwall_mb": 88.753496,
+          "ports_thread": true,
+          "threads": 37,
+          "webcontent_mb": 499.713344
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072562498.873,
+          "footprint_mb": 821.66288,
+          "pitwall_mb": 90.32636,
+          "ports_thread": true,
+          "threads": 37,
+          "webcontent_mb": 502.498624
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072563499.801,
+          "footprint_mb": 820.810912,
+          "pitwall_mb": 91.374936,
+          "ports_thread": true,
+          "threads": 37,
+          "webcontent_mb": 500.581696
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072564504.666,
+          "footprint_mb": 819.745952,
+          "pitwall_mb": 92.915032,
+          "ports_thread": true,
+          "threads": 35,
+          "webcontent_mb": 500.122944
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072565507.22,
+          "footprint_mb": 820.040864,
+          "pitwall_mb": 93.963608,
+          "ports_thread": true,
+          "threads": 35,
+          "webcontent_mb": 499.320128
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072566509.318,
+          "footprint_mb": 821.384376,
+          "pitwall_mb": 95.536472,
+          "ports_thread": true,
+          "threads": 35,
+          "webcontent_mb": 499.123544
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072567513.687,
+          "footprint_mb": 823.94028,
+          "pitwall_mb": 97.109336,
+          "ports_thread": true,
+          "threads": 35,
+          "webcontent_mb": 500.0902
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072568518.782,
+          "footprint_mb": 829.330616,
+          "pitwall_mb": 98.157912,
+          "ports_thread": true,
+          "threads": 35,
+          "webcontent_mb": 502.87548
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072569523.836,
+          "footprint_mb": 822.695096,
+          "pitwall_mb": 99.66524,
+          "ports_thread": true,
+          "threads": 34,
+          "webcontent_mb": 494.749016
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072570528.761,
+          "footprint_mb": 820.25388,
+          "pitwall_mb": 100.713816,
+          "ports_thread": true,
+          "threads": 34,
+          "webcontent_mb": 492.79932
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072571532.284,
+          "footprint_mb": 823.628984,
+          "pitwall_mb": 102.28668,
+          "ports_thread": true,
+          "threads": 34,
+          "webcontent_mb": 494.60156
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072572537.325,
+          "footprint_mb": 818.04204,
+          "pitwall_mb": 96.159064,
+          "ports_thread": true,
+          "threads": 34,
+          "webcontent_mb": 495.142232
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072573540.012,
+          "footprint_mb": 815.91212,
+          "pitwall_mb": 93.963608,
+          "ports_thread": true,
+          "threads": 34,
+          "webcontent_mb": 495.207768
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072574543.241,
+          "footprint_mb": 815.50252,
+          "pitwall_mb": 95.536472,
+          "ports_thread": true,
+          "threads": 34,
+          "webcontent_mb": 493.225304
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072575548.333,
+          "footprint_mb": 817.403088,
+          "pitwall_mb": 96.55228,
+          "ports_thread": true,
+          "threads": 33,
+          "webcontent_mb": 494.110064
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072576549.313,
+          "footprint_mb": 819.238096,
+          "pitwall_mb": 98.125144,
+          "ports_thread": true,
+          "threads": 33,
+          "webcontent_mb": 494.372208
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072577554.5708,
+          "footprint_mb": 820.204752,
+          "pitwall_mb": 99.599704,
+          "ports_thread": true,
+          "threads": 33,
+          "webcontent_mb": 493.864304
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072578559.334,
+          "footprint_mb": 816.780496,
+          "pitwall_mb": 93.93084,
+          "ports_thread": true,
+          "threads": 33,
+          "webcontent_mb": 496.108912
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072579564.2869,
+          "footprint_mb": 818.582736,
+          "pitwall_mb": 95.24156,
+          "ports_thread": true,
+          "threads": 33,
+          "webcontent_mb": 496.600432
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072580569.384,
+          "footprint_mb": 821.089488,
+          "pitwall_mb": 96.290136,
+          "ports_thread": true,
+          "threads": 33,
+          "webcontent_mb": 498.058608
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072581570.0122,
+          "footprint_mb": 822.416592,
+          "pitwall_mb": 97.863,
+          "ports_thread": true,
+          "threads": 33,
+          "webcontent_mb": 497.812848
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072582574.871,
+          "footprint_mb": 822.400208,
+          "pitwall_mb": 99.435864,
+          "ports_thread": true,
+          "threads": 33,
+          "webcontent_mb": 497.272176
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072583579.839,
+          "footprint_mb": 813.389008,
+          "pitwall_mb": 91.981144,
+          "ports_thread": true,
+          "threads": 33,
+          "webcontent_mb": 495.715696
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072584584.937,
+          "footprint_mb": 818.779368,
+          "pitwall_mb": 86.246744,
+          "ports_thread": true,
+          "threads": 30,
+          "webcontent_mb": 506.77492
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072585586.9082,
+          "footprint_mb": 817.009896,
+          "pitwall_mb": 86.63996,
+          "ports_thread": true,
+          "threads": 30,
+          "webcontent_mb": 504.595848
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072586592.3792,
+          "footprint_mb": 813.520128,
+          "pitwall_mb": 86.607192,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 501.007752
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072587593.663,
+          "footprint_mb": 575.493376,
+          "pitwall_mb": 86.590808,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 265.422216
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072588596.6091,
+          "footprint_mb": 414.12736,
+          "pitwall_mb": 86.590808,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 258.377096
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072589602.8098,
+          "footprint_mb": 414.12736,
+          "pitwall_mb": 86.590808,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 258.377096
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072590603.417,
+          "footprint_mb": 414.110976,
+          "pitwall_mb": 86.574424,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 258.377096
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072591606.489,
+          "footprint_mb": 414.078208,
+          "pitwall_mb": 86.590808,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 258.327944
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072592610.433,
+          "footprint_mb": 413.848832,
+          "pitwall_mb": 86.590808,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 258.098568
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072593614.304,
+          "footprint_mb": 413.766912,
+          "pitwall_mb": 86.541656,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 258.0658
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072594619.267,
+          "footprint_mb": 413.55392,
+          "pitwall_mb": 86.508888,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 257.967496
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072595623.2651,
+          "footprint_mb": 406.213888,
+          "pitwall_mb": 86.508888,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 250.627464
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072596623.699,
+          "footprint_mb": 402.019584,
+          "pitwall_mb": 86.508888,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 250.627464
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072597626.241,
+          "footprint_mb": 399.889664,
+          "pitwall_mb": 86.508888,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 250.594696
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072598629.462,
+          "footprint_mb": 397.923584,
+          "pitwall_mb": 84.559192,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 250.594696
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072599632.266,
+          "footprint_mb": 397.939968,
+          "pitwall_mb": 84.575576,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 250.594696
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072600635.67,
+          "footprint_mb": 397.939968,
+          "pitwall_mb": 84.575576,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 250.594696
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072601639.531,
+          "footprint_mb": 397.939968,
+          "pitwall_mb": 84.575576,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 250.594696
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072602638.8208,
+          "footprint_mb": 397.628672,
+          "pitwall_mb": 84.575576,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 250.2834
+        }
+      ],
+      "shutdown": {
+        "signals": []
+      },
+      "webcontent": {
+        "base_mb": 169.690144,
+        "last_mb": 250.2834,
+        "max_delta_mb": 346.36,
+        "max_mb": 516.048192
+      }
+    },
+    {
+      "app_pid": 4109,
+      "cold_start_ms": 547.560791015625,
+      "done": {
+        "epochMs": 1795072725803,
+        "exitedSeenEpochMs": 1795072634417,
+        "notes": [
+          "[앞 출력 3,203,628 바이트가 버려졌다]",
+          "[앞 출력 296,419,123 바이트가 버려졌다]",
+          "[프로세스가 코드 0 로 끝남]"
+        ],
+        "renderedBytes": 3210211
+      },
+      "error": null,
+      "excluded": "window hidden",
+      "flood": {
+        "bytes": 300000000,
+        "end_epoch_ms": 1795072633863.5,
+        "late_ticks": 0,
+        "lines": 2830189,
+        "rate": 10000000,
+        "secs": 30.001,
+        "start_epoch_ms": 1795072603862.2,
+        "ticks": 3000
+      },
+      "frames": {
+        "blocks": {
+          "maxMs": 1082,
+          "over50": 19,
+          "samples": 67
+        },
+        "interval": {
+          "max": 35,
+          "n": 85,
+          "over18": 0.49,
+          "p50": 17,
+          "p95": 27,
+          "p99": 35,
+          "vsyncMs": 17,
+          "within16_7": 0.49,
+          "withinVsync": 0.76
+        },
+        "measureMs": 20547,
+        "renderedBytes": 1349843,
+        "stalls": 26,
+        "timeline": [
+          {
+            "bytes": 874707,
+            "s": 1
+          }
+        ],
+        "work": {
+          "max": 4,
+          "n": 124,
+          "over18": 0,
+          "p50": 0,
+          "p95": 1,
+          "p99": 4,
+          "vsyncMs": 0,
+          "within16_7": 1,
+          "withinVsync": 0.79
+        }
+      },
+      "frames_pass": false,
+      "host": {
+        "base_mb": 54.314328,
+        "last_mb": 57.902424,
+        "max_delta_mb": 30.61,
+        "max_mb": 84.919664
+      },
+      "index": 1,
+      "load1_end": 2.16,
+      "load1_start": 2.19,
+      "ports_thread_at_end": false,
+      "ports_thread_during_run": true,
+      "run_started_epoch_ms": 1795072603892.569,
+      "samples": [
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072603419.7048,
+          "footprint_mb": 318.984656,
+          "pitwall_mb": 54.314328,
+          "ports_thread": false,
+          "threads": 45,
+          "webcontent_mb": 158.417928
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072604422.6328,
+          "footprint_mb": 795.546856,
+          "pitwall_mb": 74.630512,
+          "ports_thread": true,
+          "threads": 42,
+          "webcontent_mb": 510.821672
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072605423.75,
+          "footprint_mb": 797.398272,
+          "pitwall_mb": 84.804976,
+          "ports_thread": true,
+          "threads": 42,
+          "webcontent_mb": 502.957352
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072606430.785,
+          "footprint_mb": 696.83328,
+          "pitwall_mb": 84.919664,
+          "ports_thread": true,
+          "threads": 41,
+          "webcontent_mb": 468.059432
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072607436.589,
+          "footprint_mb": 605.73824,
+          "pitwall_mb": 84.90328,
+          "ports_thread": true,
+          "threads": 41,
+          "webcontent_mb": 467.993896
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072608440.257,
+          "footprint_mb": 605.41056,
+          "pitwall_mb": 84.870512,
+          "ports_thread": true,
+          "threads": 39,
+          "webcontent_mb": 467.993896
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072609445.238,
+          "footprint_mb": 605.050136,
+          "pitwall_mb": 84.706672,
+          "ports_thread": true,
+          "threads": 37,
+          "webcontent_mb": 467.993896
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072610447.979,
+          "footprint_mb": 605.050136,
+          "pitwall_mb": 84.690288,
+          "ports_thread": true,
+          "threads": 37,
+          "webcontent_mb": 468.01028
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072611452.204,
+          "footprint_mb": 604.640536,
+          "pitwall_mb": 84.690288,
+          "ports_thread": true,
+          "threads": 37,
+          "webcontent_mb": 467.944744
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072612452.466,
+          "footprint_mb": 426.775832,
+          "pitwall_mb": 84.690288,
+          "ports_thread": true,
+          "threads": 37,
+          "webcontent_mb": 290.227496
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072613455.6,
+          "footprint_mb": 425.956632,
+          "pitwall_mb": 84.591984,
+          "ports_thread": true,
+          "threads": 36,
+          "webcontent_mb": 290.096424
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072614459.425,
+          "footprint_mb": 423.433496,
+          "pitwall_mb": 84.428144,
+          "ports_thread": true,
+          "threads": 32,
+          "webcontent_mb": 289.83428
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072615463.085,
+          "footprint_mb": 420.82844,
+          "pitwall_mb": 84.428144,
+          "ports_thread": true,
+          "threads": 32,
+          "webcontent_mb": 289.326376
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072616465.413,
+          "footprint_mb": 416.519448,
+          "pitwall_mb": 84.428144,
+          "ports_thread": true,
+          "threads": 32,
+          "webcontent_mb": 289.211688
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072617465.603,
+          "footprint_mb": 416.519448,
+          "pitwall_mb": 84.428144,
+          "ports_thread": true,
+          "threads": 32,
+          "webcontent_mb": 289.211688
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072618469.175,
+          "footprint_mb": 416.519448,
+          "pitwall_mb": 84.428144,
+          "ports_thread": true,
+          "threads": 32,
+          "webcontent_mb": 289.211688
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072619472.846,
+          "footprint_mb": 409.294104,
+          "pitwall_mb": 84.346224,
+          "ports_thread": true,
+          "threads": 31,
+          "webcontent_mb": 282.068264
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072620474.551,
+          "footprint_mb": 409.310488,
+          "pitwall_mb": 84.362608,
+          "ports_thread": true,
+          "threads": 32,
+          "webcontent_mb": 282.068264
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072621481.48,
+          "footprint_mb": 409.310488,
+          "pitwall_mb": 84.362608,
+          "ports_thread": true,
+          "threads": 32,
+          "webcontent_mb": 282.068264
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072622485.172,
+          "footprint_mb": 409.343256,
+          "pitwall_mb": 84.41176,
+          "ports_thread": true,
+          "threads": 32,
+          "webcontent_mb": 282.068264
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072623488.3088,
+          "footprint_mb": 409.03196,
+          "pitwall_mb": 84.41176,
+          "ports_thread": true,
+          "threads": 32,
+          "webcontent_mb": 281.756968
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072624492.311,
+          "footprint_mb": 400.938264,
+          "pitwall_mb": 76.318064,
+          "ports_thread": true,
+          "threads": 32,
+          "webcontent_mb": 281.756968
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072625493.3118,
+          "footprint_mb": 391.320856,
+          "pitwall_mb": 76.203376,
+          "ports_thread": true,
+          "threads": 32,
+          "webcontent_mb": 272.3034
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072626497.08,
+          "footprint_mb": 391.25532,
+          "pitwall_mb": 76.186992,
+          "ports_thread": true,
+          "threads": 31,
+          "webcontent_mb": 272.254248
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072627499.1692,
+          "footprint_mb": 391.25532,
+          "pitwall_mb": 76.186992,
+          "ports_thread": true,
+          "threads": 31,
+          "webcontent_mb": 272.254248
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072628499.1282,
+          "footprint_mb": 391.25532,
+          "pitwall_mb": 76.186992,
+          "ports_thread": true,
+          "threads": 31,
+          "webcontent_mb": 272.254248
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072629506.271,
+          "footprint_mb": 391.25532,
+          "pitwall_mb": 76.186992,
+          "ports_thread": true,
+          "threads": 31,
+          "webcontent_mb": 272.254248
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072630510.011,
+          "footprint_mb": 391.238936,
+          "pitwall_mb": 76.170608,
+          "ports_thread": true,
+          "threads": 30,
+          "webcontent_mb": 272.254248
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072631512.851,
+          "footprint_mb": 391.238936,
+          "pitwall_mb": 76.170608,
+          "ports_thread": true,
+          "threads": 30,
+          "webcontent_mb": 272.254248
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072632511.429,
+          "footprint_mb": 391.238936,
+          "pitwall_mb": 76.170608,
+          "ports_thread": true,
+          "threads": 30,
+          "webcontent_mb": 272.254248
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072633516.645,
+          "footprint_mb": 405.542168,
+          "pitwall_mb": 76.170608,
+          "ports_thread": true,
+          "threads": 30,
+          "webcontent_mb": 286.55748
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072634521.597,
+          "footprint_mb": 483.939608,
+          "pitwall_mb": 77.104496,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 281.56036
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072635526.649,
+          "footprint_mb": 392.56604,
+          "pitwall_mb": 77.088112,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 268.387624
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072636530.711,
+          "footprint_mb": 471.749912,
+          "pitwall_mb": 77.071728,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 269.567272
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072637532.307,
+          "footprint_mb": 392.451352,
+          "pitwall_mb": 77.088112,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 268.354856
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072638536.942,
+          "footprint_mb": 392.48412,
+          "pitwall_mb": 77.137264,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 268.354856
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072639541.727,
+          "footprint_mb": 392.500504,
+          "pitwall_mb": 77.153648,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 268.354856
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072640545.668,
+          "footprint_mb": 392.48412,
+          "pitwall_mb": 77.137264,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 268.354856
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072641547.944,
+          "footprint_mb": 392.467736,
+          "pitwall_mb": 77.137264,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 268.338472
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072642548.479,
+          "footprint_mb": 392.4022,
+          "pitwall_mb": 77.153648,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 268.338472
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072643547.7222,
+          "footprint_mb": 392.385816,
+          "pitwall_mb": 77.137264,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 268.338472
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072644548.729,
+          "footprint_mb": 385.17688,
+          "pitwall_mb": 77.088112,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 261.16228
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072645550.08,
+          "footprint_mb": 385.17688,
+          "pitwall_mb": 77.088112,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 261.16228
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072646551.469,
+          "footprint_mb": 380.982576,
+          "pitwall_mb": 77.088112,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 261.16228
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072647552.9412,
+          "footprint_mb": 380.966192,
+          "pitwall_mb": 77.071728,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 261.16228
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072648557.842,
+          "footprint_mb": 380.802352,
+          "pitwall_mb": 77.088112,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 260.982056
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072649561.655,
+          "footprint_mb": 380.7532,
+          "pitwall_mb": 77.088112,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 260.932904
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072650562.767,
+          "footprint_mb": 331.060528,
+          "pitwall_mb": 77.088112,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 211.240232
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072651567.11,
+          "footprint_mb": 331.02776,
+          "pitwall_mb": 77.088112,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 211.223848
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072652570.078,
+          "footprint_mb": 331.02776,
+          "pitwall_mb": 77.088112,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 211.223848
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072653574.695,
+          "footprint_mb": 309.859608,
+          "pitwall_mb": 64.832856,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 202.2618
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072654580.3872,
+          "footprint_mb": 309.859608,
+          "pitwall_mb": 64.832856,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 202.2618
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072655582.1382,
+          "footprint_mb": 309.875992,
+          "pitwall_mb": 64.832856,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 202.278184
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072656589.041,
+          "footprint_mb": 307.77884,
+          "pitwall_mb": 64.882008,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 200.082728
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072657594.004,
+          "footprint_mb": 307.811608,
+          "pitwall_mb": 64.882008,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 200.082728
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072658598.226,
+          "footprint_mb": 307.811608,
+          "pitwall_mb": 64.882008,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 200.082728
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072659602.265,
+          "footprint_mb": 307.811608,
+          "pitwall_mb": 64.882008,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 200.066344
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072660607.1,
+          "footprint_mb": 307.762456,
+          "pitwall_mb": 64.882008,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 200.017192
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072661607.713,
+          "footprint_mb": 307.680536,
+          "pitwall_mb": 64.832856,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 199.984424
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072662609.333,
+          "footprint_mb": 307.582232,
+          "pitwall_mb": 64.734552,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 199.984424
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072663611.864,
+          "footprint_mb": 307.582232,
+          "pitwall_mb": 64.734552,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 199.984424
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072664612.463,
+          "footprint_mb": 307.647768,
+          "pitwall_mb": 64.734552,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 200.04996
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072665611.209,
+          "footprint_mb": 307.713304,
+          "pitwall_mb": 64.800088,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 200.04996
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072666618.8372,
+          "footprint_mb": 307.762456,
+          "pitwall_mb": 64.832856,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 200.04996
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072667620.966,
+          "footprint_mb": 307.762456,
+          "pitwall_mb": 64.832856,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 200.04996
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072668626.11,
+          "footprint_mb": 307.762456,
+          "pitwall_mb": 64.832856,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 200.04996
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072669628.596,
+          "footprint_mb": 307.762456,
+          "pitwall_mb": 64.832856,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 200.04996
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072670632.235,
+          "footprint_mb": 307.762456,
+          "pitwall_mb": 64.832856,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 200.04996
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072671636.617,
+          "footprint_mb": 307.664152,
+          "pitwall_mb": 64.734552,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 200.04996
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072672634.844,
+          "footprint_mb": 307.615,
+          "pitwall_mb": 64.734552,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 200.04996
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072673641.5168,
+          "footprint_mb": 307.615,
+          "pitwall_mb": 64.734552,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 200.04996
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072674643.456,
+          "footprint_mb": 307.615,
+          "pitwall_mb": 64.734552,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 200.04996
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072675643.706,
+          "footprint_mb": 307.615,
+          "pitwall_mb": 64.734552,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 200.04996
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072676647.328,
+          "footprint_mb": 307.615,
+          "pitwall_mb": 64.734552,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 200.04996
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072677651.119,
+          "footprint_mb": 307.565848,
+          "pitwall_mb": 64.734552,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 200.000808
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072678655.941,
+          "footprint_mb": 307.565848,
+          "pitwall_mb": 64.734552,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 200.000808
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072679660.762,
+          "footprint_mb": 300.438808,
+          "pitwall_mb": 57.541976,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 200.082728
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072680664.4521,
+          "footprint_mb": 297.817368,
+          "pitwall_mb": 57.541976,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 197.461288
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072681668.02,
+          "footprint_mb": 297.817368,
+          "pitwall_mb": 57.541976,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 197.461288
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072682669.758,
+          "footprint_mb": 297.817368,
+          "pitwall_mb": 57.541976,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 197.461288
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072683675.29,
+          "footprint_mb": 297.817368,
+          "pitwall_mb": 57.541976,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 197.461288
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072684680.701,
+          "footprint_mb": 297.768216,
+          "pitwall_mb": 57.492824,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 197.461288
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072685681.525,
+          "footprint_mb": 297.768216,
+          "pitwall_mb": 57.492824,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 197.461288
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072686686.6318,
+          "footprint_mb": 297.768216,
+          "pitwall_mb": 57.492824,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 197.461288
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072687690.751,
+          "footprint_mb": 297.768216,
+          "pitwall_mb": 57.492824,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 197.461288
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072688696.011,
+          "footprint_mb": 297.768216,
+          "pitwall_mb": 57.492824,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 197.461288
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072689699.657,
+          "footprint_mb": 297.735448,
+          "pitwall_mb": 57.492824,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 197.42852
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072690704.438,
+          "footprint_mb": 297.719064,
+          "pitwall_mb": 57.492824,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 197.412136
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072691707.175,
+          "footprint_mb": 297.981208,
+          "pitwall_mb": 57.492824,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 197.67428
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072692707.9749,
+          "footprint_mb": 297.86652,
+          "pitwall_mb": 57.492824,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 197.559592
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072693715.667,
+          "footprint_mb": 298.882328,
+          "pitwall_mb": 57.623896,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 198.378792
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072694717.388,
+          "footprint_mb": 298.997016,
+          "pitwall_mb": 57.623896,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 198.49348
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072695717.335,
+          "footprint_mb": 298.27612,
+          "pitwall_mb": 57.623896,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 197.772584
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072696720.259,
+          "footprint_mb": 298.243352,
+          "pitwall_mb": 57.623896,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 197.772584
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072697723.772,
+          "footprint_mb": 298.243352,
+          "pitwall_mb": 57.623896,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 197.772584
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072698728.3188,
+          "footprint_mb": 298.243352,
+          "pitwall_mb": 57.623896,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 197.772584
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072699733.063,
+          "footprint_mb": 298.243352,
+          "pitwall_mb": 57.623896,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 197.772584
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072700733.3591,
+          "footprint_mb": 298.27612,
+          "pitwall_mb": 57.623896,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 197.805352
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072701737.99,
+          "footprint_mb": 296.9654,
+          "pitwall_mb": 57.525592,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 196.642088
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072702742.29,
+          "footprint_mb": 296.9654,
+          "pitwall_mb": 57.525592,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 196.642088
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072703746.444,
+          "footprint_mb": 296.932632,
+          "pitwall_mb": 57.525592,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 196.60932
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072704751.3179,
+          "footprint_mb": 296.932632,
+          "pitwall_mb": 57.525592,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 196.60932
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072705755.903,
+          "footprint_mb": 296.949016,
+          "pitwall_mb": 57.525592,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 196.625704
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072706761.071,
+          "footprint_mb": 296.949016,
+          "pitwall_mb": 57.525592,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 196.625704
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072707766.083,
+          "footprint_mb": 296.949016,
+          "pitwall_mb": 57.525592,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 196.625704
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072708771.341,
+          "footprint_mb": 296.932632,
+          "pitwall_mb": 57.525592,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 196.625704
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072709770.0269,
+          "footprint_mb": 296.932632,
+          "pitwall_mb": 57.525592,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 196.625704
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072710777.28,
+          "footprint_mb": 296.785176,
+          "pitwall_mb": 57.525592,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 196.478248
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072711779.733,
+          "footprint_mb": 296.785176,
+          "pitwall_mb": 57.525592,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 196.478248
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072712780.751,
+          "footprint_mb": 296.785176,
+          "pitwall_mb": 57.525592,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 196.478248
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072713786.27,
+          "footprint_mb": 296.785176,
+          "pitwall_mb": 57.525592,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 196.478248
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072714788.3389,
+          "footprint_mb": 296.899864,
+          "pitwall_mb": 57.525592,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 196.592936
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072715786.174,
+          "footprint_mb": 297.063704,
+          "pitwall_mb": 57.623896,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 196.592936
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072716792.686,
+          "footprint_mb": 297.063704,
+          "pitwall_mb": 57.623896,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 196.592936
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072717794.853,
+          "footprint_mb": 297.063704,
+          "pitwall_mb": 57.623896,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 196.592936
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072718799.6099,
+          "footprint_mb": 297.063704,
+          "pitwall_mb": 57.623896,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 196.592936
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072719803.666,
+          "footprint_mb": 297.063704,
+          "pitwall_mb": 57.623896,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 196.592936
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072720805.343,
+          "footprint_mb": 297.063704,
+          "pitwall_mb": 57.623896,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 196.592936
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072721807.591,
+          "footprint_mb": 296.9654,
+          "pitwall_mb": 57.525592,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 196.592936
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072722810.2952,
+          "footprint_mb": 296.9654,
+          "pitwall_mb": 57.525592,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 196.592936
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072723812.3,
+          "footprint_mb": 296.9654,
+          "pitwall_mb": 57.525592,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 196.592936
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072724811.624,
+          "footprint_mb": 296.949016,
+          "pitwall_mb": 57.623896,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 196.478248
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072725816.699,
+          "footprint_mb": 451.859736,
+          "pitwall_mb": 57.951576,
+          "ports_thread": false,
+          "threads": 32,
+          "webcontent_mb": 192.955688
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072726824.162,
+          "footprint_mb": 447.61628,
+          "pitwall_mb": 57.951576,
+          "ports_thread": false,
+          "threads": 31,
+          "webcontent_mb": 188.712232
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072727830.686,
+          "footprint_mb": 293.410072,
+          "pitwall_mb": 58.000728,
+          "ports_thread": false,
+          "threads": 31,
+          "webcontent_mb": 187.991336
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072728835.53,
+          "footprint_mb": 293.131544,
+          "pitwall_mb": 58.000728,
+          "ports_thread": false,
+          "threads": 31,
+          "webcontent_mb": 187.991336
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072729836.436,
+          "footprint_mb": 293.131544,
+          "pitwall_mb": 58.000728,
+          "ports_thread": false,
+          "threads": 31,
+          "webcontent_mb": 187.991336
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072730840.6821,
+          "footprint_mb": 293.131544,
+          "pitwall_mb": 58.000728,
+          "ports_thread": false,
+          "threads": 31,
+          "webcontent_mb": 187.991336
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072731843.397,
+          "footprint_mb": 293.098776,
+          "pitwall_mb": 58.000728,
+          "ports_thread": false,
+          "threads": 31,
+          "webcontent_mb": 187.991336
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072732845.7388,
+          "footprint_mb": 292.984088,
+          "pitwall_mb": 57.951576,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 187.9258
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072733850.791,
+          "footprint_mb": 292.967704,
+          "pitwall_mb": 57.951576,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 187.909416
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072734854.038,
+          "footprint_mb": 292.967704,
+          "pitwall_mb": 57.951576,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 187.909416
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072735853.014,
+          "footprint_mb": 292.885784,
+          "pitwall_mb": 57.902424,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 187.876648
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072736861.3,
+          "footprint_mb": 288.544024,
+          "pitwall_mb": 57.902424,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 187.729192
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072737865.4949,
+          "footprint_mb": 288.544024,
+          "pitwall_mb": 57.902424,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 187.729192
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072738865.4321,
+          "footprint_mb": 288.544024,
+          "pitwall_mb": 57.902424,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 187.729192
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072739869.14,
+          "footprint_mb": 288.544024,
+          "pitwall_mb": 57.902424,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 187.729192
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072740874.0288,
+          "footprint_mb": 288.544024,
+          "pitwall_mb": 57.902424,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 187.729192
+        }
+      ],
+      "shutdown": {
+        "signals": []
+      },
+      "webcontent": {
+        "base_mb": 158.417928,
+        "last_mb": 187.729192,
+        "max_delta_mb": 352.4,
+        "max_mb": 510.821672
+      }
+    },
+    {
+      "app_pid": 6426,
+      "cold_start_ms": 526.6611328125,
+      "done": {
+        "epochMs": 1795072867489,
+        "exitedSeenEpochMs": 1795072772428,
+        "notes": [
+          "[앞 출력 5,652,761 바이트가 버려졌다]",
+          "[앞 출력 5,835,208 바이트가 버려졌다]",
+          "[앞 출력 12,093,752 바이트가 버려졌다]",
+          "[앞 출력 5,573,061 바이트가 버려졌다]",
+          "[앞 출력 11,790,919 바이트가 버려졌다]",
+          "[앞 출력 255,981,130 바이트가 버려졌다]",
+          "[프로세스가 코드 0 로 끝남]"
+        ],
+        "renderedBytes": 5856979
+      },
+      "error": null,
+      "excluded": "window hidden",
+      "flood": {
+        "bytes": 300000000,
+        "end_epoch_ms": 1795072771918.0,
+        "late_ticks": 0,
+        "lines": 2830189,
+        "rate": 10000000,
+        "secs": 30.002,
+        "start_epoch_ms": 1795072741916.0,
+        "ticks": 3000
+      },
+      "frames": {
+        "blocks": {
+          "maxMs": 1092,
+          "over50": 16,
+          "samples": 232
+        },
+        "interval": {
+          "max": 35,
+          "n": 384,
+          "over18": 0.52,
+          "p50": 19,
+          "p95": 26,
+          "p99": 30,
+          "vsyncMs": 19,
+          "within16_7": 0.46,
+          "withinVsync": 0.97
+        },
+        "measureMs": 20586,
+        "renderedBytes": 3962659,
+        "stalls": 23,
+        "timeline": [
+          {
+            "bytes": 814131,
+            "s": 1
+          },
+          {
+            "bytes": 1505059,
+            "s": 2
+          },
+          {
+            "bytes": 2176803,
+            "s": 3
+          },
+          {
+            "bytes": 2848547,
+            "s": 4
+          },
+          {
+            "bytes": 3553059,
+            "s": 5
+          }
+        ],
+        "work": {
+          "max": 4,
+          "n": 560,
+          "over18": 0,
+          "p50": 0,
+          "p95": 1,
+          "p99": 1,
+          "vsyncMs": 0,
+          "within16_7": 1,
+          "withinVsync": 0.78
+        }
+      },
+      "frames_pass": false,
+      "host": {
+        "base_mb": 54.560088,
+        "last_mb": 61.146456,
+        "max_delta_mb": 28.23,
+        "max_mb": 82.789744
+      },
+      "index": 2,
+      "load1_end": 1.86,
+      "load1_start": 2.16,
+      "ports_thread_at_end": false,
+      "ports_thread_during_run": true,
+      "run_started_epoch_ms": 1795072741940.314,
+      "samples": [
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072741659.936,
+          "footprint_mb": 320.70488,
+          "pitwall_mb": 54.560088,
+          "ports_thread": false,
+          "threads": 37,
+          "webcontent_mb": 159.745008
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072742663.613,
+          "footprint_mb": 798.872736,
+          "pitwall_mb": 70.190448,
+          "ports_thread": true,
+          "threads": 43,
+          "webcontent_mb": 518.309136
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072743668.957,
+          "footprint_mb": 796.775608,
+          "pitwall_mb": 77.743472,
+          "ports_thread": true,
+          "threads": 43,
+          "webcontent_mb": 508.98664
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072744673.491,
+          "footprint_mb": 786.17516,
+          "pitwall_mb": 78.955888,
+          "ports_thread": true,
+          "threads": 43,
+          "webcontent_mb": 497.43592
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072745678.984,
+          "footprint_mb": 789.77964,
+          "pitwall_mb": 80.528752,
+          "ports_thread": true,
+          "threads": 43,
+          "webcontent_mb": 499.418384
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072746680.488,
+          "footprint_mb": 795.612368,
+          "pitwall_mb": 81.364336,
+          "ports_thread": true,
+          "threads": 40,
+          "webcontent_mb": 504.907048
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072747687.0562,
+          "footprint_mb": 793.990352,
+          "pitwall_mb": 82.789744,
+          "ports_thread": true,
+          "threads": 38,
+          "webcontent_mb": 502.105384
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072748689.065,
+          "footprint_mb": 392.484048,
+          "pitwall_mb": 82.789744,
+          "ports_thread": true,
+          "threads": 38,
+          "webcontent_mb": 256.7386
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072749693.042,
+          "footprint_mb": 391.238864,
+          "pitwall_mb": 82.789744,
+          "ports_thread": true,
+          "threads": 38,
+          "webcontent_mb": 256.312616
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072750695.6228,
+          "footprint_mb": 391.206096,
+          "pitwall_mb": 82.789744,
+          "ports_thread": true,
+          "threads": 38,
+          "webcontent_mb": 256.279848
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072751699.946,
+          "footprint_mb": 391.156944,
+          "pitwall_mb": 82.789744,
+          "ports_thread": true,
+          "threads": 38,
+          "webcontent_mb": 256.279848
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072752702.487,
+          "footprint_mb": 388.453584,
+          "pitwall_mb": 82.625904,
+          "ports_thread": true,
+          "threads": 34,
+          "webcontent_mb": 255.952168
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072753704.395,
+          "footprint_mb": 387.814608,
+          "pitwall_mb": 82.625904,
+          "ports_thread": true,
+          "threads": 34,
+          "webcontent_mb": 255.362344
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072754708.097,
+          "footprint_mb": 386.864336,
+          "pitwall_mb": 82.625904,
+          "ports_thread": true,
+          "threads": 34,
+          "webcontent_mb": 255.001896
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072755713.177,
+          "footprint_mb": 386.766032,
+          "pitwall_mb": 82.625904,
+          "ports_thread": true,
+          "threads": 34,
+          "webcontent_mb": 254.903592
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072756715.79,
+          "footprint_mb": 386.766032,
+          "pitwall_mb": 82.625904,
+          "ports_thread": true,
+          "threads": 34,
+          "webcontent_mb": 254.903592
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072757720.674,
+          "footprint_mb": 373.019856,
+          "pitwall_mb": 82.593136,
+          "ports_thread": true,
+          "threads": 33,
+          "webcontent_mb": 247.48164
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072758727.148,
+          "footprint_mb": 363.517136,
+          "pitwall_mb": 82.593136,
+          "ports_thread": true,
+          "threads": 33,
+          "webcontent_mb": 237.97892
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072759725.324,
+          "footprint_mb": 363.484368,
+          "pitwall_mb": 82.543984,
+          "ports_thread": true,
+          "threads": 33,
+          "webcontent_mb": 237.97892
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072760730.966,
+          "footprint_mb": 363.304144,
+          "pitwall_mb": 82.543984,
+          "ports_thread": true,
+          "threads": 33,
+          "webcontent_mb": 237.847848
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072761738.405,
+          "footprint_mb": 363.304144,
+          "pitwall_mb": 82.543984,
+          "ports_thread": true,
+          "threads": 33,
+          "webcontent_mb": 237.847848
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072762742.5151,
+          "footprint_mb": 359.584976,
+          "pitwall_mb": 78.742896,
+          "ports_thread": true,
+          "threads": 33,
+          "webcontent_mb": 237.929768
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072763747.8982,
+          "footprint_mb": 353.342672,
+          "pitwall_mb": 78.726512,
+          "ports_thread": true,
+          "threads": 32,
+          "webcontent_mb": 231.703848
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072764751.853,
+          "footprint_mb": 351.933648,
+          "pitwall_mb": 78.726512,
+          "ports_thread": true,
+          "threads": 32,
+          "webcontent_mb": 230.294824
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072765756.318,
+          "footprint_mb": 351.90088,
+          "pitwall_mb": 78.710128,
+          "ports_thread": true,
+          "threads": 32,
+          "webcontent_mb": 230.294824
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072766759.355,
+          "footprint_mb": 351.90088,
+          "pitwall_mb": 78.710128,
+          "ports_thread": true,
+          "threads": 32,
+          "webcontent_mb": 230.294824
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072767759.644,
+          "footprint_mb": 351.884496,
+          "pitwall_mb": 78.710128,
+          "ports_thread": true,
+          "threads": 32,
+          "webcontent_mb": 230.27844
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072768760.5742,
+          "footprint_mb": 351.851728,
+          "pitwall_mb": 78.660976,
+          "ports_thread": true,
+          "threads": 31,
+          "webcontent_mb": 230.294824
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072769763.645,
+          "footprint_mb": 351.917264,
+          "pitwall_mb": 78.660976,
+          "ports_thread": true,
+          "threads": 31,
+          "webcontent_mb": 230.36036
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072770769.478,
+          "footprint_mb": 351.917264,
+          "pitwall_mb": 78.660976,
+          "ports_thread": true,
+          "threads": 31,
+          "webcontent_mb": 230.36036
+        },
+        {
+          "descendants": 1,
+          "epoch_ms": 1795072771772.92,
+          "footprint_mb": 351.917264,
+          "pitwall_mb": 78.660976,
+          "ports_thread": true,
+          "threads": 31,
+          "webcontent_mb": 230.36036
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072772776.8372,
+          "footprint_mb": 441.373904,
+          "pitwall_mb": 78.59544,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 237.438248
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072773782.5862,
+          "footprint_mb": 361.960656,
+          "pitwall_mb": 78.59544,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 236.209448
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072774787.771,
+          "footprint_mb": 362.091728,
+          "pitwall_mb": 78.693744,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 236.209448
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072775791.655,
+          "footprint_mb": 362.091728,
+          "pitwall_mb": 78.693744,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 236.209448
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072776793.2688,
+          "footprint_mb": 362.091728,
+          "pitwall_mb": 78.693744,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 236.209448
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072777794.809,
+          "footprint_mb": 361.993424,
+          "pitwall_mb": 78.693744,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 236.111144
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072778800.569,
+          "footprint_mb": 441.324752,
+          "pitwall_mb": 78.693744,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 237.339944
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072779804.925,
+          "footprint_mb": 362.075344,
+          "pitwall_mb": 78.51352,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 236.111144
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072780808.77,
+          "footprint_mb": 361.8132,
+          "pitwall_mb": 78.51352,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 236.111144
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072781808.868,
+          "footprint_mb": 361.8132,
+          "pitwall_mb": 78.51352,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 236.111144
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072782814.468,
+          "footprint_mb": 354.473168,
+          "pitwall_mb": 78.51352,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 228.771112
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072783814.624,
+          "footprint_mb": 354.424016,
+          "pitwall_mb": 78.51352,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 228.72196
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072784817.657,
+          "footprint_mb": 354.424016,
+          "pitwall_mb": 78.51352,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 228.72196
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072785824.637,
+          "footprint_mb": 354.391248,
+          "pitwall_mb": 78.51352,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 228.72196
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072786824.172,
+          "footprint_mb": 354.489552,
+          "pitwall_mb": 78.51352,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 228.853032
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072787828.124,
+          "footprint_mb": 354.489552,
+          "pitwall_mb": 78.51352,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 228.853032
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072788832.093,
+          "footprint_mb": 350.229712,
+          "pitwall_mb": 78.51352,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 228.787496
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072789835.0598,
+          "footprint_mb": 350.18056,
+          "pitwall_mb": 78.51352,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 228.738344
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072790836.4338,
+          "footprint_mb": 350.18056,
+          "pitwall_mb": 78.51352,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 228.738344
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072791836.946,
+          "footprint_mb": 350.26248,
+          "pitwall_mb": 78.562672,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 228.754728
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072792840.072,
+          "footprint_mb": 350.26248,
+          "pitwall_mb": 78.562672,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 228.754728
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072793842.277,
+          "footprint_mb": 350.278864,
+          "pitwall_mb": 78.562672,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 228.771112
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072794847.6318,
+          "footprint_mb": 346.100944,
+          "pitwall_mb": 78.562672,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 224.593192
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072795848.489,
+          "footprint_mb": 339.711184,
+          "pitwall_mb": 72.107376,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 224.658728
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072796850.046,
+          "footprint_mb": 339.678416,
+          "pitwall_mb": 72.107376,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 224.658728
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072797855.586,
+          "footprint_mb": 339.678416,
+          "pitwall_mb": 72.107376,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 224.658728
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072798854.801,
+          "footprint_mb": 339.678416,
+          "pitwall_mb": 72.107376,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 224.658728
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072799852.0442,
+          "footprint_mb": 336.49992,
+          "pitwall_mb": 72.12376,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 221.414696
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072800858.572,
+          "footprint_mb": 336.532688,
+          "pitwall_mb": 72.156528,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 221.414696
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072801863.117,
+          "footprint_mb": 336.532688,
+          "pitwall_mb": 72.172912,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 221.398312
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072802867.9111,
+          "footprint_mb": 336.532688,
+          "pitwall_mb": 72.172912,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 221.398312
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072803870.951,
+          "footprint_mb": 336.532688,
+          "pitwall_mb": 72.172912,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 221.398312
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072804874.594,
+          "footprint_mb": 336.532688,
+          "pitwall_mb": 72.172912,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 221.398312
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072805877.948,
+          "footprint_mb": 336.418,
+          "pitwall_mb": 72.058224,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 221.398312
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072806876.676,
+          "footprint_mb": 336.368848,
+          "pitwall_mb": 72.058224,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 221.398312
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072807878.674,
+          "footprint_mb": 336.499944,
+          "pitwall_mb": 72.107376,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 221.398312
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072808885.638,
+          "footprint_mb": 336.499944,
+          "pitwall_mb": 72.107376,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 221.398312
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072809888.8708,
+          "footprint_mb": 336.303336,
+          "pitwall_mb": 72.107376,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 221.201704
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072810890.069,
+          "footprint_mb": 336.336104,
+          "pitwall_mb": 72.140144,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 221.201704
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072811894.746,
+          "footprint_mb": 336.31972,
+          "pitwall_mb": 72.156528,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 221.201704
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072812893.921,
+          "footprint_mb": 336.31972,
+          "pitwall_mb": 72.156528,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 221.201704
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072813898.692,
+          "footprint_mb": 336.434408,
+          "pitwall_mb": 72.156528,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 221.316392
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072814902.144,
+          "footprint_mb": 336.434408,
+          "pitwall_mb": 72.156528,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 221.316392
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072815904.9338,
+          "footprint_mb": 336.286952,
+          "pitwall_mb": 72.058224,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 221.316392
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072816906.865,
+          "footprint_mb": 336.303336,
+          "pitwall_mb": 72.058224,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 221.332776
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072817911.714,
+          "footprint_mb": 336.303336,
+          "pitwall_mb": 72.058224,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 221.332776
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072818914.308,
+          "footprint_mb": 336.270568,
+          "pitwall_mb": 72.058224,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 221.300008
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072819920.433,
+          "footprint_mb": 336.270568,
+          "pitwall_mb": 72.058224,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 221.300008
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072820924.3528,
+          "footprint_mb": 336.270568,
+          "pitwall_mb": 72.058224,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 221.300008
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072821929.364,
+          "footprint_mb": 321.623248,
+          "pitwall_mb": 61.556056,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 217.154856
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072822934.185,
+          "footprint_mb": 321.606864,
+          "pitwall_mb": 61.556056,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 217.154856
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072823935.773,
+          "footprint_mb": 321.656016,
+          "pitwall_mb": 61.539672,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 217.154856
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072824937.9749,
+          "footprint_mb": 321.6724,
+          "pitwall_mb": 61.556056,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 217.154856
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072825941.855,
+          "footprint_mb": 321.6724,
+          "pitwall_mb": 61.556056,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 217.154856
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072826943.45,
+          "footprint_mb": 321.6724,
+          "pitwall_mb": 61.556056,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 217.154856
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072827946.197,
+          "footprint_mb": 321.6724,
+          "pitwall_mb": 61.556056,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 217.154856
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072828951.318,
+          "footprint_mb": 321.787088,
+          "pitwall_mb": 61.556056,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 217.154856
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072829952.9978,
+          "footprint_mb": 321.787088,
+          "pitwall_mb": 61.556056,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 217.154856
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072830951.574,
+          "footprint_mb": 321.885392,
+          "pitwall_mb": 61.605208,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 217.154856
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072831954.8372,
+          "footprint_mb": 321.869008,
+          "pitwall_mb": 61.605208,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 217.138472
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072832953.298,
+          "footprint_mb": 321.737936,
+          "pitwall_mb": 61.605208,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 217.0074
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072833959.0098,
+          "footprint_mb": 321.737936,
+          "pitwall_mb": 61.605208,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 217.0074
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072834963.769,
+          "footprint_mb": 321.737936,
+          "pitwall_mb": 61.605208,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 217.0074
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072835966.384,
+          "footprint_mb": 318.837968,
+          "pitwall_mb": 61.605208,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 214.107432
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072836967.3892,
+          "footprint_mb": 318.739664,
+          "pitwall_mb": 61.506904,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 214.107432
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072837972.805,
+          "footprint_mb": 318.657744,
+          "pitwall_mb": 61.506904,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 214.091048
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072838975.989,
+          "footprint_mb": 318.657744,
+          "pitwall_mb": 61.506904,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 214.091048
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072839977.21,
+          "footprint_mb": 318.657744,
+          "pitwall_mb": 61.506904,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 214.091048
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072840977.112,
+          "footprint_mb": 318.657744,
+          "pitwall_mb": 61.506904,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 214.091048
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072841981.783,
+          "footprint_mb": 318.657744,
+          "pitwall_mb": 61.506904,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 214.091048
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072842986.43,
+          "footprint_mb": 318.657744,
+          "pitwall_mb": 61.506904,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 214.091048
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072843988.248,
+          "footprint_mb": 318.64136,
+          "pitwall_mb": 61.506904,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 214.091048
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072844989.951,
+          "footprint_mb": 318.64136,
+          "pitwall_mb": 61.506904,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 214.091048
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072845992.988,
+          "footprint_mb": 318.526672,
+          "pitwall_mb": 61.506904,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 213.97636
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072846998.524,
+          "footprint_mb": 318.526672,
+          "pitwall_mb": 61.506904,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 213.97636
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072848000.061,
+          "footprint_mb": 318.575824,
+          "pitwall_mb": 61.539672,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 213.97636
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072849004.035,
+          "footprint_mb": 318.592208,
+          "pitwall_mb": 61.556056,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 213.97636
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072850009.105,
+          "footprint_mb": 318.592208,
+          "pitwall_mb": 61.556056,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 213.97636
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072851014.3489,
+          "footprint_mb": 318.706896,
+          "pitwall_mb": 61.556056,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 214.091048
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072852017.353,
+          "footprint_mb": 318.772432,
+          "pitwall_mb": 61.621592,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 214.091048
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072853017.223,
+          "footprint_mb": 318.821584,
+          "pitwall_mb": 61.637976,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 214.123816
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072854022.283,
+          "footprint_mb": 318.8052,
+          "pitwall_mb": 61.621592,
+          "ports_thread": false,
+          "threads": 28,
+          "webcontent_mb": 214.123816
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072855027.23,
+          "footprint_mb": 318.821584,
+          "pitwall_mb": 61.637976,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 214.123816
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072856032.307,
+          "footprint_mb": 318.88712,
+          "pitwall_mb": 61.637976,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 214.189352
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072857034.915,
+          "footprint_mb": 318.88712,
+          "pitwall_mb": 61.637976,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 214.189352
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072858041.3389,
+          "footprint_mb": 318.903504,
+          "pitwall_mb": 61.637976,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 214.205736
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072859041.409,
+          "footprint_mb": 318.903504,
+          "pitwall_mb": 61.637976,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 214.205736
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072860047.444,
+          "footprint_mb": 318.903504,
+          "pitwall_mb": 61.637976,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 214.205736
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072861046.65,
+          "footprint_mb": 318.870736,
+          "pitwall_mb": 61.621592,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 214.189352
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072862046.3828,
+          "footprint_mb": 318.919888,
+          "pitwall_mb": 61.670744,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 214.189352
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072863051.625,
+          "footprint_mb": 317.347024,
+          "pitwall_mb": 61.687128,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 212.600104
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072864054.9841,
+          "footprint_mb": 317.363408,
+          "pitwall_mb": 61.687128,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 212.616488
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072865056.937,
+          "footprint_mb": 317.363408,
+          "pitwall_mb": 61.687128,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 212.616488
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072866061.915,
+          "footprint_mb": 317.33064,
+          "pitwall_mb": 61.687128,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 212.58372
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072867067.301,
+          "footprint_mb": 317.33064,
+          "pitwall_mb": 61.687128,
+          "ports_thread": false,
+          "threads": 30,
+          "webcontent_mb": 212.58372
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072868070.447,
+          "footprint_mb": 316.708048,
+          "pitwall_mb": 61.113688,
+          "ports_thread": false,
+          "threads": 27,
+          "webcontent_mb": 212.58372
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072869072.624,
+          "footprint_mb": 316.83912,
+          "pitwall_mb": 61.195608,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 212.58372
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072870077.1091,
+          "footprint_mb": 316.855504,
+          "pitwall_mb": 61.195608,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 212.600104
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072871081.2112,
+          "footprint_mb": 316.83912,
+          "pitwall_mb": 61.195608,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 212.58372
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072872086.822,
+          "footprint_mb": 316.83912,
+          "pitwall_mb": 61.195608,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 212.58372
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072873087.029,
+          "footprint_mb": 316.83912,
+          "pitwall_mb": 61.195608,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 212.58372
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072874094.776,
+          "footprint_mb": 316.83912,
+          "pitwall_mb": 61.195608,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 212.58372
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072875098.0798,
+          "footprint_mb": 316.822736,
+          "pitwall_mb": 61.195608,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 212.567336
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072876100.416,
+          "footprint_mb": 316.83912,
+          "pitwall_mb": 61.195608,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 212.58372
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072877104.182,
+          "footprint_mb": 316.26568,
+          "pitwall_mb": 61.195608,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 212.01028
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072878109.145,
+          "footprint_mb": 316.216528,
+          "pitwall_mb": 61.146456,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 212.01028
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072879113.4429,
+          "footprint_mb": 316.26568,
+          "pitwall_mb": 61.146456,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 212.01028
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072880117.774,
+          "footprint_mb": 316.26568,
+          "pitwall_mb": 61.146456,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 212.01028
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072881118.7698,
+          "footprint_mb": 316.26568,
+          "pitwall_mb": 61.146456,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 212.01028
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072882123.376,
+          "footprint_mb": 316.26568,
+          "pitwall_mb": 61.146456,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 212.01028
+        },
+        {
+          "descendants": 0,
+          "epoch_ms": 1795072883126.997,
+          "footprint_mb": 316.26568,
+          "pitwall_mb": 61.146456,
+          "ports_thread": false,
+          "threads": 29,
+          "webcontent_mb": 212.01028
+        }
+      ],
+      "shutdown": {
+        "signals": []
+      },
+      "webcontent": {
+        "base_mb": 159.745008,
+        "last_mb": 212.01028,
+        "max_delta_mb": 358.56,
+        "max_mb": 518.309136
+      }
+    }
+  ],
+  "schema": "pitwall-perf-m6/1",
+  "summary": {
+    "block_max_ms": {
+      "max": 34.0,
+      "median": 34.0,
+      "min": 34.0,
+      "n": 1
+    },
+    "console_mb_per_s": {
+      "max": 0.6964364908772807,
+      "median": 0.6964364908772807,
+      "min": 0.6964364908772807,
+      "n": 1
+    },
+    "frames_pass": false,
+    "host_after_delta_mb": {
+      "max": 31.09688,
+      "median": 6.586368,
+      "min": 3.588096,
+      "n": 3
+    },
+    "host_max_delta_mb": {
+      "max": 48.81,
+      "median": 30.61,
+      "min": 28.23,
+      "n": 3
+    },
+    "host_within_one_ring_plus_8mb": false,
+    "host_within_ring_total": true,
+    "interval_max_ms": {
+      "max": 39.0,
+      "median": 39.0,
+      "min": 39.0,
+      "n": 1
+    },
+    "interval_p95_ms": {
+      "max": 25.0,
+      "median": 25.0,
+      "min": 25.0,
+      "n": 1
+    },
+    "vsync_ms": {
+      "max": 19.0,
+      "median": 19.0,
+      "min": 19.0,
+      "n": 1
+    },
+    "webcontent_max_delta_mb": {
+      "max": 346.36,
+      "median": 346.36,
+      "min": 346.36,
+      "n": 1
+    },
+    "within_vsync": {
+      "max": 0.99,
+      "median": 0.99,
+      "min": 0.99,
+      "n": 1
+    },
+    "work_p95_ms": {
+      "max": 1.0,
+      "median": 1.0,
+      "min": 1.0,
+      "n": 1
+    },
+    "written_mb_per_s": {
+      "max": 9.999666677777407,
+      "median": 9.999666677777407,
+      "min": 9.999333377774816,
+      "n": 3
+    }
+  }
+}

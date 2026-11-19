@@ -1,0 +1,2511 @@
+{
+  "app": "target/release/perf-m6/Pitwall.app",
+  "definition": "per run a fresh app on an empty trusted project with one run configuration whose [debug] launches a target that sleeps (exit: 1 s, ends by itself; stop: 60 s, the scenario stops the session after 4 s) under the adapter set by `[dap.<id>] path`; the app's descendants are polled every 25 ms; pass = no descendant before `debug_starting`, and every descendant that appeared after it is gone ≤ 2000 ms after `debug_ended` (exit: when the webview saw the session end; stop: when it called stop); adapters [\"codelldb\", \"js-debug\", \"debugpy\"], endings [\"exit\", \"stop\"], 3 runs each",
+  "environment": {
+    "commit": "2b1754942eaeaee74d10f1a18030be83ec5efd46",
+    "dirty": false,
+    "hardware": "Mac17,9 · Apple M5 Pro · 15 CPU",
+    "os": "macOS 27.2.1 (26B131)"
+  },
+  "hid_idle_now_s": 0.0,
+  "hid_idle_start_s": 0.0,
+  "kind": "debug-end",
+  "resummarized": true,
+  "runs": [
+    {
+      "adapter": "codelldb",
+      "adapter_path": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/dap-adapters/data/tools/codelldb/v1.12.3/extension/adapter/codelldb",
+      "app_pid": 54399,
+      "cold_start_ms": 537.423095703125,
+      "ended": {
+        "epochMs": 1795074195619,
+        "how": "exited"
+      },
+      "ending": "exit",
+      "error": null,
+      "excluded": "window hidden",
+      "index": 0,
+      "judgement": {
+        "all_gone_after_end_ms": 16.5,
+        "before_start": 0,
+        "pass": true,
+        "session_processes": [
+          {
+            "name": "codelldb",
+            "pid": 54497
+          },
+          {
+            "name": "rustc",
+            "pid": 54511
+          },
+          {
+            "name": "codelldb-launch",
+            "pid": 54512
+          },
+          {
+            "name": "wait",
+            "pid": 54513
+          },
+          {
+            "name": "debugserver",
+            "pid": 54516
+          }
+        ],
+        "still_alive": false
+      },
+      "load1_end": 2.18,
+      "load1_start": 2.23,
+      "processes": [
+        {
+          "first_ms": 1795074190722.1128,
+          "gone_ms": 1795074190866.55,
+          "last_ms": 1795074190835.818,
+          "name": "zsh",
+          "pid": 54405
+        },
+        {
+          "first_ms": 1795074190722.1128,
+          "gone_ms": 1795074190753.365,
+          "last_ms": 1795074190722.1128,
+          "name": "bash",
+          "pid": 54407
+        },
+        {
+          "first_ms": 1795074190722.1128,
+          "gone_ms": 1795074190753.365,
+          "last_ms": 1795074190722.1128,
+          "name": "bash",
+          "pid": 54412
+        },
+        {
+          "first_ms": 1795074190722.1128,
+          "gone_ms": 1795074190753.365,
+          "last_ms": 1795074190722.1128,
+          "name": "ps",
+          "pid": 54413
+        },
+        {
+          "first_ms": 1795074190781.829,
+          "gone_ms": 1795074190809.926,
+          "last_ms": 1795074190781.829,
+          "name": "?",
+          "pid": 54419
+        },
+        {
+          "first_ms": 1795074190809.926,
+          "gone_ms": 1795074190835.818,
+          "last_ms": 1795074190809.926,
+          "name": "zsh",
+          "pid": 54421
+        },
+        {
+          "first_ms": 1795074190809.926,
+          "gone_ms": 1795074190835.818,
+          "last_ms": 1795074190809.926,
+          "name": "docker",
+          "pid": 54428
+        },
+        {
+          "first_ms": 1795074190809.926,
+          "gone_ms": 1795074190835.818,
+          "last_ms": 1795074190809.926,
+          "name": "?",
+          "pid": 54431
+        },
+        {
+          "first_ms": 1795074190835.818,
+          "gone_ms": 1795074190866.55,
+          "last_ms": 1795074190835.818,
+          "name": "zsh",
+          "pid": 54434
+        },
+        {
+          "first_ms": 1795074193723.855,
+          "gone_ms": 1795074195635.519,
+          "last_ms": 1795074195604.285,
+          "name": "codelldb",
+          "pid": 54497
+        },
+        {
+          "first_ms": 1795074193980.0762,
+          "gone_ms": 1795074194101.2622,
+          "last_ms": 1795074194070.724,
+          "name": "rustc",
+          "pid": 54511
+        },
+        {
+          "first_ms": 1795074194131.836,
+          "gone_ms": 1795074195635.519,
+          "last_ms": 1795074195604.285,
+          "name": "codelldb-launch",
+          "pid": 54512
+        },
+        {
+          "first_ms": 1795074194131.836,
+          "gone_ms": 1795074195635.519,
+          "last_ms": 1795074195604.285,
+          "name": "wait",
+          "pid": 54513
+        },
+        {
+          "first_ms": 1795074194131.836,
+          "gone_ms": 1795074195635.519,
+          "last_ms": 1795074195604.285,
+          "name": "debugserver",
+          "pid": 54516
+        }
+      ],
+      "running": null,
+      "shutdown": {
+        "signals": []
+      },
+      "starting_epoch_ms": 1795074193696.0
+    },
+    {
+      "adapter": "codelldb",
+      "adapter_path": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/dap-adapters/data/tools/codelldb/v1.12.3/extension/adapter/codelldb",
+      "app_pid": 54731,
+      "cold_start_ms": 542.617919921875,
+      "ended": {
+        "epochMs": 1795074206477,
+        "how": "exited"
+      },
+      "ending": "exit",
+      "error": null,
+      "excluded": "window hidden",
+      "index": 1,
+      "judgement": {
+        "all_gone_after_end_ms": 21.1,
+        "before_start": 0,
+        "pass": true,
+        "session_processes": [
+          {
+            "name": "codelldb",
+            "pid": 54836
+          },
+          {
+            "name": "codelldb",
+            "pid": 54843
+          },
+          {
+            "name": "codelldb-launch",
+            "pid": 54855
+          },
+          {
+            "name": "wait",
+            "pid": 54856
+          },
+          {
+            "name": "debugserver",
+            "pid": 54859
+          }
+        ],
+        "still_alive": false
+      },
+      "load1_end": 2.25,
+      "load1_start": 2.18,
+      "processes": [
+        {
+          "first_ms": 1795074201944.152,
+          "gone_ms": 1795074202094.386,
+          "last_ms": 1795074202063.699,
+          "name": "zsh",
+          "pid": 54738
+        },
+        {
+          "first_ms": 1795074201944.152,
+          "gone_ms": 1795074201974.944,
+          "last_ms": 1795074201944.152,
+          "name": "path_helper",
+          "pid": 54739
+        },
+        {
+          "first_ms": 1795074202006.024,
+          "gone_ms": 1795074202033.041,
+          "last_ms": 1795074202006.024,
+          "name": "cc",
+          "pid": 54750
+        },
+        {
+          "first_ms": 1795074202033.041,
+          "gone_ms": 1795074202063.699,
+          "last_ms": 1795074202033.041,
+          "name": "zsh",
+          "pid": 54751
+        },
+        {
+          "first_ms": 1795074202033.041,
+          "gone_ms": 1795074202063.699,
+          "last_ms": 1795074202033.041,
+          "name": "?",
+          "pid": 54757
+        },
+        {
+          "first_ms": 1795074202033.041,
+          "gone_ms": 1795074202063.699,
+          "last_ms": 1795074202033.041,
+          "name": "docker",
+          "pid": 54759
+        },
+        {
+          "first_ms": 1795074202033.041,
+          "gone_ms": 1795074202063.699,
+          "last_ms": 1795074202033.041,
+          "name": "?",
+          "pid": 54760
+        },
+        {
+          "first_ms": 1795074202063.699,
+          "gone_ms": 1795074202094.386,
+          "last_ms": 1795074202063.699,
+          "name": "mise",
+          "pid": 54764
+        },
+        {
+          "first_ms": 1795074204946.989,
+          "gone_ms": 1795074206498.095,
+          "last_ms": 1795074206466.2969,
+          "name": "codelldb",
+          "pid": 54836
+        },
+        {
+          "first_ms": 1795074205115.9612,
+          "gone_ms": 1795074205160.312,
+          "last_ms": 1795074205115.9612,
+          "name": "codelldb",
+          "pid": 54843
+        },
+        {
+          "first_ms": 1795074205160.312,
+          "gone_ms": 1795074206498.095,
+          "last_ms": 1795074206466.2969,
+          "name": "codelldb-launch",
+          "pid": 54855
+        },
+        {
+          "first_ms": 1795074205160.312,
+          "gone_ms": 1795074206498.095,
+          "last_ms": 1795074206466.2969,
+          "name": "wait",
+          "pid": 54856
+        },
+        {
+          "first_ms": 1795074205187.977,
+          "gone_ms": 1795074206498.095,
+          "last_ms": 1795074206466.2969,
+          "name": "debugserver",
+          "pid": 54859
+        }
+      ],
+      "running": null,
+      "shutdown": {
+        "signals": []
+      },
+      "starting_epoch_ms": 1795074204935.0
+    },
+    {
+      "adapter": "codelldb",
+      "adapter_path": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/dap-adapters/data/tools/codelldb/v1.12.3/extension/adapter/codelldb",
+      "app_pid": 55055,
+      "cold_start_ms": 509.1240234375,
+      "ended": {
+        "epochMs": 1795074217465,
+        "how": "exited"
+      },
+      "ending": "exit",
+      "error": null,
+      "excluded": "window hidden",
+      "index": 2,
+      "judgement": {
+        "all_gone_after_end_ms": 22.8,
+        "before_start": 0,
+        "pass": true,
+        "session_processes": [
+          {
+            "name": "codelldb",
+            "pid": 55158
+          },
+          {
+            "name": "codelldb-launch",
+            "pid": 55171
+          },
+          {
+            "name": "wait",
+            "pid": 55172
+          },
+          {
+            "name": "debugserver",
+            "pid": 55175
+          }
+        ],
+        "still_alive": false
+      },
+      "load1_end": 2.44,
+      "load1_start": 2.25,
+      "processes": [
+        {
+          "first_ms": 1795074212887.299,
+          "gone_ms": 1795074213026.0068,
+          "last_ms": 1795074212998.369,
+          "name": "zsh",
+          "pid": 55061
+        },
+        {
+          "first_ms": 1795074212887.299,
+          "gone_ms": 1795074212915.096,
+          "last_ms": 1795074212887.299,
+          "name": "zsh",
+          "pid": 55069
+        },
+        {
+          "first_ms": 1795074212941.682,
+          "gone_ms": 1795074212967.655,
+          "last_ms": 1795074212941.682,
+          "name": "git",
+          "pid": 55074
+        },
+        {
+          "first_ms": 1795074212967.655,
+          "gone_ms": 1795074212998.369,
+          "last_ms": 1795074212967.655,
+          "name": "zsh",
+          "pid": 55075
+        },
+        {
+          "first_ms": 1795074212967.655,
+          "gone_ms": 1795074212998.369,
+          "last_ms": 1795074212967.655,
+          "name": "docker",
+          "pid": 55082
+        },
+        {
+          "first_ms": 1795074212998.369,
+          "gone_ms": 1795074213026.0068,
+          "last_ms": 1795074212998.369,
+          "name": "mise",
+          "pid": 55088
+        },
+        {
+          "first_ms": 1795074215912.159,
+          "gone_ms": 1795074217487.756,
+          "last_ms": 1795074217459.079,
+          "name": "codelldb",
+          "pid": 55158
+        },
+        {
+          "first_ms": 1795074216136.1948,
+          "gone_ms": 1795074217459.079,
+          "last_ms": 1795074217426.514,
+          "name": "codelldb-launch",
+          "pid": 55171
+        },
+        {
+          "first_ms": 1795074216136.1948,
+          "gone_ms": 1795074217459.079,
+          "last_ms": 1795074217426.514,
+          "name": "wait",
+          "pid": 55172
+        },
+        {
+          "first_ms": 1795074216136.1948,
+          "gone_ms": 1795074217459.079,
+          "last_ms": 1795074217426.514,
+          "name": "debugserver",
+          "pid": 55175
+        }
+      ],
+      "running": null,
+      "shutdown": {
+        "signals": []
+      },
+      "starting_epoch_ms": 1795074215888.0
+    },
+    {
+      "adapter": "codelldb",
+      "adapter_path": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/dap-adapters/data/tools/codelldb/v1.12.3/extension/adapter/codelldb",
+      "app_pid": 55374,
+      "cold_start_ms": 514.046142578125,
+      "ended": {
+        "endedEpochMs": 1795074231364,
+        "epochMs": 1795074231347,
+        "how": "stopped"
+      },
+      "ending": "stop",
+      "error": null,
+      "excluded": "window hidden",
+      "index": 3,
+      "judgement": {
+        "all_gone_after_end_ms": 162.0,
+        "before_start": 0,
+        "pass": true,
+        "session_processes": [
+          {
+            "name": "codelldb",
+            "pid": 55483
+          },
+          {
+            "name": "rustup",
+            "pid": 55484
+          },
+          {
+            "name": "codelldb-launch",
+            "pid": 55496
+          },
+          {
+            "name": "wait",
+            "pid": 55497
+          },
+          {
+            "name": "debugserver",
+            "pid": 55500
+          }
+        ],
+        "still_alive": false
+      },
+      "load1_end": 2.28,
+      "load1_start": 2.41,
+      "processes": [
+        {
+          "first_ms": 1795074223339.108,
+          "gone_ms": 1795074223519.9548,
+          "last_ms": 1795074223489.066,
+          "name": "pitwall",
+          "pid": 55381
+        },
+        {
+          "first_ms": 1795074223461.4202,
+          "gone_ms": 1795074223489.066,
+          "last_ms": 1795074223461.4202,
+          "name": "zsh",
+          "pid": 55395
+        },
+        {
+          "first_ms": 1795074223461.4202,
+          "gone_ms": 1795074223489.066,
+          "last_ms": 1795074223461.4202,
+          "name": "docker",
+          "pid": 55403
+        },
+        {
+          "first_ms": 1795074223489.066,
+          "gone_ms": 1795074223519.9548,
+          "last_ms": 1795074223489.066,
+          "name": "mise",
+          "pid": 55408
+        },
+        {
+          "first_ms": 1795074226353.614,
+          "gone_ms": 1795074231508.997,
+          "last_ms": 1795074231478.064,
+          "name": "codelldb",
+          "pid": 55483
+        },
+        {
+          "first_ms": 1795074226535.9731,
+          "gone_ms": 1795074226578.867,
+          "last_ms": 1795074226535.9731,
+          "name": "rustup",
+          "pid": 55484
+        },
+        {
+          "first_ms": 1795074226578.867,
+          "gone_ms": 1795074231361.778,
+          "last_ms": 1795074231334.247,
+          "name": "codelldb-launch",
+          "pid": 55496
+        },
+        {
+          "first_ms": 1795074226578.867,
+          "gone_ms": 1795074231478.064,
+          "last_ms": 1795074231424.106,
+          "name": "wait",
+          "pid": 55497
+        },
+        {
+          "first_ms": 1795074226609.488,
+          "gone_ms": 1795074231478.064,
+          "last_ms": 1795074231424.106,
+          "name": "debugserver",
+          "pid": 55500
+        }
+      ],
+      "running": null,
+      "shutdown": {
+        "signals": []
+      },
+      "starting_epoch_ms": 1795074226341.0
+    },
+    {
+      "adapter": "codelldb",
+      "adapter_path": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/dap-adapters/data/tools/codelldb/v1.12.3/extension/adapter/codelldb",
+      "app_pid": 55787,
+      "cold_start_ms": 521.854736328125,
+      "ended": {
+        "endedEpochMs": 1795074245156,
+        "epochMs": 1795074245146,
+        "how": "stopped"
+      },
+      "ending": "stop",
+      "error": null,
+      "excluded": "window hidden",
+      "index": 4,
+      "judgement": {
+        "all_gone_after_end_ms": 152.0,
+        "before_start": 0,
+        "pass": true,
+        "session_processes": [
+          {
+            "name": "codelldb",
+            "pid": 55895
+          },
+          {
+            "name": "codelldb-launch",
+            "pid": 55914
+          },
+          {
+            "name": "wait",
+            "pid": 55915
+          },
+          {
+            "name": "debugserver",
+            "pid": 55918
+          }
+        ],
+        "still_alive": false
+      },
+      "load1_end": 2.07,
+      "load1_start": 2.28,
+      "processes": [
+        {
+          "first_ms": 1795074237248.3572,
+          "gone_ms": 1795074237428.103,
+          "last_ms": 1795074237400.1929,
+          "name": "zsh",
+          "pid": 55794
+        },
+        {
+          "first_ms": 1795074237276.144,
+          "gone_ms": 1795074237306.924,
+          "last_ms": 1795074237276.144,
+          "name": "locale",
+          "pid": 55803
+        },
+        {
+          "first_ms": 1795074237338.29,
+          "gone_ms": 1795074237369.634,
+          "last_ms": 1795074237338.29,
+          "name": "git",
+          "pid": 55807
+        },
+        {
+          "first_ms": 1795074237369.634,
+          "gone_ms": 1795074237400.1929,
+          "last_ms": 1795074237369.634,
+          "name": "zsh",
+          "pid": 55808
+        },
+        {
+          "first_ms": 1795074237369.634,
+          "gone_ms": 1795074237400.1929,
+          "last_ms": 1795074237369.634,
+          "name": "?",
+          "pid": 55814
+        },
+        {
+          "first_ms": 1795074237369.634,
+          "gone_ms": 1795074237400.1929,
+          "last_ms": 1795074237369.634,
+          "name": "docker",
+          "pid": 55815
+        },
+        {
+          "first_ms": 1795074237369.634,
+          "gone_ms": 1795074237400.1929,
+          "last_ms": 1795074237369.634,
+          "name": "?",
+          "pid": 55817
+        },
+        {
+          "first_ms": 1795074237400.1929,
+          "gone_ms": 1795074237428.103,
+          "last_ms": 1795074237400.1929,
+          "name": "mise",
+          "pid": 55821
+        },
+        {
+          "first_ms": 1795074240279.737,
+          "gone_ms": 1795074245297.979,
+          "last_ms": 1795074245269.1702,
+          "name": "codelldb",
+          "pid": 55895
+        },
+        {
+          "first_ms": 1795074240503.695,
+          "gone_ms": 1795074245180.94,
+          "last_ms": 1795074245149.076,
+          "name": "codelldb-launch",
+          "pid": 55914
+        },
+        {
+          "first_ms": 1795074240503.695,
+          "gone_ms": 1795074245269.1702,
+          "last_ms": 1795074245242.4531,
+          "name": "wait",
+          "pid": 55915
+        },
+        {
+          "first_ms": 1795074240503.695,
+          "gone_ms": 1795074245269.1702,
+          "last_ms": 1795074245242.4531,
+          "name": "debugserver",
+          "pid": 55918
+        }
+      ],
+      "running": null,
+      "shutdown": {
+        "signals": []
+      },
+      "starting_epoch_ms": 1795074240244.0
+    },
+    {
+      "adapter": "codelldb",
+      "adapter_path": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/dap-adapters/data/tools/codelldb/v1.12.3/extension/adapter/codelldb",
+      "app_pid": 56208,
+      "cold_start_ms": 522.52197265625,
+      "ended": {
+        "endedEpochMs": 1795074258449,
+        "epochMs": 1795074258439,
+        "how": "stopped"
+      },
+      "ending": "stop",
+      "error": null,
+      "excluded": "window hidden",
+      "index": 5,
+      "judgement": {
+        "all_gone_after_end_ms": 154.6,
+        "before_start": 0,
+        "pass": true,
+        "session_processes": [
+          {
+            "name": "codelldb",
+            "pid": 56320
+          },
+          {
+            "name": "rustc",
+            "pid": 56332
+          },
+          {
+            "name": "codelldb-launch",
+            "pid": 56333
+          },
+          {
+            "name": "wait",
+            "pid": 56334
+          },
+          {
+            "name": "debugserver",
+            "pid": 56337
+          }
+        ],
+        "still_alive": false
+      },
+      "load1_end": 3.58,
+      "load1_start": 2.07,
+      "processes": [
+        {
+          "first_ms": 1795074251063.7358,
+          "gone_ms": 1795074251208.8489,
+          "last_ms": 1795074251178.096,
+          "name": "zsh",
+          "pid": 56216
+        },
+        {
+          "first_ms": 1795074251063.7358,
+          "gone_ms": 1795074251094.807,
+          "last_ms": 1795074251063.7358,
+          "name": "bash",
+          "pid": 56219
+        },
+        {
+          "first_ms": 1795074251152.025,
+          "gone_ms": 1795074251178.096,
+          "last_ms": 1795074251152.025,
+          "name": "zsh",
+          "pid": 56230
+        },
+        {
+          "first_ms": 1795074251152.025,
+          "gone_ms": 1795074251178.096,
+          "last_ms": 1795074251152.025,
+          "name": "docker",
+          "pid": 56231
+        },
+        {
+          "first_ms": 1795074251152.025,
+          "gone_ms": 1795074251178.096,
+          "last_ms": 1795074251152.025,
+          "name": "zsh",
+          "pid": 56233
+        },
+        {
+          "first_ms": 1795074251152.025,
+          "gone_ms": 1795074251178.096,
+          "last_ms": 1795074251152.025,
+          "name": "ssh-keygen",
+          "pid": 56234
+        },
+        {
+          "first_ms": 1795074251152.025,
+          "gone_ms": 1795074251178.096,
+          "last_ms": 1795074251152.025,
+          "name": "awk",
+          "pid": 56235
+        },
+        {
+          "first_ms": 1795074251178.096,
+          "gone_ms": 1795074251208.8489,
+          "last_ms": 1795074251178.096,
+          "name": "mise",
+          "pid": 56242
+        },
+        {
+          "first_ms": 1795074254172.297,
+          "gone_ms": 1795074258593.64,
+          "last_ms": 1795074258538.494,
+          "name": "codelldb",
+          "pid": 56320
+        },
+        {
+          "first_ms": 1795074254336.9292,
+          "gone_ms": 1795074254365.572,
+          "last_ms": 1795074254336.9292,
+          "name": "rustc",
+          "pid": 56332
+        },
+        {
+          "first_ms": 1795074254365.572,
+          "gone_ms": 1795074258446.699,
+          "last_ms": 1795074258418.3171,
+          "name": "codelldb-launch",
+          "pid": 56333
+        },
+        {
+          "first_ms": 1795074254393.389,
+          "gone_ms": 1795074258593.64,
+          "last_ms": 1795074258538.494,
+          "name": "wait",
+          "pid": 56334
+        },
+        {
+          "first_ms": 1795074254393.389,
+          "gone_ms": 1795074258593.64,
+          "last_ms": 1795074258538.494,
+          "name": "debugserver",
+          "pid": 56337
+        }
+      ],
+      "running": null,
+      "shutdown": {
+        "signals": []
+      },
+      "starting_epoch_ms": 1795074254137.0
+    },
+    {
+      "adapter": "js-debug",
+      "adapter_path": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/dap-adapters/data/tools/js-debug-adapter/v1.140.0/pitwall-bin/js-debug-adapter",
+      "app_pid": 56881,
+      "cold_start_ms": 564.40478515625,
+      "ended": {
+        "epochMs": 1795074268637,
+        "how": "exited"
+      },
+      "ending": "exit",
+      "error": null,
+      "excluded": "window hidden",
+      "index": 6,
+      "judgement": {
+        "all_gone_after_end_ms": 1252.8,
+        "before_start": 0,
+        "pass": true,
+        "session_processes": [
+          {
+            "name": "node",
+            "pid": 57006
+          },
+          {
+            "name": "node",
+            "pid": 57007
+          },
+          {
+            "name": "node",
+            "pid": 57022
+          },
+          {
+            "name": "node",
+            "pid": 57023
+          },
+          {
+            "name": "bash",
+            "pid": 57058
+          },
+          {
+            "name": "pgrep",
+            "pid": 57059
+          }
+        ],
+        "still_alive": false
+      },
+      "load1_end": 3.25,
+      "load1_start": 3.58,
+      "processes": [
+        {
+          "first_ms": 1795074264386.335,
+          "gone_ms": 1795074264706.345,
+          "last_ms": 1795074264678.944,
+          "name": "zsh",
+          "pid": 56890
+        },
+        {
+          "first_ms": 1795074264386.335,
+          "gone_ms": 1795074264413.2048,
+          "last_ms": 1795074264386.335,
+          "name": "zsh",
+          "pid": 56898
+        },
+        {
+          "first_ms": 1795074264444.2598,
+          "gone_ms": 1795074264475.454,
+          "last_ms": 1795074264444.2598,
+          "name": "?",
+          "pid": 56905
+        },
+        {
+          "first_ms": 1795074264504.434,
+          "gone_ms": 1795074264534.351,
+          "last_ms": 1795074264504.434,
+          "name": "?",
+          "pid": 56915
+        },
+        {
+          "first_ms": 1795074264562.467,
+          "gone_ms": 1795074264593.117,
+          "last_ms": 1795074264562.467,
+          "name": "zsh",
+          "pid": 56917
+        },
+        {
+          "first_ms": 1795074264621.746,
+          "gone_ms": 1795074264648.0789,
+          "last_ms": 1795074264621.746,
+          "name": "zsh",
+          "pid": 56923
+        },
+        {
+          "first_ms": 1795074264648.0789,
+          "gone_ms": 1795074264678.944,
+          "last_ms": 1795074264648.0789,
+          "name": "zsh",
+          "pid": 56925
+        },
+        {
+          "first_ms": 1795074264648.0789,
+          "gone_ms": 1795074264678.944,
+          "last_ms": 1795074264648.0789,
+          "name": "docker",
+          "pid": 56926
+        },
+        {
+          "first_ms": 1795074264648.0789,
+          "gone_ms": 1795074264678.944,
+          "last_ms": 1795074264648.0789,
+          "name": "zsh",
+          "pid": 56928
+        },
+        {
+          "first_ms": 1795074264648.0789,
+          "gone_ms": 1795074264678.944,
+          "last_ms": 1795074264648.0789,
+          "name": "ssh-keygen",
+          "pid": 56929
+        },
+        {
+          "first_ms": 1795074264648.0789,
+          "gone_ms": 1795074264678.944,
+          "last_ms": 1795074264648.0789,
+          "name": "awk",
+          "pid": 56930
+        },
+        {
+          "first_ms": 1795074264678.944,
+          "gone_ms": 1795074264706.345,
+          "last_ms": 1795074264678.944,
+          "name": "mise",
+          "pid": 56937
+        },
+        {
+          "first_ms": 1795074267360.7,
+          "gone_ms": 1795074267391.8208,
+          "last_ms": 1795074267360.7,
+          "name": "node",
+          "pid": 57006
+        },
+        {
+          "first_ms": 1795074267391.8208,
+          "gone_ms": 1795074269889.842,
+          "last_ms": 1795074269858.94,
+          "name": "node",
+          "pid": 57007
+        },
+        {
+          "first_ms": 1795074267551.3152,
+          "gone_ms": 1795074268658.643,
+          "last_ms": 1795074268627.583,
+          "name": "node",
+          "pid": 57022
+        },
+        {
+          "first_ms": 1795074267582.0469,
+          "gone_ms": 1795074268627.583,
+          "last_ms": 1795074268600.118,
+          "name": "node",
+          "pid": 57023
+        },
+        {
+          "first_ms": 1795074268658.643,
+          "gone_ms": 1795074268689.316,
+          "last_ms": 1795074268658.643,
+          "name": "bash",
+          "pid": 57058
+        },
+        {
+          "first_ms": 1795074268658.643,
+          "gone_ms": 1795074268689.316,
+          "last_ms": 1795074268658.643,
+          "name": "pgrep",
+          "pid": 57059
+        }
+      ],
+      "running": null,
+      "shutdown": {
+        "signals": []
+      },
+      "starting_epoch_ms": 1795074267353.0
+    },
+    {
+      "adapter": "js-debug",
+      "adapter_path": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/dap-adapters/data/tools/js-debug-adapter/v1.140.0/pitwall-bin/js-debug-adapter",
+      "app_pid": 57294,
+      "cold_start_ms": 518.752685546875,
+      "ended": {
+        "epochMs": 1795074279529,
+        "how": "exited"
+      },
+      "ending": "exit",
+      "error": null,
+      "excluded": "window hidden",
+      "index": 7,
+      "judgement": {
+        "all_gone_after_end_ms": 1254.7,
+        "before_start": 0,
+        "pass": true,
+        "session_processes": [
+          {
+            "name": "node",
+            "pid": 57416
+          },
+          {
+            "name": "node",
+            "pid": 57417
+          },
+          {
+            "name": "node",
+            "pid": 57421
+          },
+          {
+            "name": "node",
+            "pid": 57422
+          },
+          {
+            "name": "sh",
+            "pid": 57461
+          }
+        ],
+        "still_alive": false
+      },
+      "load1_end": 2.75,
+      "load1_start": 3.25,
+      "processes": [
+        {
+          "first_ms": 1795074275273.774,
+          "gone_ms": 1795074275424.598,
+          "last_ms": 1795074275393.638,
+          "name": "zsh",
+          "pid": 57300
+        },
+        {
+          "first_ms": 1795074275273.774,
+          "gone_ms": 1795074275303.2988,
+          "last_ms": 1795074275273.774,
+          "name": "bash",
+          "pid": 57302
+        },
+        {
+          "first_ms": 1795074275273.774,
+          "gone_ms": 1795074275303.2988,
+          "last_ms": 1795074275273.774,
+          "name": "?",
+          "pid": 57305
+        },
+        {
+          "first_ms": 1795074275333.582,
+          "gone_ms": 1795074275364.786,
+          "last_ms": 1795074275333.582,
+          "name": "zsh",
+          "pid": 57313
+        },
+        {
+          "first_ms": 1795074275393.638,
+          "gone_ms": 1795074275424.598,
+          "last_ms": 1795074275393.638,
+          "name": "mise",
+          "pid": 57326
+        },
+        {
+          "first_ms": 1795074278302.909,
+          "gone_ms": 1795074278333.7551,
+          "last_ms": 1795074278302.909,
+          "name": "node",
+          "pid": 57416
+        },
+        {
+          "first_ms": 1795074278333.7551,
+          "gone_ms": 1795074280783.6511,
+          "last_ms": 1795074280752.753,
+          "name": "node",
+          "pid": 57417
+        },
+        {
+          "first_ms": 1795074278423.1929,
+          "gone_ms": 1795074279526.682,
+          "last_ms": 1795074279495.364,
+          "name": "node",
+          "pid": 57421
+        },
+        {
+          "first_ms": 1795074278453.731,
+          "gone_ms": 1795074279526.682,
+          "last_ms": 1795074279495.364,
+          "name": "node",
+          "pid": 57422
+        },
+        {
+          "first_ms": 1795074279526.682,
+          "gone_ms": 1795074279580.1548,
+          "last_ms": 1795074279526.682,
+          "name": "sh",
+          "pid": 57461
+        }
+      ],
+      "running": null,
+      "shutdown": {
+        "signals": []
+      },
+      "starting_epoch_ms": 1795074278273.0
+    },
+    {
+      "adapter": "js-debug",
+      "adapter_path": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/dap-adapters/data/tools/js-debug-adapter/v1.140.0/pitwall-bin/js-debug-adapter",
+      "app_pid": 57654,
+      "cold_start_ms": 580.2197265625,
+      "ended": {
+        "epochMs": 1795074289728,
+        "how": "exited"
+      },
+      "ending": "exit",
+      "error": null,
+      "excluded": "window hidden",
+      "index": 8,
+      "judgement": {
+        "all_gone_after_end_ms": 1254.8,
+        "before_start": 0,
+        "pass": true,
+        "session_processes": [
+          {
+            "name": "node",
+            "pid": 57773
+          },
+          {
+            "name": "node",
+            "pid": 57774
+          },
+          {
+            "name": "node",
+            "pid": 57789
+          },
+          {
+            "name": "node",
+            "pid": 57790
+          },
+          {
+            "name": "bash",
+            "pid": 57825
+          },
+          {
+            "name": "pgrep",
+            "pid": 57826
+          }
+        ],
+        "still_alive": false
+      },
+      "load1_end": 2.33,
+      "load1_start": 2.75,
+      "processes": [
+        {
+          "first_ms": 1795074285407.868,
+          "gone_ms": 1795074285579.3208,
+          "last_ms": 1795074285549.084,
+          "name": "zsh",
+          "pid": 57663
+        },
+        {
+          "first_ms": 1795074285407.868,
+          "gone_ms": 1795074285434.901,
+          "last_ms": 1795074285407.868,
+          "name": "bash",
+          "pid": 57665
+        },
+        {
+          "first_ms": 1795074285496.1218,
+          "gone_ms": 1795074285522.812,
+          "last_ms": 1795074285496.1218,
+          "name": "git",
+          "pid": 57675
+        },
+        {
+          "first_ms": 1795074285522.812,
+          "gone_ms": 1795074285549.084,
+          "last_ms": 1795074285522.812,
+          "name": "zsh",
+          "pid": 57676
+        },
+        {
+          "first_ms": 1795074285522.812,
+          "gone_ms": 1795074285549.084,
+          "last_ms": 1795074285522.812,
+          "name": "?",
+          "pid": 57684
+        },
+        {
+          "first_ms": 1795074285522.812,
+          "gone_ms": 1795074285549.084,
+          "last_ms": 1795074285522.812,
+          "name": "?",
+          "pid": 57687
+        },
+        {
+          "first_ms": 1795074285549.084,
+          "gone_ms": 1795074285579.3208,
+          "last_ms": 1795074285549.084,
+          "name": "mise",
+          "pid": 57689
+        },
+        {
+          "first_ms": 1795074288495.464,
+          "gone_ms": 1795074288526.98,
+          "last_ms": 1795074288495.464,
+          "name": "node",
+          "pid": 57773
+        },
+        {
+          "first_ms": 1795074288526.98,
+          "gone_ms": 1795074290982.7522,
+          "last_ms": 1795074290953.046,
+          "name": "node",
+          "pid": 57774
+        },
+        {
+          "first_ms": 1795074288632.577,
+          "gone_ms": 1795074289739.795,
+          "last_ms": 1795074289712.392,
+          "name": "node",
+          "pid": 57789
+        },
+        {
+          "first_ms": 1795074288662.452,
+          "gone_ms": 1795074289739.795,
+          "last_ms": 1795074289712.392,
+          "name": "node",
+          "pid": 57790
+        },
+        {
+          "first_ms": 1795074289739.795,
+          "gone_ms": 1795074289769.311,
+          "last_ms": 1795074289739.795,
+          "name": "bash",
+          "pid": 57825
+        },
+        {
+          "first_ms": 1795074289739.795,
+          "gone_ms": 1795074289769.311,
+          "last_ms": 1795074289739.795,
+          "name": "pgrep",
+          "pid": 57826
+        }
+      ],
+      "running": null,
+      "shutdown": {
+        "signals": []
+      },
+      "starting_epoch_ms": 1795074288477.0
+    },
+    {
+      "adapter": "js-debug",
+      "adapter_path": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/dap-adapters/data/tools/js-debug-adapter/v1.140.0/pitwall-bin/js-debug-adapter",
+      "app_pid": 57971,
+      "cold_start_ms": 537.626953125,
+      "ended": {
+        "endedEpochMs": 1795074303653,
+        "epochMs": 1795074303605,
+        "how": "stopped"
+      },
+      "ending": "stop",
+      "error": null,
+      "excluded": "window hidden",
+      "index": 9,
+      "judgement": {
+        "all_gone_after_end_ms": 1276.0,
+        "before_start": 0,
+        "pass": true,
+        "session_processes": [
+          {
+            "name": "node",
+            "pid": 58082
+          },
+          {
+            "name": "node",
+            "pid": 58083
+          },
+          {
+            "name": "node",
+            "pid": 58096
+          },
+          {
+            "name": "node",
+            "pid": 58098
+          },
+          {
+            "name": "node",
+            "pid": 58099
+          },
+          {
+            "name": "bash",
+            "pid": 58218
+          },
+          {
+            "name": "pgrep",
+            "pid": 58219
+          }
+        ],
+        "still_alive": false
+      },
+      "load1_end": 2.59,
+      "load1_start": 2.33,
+      "processes": [
+        {
+          "first_ms": 1795074295887.684,
+          "gone_ms": 1795074296066.4612,
+          "last_ms": 1795074296035.79,
+          "name": "zsh",
+          "pid": 57978
+        },
+        {
+          "first_ms": 1795074295977.068,
+          "gone_ms": 1795074296005.047,
+          "last_ms": 1795074295977.068,
+          "name": "git",
+          "pid": 57990
+        },
+        {
+          "first_ms": 1795074296005.047,
+          "gone_ms": 1795074296035.79,
+          "last_ms": 1795074296005.047,
+          "name": "zsh",
+          "pid": 57991
+        },
+        {
+          "first_ms": 1795074296005.047,
+          "gone_ms": 1795074296035.79,
+          "last_ms": 1795074296005.047,
+          "name": "docker",
+          "pid": 57998
+        },
+        {
+          "first_ms": 1795074296005.047,
+          "gone_ms": 1795074296035.79,
+          "last_ms": 1795074296005.047,
+          "name": "?",
+          "pid": 58002
+        },
+        {
+          "first_ms": 1795074296035.79,
+          "gone_ms": 1795074296066.4612,
+          "last_ms": 1795074296035.79,
+          "name": "mise",
+          "pid": 58004
+        },
+        {
+          "first_ms": 1795074298988.117,
+          "gone_ms": 1795074299017.997,
+          "last_ms": 1795074298988.117,
+          "name": "node",
+          "pid": 58082
+        },
+        {
+          "first_ms": 1795074299044.925,
+          "gone_ms": 1795074304881.0388,
+          "last_ms": 1795074304849.844,
+          "name": "node",
+          "pid": 58083
+        },
+        {
+          "first_ms": 1795074299153.298,
+          "gone_ms": 1795074299184.042,
+          "last_ms": 1795074299153.298,
+          "name": "node",
+          "pid": 58096
+        },
+        {
+          "first_ms": 1795074299184.042,
+          "gone_ms": 1795074303661.376,
+          "last_ms": 1795074303630.2742,
+          "name": "node",
+          "pid": 58098
+        },
+        {
+          "first_ms": 1795074299213.327,
+          "gone_ms": 1795074303630.2742,
+          "last_ms": 1795074303599.668,
+          "name": "node",
+          "pid": 58099
+        },
+        {
+          "first_ms": 1795074303630.2742,
+          "gone_ms": 1795074303661.376,
+          "last_ms": 1795074303630.2742,
+          "name": "bash",
+          "pid": 58218
+        },
+        {
+          "first_ms": 1795074303630.2742,
+          "gone_ms": 1795074303661.376,
+          "last_ms": 1795074303630.2742,
+          "name": "pgrep",
+          "pid": 58219
+        }
+      ],
+      "running": null,
+      "shutdown": {
+        "signals": []
+      },
+      "starting_epoch_ms": 1795074298979.0
+    },
+    {
+      "adapter": "js-debug",
+      "adapter_path": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/dap-adapters/data/tools/js-debug-adapter/v1.140.0/pitwall-bin/js-debug-adapter",
+      "app_pid": 58532,
+      "cold_start_ms": 558.5849609375,
+      "ended": {
+        "endedEpochMs": 1795074317220,
+        "epochMs": 1795074317169,
+        "how": "stopped"
+      },
+      "ending": "stop",
+      "error": null,
+      "excluded": "window hidden",
+      "index": 10,
+      "judgement": {
+        "all_gone_after_end_ms": 1276.4,
+        "before_start": 0,
+        "pass": true,
+        "session_processes": [
+          {
+            "name": "node",
+            "pid": 58666
+          },
+          {
+            "name": "node",
+            "pid": 58667
+          },
+          {
+            "name": "node",
+            "pid": 58671
+          },
+          {
+            "name": "node",
+            "pid": 58683
+          },
+          {
+            "name": "bash",
+            "pid": 58825
+          },
+          {
+            "name": "pgrep",
+            "pid": 58826
+          }
+        ],
+        "still_alive": false
+      },
+      "load1_end": 2.65,
+      "load1_start": 2.59,
+      "processes": [
+        {
+          "first_ms": 1795074309503.687,
+          "gone_ms": 1795074309684.294,
+          "last_ms": 1795074309653.166,
+          "name": "zsh",
+          "pid": 58540
+        },
+        {
+          "first_ms": 1795074309503.687,
+          "gone_ms": 1795074309534.6938,
+          "last_ms": 1795074309503.687,
+          "name": "bash",
+          "pid": 58542
+        },
+        {
+          "first_ms": 1795074309562.416,
+          "gone_ms": 1795074309592.197,
+          "last_ms": 1795074309562.416,
+          "name": "?",
+          "pid": 58550
+        },
+        {
+          "first_ms": 1795074309592.197,
+          "gone_ms": 1795074309622.0269,
+          "last_ms": 1795074309592.197,
+          "name": "git",
+          "pid": 58552
+        },
+        {
+          "first_ms": 1795074309622.0269,
+          "gone_ms": 1795074309653.166,
+          "last_ms": 1795074309622.0269,
+          "name": "zsh",
+          "pid": 58553
+        },
+        {
+          "first_ms": 1795074309622.0269,
+          "gone_ms": 1795074309653.166,
+          "last_ms": 1795074309622.0269,
+          "name": "docker",
+          "pid": 58563
+        },
+        {
+          "first_ms": 1795074309653.166,
+          "gone_ms": 1795074309684.294,
+          "last_ms": 1795074309653.166,
+          "name": "mise",
+          "pid": 58567
+        },
+        {
+          "first_ms": 1795074312511.986,
+          "gone_ms": 1795074312542.9248,
+          "last_ms": 1795074312511.986,
+          "name": "node",
+          "pid": 58666
+        },
+        {
+          "first_ms": 1795074312542.9248,
+          "gone_ms": 1795074318445.385,
+          "last_ms": 1795074318412.848,
+          "name": "node",
+          "pid": 58667
+        },
+        {
+          "first_ms": 1795074312665.4912,
+          "gone_ms": 1795074317229.774,
+          "last_ms": 1795074317199.95,
+          "name": "node",
+          "pid": 58671
+        },
+        {
+          "first_ms": 1795074312706.394,
+          "gone_ms": 1795074317199.95,
+          "last_ms": 1795074317169.035,
+          "name": "node",
+          "pid": 58683
+        },
+        {
+          "first_ms": 1795074317199.95,
+          "gone_ms": 1795074317229.774,
+          "last_ms": 1795074317199.95,
+          "name": "bash",
+          "pid": 58825
+        },
+        {
+          "first_ms": 1795074317199.95,
+          "gone_ms": 1795074317229.774,
+          "last_ms": 1795074317199.95,
+          "name": "pgrep",
+          "pid": 58826
+        }
+      ],
+      "running": null,
+      "shutdown": {
+        "signals": []
+      },
+      "starting_epoch_ms": 1795074312479.0
+    },
+    {
+      "adapter": "js-debug",
+      "adapter_path": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/dap-adapters/data/tools/js-debug-adapter/v1.140.0/pitwall-bin/js-debug-adapter",
+      "app_pid": 59113,
+      "cold_start_ms": 650.81689453125,
+      "ended": {
+        "endedEpochMs": 1795074330916,
+        "epochMs": 1795074330871,
+        "how": "stopped"
+      },
+      "ending": "stop",
+      "error": null,
+      "excluded": "window hidden",
+      "index": 11,
+      "judgement": {
+        "all_gone_after_end_ms": 1265.1,
+        "before_start": 0,
+        "pass": true,
+        "session_processes": [
+          {
+            "name": "node",
+            "pid": 59266
+          },
+          {
+            "name": "node",
+            "pid": 59267
+          },
+          {
+            "name": "node",
+            "pid": 59269
+          },
+          {
+            "name": "node",
+            "pid": 59271
+          },
+          {
+            "name": "node",
+            "pid": 59283
+          },
+          {
+            "name": "bash",
+            "pid": 59417
+          },
+          {
+            "name": "bash",
+            "pid": 59418
+          }
+        ],
+        "still_alive": false
+      },
+      "load1_end": 3.73,
+      "load1_start": 2.65,
+      "processes": [
+        {
+          "first_ms": 1795074323232.1738,
+          "gone_ms": 1795074323405.562,
+          "last_ms": 1795074323379.244,
+          "name": "zsh",
+          "pid": 59129
+        },
+        {
+          "first_ms": 1795074323232.1738,
+          "gone_ms": 1795074323263.583,
+          "last_ms": 1795074323232.1738,
+          "name": "bash",
+          "pid": 59131
+        },
+        {
+          "first_ms": 1795074323295.656,
+          "gone_ms": 1795074323322.109,
+          "last_ms": 1795074323295.656,
+          "name": "?",
+          "pid": 59141
+        },
+        {
+          "first_ms": 1795074323322.109,
+          "gone_ms": 1795074323348.224,
+          "last_ms": 1795074323322.109,
+          "name": "git",
+          "pid": 59143
+        },
+        {
+          "first_ms": 1795074323348.224,
+          "gone_ms": 1795074323379.244,
+          "last_ms": 1795074323348.224,
+          "name": "zsh",
+          "pid": 59145
+        },
+        {
+          "first_ms": 1795074323348.224,
+          "gone_ms": 1795074323379.244,
+          "last_ms": 1795074323348.224,
+          "name": "docker",
+          "pid": 59155
+        },
+        {
+          "first_ms": 1795074323348.224,
+          "gone_ms": 1795074323379.244,
+          "last_ms": 1795074323348.224,
+          "name": "?",
+          "pid": 59156
+        },
+        {
+          "first_ms": 1795074323379.244,
+          "gone_ms": 1795074323405.562,
+          "last_ms": 1795074323379.244,
+          "name": "mise",
+          "pid": 59161
+        },
+        {
+          "first_ms": 1795074326256.304,
+          "gone_ms": 1795074326284.7742,
+          "last_ms": 1795074326256.304,
+          "name": "node",
+          "pid": 59266
+        },
+        {
+          "first_ms": 1795074326284.7742,
+          "gone_ms": 1795074332136.068,
+          "last_ms": 1795074332103.776,
+          "name": "node",
+          "pid": 59267
+        },
+        {
+          "first_ms": 1795074326372.613,
+          "gone_ms": 1795074326403.511,
+          "last_ms": 1795074326372.613,
+          "name": "node",
+          "pid": 59269
+        },
+        {
+          "first_ms": 1795074326403.511,
+          "gone_ms": 1795074330915.814,
+          "last_ms": 1795074330884.716,
+          "name": "node",
+          "pid": 59271
+        },
+        {
+          "first_ms": 1795074326447.715,
+          "gone_ms": 1795074330884.716,
+          "last_ms": 1795074330856.934,
+          "name": "node",
+          "pid": 59283
+        },
+        {
+          "first_ms": 1795074330884.716,
+          "gone_ms": 1795074330915.814,
+          "last_ms": 1795074330884.716,
+          "name": "bash",
+          "pid": 59417
+        },
+        {
+          "first_ms": 1795074330884.716,
+          "gone_ms": 1795074330915.814,
+          "last_ms": 1795074330884.716,
+          "name": "bash",
+          "pid": 59418
+        }
+      ],
+      "running": null,
+      "shutdown": {
+        "signals": []
+      },
+      "starting_epoch_ms": 1795074326249.0
+    },
+    {
+      "adapter": "debugpy",
+      "adapter_path": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/dap-adapters/data/tools/debugpy/1.8.22/pitwall-bin/debugpy-adapter",
+      "app_pid": 59567,
+      "cold_start_ms": 527.325927734375,
+      "ended": {
+        "epochMs": 1795074341760,
+        "how": "exited"
+      },
+      "ending": "exit",
+      "error": null,
+      "excluded": "window hidden",
+      "index": 12,
+      "judgement": {
+        "all_gone_after_end_ms": 16.3,
+        "before_start": 0,
+        "pass": true,
+        "session_processes": [
+          {
+            "name": "python3.14",
+            "pid": 59676
+          },
+          {
+            "name": "python3.14",
+            "pid": 59679
+          },
+          {
+            "name": "python3.14",
+            "pid": 59682
+          },
+          {
+            "name": "python3.14",
+            "pid": 59704
+          }
+        ],
+        "still_alive": false
+      },
+      "load1_end": 3.62,
+      "load1_start": 3.73,
+      "processes": [
+        {
+          "first_ms": 1795074336828.728,
+          "gone_ms": 1795074336979.039,
+          "last_ms": 1795074336948.314,
+          "name": "zsh",
+          "pid": 59573
+        },
+        {
+          "first_ms": 1795074336886.543,
+          "gone_ms": 1795074336917.702,
+          "last_ms": 1795074336886.543,
+          "name": "zsh",
+          "pid": 59587
+        },
+        {
+          "first_ms": 1795074336886.543,
+          "gone_ms": 1795074336917.702,
+          "last_ms": 1795074336886.543,
+          "name": "docker",
+          "pid": 59588
+        },
+        {
+          "first_ms": 1795074336886.543,
+          "gone_ms": 1795074336917.702,
+          "last_ms": 1795074336886.543,
+          "name": "?",
+          "pid": 59589
+        },
+        {
+          "first_ms": 1795074336948.314,
+          "gone_ms": 1795074336979.039,
+          "last_ms": 1795074336948.314,
+          "name": "mise",
+          "pid": 59600
+        },
+        {
+          "first_ms": 1795074339861.168,
+          "gone_ms": 1795074341776.27,
+          "last_ms": 1795074341745.375,
+          "name": "python3.14",
+          "pid": 59676
+        },
+        {
+          "first_ms": 1795074339974.637,
+          "gone_ms": 1795074341776.27,
+          "last_ms": 1795074341745.375,
+          "name": "python3.14",
+          "pid": 59679
+        },
+        {
+          "first_ms": 1795074340005.268,
+          "gone_ms": 1795074341776.27,
+          "last_ms": 1795074341745.375,
+          "name": "python3.14",
+          "pid": 59682
+        },
+        {
+          "first_ms": 1795074340077.644,
+          "gone_ms": 1795074340105.85,
+          "last_ms": 1795074340077.644,
+          "name": "python3.14",
+          "pid": 59704
+        }
+      ],
+      "running": null,
+      "shutdown": {
+        "signals": []
+      },
+      "starting_epoch_ms": 1795074339825.0
+    },
+    {
+      "adapter": "debugpy",
+      "adapter_path": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/dap-adapters/data/tools/debugpy/1.8.22/pitwall-bin/debugpy-adapter",
+      "app_pid": 60028,
+      "cold_start_ms": 548.679931640625,
+      "ended": {
+        "epochMs": 1795074352805,
+        "how": "exited"
+      },
+      "ending": "exit",
+      "error": null,
+      "excluded": "window hidden",
+      "index": 13,
+      "judgement": {
+        "all_gone_after_end_ms": 6.2,
+        "before_start": 0,
+        "pass": true,
+        "session_processes": [
+          {
+            "name": "python3.14",
+            "pid": 60236
+          },
+          {
+            "name": "python3.14",
+            "pid": 60237
+          },
+          {
+            "name": "?",
+            "pid": 60238
+          },
+          {
+            "name": "python3.14",
+            "pid": 60251
+          },
+          {
+            "name": "python3.14",
+            "pid": 60255
+          }
+        ],
+        "still_alive": false
+      },
+      "load1_end": 3.24,
+      "load1_start": 3.62,
+      "processes": [
+        {
+          "first_ms": 1795074347841.824,
+          "gone_ms": 1795074348019.188,
+          "last_ms": 1795074347988.494,
+          "name": "zsh",
+          "pid": 60051
+        },
+        {
+          "first_ms": 1795074347901.236,
+          "gone_ms": 1795074347931.849,
+          "last_ms": 1795074347901.236,
+          "name": "?",
+          "pid": 60063
+        },
+        {
+          "first_ms": 1795074347931.849,
+          "gone_ms": 1795074347959.026,
+          "last_ms": 1795074347931.849,
+          "name": "git",
+          "pid": 60065
+        },
+        {
+          "first_ms": 1795074347959.026,
+          "gone_ms": 1795074347988.494,
+          "last_ms": 1795074347959.026,
+          "name": "zsh",
+          "pid": 60066
+        },
+        {
+          "first_ms": 1795074347959.026,
+          "gone_ms": 1795074347988.494,
+          "last_ms": 1795074347959.026,
+          "name": "zsh",
+          "pid": 60072
+        },
+        {
+          "first_ms": 1795074347959.026,
+          "gone_ms": 1795074347988.494,
+          "last_ms": 1795074347959.026,
+          "name": "docker",
+          "pid": 60073
+        },
+        {
+          "first_ms": 1795074347959.026,
+          "gone_ms": 1795074347988.494,
+          "last_ms": 1795074347959.026,
+          "name": "ssh-keygen",
+          "pid": 60074
+        },
+        {
+          "first_ms": 1795074347959.026,
+          "gone_ms": 1795074347988.494,
+          "last_ms": 1795074347959.026,
+          "name": "awk",
+          "pid": 60075
+        },
+        {
+          "first_ms": 1795074347988.494,
+          "gone_ms": 1795074348019.188,
+          "last_ms": 1795074347988.494,
+          "name": "mise",
+          "pid": 60079
+        },
+        {
+          "first_ms": 1795074350946.6,
+          "gone_ms": 1795074350978.544,
+          "last_ms": 1795074350946.6,
+          "name": "python3.14",
+          "pid": 60236
+        },
+        {
+          "first_ms": 1795074350978.544,
+          "gone_ms": 1795074352811.2258,
+          "last_ms": 1795074352779.438,
+          "name": "python3.14",
+          "pid": 60237
+        },
+        {
+          "first_ms": 1795074351009.4668,
+          "gone_ms": 1795074351056.3208,
+          "last_ms": 1795074351009.4668,
+          "name": "?",
+          "pid": 60238
+        },
+        {
+          "first_ms": 1795074351056.3208,
+          "gone_ms": 1795074352811.2258,
+          "last_ms": 1795074352779.438,
+          "name": "python3.14",
+          "pid": 60251
+        },
+        {
+          "first_ms": 1795074351087.066,
+          "gone_ms": 1795074352811.2258,
+          "last_ms": 1795074352779.438,
+          "name": "python3.14",
+          "pid": 60255
+        }
+      ],
+      "running": null,
+      "shutdown": {
+        "signals": []
+      },
+      "starting_epoch_ms": 1795074350934.0
+    },
+    {
+      "adapter": "debugpy",
+      "adapter_path": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/dap-adapters/data/tools/debugpy/1.8.22/pitwall-bin/debugpy-adapter",
+      "app_pid": 60447,
+      "cold_start_ms": 558.218994140625,
+      "ended": {
+        "epochMs": 1795074363884,
+        "how": "exited"
+      },
+      "ending": "exit",
+      "error": null,
+      "excluded": "window hidden",
+      "index": 14,
+      "judgement": {
+        "all_gone_after_end_ms": 0.9,
+        "before_start": 0,
+        "pass": true,
+        "session_processes": [
+          {
+            "name": "bash",
+            "pid": 60583
+          },
+          {
+            "name": "python3.14",
+            "pid": 60586
+          },
+          {
+            "name": "python3.14",
+            "pid": 60589
+          }
+        ],
+        "still_alive": false
+      },
+      "load1_end": 3.05,
+      "load1_start": 3.24,
+      "processes": [
+        {
+          "first_ms": 1795074359018.942,
+          "gone_ms": 1795074359348.877,
+          "last_ms": 1795074359319.661,
+          "name": "zsh",
+          "pid": 60454
+        },
+        {
+          "first_ms": 1795074359018.942,
+          "gone_ms": 1795074359048.8,
+          "last_ms": 1795074359018.942,
+          "name": "env",
+          "pid": 60456
+        },
+        {
+          "first_ms": 1795074359137.795,
+          "gone_ms": 1795074359168.5232,
+          "last_ms": 1795074359137.795,
+          "name": "?",
+          "pid": 60475
+        },
+        {
+          "first_ms": 1795074359289.0798,
+          "gone_ms": 1795074359319.661,
+          "last_ms": 1795074359289.0798,
+          "name": "git",
+          "pid": 60487
+        },
+        {
+          "first_ms": 1795074362030.126,
+          "gone_ms": 1795074363884.882,
+          "last_ms": 1795074363856.432,
+          "name": "bash",
+          "pid": 60583
+        },
+        {
+          "first_ms": 1795074362118.4338,
+          "gone_ms": 1795074363884.882,
+          "last_ms": 1795074363856.432,
+          "name": "python3.14",
+          "pid": 60586
+        },
+        {
+          "first_ms": 1795074362145.668,
+          "gone_ms": 1795074363884.882,
+          "last_ms": 1795074363856.432,
+          "name": "python3.14",
+          "pid": 60589
+        }
+      ],
+      "running": null,
+      "shutdown": {
+        "signals": []
+      },
+      "starting_epoch_ms": 1795074362008.0
+    },
+    {
+      "adapter": "debugpy",
+      "adapter_path": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/dap-adapters/data/tools/debugpy/1.8.22/pitwall-bin/debugpy-adapter",
+      "app_pid": 60951,
+      "cold_start_ms": 574.416015625,
+      "ended": {
+        "endedEpochMs": 1795074376815,
+        "epochMs": 1795074376799,
+        "how": "stopped"
+      },
+      "ending": "stop",
+      "error": null,
+      "excluded": "window hidden",
+      "index": 15,
+      "judgement": {
+        "all_gone_after_end_ms": 27.8,
+        "before_start": 0,
+        "pass": true,
+        "session_processes": [
+          {
+            "name": "python3.14",
+            "pid": 61094
+          },
+          {
+            "name": "python3.14",
+            "pid": 61095
+          },
+          {
+            "name": "python3.14",
+            "pid": 61097
+          },
+          {
+            "name": "python3.14",
+            "pid": 61098
+          },
+          {
+            "name": "python3.14",
+            "pid": 61100
+          },
+          {
+            "name": "python3.14",
+            "pid": 61101
+          }
+        ],
+        "still_alive": false
+      },
+      "load1_end": 3.03,
+      "load1_start": 3.05,
+      "processes": [
+        {
+          "first_ms": 1795074369745.652,
+          "gone_ms": 1795074369925.411,
+          "last_ms": 1795074369894.6309,
+          "name": "zsh",
+          "pid": 60958
+        },
+        {
+          "first_ms": 1795074369745.652,
+          "gone_ms": 1795074369774.734,
+          "last_ms": 1795074369745.652,
+          "name": "bash",
+          "pid": 60960
+        },
+        {
+          "first_ms": 1795074369832.45,
+          "gone_ms": 1795074369863.901,
+          "last_ms": 1795074369832.45,
+          "name": "git",
+          "pid": 60970
+        },
+        {
+          "first_ms": 1795074369863.901,
+          "gone_ms": 1795074369894.6309,
+          "last_ms": 1795074369863.901,
+          "name": "?",
+          "pid": 60971
+        },
+        {
+          "first_ms": 1795074369894.6309,
+          "gone_ms": 1795074369925.411,
+          "last_ms": 1795074369894.6309,
+          "name": "mise",
+          "pid": 60985
+        },
+        {
+          "first_ms": 1795074372738.0422,
+          "gone_ms": 1795074372764.2642,
+          "last_ms": 1795074372738.0422,
+          "name": "python3.14",
+          "pid": 61094
+        },
+        {
+          "first_ms": 1795074372764.2642,
+          "gone_ms": 1795074376826.825,
+          "last_ms": 1795074376797.6128,
+          "name": "python3.14",
+          "pid": 61095
+        },
+        {
+          "first_ms": 1795074372791.6602,
+          "gone_ms": 1795074372818.82,
+          "last_ms": 1795074372791.6602,
+          "name": "python3.14",
+          "pid": 61097
+        },
+        {
+          "first_ms": 1795074372818.82,
+          "gone_ms": 1795074376826.825,
+          "last_ms": 1795074376797.6128,
+          "name": "python3.14",
+          "pid": 61098
+        },
+        {
+          "first_ms": 1795074372847.709,
+          "gone_ms": 1795074372878.756,
+          "last_ms": 1795074372847.709,
+          "name": "python3.14",
+          "pid": 61100
+        },
+        {
+          "first_ms": 1795074372878.756,
+          "gone_ms": 1795074376826.825,
+          "last_ms": 1795074376797.6128,
+          "name": "python3.14",
+          "pid": 61101
+        }
+      ],
+      "running": null,
+      "shutdown": {
+        "signals": []
+      },
+      "starting_epoch_ms": 1795074372728.0
+    },
+    {
+      "adapter": "debugpy",
+      "adapter_path": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/dap-adapters/data/tools/debugpy/1.8.22/pitwall-bin/debugpy-adapter",
+      "app_pid": 61400,
+      "cold_start_ms": 566.655029296875,
+      "ended": {
+        "endedEpochMs": 1795074390443,
+        "epochMs": 1795074390417,
+        "how": "stopped"
+      },
+      "ending": "stop",
+      "error": null,
+      "excluded": "window hidden",
+      "index": 16,
+      "judgement": {
+        "all_gone_after_end_ms": 45.4,
+        "before_start": 0,
+        "pass": true,
+        "session_processes": [
+          {
+            "name": "bash",
+            "pid": 61610
+          },
+          {
+            "name": "python3.14",
+            "pid": 61617
+          },
+          {
+            "name": "python3.14",
+            "pid": 61621
+          }
+        ],
+        "still_alive": false
+      },
+      "load1_end": 4.12,
+      "load1_start": 3.03,
+      "processes": [
+        {
+          "first_ms": 1795074382659.8042,
+          "gone_ms": 1795074382824.753,
+          "last_ms": 1795074382798.34,
+          "name": "zsh",
+          "pid": 61429
+        },
+        {
+          "first_ms": 1795074382686.412,
+          "gone_ms": 1795074382714.072,
+          "last_ms": 1795074382686.412,
+          "name": "?",
+          "pid": 61437
+        },
+        {
+          "first_ms": 1795074382768.063,
+          "gone_ms": 1795074382798.34,
+          "last_ms": 1795074382768.063,
+          "name": "zsh",
+          "pid": 61442
+        },
+        {
+          "first_ms": 1795074382768.063,
+          "gone_ms": 1795074382798.34,
+          "last_ms": 1795074382768.063,
+          "name": "docker",
+          "pid": 61443
+        },
+        {
+          "first_ms": 1795074382768.063,
+          "gone_ms": 1795074382798.34,
+          "last_ms": 1795074382768.063,
+          "name": "zsh",
+          "pid": 61445
+        },
+        {
+          "first_ms": 1795074382768.063,
+          "gone_ms": 1795074382798.34,
+          "last_ms": 1795074382768.063,
+          "name": "ssh-keygen",
+          "pid": 61446
+        },
+        {
+          "first_ms": 1795074382768.063,
+          "gone_ms": 1795074382798.34,
+          "last_ms": 1795074382768.063,
+          "name": "awk",
+          "pid": 61447
+        },
+        {
+          "first_ms": 1795074382798.34,
+          "gone_ms": 1795074382824.753,
+          "last_ms": 1795074382798.34,
+          "name": "mise",
+          "pid": 61454
+        },
+        {
+          "first_ms": 1795074385651.76,
+          "gone_ms": 1795074390462.428,
+          "last_ms": 1795074390434.8271,
+          "name": "bash",
+          "pid": 61610
+        },
+        {
+          "first_ms": 1795074385739.9531,
+          "gone_ms": 1795074390462.428,
+          "last_ms": 1795074390434.8271,
+          "name": "python3.14",
+          "pid": 61617
+        },
+        {
+          "first_ms": 1795074385796.749,
+          "gone_ms": 1795074390434.8271,
+          "last_ms": 1795074390402.7031,
+          "name": "python3.14",
+          "pid": 61621
+        }
+      ],
+      "running": null,
+      "shutdown": {
+        "signals": []
+      },
+      "starting_epoch_ms": 1795074385632.0
+    },
+    {
+      "adapter": "debugpy",
+      "adapter_path": "/Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/dap-adapters/data/tools/debugpy/1.8.22/pitwall-bin/debugpy-adapter",
+      "app_pid": 62224,
+      "cold_start_ms": 588.4990234375,
+      "ended": {
+        "endedEpochMs": 1795074403496,
+        "epochMs": 1795074403480,
+        "how": "stopped"
+      },
+      "ending": "stop",
+      "error": null,
+      "excluded": "window hidden",
+      "index": 17,
+      "judgement": {
+        "all_gone_after_end_ms": 29.5,
+        "before_start": 0,
+        "pass": true,
+        "session_processes": [
+          {
+            "name": "python3.14",
+            "pid": 62418
+          },
+          {
+            "name": "python3.14",
+            "pid": 62419
+          },
+          {
+            "name": "python3.14",
+            "pid": 62421
+          },
+          {
+            "name": "python3.14",
+            "pid": 62424
+          }
+        ],
+        "still_alive": false
+      },
+      "load1_end": 9.23,
+      "load1_start": 4.12,
+      "processes": [
+        {
+          "first_ms": 1795074396435.8188,
+          "gone_ms": 1795074396612.956,
+          "last_ms": 1795074396586.427,
+          "name": "zsh",
+          "pid": 62239
+        },
+        {
+          "first_ms": 1795074396435.8188,
+          "gone_ms": 1795074396466.307,
+          "last_ms": 1795074396435.8188,
+          "name": "bash",
+          "pid": 62241
+        },
+        {
+          "first_ms": 1795074396529.143,
+          "gone_ms": 1795074396558.0872,
+          "last_ms": 1795074396529.143,
+          "name": "git",
+          "pid": 62265
+        },
+        {
+          "first_ms": 1795074396558.0872,
+          "gone_ms": 1795074396586.427,
+          "last_ms": 1795074396558.0872,
+          "name": "zsh",
+          "pid": 62267
+        },
+        {
+          "first_ms": 1795074396558.0872,
+          "gone_ms": 1795074396586.427,
+          "last_ms": 1795074396558.0872,
+          "name": "docker",
+          "pid": 62281
+        },
+        {
+          "first_ms": 1795074396586.427,
+          "gone_ms": 1795074396612.956,
+          "last_ms": 1795074396586.427,
+          "name": "mise",
+          "pid": 62283
+        },
+        {
+          "first_ms": 1795074399433.85,
+          "gone_ms": 1795074403509.5068,
+          "last_ms": 1795074403482.26,
+          "name": "python3.14",
+          "pid": 62418
+        },
+        {
+          "first_ms": 1795074399464.731,
+          "gone_ms": 1795074399495.688,
+          "last_ms": 1795074399464.731,
+          "name": "python3.14",
+          "pid": 62419
+        },
+        {
+          "first_ms": 1795074399495.688,
+          "gone_ms": 1795074403509.5068,
+          "last_ms": 1795074403482.26,
+          "name": "python3.14",
+          "pid": 62421
+        },
+        {
+          "first_ms": 1795074399552.541,
+          "gone_ms": 1795074403482.26,
+          "last_ms": 1795074403450.501,
+          "name": "python3.14",
+          "pid": 62424
+        }
+      ],
+      "running": null,
+      "shutdown": {
+        "signals": []
+      },
+      "starting_epoch_ms": 1795074399410.0
+    }
+  ],
+  "schema": "pitwall-perf-m6/1",
+  "summary": {
+    "codelldb / exit": {
+      "gone_after_end_ms": {
+        "max": 22.8,
+        "median": 21.1,
+        "min": 16.5,
+        "n": 3
+      },
+      "pass": true,
+      "runs": 3
+    },
+    "codelldb / stop": {
+      "gone_after_end_ms": {
+        "max": 162.0,
+        "median": 154.6,
+        "min": 152.0,
+        "n": 3
+      },
+      "pass": true,
+      "runs": 3
+    },
+    "debugpy / exit": {
+      "gone_after_end_ms": {
+        "max": 16.3,
+        "median": 6.2,
+        "min": 0.9,
+        "n": 3
+      },
+      "pass": true,
+      "runs": 3
+    },
+    "debugpy / stop": {
+      "gone_after_end_ms": {
+        "max": 45.4,
+        "median": 29.5,
+        "min": 27.8,
+        "n": 3
+      },
+      "pass": true,
+      "runs": 3
+    },
+    "js-debug / exit": {
+      "gone_after_end_ms": {
+        "max": 1254.8,
+        "median": 1254.7,
+        "min": 1252.8,
+        "n": 3
+      },
+      "pass": true,
+      "runs": 3
+    },
+    "js-debug / stop": {
+      "gone_after_end_ms": {
+        "max": 1276.4,
+        "median": 1276.0,
+        "min": 1265.1,
+        "n": 3
+      },
+      "pass": true,
+      "runs": 3
+    }
+  }
+}

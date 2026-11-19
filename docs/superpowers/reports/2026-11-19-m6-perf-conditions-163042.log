@@ -1,0 +1,291 @@
+ProductName:		macOS
+ProductVersion:		27.2.1
+BuildVersion:		26B131
+2b1754942eaeaee74d10f1a18030be83ec5efd46
+       0
+== empty 2026-11-19 16:30:51
+{ 8.70 8.40 8.86 }
+"HIDIdleTime" = 1551846375
+ 30.2 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+ 13.8 /Users/jang2162/.local/bin/claude
+ 11.1 /Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)
+  7.2 /Applications/Orca.app/Contents/MacOS/Orca
+  6.0 /Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper
+  5.2 /Applications/Orca.app/Contents/Frameworks/Orca Helper (Renderer).app/Contents/MacOS/Orca Helper (Renderer)
+          Resolution: 2560 x 1440 (QHD/WQHD - Wide Quad High Definition)
+          Main Display: Yes
+          Online: Yes
+          Resolution: 2560 x 1440 (QHD/WQHD - Wide Quad High Definition)
+          Online: Yes
+pw-perf: caffeinate 33686 keeps the display and the system awake while measuring
+pw-perf: /Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/release/perf-m6/Pitwall.app/Contents/MacOS/pitwall (1 warm-up + 5 measured; each opens one project window) → /Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/perf/m6-empty-2026-11-19-163042-try1
+pw-perf: run 0 (warm-up): cold start 1648 ms, idle footprint 224.7 MB (6 processes)
+pw-perf: run 1 (excluded: window hidden before the idle sample): cold start 509 ms, idle footprint 256.8 MB (6 processes)
+pw-perf: run 2 (excluded: window hidden before the idle sample): cold start 510 ms, idle footprint 297.7 MB (6 processes)
+pw-perf: run 3 (excluded: window hidden before the idle sample): cold start 512 ms, idle footprint 225.4 MB (6 processes)
+pw-perf: run 4 (excluded: window hidden before the idle sample): cold start 499 ms, idle footprint 295.7 MB (6 processes)
+pw-perf: run 5: cold start 505 ms, idle footprint 226.5 MB (6 processes)
+## Pitwall performance baseline
+
+> **Warning:** only 1 of 5 measured runs are valid (the rest were excluded or failed — see the runs and failed runs); the medians are not a baseline — rerun with the project window unobscured.
+
+- build: release (`/Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/release/perf-m6/Pitwall.app`)
+- commit: `2b1754942eaeaee74d10f1a18030be83ec5efd46`
+- os: macOS 27.2.1 (26B131)
+- hardware: Mac17,9 · Apple M5 Pro · 15 CPUs · 48 GiB
+- runs: 5 measured (1 valid, 4 excluded) + 1 warm-up · idle = 10s after the first frame · MB = 10^6 bytes
+- label: default bundle, empty project
+
+| metric | median | min – max | target |
+| --- | --- | --- | --- |
+| cold start → project window first frame | 505 ms | 505 – 505 ms | < 1500 ms (within target) |
+| idle memory (phys_footprint, app + WebKit) | 226.5 MB | 226.5 – 226.5 MB | < 300 MB (within target) |
+| idle memory (RSS, same processes; reference) | 499.7 MB | 499.7 – 499.7 MB | |
+| start → detached app process enters `main` | 104 ms | 104 – 104 ms | |
+
+| run | cold start (ms) | app main (ms) | footprint (MB) | RSS (MB) | processes |
+| --- | --- | --- | --- | --- | --- |
+| 0 (warm-up) | 1648 | 1153 | 224.7 | 506.7 | com.apple.WebKit.WebContent 129.7 · pitwall 64.8 · com.apple.WebKit.GPU 17.7 · com.apple.audio.SandboxHelper 5.5 · com.apple.WebKit.Networking 4.7 · SetStoreUpdateService 2.3 |
+| 1 (excluded: window hidden before the idle sample) | 509 | 108 | 256.8 | 462.8 | com.apple.WebKit.WebContent 161.1 · pitwall 65.2 · com.apple.WebKit.GPU 17.9 · com.apple.audio.SandboxHelper 5.5 · com.apple.WebKit.Networking 4.9 · SetStoreUpdateService 2.3 |
+| 2 (excluded: window hidden before the idle sample) | 510 | 98 | 297.7 | 499.2 | com.apple.WebKit.WebContent 202.3 · pitwall 64.6 · com.apple.WebKit.GPU 18.1 · com.apple.audio.SandboxHelper 5.5 · com.apple.WebKit.Networking 4.8 · SetStoreUpdateService 2.3 |
+| 3 (excluded: window hidden before the idle sample) | 512 | 110 | 225.4 | 502.8 | com.apple.WebKit.WebContent 130.4 · pitwall 64.9 · com.apple.WebKit.GPU 17.5 · com.apple.audio.SandboxHelper 5.5 · com.apple.WebKit.Networking 4.8 · SetStoreUpdateService 2.2 |
+| 4 (excluded: window hidden before the idle sample) | 499 | 98 | 295.7 | 499.9 | com.apple.WebKit.WebContent 201.1 · pitwall 64.5 · com.apple.WebKit.GPU 17.5 · com.apple.audio.SandboxHelper 5.5 · com.apple.WebKit.Networking 4.9 · SetStoreUpdateService 2.2 |
+| 5 | 505 | 104 | 226.5 | 499.7 | com.apple.WebKit.WebContent 131.6 · pitwall 64.1 · com.apple.WebKit.GPU 18.2 · com.apple.audio.SandboxHelper 5.5 · com.apple.WebKit.Networking 4.8 · SetStoreUpdateService 2.2 |
+
+Start: wall clock just before the harness spawns `<bundle>/Contents/MacOS/pitwall <project>` (CLI cold start of a registered project). End: the project window's `perf_first_frame` mark: second requestAnimationFrame after the first React commit, timestamped by the app on receipt. Memory: sum of phys_footprint (Activity Monitor's Memory column) over the processes whose responsible pid is the app instance (the app and the WebKit WebContent/GPU/Networking it requested); the launch is spawned with responsibility disclaimed so that this group is the instance alone; memory sampled idle_secs after the first-frame mark; a run whose window was hidden at any time before the sample, or whose screen was locked, is excluded. Cache: warm disk cache, new processes: no purge between runs; warm-up runs and excluded runs (window hidden before its first frame, screen locked) are recorded but left out of the medians.
+
+pw-perf: wrote /Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/perf/m6-empty-2026-11-19-163042-try1/result.json and /Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/perf/m6-empty-2026-11-19-163042-try1/summary.md
+pw-perf: warning: only 1 of 5 measured runs are valid (the rest were excluded or failed — see the runs and failed runs); the medians are not a baseline — rerun with the project window unobscured
+exit 3
+pw-perf: caffeinate 37362 keeps the display and the system awake while measuring
+pw-perf: /Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/release/perf-m6/Pitwall.app/Contents/MacOS/pitwall (1 warm-up + 5 measured; each opens one project window) → /Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/perf/m6-empty-2026-11-19-163042-try2
+pw-perf: run 0 (warm-up) (excluded: window hidden before the idle sample): cold start 512 ms, idle footprint 221.8 MB (6 processes)
+pw-perf: run 1 (excluded: window hidden before the idle sample): cold start 512 ms, idle footprint 252.8 MB (6 processes)
+pw-perf: run 2 (excluded: window hidden before the idle sample): cold start 531 ms, idle footprint 231.5 MB (6 processes)
+pw-perf: run 3: cold start 526 ms, idle footprint 273.6 MB (6 processes)
+pw-perf: run 4: cold start 528 ms, idle footprint 230.4 MB (6 processes)
+pw-perf: run 5: cold start 580 ms, idle footprint 228.5 MB (6 processes)
+## Pitwall performance baseline
+
+- build: release (`/Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/release/perf-m6/Pitwall.app`)
+- commit: `2b1754942eaeaee74d10f1a18030be83ec5efd46`
+- os: macOS 27.2.1 (26B131)
+- hardware: Mac17,9 · Apple M5 Pro · 15 CPUs · 48 GiB
+- runs: 5 measured (3 valid, 2 excluded) + 1 warm-up · idle = 10s after the first frame · MB = 10^6 bytes
+- label: default bundle, empty project
+
+| metric | median | min – max | target |
+| --- | --- | --- | --- |
+| cold start → project window first frame | 528 ms | 526 – 580 ms | < 1500 ms (within target) |
+| idle memory (phys_footprint, app + WebKit) | 230.4 MB | 228.5 – 273.6 MB | < 300 MB (within target) |
+| idle memory (RSS, same processes; reference) | 489.6 MB | 466.4 – 498.3 MB | |
+| start → detached app process enters `main` | 109 ms | 108 – 123 ms | |
+
+| run | cold start (ms) | app main (ms) | footprint (MB) | RSS (MB) | processes |
+| --- | --- | --- | --- | --- | --- |
+| 0 (warm-up) (excluded: window hidden before the idle sample) | 512 | 100 | 221.8 | 458.0 | com.apple.WebKit.WebContent 126.9 · pitwall 64.7 · com.apple.WebKit.GPU 17.5 · com.apple.audio.SandboxHelper 5.5 · com.apple.WebKit.Networking 4.9 · SetStoreUpdateService 2.3 |
+| 1 (excluded: window hidden before the idle sample) | 512 | 108 | 252.8 | 452.3 | com.apple.WebKit.WebContent 160.0 · pitwall 62.8 · com.apple.WebKit.GPU 17.4 · com.apple.audio.SandboxHelper 5.5 · com.apple.WebKit.Networking 4.8 · SetStoreUpdateService 2.2 |
+| 2 (excluded: window hidden before the idle sample) | 531 | 127 | 231.5 | 496.4 | com.apple.WebKit.WebContent 132.2 · pitwall 68.8 · com.apple.WebKit.GPU 17.9 · com.apple.audio.SandboxHelper 5.5 · com.apple.WebKit.Networking 4.9 · SetStoreUpdateService 2.2 |
+| 3 | 526 | 108 | 273.6 | 466.4 | com.apple.WebKit.WebContent 175.4 · pitwall 67.5 · com.apple.WebKit.GPU 18.2 · com.apple.audio.SandboxHelper 5.5 · com.apple.WebKit.Networking 4.8 · SetStoreUpdateService 2.2 |
+| 4 | 528 | 109 | 230.4 | 498.3 | com.apple.WebKit.WebContent 131.3 · pitwall 68.5 · com.apple.WebKit.GPU 18.1 · com.apple.audio.SandboxHelper 5.5 · com.apple.WebKit.Networking 4.7 · SetStoreUpdateService 2.3 |
+| 5 | 580 | 123 | 228.5 | 489.6 | com.apple.WebKit.WebContent 128.5 · pitwall 69.2 · com.apple.WebKit.GPU 18.1 · com.apple.audio.SandboxHelper 5.6 · com.apple.WebKit.Networking 4.8 · SetStoreUpdateService 2.3 |
+
+Start: wall clock just before the harness spawns `<bundle>/Contents/MacOS/pitwall <project>` (CLI cold start of a registered project). End: the project window's `perf_first_frame` mark: second requestAnimationFrame after the first React commit, timestamped by the app on receipt. Memory: sum of phys_footprint (Activity Monitor's Memory column) over the processes whose responsible pid is the app instance (the app and the WebKit WebContent/GPU/Networking it requested); the launch is spawned with responsibility disclaimed so that this group is the instance alone; memory sampled idle_secs after the first-frame mark; a run whose window was hidden at any time before the sample, or whose screen was locked, is excluded. Cache: warm disk cache, new processes: no purge between runs; warm-up runs and excluded runs (window hidden before its first frame, screen locked) are recorded but left out of the medians.
+
+pw-perf: wrote /Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/perf/m6-empty-2026-11-19-163042-try2/result.json and /Users/jang2162/IdeaProjects/pitwall/.worktrees/m6-22/target/perf/m6-empty-2026-11-19-163042-try2/summary.md
+exit 0
+== idle-procs 2026-11-19 16:34:16
+{ 1.94 5.33 7.45 }
+"HIDIdleTime" = 509717791
+ 21.2 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+ 16.4 /System/Library/Frameworks/Virtualization.framework/Versions/A/XPCServices/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine
+  6.0 /Users/jang2162/Applications/IntelliJ IDEA.app/Contents/MacOS/idea
+  2.1 /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/157.0.8103.79/Helpers/Google Chrome Helper (Aperitif Renderer).app/Contents/MacOS/Google Chrome Helper (Aperitif Renderer)
+  1.1 /Library/Internet Plug-Ins/F5 SSL VPN Plugin.plugin/Contents/Helpers/svpn
+  1.1 /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/157.0.8103.79/Helpers/Google Chrome Helper (Aperitif).app/Contents/MacOS/Google Chrome Helper (Aperitif)
+          Resolution: 2560 x 1440 (QHD/WQHD - Wide Quad High Definition)
+          Main Display: Yes
+          Online: Yes
+          Resolution: 2560 x 1440 (QHD/WQHD - Wide Quad High Definition)
+          Online: Yes
+pw-perf-m6: idle-procs run 0: cold 519 ms, idle wakeups 0.20/s, threads 25, descendants 0 (excluded)
+pw-perf-m6: idle-procs run 1: cold 576 ms, idle wakeups 0.07/s, threads 28, descendants 0 (excluded)
+pw-perf-m6: idle-procs run 2: cold 507 ms, idle wakeups 0.20/s, threads 29, descendants 0 (excluded)
+## M6 measurement: idle-procs
+
+- commit: `2b1754942eaeaee74d10f1a18030be83ec5efd46` (dirty false)
+- os: macOS 27.2.1 (26B131)
+- hardware: Mac17,9 · Apple M5 Pro · 15 CPU
+- app: `target/release/perf-m6/Pitwall.app`
+- definition: per run a fresh app on an empty untrusted project (no run configuration, no debug); from first frame + 10s for 30s: `pitwall` (the app process — the Host is in it) idle and interrupt wakeups and CPU time (rusage deltas), its threads by name, and the app's descendant processes every 1 s; 3 runs
+
+- verdict: **nothing spawned** (descendant processes 0, `run-ports` thread seen false)
+- `pitwall` idle wakeups/s **0.20** (0.07 – 0.20, n=3), interrupt wakeups/s **6.03** (5.49 – 8.56, n=3), CPU ms/s **0.46** (0.42 – 0.95, n=3), threads **28.0** (25.0 – 29.0, n=3)
+- app instance footprint **—** (— – —, n=0) MB, `pitwall` **—** (— – —, n=0) MB
+
+| Run | cold ms | idle wk/s | intr wk/s | CPU ms/s | threads | descendants | excluded |
+|---|---|---|---|---|---|---|---|
+| 0 | 519.1 | 0.20 | 5.49 | 0.42 | 25 | 0 | window hidden |
+| 1 | 576.4 | 0.07 | 6.03 | 0.46 | 28 | 0 | window hidden |
+| 2 | 506.5 | 0.20 | 8.56 | 0.95 | 29 | 0 | window hidden |
+
+Threads of `pitwall` (run 0, end of window): `(unnamed)` × 2, `Log work queue` × 1, `WebCore: Scrolling` × 1, `com.apple.NSEventThread` × 1, `main` × 1, `notify-rs fsevents loop` × 2, `pw-fs-watch` × 1, `pw-index-events` × 1, `tokio-rt-worker` × 15
+exit 3
+== idle-procs-trusted 2026-11-19 16:36:19
+{ 3.22 4.75 6.93 }
+"HIDIdleTime" = 136331375
+123.3 /usr/libexec/pboard
+ 29.1 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+ 12.6 /sbin/launchd
+ 11.8 /usr/sbin/coreaudiod
+ 11.7 /System/Library/CoreServices/MenuBarAgent.app/Contents/MacOS/MenuBarAgent
+  7.2 /Applications/Slack.app/Contents/Frameworks/Slack Helper (Renderer).app/Contents/MacOS/Slack Helper (Renderer)
+          Resolution: 2560 x 1440 (QHD/WQHD - Wide Quad High Definition)
+          Main Display: Yes
+          Online: Yes
+          Resolution: 2560 x 1440 (QHD/WQHD - Wide Quad High Definition)
+          Online: Yes
+pw-perf-m6: idle-procs run 0: cold 531 ms, idle wakeups 0.17/s, threads 26, descendants 0 (excluded)
+pw-perf-m6: idle-procs run 1: cold 511 ms, idle wakeups 0.03/s, threads 26, descendants 0 (excluded)
+pw-perf-m6: idle-procs run 2: cold 506 ms, idle wakeups 0.17/s, threads 30, descendants 0
+## M6 measurement: idle-procs
+
+- commit: `2b1754942eaeaee74d10f1a18030be83ec5efd46` (dirty false)
+- os: macOS 27.2.1 (26B131)
+- hardware: Mac17,9 · Apple M5 Pro · 15 CPU
+- app: `target/release/perf-m6/Pitwall.app`
+- definition: per run a fresh app on an empty trusted project (no run configuration, no debug); from first frame + 10s for 30s: `pitwall` (the app process — the Host is in it) idle and interrupt wakeups and CPU time (rusage deltas), its threads by name, and the app's descendant processes every 1 s; 3 runs
+
+- verdict: **nothing spawned** (descendant processes 0, `run-ports` thread seen false)
+- `pitwall` idle wakeups/s **0.17** (0.03 – 0.17, n=3), interrupt wakeups/s **7.49** (6.19 – 9.56, n=3), CPU ms/s **1.18** (0.58 – 1.44, n=3), threads **26.0** (26.0 – 30.0, n=3)
+- app instance footprint **228.3** (228.3 – 228.3, n=1) MB, `pitwall` **69.5** (69.5 – 69.5, n=1) MB
+
+| Run | cold ms | idle wk/s | intr wk/s | CPU ms/s | threads | descendants | excluded |
+|---|---|---|---|---|---|---|---|
+| 0 | 531.0 | 0.17 | 7.49 | 1.18 | 26 | 0 | window hidden |
+| 1 | 511.0 | 0.03 | 6.19 | 0.58 | 26 | 0 | window hidden |
+| 2 | 505.7 | 0.17 | 9.56 | 1.44 | 30 | 0 |  |
+
+Threads of `pitwall` (run 0, end of window): `(unnamed)` × 2, `JavaScriptCore libpas scavenger` × 1, `Log work queue` × 1, `WebCore: Scrolling` × 1, `com.apple.NSEventThread` × 1, `main` × 1, `notify-rs fsevents loop` × 2, `pw-fs-watch` × 1, `pw-index-events` × 1, `tokio-rt-worker` × 15
+exit 3
+== run-flood 2026-11-19 16:38:22
+{ 3.28 4.02 6.32 }
+"HIDIdleTime" = 97929750
+136.1 /usr/libexec/pboard
+ 39.4 /System/Library/CoreServices/MenuBarAgent.app/Contents/MacOS/MenuBarAgent
+ 30.1 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+ 10.0 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+  7.7 /System/Library/CoreServices/WindowManager.app/Contents/MacOS/WindowManager
+  6.9 /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/157.0.8103.79/Helpers/Google Chrome Helper (Aperitif Renderer).app/Contents/MacOS/Google Chrome Helper (Aperitif Renderer)
+          Resolution: 2560 x 1440 (QHD/WQHD - Wide Quad High Definition)
+          Main Display: Yes
+          Online: Yes
+          Resolution: 2560 x 1440 (QHD/WQHD - Wide Quad High Definition)
+          Online: Yes
+pw-perf-m6: run-flood run 0: frames withinVsync 1 vsync 16, Host 59.6 → 84.2 MB,  (excluded)
+pw-perf-m6: run-flood run 1: frames withinVsync 0.5 vsync 9, Host 58.8 → 87.7 MB,  (excluded)
+pw-perf-m6: run-flood run 2: frames withinVsync 0.65 vsync 17, Host 57.6 → 79.9 MB,  (excluded)
+## M6 measurement: run-flood
+
+- commit: `2b1754942eaeaee74d10f1a18030be83ec5efd46` (dirty false)
+- os: macOS 27.2.1 (26B131)
+- hardware: Mac17,9 · Apple M5 Pro · 15 CPU
+- app: `target/release/perf-m6/Pitwall.app`
+- definition: per run a fresh app on an empty trusted project with one shell run configuration `pw-perf-flood --rate 10000000 --secs 30` started from the title bar (in-app scenario run-flood); the webview measures rAF intervals for 20 s from the first console output; the driver samples `pitwall` and WebContent phys_footprint every 1 s from launch until 15s after the console caught up; Host growth = max − the last sample before `run_started`; 3 runs
+
+- console frames: withinVsync **—** (— – —, n=0) (≥ 0.95), vsyncMs **—** (— – —, n=0) (≤ 17) → **null**
+- interval p95 **—** (— – —, n=0) ms, max **—** (— – —, n=0) ms; rAF work p95 **—** (— – —, n=0) ms; longest main-thread block **—** (— – —, n=0) ms
+- written **10.0** (10.0 – 10.0, n=3) MB/s by the program; console rendered **—** (— – —, n=0) MB/s during the frame window
+- Host (`pitwall`) footprint max − before the run: **24.6** (22.4 – 28.9, n=3) MB (one live ring 8.4 MB, Host total 67.1 MB) → within the Host total **true**, within one ring + 8 MB false
+- Host after the run − before: **1.0** (-1.9 – 4.3, n=3) MB; WebContent max − before: **—** (— – —, n=0) MB
+
+| Run | withinVsync | vsync ms | p95 ms | max ms | console MB | Host base → max → after MB | notes | excluded / error |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 1.00 | 16.0 | 24.0 | 24.0 | 0.8 | 59.6 → 84.2 → 57.7 | 3 | window hidden |
+| 1 | 0.50 | 9.0 | 30.0 | 39.0 | 1.3 | 58.8 → 87.7 → 63.0 | 3 | window hidden |
+| 2 | 0.65 | 17.0 | 35.0 | 38.0 | 0.8 | 57.6 → 79.9 → 58.6 | 2 | window hidden |
+exit 3
+== debug-end 2026-11-19 16:43:09
+{ 2.23 2.85 5.10 }
+"HIDIdleTime" = 357742000
+133.3 /usr/libexec/pboard
+ 38.6 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+ 11.2 /System/Library/Frameworks/Virtualization.framework/Versions/A/XPCServices/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine
+  7.0 /System/Library/CoreServices/MenuBarAgent.app/Contents/MacOS/MenuBarAgent
+  6.9 /usr/libexec/runningboardd
+  5.3 /Users/jang2162/Applications/IntelliJ IDEA.app/Contents/MacOS/idea
+          Resolution: 2560 x 1440 (QHD/WQHD - Wide Quad High Definition)
+          Main Display: Yes
+          Online: Yes
+          Resolution: 2560 x 1440 (QHD/WQHD - Wide Quad High Definition)
+          Online: Yes
+pw-perf-m6: debug-end run 0 codelldb/exit: gone after end 16.5 ms, pass false
+pw-perf-m6: debug-end run 1 codelldb/exit: gone after end 21.1 ms, pass false
+pw-perf-m6: debug-end run 2 codelldb/exit: gone after end 22.8 ms, pass false
+pw-perf-m6: debug-end run 3 codelldb/stop: gone after end 162.0 ms, pass false
+pw-perf-m6: debug-end run 4 codelldb/stop: gone after end 152.0 ms, pass false
+pw-perf-m6: debug-end run 5 codelldb/stop: gone after end 154.6 ms, pass false
+pw-perf-m6: debug-end run 6 js-debug/exit: gone after end 1252.8 ms, pass false
+pw-perf-m6: debug-end run 7 js-debug/exit: gone after end 1254.7 ms, pass false
+pw-perf-m6: debug-end run 8 js-debug/exit: gone after end 1254.8 ms, pass false
+pw-perf-m6: debug-end run 9 js-debug/stop: gone after end 1276.0 ms, pass false
+pw-perf-m6: debug-end run 10 js-debug/stop: gone after end 1276.4 ms, pass false
+pw-perf-m6: debug-end run 11 js-debug/stop: gone after end 1265.1 ms, pass false
+pw-perf-m6: debug-end run 12 debugpy/exit: gone after end 16.3 ms, pass false
+pw-perf-m6: debug-end run 13 debugpy/exit: gone after end 6.2 ms, pass false
+pw-perf-m6: debug-end run 14 debugpy/exit: gone after end 0.9 ms, pass false
+pw-perf-m6: debug-end run 15 debugpy/stop: gone after end 27.8 ms, pass false
+pw-perf-m6: debug-end run 16 debugpy/stop: gone after end 45.4 ms, pass false
+pw-perf-m6: debug-end run 17 debugpy/stop: gone after end 29.5 ms, pass false
+## M6 measurement: debug-end
+
+- commit: `2b1754942eaeaee74d10f1a18030be83ec5efd46` (dirty false)
+- os: macOS 27.2.1 (26B131)
+- hardware: Mac17,9 · Apple M5 Pro · 15 CPU
+- app: `target/release/perf-m6/Pitwall.app`
+- definition: per run a fresh app on an empty trusted project with one run configuration whose [debug] launches a target that sleeps (exit: 1 s, ends by itself; stop: 60 s, the scenario stops the session after 4 s) under the adapter set by `[dap.<id>] path`; the app's descendants are polled every 25 ms; pass = no descendant before `debug_starting`, and every descendant that appeared after it is gone ≤ 2000 ms after `debug_ended` (exit: when the webview saw the session end; stop: when it called stop); adapters ["codelldb", "js-debug", "debugpy"], endings ["exit", "stop"], 3 runs each
+
+| adapter / ending | runs | session end → all its processes gone (ms) | pass (≤ 2000 ms, none before start) |
+|---|---|---|---|
+| codelldb / exit | 3 | **21.1** (16.5 – 22.8, n=3) | false |
+| codelldb / stop | 3 | **154.6** (152.0 – 162.0, n=3) | false |
+| debugpy / exit | 3 | **6.2** (0.9 – 16.3, n=3) | false |
+| debugpy / stop | 3 | **29.5** (27.8 – 45.4, n=3) | false |
+| js-debug / exit | 3 | **1254.7** (1252.8 – 1254.8, n=3) | false |
+| js-debug / stop | 3 | **1276.0** (1265.1 – 1276.4, n=3) | false |
+
+| Run | adapter | ending | processes before start | session processes | gone after end ms | error |
+|---|---|---|---|---|---|---|
+| 0 | codelldb | exit | 9 | codelldb, rustc, codelldb-launch, wait, debugserver | 16.5 |  |
+| 1 | codelldb | exit | 8 | codelldb, codelldb, codelldb-launch, wait, debugserver | 21.1 |  |
+| 2 | codelldb | exit | 6 | codelldb, codelldb-launch, wait, debugserver | 22.8 |  |
+| 3 | codelldb | stop | 4 | codelldb, rustup, codelldb-launch, wait, debugserver | 162.0 |  |
+| 4 | codelldb | stop | 8 | codelldb, codelldb-launch, wait, debugserver | 152.0 |  |
+| 5 | codelldb | stop | 8 | codelldb, rustc, codelldb-launch, wait, debugserver | 154.6 |  |
+| 6 | js-debug | exit | 12 | node, node, node, node, bash, pgrep | 1252.8 |  |
+| 7 | js-debug | exit | 5 | node, node, node, node, sh | 1254.7 |  |
+| 8 | js-debug | exit | 7 | node, node, node, node, bash, pgrep | 1254.8 |  |
+| 9 | js-debug | stop | 6 | node, node, node, node, node, bash, pgrep | 1276.0 |  |
+| 10 | js-debug | stop | 7 | node, node, node, node, bash, pgrep | 1276.4 |  |
+| 11 | js-debug | stop | 8 | node, node, node, node, node, bash, bash | 1265.1 |  |
+| 12 | debugpy | exit | 5 | python3.14, python3.14, python3.14, python3.14 | 16.3 |  |
+| 13 | debugpy | exit | 9 | python3.14, python3.14, ?, python3.14, python3.14 | 6.2 |  |
+| 14 | debugpy | exit | 4 | bash, python3.14, python3.14 | 0.9 |  |
+| 15 | debugpy | stop | 5 | python3.14, python3.14, python3.14, python3.14, python3.14, python3.14 | 27.8 |  |
+| 16 | debugpy | stop | 8 | bash, python3.14, python3.14 | 45.4 |  |
+| 17 | debugpy | stop | 6 | python3.14, python3.14, python3.14, python3.14 | 29.5 |  |
+exit 3
+== end 2026-11-19 16:46:48
+{ 9.23 4.47 5.18 }
+"HIDIdleTime" = 143775500
+326.4 /Users/jang2162/.gradle/jdks/eclipse_adoptium-17-aarch64-os_x.2/jdk-17.0.21+9/Contents/Home/bin/java
+101.5 /usr/libexec/pboard
+ 35.0 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+ 25.3 /System/Library/CoreServices/MenuBarAgent.app/Contents/MacOS/MenuBarAgent
+ 24.7 /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/157.0.8103.79/Helpers/Google Chrome Helper (Aperitif Renderer).app/Contents/MacOS/Google Chrome Helper (Aperitif Renderer)
+ 20.7 /Users/jang2162/Applications/IntelliJ IDEA.app/Contents/MacOS/idea
+          Resolution: 2560 x 1440 (QHD/WQHD - Wide Quad High Definition)
+          Main Display: Yes
+          Online: Yes
+          Resolution: 2560 x 1440 (QHD/WQHD - Wide Quad High Definition)
+          Online: Yes
