@@ -428,6 +428,34 @@ export type UnaryMethods = {
 	 */
 	"debug.threads": { params: DebugSessionParams; result: DebugThreads };
 	/**
+	 * This project's breakpoints (stored by Pitwall and shared by its worktrees): file, line, on or off, condition, log
+	 * message, hit count, and whether an agent set it. `path` limits it to one file. Writes nothing.
+	 */
+	"debug.tool.breakpointList": { params: DebugToolBreakpointListParams; result: DebugToolBreakpointList };
+	/**
+	 * Set a plain breakpoint at a line of a file inside the project, turn one on or off (`enabled`), or remove one
+	 * (`remove`). It takes no condition, log message or hit count — those run inside the debugged program, use
+	 * `breakpoint_set_expr`. A breakpoint that already has one can be turned off or removed here but not turned on. The
+	 * person approves it in Pitwall first. Breakpoints are stored: they also apply to debug sessions started later, and an
+	 * open debug session gets them at once.
+	 */
+	"debug.tool.breakpointSet": { params: DebugToolBreakpointSetParams; result: DebugToolBreakpointSet };
+	/**
+	 * Set a breakpoint with a condition, a log message (a logpoint) or a hit count at a line of a file inside the project.
+	 * These expressions run inside the debugged program each time the line is reached — in open debug sessions at once and
+	 * in debug sessions the person starts later (breakpoints are stored) — so this is an `exec` tool: the person sees the
+	 * expressions and approves them in Pitwall first. To change only the line or on/off, or to remove it, use
+	 * `breakpoint_set`.
+	 */
+	"debug.tool.breakpointSetExpr": { params: DebugToolBreakpointSetExprParams; result: DebugToolBreakpointSet };
+	/**
+	 * The state of this project's debug session: `noSession`, `starting`, `running`, or `stopped` with why, the threads,
+	 * the stopped thread's top 20 frames and the top frame's variables one level deep (values cut to 512 characters, the
+	 * response to about 192 KiB). It only reads; there is no tool to step, continue or evaluate. A `sessionId` that is not a
+	 * debug session of this project is `noSession`.
+	 */
+	"debug.tool.state": { params: DebugToolStateParams; result: DebugToolState };
+	/**
 	 * 변수 한 쪽(기본 100, 상한 500). 어댑터가 쪽을 지키지 않아도 그 쪽만 준다.
 	 */
 	"debug.variables": { params: DebugVariablesParams; result: DebugVariables };
@@ -1550,6 +1578,10 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"debug.stack": {"name":"debug.stack","kind":"unary","tier":"read","roles":["owner"],"params":"DebugStackParams","output":"DebugStack","doc":" 한 스레드의 콜스택(쪽 단위).\n","mcp":null,"fileScope":false},
 	"debug.start": {"name":"debug.start","kind":"unary","tier":"exec","roles":["owner"],"params":"DebugStartParams","output":"DebugStarted","doc":" 실행 구성의 `[debug]` 로 디버그 세션을 연다 — 세션은 실행 하나다(`kind = \"debug\"`, 콘솔은 `run.attach`, 끝내기는 `run.stop`).\n `mode = \"attach\"` 면 프로그램을 띄우지 않고 붙기만 한다. 그 프로젝트의 창이 아니면 permission denied, 미신뢰 프로젝트면 어댑터를\n 띄우지 않고 permission denied(`data.reason = \"untrusted\"`), 없는 구성은 not found, `[debug]` 가 없거나 어댑터를 쓸 수 없으면\n invalid params(`data.reason` — `noDebug` · `adapterMissing` · `adapterDisabled` · `adapterArgs` · `runtimeMissing` ·\n `languageServerNotRunning`). 어댑터가 시작에 실패하면 그 실행은 끝난 실행으로 남고 오류의 `data.runId` 가 그것이다.\n","mcp":null,"fileScope":false},
 	"debug.threads": {"name":"debug.threads","kind":"unary","tier":"read","roles":["owner"],"params":"DebugSessionParams","output":"DebugThreads","doc":" 스레드 목록.\n","mcp":null,"fileScope":false},
+	"debug.tool.breakpointList": {"name":"debug.tool.breakpointList","kind":"unary","tier":"read","roles":["owner"],"params":"DebugToolBreakpointListParams","output":"DebugToolBreakpointList","doc":" This project's breakpoints (stored by Pitwall and shared by its worktrees): file, line, on or off, condition, log\n message, hit count, and whether an agent set it. `path` limits it to one file. Writes nothing.\n","mcp":{"group":"debug","name":"breakpoint_list"},"fileScope":false},
+	"debug.tool.breakpointSet": {"name":"debug.tool.breakpointSet","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<DebugToolBreakpointSetParams>","output":"DebugToolBreakpointSet","doc":" Set a plain breakpoint at a line of a file inside the project, turn one on or off (`enabled`), or remove one\n (`remove`). It takes no condition, log message or hit count — those run inside the debugged program, use\n `breakpoint_set_expr`. A breakpoint that already has one can be turned off or removed here but not turned on. The\n person approves it in Pitwall first. Breakpoints are stored: they also apply to debug sessions started later, and an\n open debug session gets them at once.\n","mcp":{"group":"debug","name":"breakpoint_set"},"fileScope":false},
+	"debug.tool.breakpointSetExpr": {"name":"debug.tool.breakpointSetExpr","kind":"unary","tier":"exec","roles":["owner"],"params":"Planned<DebugToolBreakpointSetExprParams>","output":"DebugToolBreakpointSet","doc":" Set a breakpoint with a condition, a log message (a logpoint) or a hit count at a line of a file inside the project.\n These expressions run inside the debugged program each time the line is reached — in open debug sessions at once and\n in debug sessions the person starts later (breakpoints are stored) — so this is an `exec` tool: the person sees the\n expressions and approves them in Pitwall first. To change only the line or on/off, or to remove it, use\n `breakpoint_set`.\n","mcp":{"group":"debug","name":"breakpoint_set_expr"},"fileScope":false},
+	"debug.tool.state": {"name":"debug.tool.state","kind":"unary","tier":"read","roles":["owner"],"params":"DebugToolStateParams","output":"DebugToolState","doc":" The state of this project's debug session: `noSession`, `starting`, `running`, or `stopped` with why, the threads,\n the stopped thread's top 20 frames and the top frame's variables one level deep (values cut to 512 characters, the\n response to about 192 KiB). It only reads; there is no tool to step, continue or evaluate. A `sessionId` that is not a\n debug session of this project is `noSession`.\n","mcp":{"group":"debug","name":"debug_state"},"fileScope":false},
 	"debug.variables": {"name":"debug.variables","kind":"unary","tier":"read","roles":["owner"],"params":"DebugVariablesParams","output":"DebugVariables","doc":" 변수 한 쪽(기본 100, 상한 500). 어댑터가 쪽을 지키지 않아도 그 쪽만 준다.\n","mcp":null,"fileScope":false},
 	"diag.collect": {"name":"diag.collect","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"DiagnosticsText","doc":" 「진단 정보 복사」의 텍스트: 버전 · OS · 활성 기능 · 크래시 리포트 설정 · 최근 경고와 오류 로그.\n 경로 · 비밀 · 홈 디렉터리 이름은 가린다.\n","mcp":null,"fileScope":false},
 	"ext.list": {"name":"ext.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ExtensionList","doc":" 등록된 확장과 읽는 중에 나온 진단.\n","mcp":null,"fileScope":false},
@@ -1946,6 +1978,11 @@ export type Breakpoint = {
 	logMessage?: string | null,
 	/**  몇 번째에 멈추나(어댑터의 문법 — 대상 안에서 평가된다). */
 	hitCondition?: string | null,
+	/**
+	 *  에이전트가 두었거나 바꾸었다(M6-20 의 툴 — 거터의 표지). 사람이 같은 줄을 다른 내용으로 저장하면 사람 것이 된다
+	 *  ([`Breakpoints::set_file`] — 같은 줄 · 같은 내용이면 화면이 이 칸을 되돌려 보내지 않아도 남긴다).
+	 */
+	agent?: boolean,
 };
 
 /**  어댑터가 본 브레이크포인트 하나(그 세션에서). */
@@ -4141,6 +4178,179 @@ export type DebugThread = {
 
 export type DebugThreads = {
 	threads: DebugThread[],
+};
+
+/**  A breakpoint as the tools show it. */
+export type DebugToolBreakpoint = {
+	/**  1-based line. */
+	line: number,
+	/**  Disabled breakpoints are kept but not sent to the debug adapter. */
+	enabled: boolean,
+	/**  Stop only when this expression is true (evaluated inside the debugged program). */
+	condition: string | null,
+	/**  Log this message instead of stopping (`{expr}` parts are evaluated inside the debugged program). */
+	logMessage: string | null,
+	/**  Stop only on some hits (the debug adapter's syntax, evaluated by the adapter). */
+	hitCondition: string | null,
+	/**  An agent set or changed it (Pitwall marks it in the editor gutter). */
+	byAgent: boolean,
+};
+
+export type DebugToolBreakpointFile = {
+	/**  Path relative to the project root (`/`-separated). Breakpoints are shared by all worktrees of the project. */
+	path: string,
+	/**  The file in the worktree asked for (absolute path). */
+	file: string,
+	/**  By line. */
+	breakpoints: DebugToolBreakpoint[],
+};
+
+export type DebugToolBreakpointList = {
+	/**  Files with breakpoints, by path. */
+	files: DebugToolBreakpointFile[],
+	/**  Why the stored breakpoints could not be read (the file was set aside and the list started empty), if so. */
+	problem: string | null,
+};
+
+export type DebugToolBreakpointListParams = {
+	projectId: string,
+	/**
+	 *  Top of the worktree (absolute path) that `path` and the listed `file`s are in. Empty means the session's worktree, or
+	 *  else the main checkout.
+	 */
+	worktree?: string | null,
+	/**  Only this file (absolute, or relative to the project root). */
+	path?: string | null,
+};
+
+export type DebugToolBreakpointSet = {
+	/**  Path relative to the project root. */
+	path: string,
+	/**  The file (absolute path in the worktree asked for). */
+	file: string,
+	line: number,
+	/**  The breakpoint at that line now (`null` after a removal). */
+	breakpoint: DebugToolBreakpoint | null,
+	/**  All breakpoints of that file now. */
+	breakpoints: DebugToolBreakpoint[],
+};
+
+export type DebugToolBreakpointSetExprParams = {
+	projectId: string,
+	/**  Top of the worktree (absolute path) that `path` is in. Empty means the session's worktree, or else the main checkout. */
+	worktree?: string | null,
+	/**  A file inside the project root (absolute, or relative to the project root). */
+	path: string,
+	/**  1-based line. */
+	line: number,
+	/**  Stop only when this expression is true. It runs inside the debugged program. */
+	condition?: string | null,
+	/**  Log this message instead of stopping; `{expr}` parts run inside the debugged program. */
+	logMessage?: string | null,
+	/**  Stop only on some hits, in the debug adapter's syntax (for example `3` or `>= 3`). */
+	hitCondition?: string | null,
+	/**  Turn the breakpoint on (the default) or off. */
+	enabled?: boolean | null,
+};
+
+export type DebugToolBreakpointSetParams = {
+	projectId: string,
+	/**  Top of the worktree (absolute path) that `path` is in. Empty means the session's worktree, or else the main checkout. */
+	worktree?: string | null,
+	/**  A file inside the project root (absolute, or relative to the project root). */
+	path: string,
+	/**  1-based line. */
+	line: number,
+	/**
+	 *  Turn the breakpoint on (the default) or off. A breakpoint that has a condition, log message or hit count cannot be
+	 *  turned on with this tool — use `breakpoint_set_expr`; turning it off keeps them.
+	 */
+	enabled?: boolean | null,
+	/**  Remove the breakpoint at this line (with its condition, log message and hit count). */
+	remove?: boolean,
+};
+
+/**  A stack frame (the top one first). */
+export type DebugToolFrame = {
+	name: string,
+	/**  Source file (absolute path as the debug adapter gave it — it can be outside the project). */
+	path: string | null,
+	line: number,
+	column: number,
+};
+
+/**  One scope of the top frame (locals, arguments, registers …). */
+export type DebugToolScope = {
+	name: string,
+	/**  The debug adapter says this scope is expensive to read; it was not read. */
+	skipped: boolean,
+	variables: DebugToolVariable[],
+	/**  More variables than listed (at most 100 per scope are read, and fewer when the response is cut). */
+	more: boolean,
+};
+
+/**  Where a debug session is. */
+export type DebugToolSessionState = 
+/**  No debug session of this project (or no such session). */
+"noSession" | 
+/**  The debug adapter is still starting. */
+"starting" | 
+/**  Running — not stopped. Nothing else is read. */
+"running" | 
+/**  Stopped (at a breakpoint, after a step, on an exception, paused). */
+"stopped";
+
+export type DebugToolState = {
+	state: DebugToolSessionState,
+	/**  The debug session shown (its run id). */
+	sessionId: string | null,
+	/**  The project's other debug sessions (run ids). */
+	otherSessions: string[],
+	/**  Why it stopped (only when stopped). */
+	stop: DebugToolStop | null,
+	/**  Threads (at most 100; only when stopped). */
+	threads: DebugToolThread[],
+	/**  The stopped thread's top 20 frames (only when stopped). */
+	frames: DebugToolFrame[],
+	/**  The top frame's variables, one level (only when stopped). */
+	locals: DebugToolScope[],
+	/**  Frames or variables were left out to keep the response under about 192 KiB. */
+	truncated: boolean,
+	/**  What could not be read from the debug adapter (it may have resumed meanwhile). */
+	problem: string | null,
+};
+
+export type DebugToolStateParams = {
+	projectId: string,
+	/**
+	 *  A debug session (its run id, `kind = "debug"` in `run_status`). Without it, a stopped session of the project if
+	 *  there is one, else any.
+	 */
+	sessionId?: string | null,
+};
+
+export type DebugToolStop = {
+	/**  `breakpoint`, `step`, `exception`, `pause`, `entry` … (the debug adapter's word). */
+	reason: string,
+	description: string | null,
+	threadId: number | null,
+	allThreadsStopped: boolean,
+};
+
+export type DebugToolThread = {
+	id: number,
+	name: string,
+};
+
+export type DebugToolVariable = {
+	name: string,
+	/**  The value as the debug adapter shows it, cut to 512 characters (`clipped`). */
+	value: string,
+	type: string | null,
+	/**  It has children; they are not read (one level only). */
+	expandable: boolean,
+	/**  The name, value or type was cut. */
+	clipped: boolean,
 };
 
 export type DebugVariable = {

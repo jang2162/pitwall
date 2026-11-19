@@ -16135,6 +16135,11 @@
           "Breakpoint": {
             "description": "브레이크포인트 하나(줄은 1부터).",
             "properties": {
+              "agent": {
+                "default": false,
+                "description": "에이전트가 두었거나 바꾸었다(M6-20 의 툴 — 거터의 표지). 사람이 같은 줄을 다른 내용으로 저장하면 사람 것이 된다\n([`Breakpoints::set_file`] — 같은 줄 · 같은 내용이면 화면이 이 칸을 되돌려 보내지 않아도 남긴다).",
+                "type": "boolean"
+              },
               "condition": {
                 "default": null,
                 "description": "멈출 조건 — 디버그 대상 안에서 평가되는 식.",
@@ -16175,7 +16180,8 @@
               "enabled",
               "condition",
               "logMessage",
-              "hitCondition"
+              "hitCondition",
+              "agent"
             ],
             "type": "object"
           },
@@ -16262,6 +16268,11 @@
           "Breakpoint": {
             "description": "브레이크포인트 하나(줄은 1부터).",
             "properties": {
+              "agent": {
+                "default": false,
+                "description": "에이전트가 두었거나 바꾸었다(M6-20 의 툴 — 거터의 표지). 사람이 같은 줄을 다른 내용으로 저장하면 사람 것이 된다\n([`Breakpoints::set_file`] — 같은 줄 · 같은 내용이면 화면이 이 칸을 되돌려 보내지 않아도 남긴다).",
+                "type": "boolean"
+              },
               "condition": {
                 "default": null,
                 "description": "멈출 조건 — 디버그 대상 안에서 평가되는 식.",
@@ -16302,7 +16313,8 @@
               "enabled",
               "condition",
               "logMessage",
-              "hitCondition"
+              "hitCondition",
+              "agent"
             ],
             "type": "object"
           }
@@ -16340,6 +16352,11 @@
           "Breakpoint": {
             "description": "브레이크포인트 하나(줄은 1부터).",
             "properties": {
+              "agent": {
+                "default": false,
+                "description": "에이전트가 두었거나 바꾸었다(M6-20 의 툴 — 거터의 표지). 사람이 같은 줄을 다른 내용으로 저장하면 사람 것이 된다\n([`Breakpoints::set_file`] — 같은 줄 · 같은 내용이면 화면이 이 칸을 되돌려 보내지 않아도 남긴다).",
+                "type": "boolean"
+              },
               "condition": {
                 "default": null,
                 "description": "멈출 조건 — 디버그 대상 안에서 평가되는 식.",
@@ -16410,6 +16427,11 @@
           "Breakpoint": {
             "description": "브레이크포인트 하나(줄은 1부터).",
             "properties": {
+              "agent": {
+                "default": false,
+                "description": "에이전트가 두었거나 바꾸었다(M6-20 의 툴 — 거터의 표지). 사람이 같은 줄을 다른 내용으로 저장하면 사람 것이 된다\n([`Breakpoints::set_file`] — 같은 줄 · 같은 내용이면 화면이 이 칸을 되돌려 보내지 않아도 남긴다).",
+                "type": "boolean"
+              },
               "condition": {
                 "default": null,
                 "description": "멈출 조건 — 디버그 대상 안에서 평가되는 식.",
@@ -16450,7 +16472,8 @@
               "enabled",
               "condition",
               "logMessage",
-              "hitCondition"
+              "hitCondition",
+              "agent"
             ],
             "type": "object"
           }
@@ -17385,6 +17408,734 @@
         },
         "required": [
           "threads"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "debug.tool.breakpointList": {
+      "description": "This project's breakpoints (stored by Pitwall and shared by its worktrees): file, line, on or off, condition, log\nmessage, hit count, and whether an agent set it. `path` limits it to one file. Writes nothing.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "default": null,
+            "description": "Only this file (absolute, or relative to the project root).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "Top of the worktree (absolute path) that `path` and the listed `file`s are in. Empty means the session's worktree, or\nelse the main checkout.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DebugToolBreakpoint": {
+            "description": "A breakpoint as the tools show it.",
+            "properties": {
+              "byAgent": {
+                "description": "An agent set or changed it (Pitwall marks it in the editor gutter).",
+                "type": "boolean"
+              },
+              "condition": {
+                "description": "Stop only when this expression is true (evaluated inside the debugged program).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "enabled": {
+                "description": "Disabled breakpoints are kept but not sent to the debug adapter.",
+                "type": "boolean"
+              },
+              "hitCondition": {
+                "description": "Stop only on some hits (the debug adapter's syntax, evaluated by the adapter).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "line": {
+                "description": "1-based line.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "logMessage": {
+                "description": "Log this message instead of stopping (`{expr}` parts are evaluated inside the debugged program).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "line",
+              "enabled",
+              "condition",
+              "logMessage",
+              "hitCondition",
+              "byAgent"
+            ],
+            "type": "object"
+          },
+          "DebugToolBreakpointFile": {
+            "properties": {
+              "breakpoints": {
+                "description": "By line.",
+                "items": {
+                  "$ref": "#/$defs/DebugToolBreakpoint"
+                },
+                "type": "array"
+              },
+              "file": {
+                "description": "The file in the worktree asked for (absolute path).",
+                "type": "string"
+              },
+              "path": {
+                "description": "Path relative to the project root (`/`-separated). Breakpoints are shared by all worktrees of the project.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "file",
+              "breakpoints"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "files": {
+            "description": "Files with breakpoints, by path.",
+            "items": {
+              "$ref": "#/$defs/DebugToolBreakpointFile"
+            },
+            "type": "array"
+          },
+          "problem": {
+            "description": "Why the stored breakpoints could not be read (the file was set aside and the list started empty), if so.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "files",
+          "problem"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "debug.tool.breakpointSet": {
+      "description": "Set a plain breakpoint at a line of a file inside the project, turn one on or off (`enabled`), or remove one\n(`remove`). It takes no condition, log message or hit count — those run inside the debugged program, use\n`breakpoint_set_expr`. A breakpoint that already has one can be turned off or removed here but not turned on. The\nperson approves it in Pitwall first. Breakpoints are stored: they also apply to debug sessions started later, and an\nopen debug session gets them at once.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "default": null,
+            "description": "Turn the breakpoint on (the default) or off. A breakpoint that has a condition, log message or hit count cannot be\nturned on with this tool — use `breakpoint_set_expr`; turning it off keeps them.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "line": {
+            "description": "1-based line.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "A file inside the project root (absolute, or relative to the project root).",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "remove": {
+            "default": false,
+            "description": "Remove the breakpoint at this line (with its condition, log message and hit count).",
+            "type": "boolean"
+          },
+          "worktree": {
+            "default": null,
+            "description": "Top of the worktree (absolute path) that `path` is in. Empty means the session's worktree, or else the main checkout.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "path",
+          "line"
+        ],
+        "type": "object",
+        "x-pitwall-planned": true
+      },
+      "result": {
+        "$defs": {
+          "DebugToolBreakpoint": {
+            "description": "A breakpoint as the tools show it.",
+            "properties": {
+              "byAgent": {
+                "description": "An agent set or changed it (Pitwall marks it in the editor gutter).",
+                "type": "boolean"
+              },
+              "condition": {
+                "description": "Stop only when this expression is true (evaluated inside the debugged program).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "enabled": {
+                "description": "Disabled breakpoints are kept but not sent to the debug adapter.",
+                "type": "boolean"
+              },
+              "hitCondition": {
+                "description": "Stop only on some hits (the debug adapter's syntax, evaluated by the adapter).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "line": {
+                "description": "1-based line.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "logMessage": {
+                "description": "Log this message instead of stopping (`{expr}` parts are evaluated inside the debugged program).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "line",
+              "enabled",
+              "condition",
+              "logMessage",
+              "hitCondition",
+              "byAgent"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "breakpoint": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DebugToolBreakpoint"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The breakpoint at that line now (`null` after a removal)."
+          },
+          "breakpoints": {
+            "description": "All breakpoints of that file now.",
+            "items": {
+              "$ref": "#/$defs/DebugToolBreakpoint"
+            },
+            "type": "array"
+          },
+          "file": {
+            "description": "The file (absolute path in the worktree asked for).",
+            "type": "string"
+          },
+          "line": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Path relative to the project root.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "file",
+          "line",
+          "breakpoint",
+          "breakpoints"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "debug.tool.breakpointSetExpr": {
+      "description": "Set a breakpoint with a condition, a log message (a logpoint) or a hit count at a line of a file inside the project.\nThese expressions run inside the debugged program each time the line is reached — in open debug sessions at once and\nin debug sessions the person starts later (breakpoints are stored) — so this is an `exec` tool: the person sees the\nexpressions and approves them in Pitwall first. To change only the line or on/off, or to remove it, use\n`breakpoint_set`.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "condition": {
+            "default": null,
+            "description": "Stop only when this expression is true. It runs inside the debugged program.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "default": null,
+            "description": "Turn the breakpoint on (the default) or off.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "hitCondition": {
+            "default": null,
+            "description": "Stop only on some hits, in the debug adapter's syntax (for example `3` or `>= 3`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "description": "1-based line.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "logMessage": {
+            "default": null,
+            "description": "Log this message instead of stopping; `{expr}` parts run inside the debugged program.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "A file inside the project root (absolute, or relative to the project root).",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "Top of the worktree (absolute path) that `path` is in. Empty means the session's worktree, or else the main checkout.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "path",
+          "line"
+        ],
+        "type": "object",
+        "x-pitwall-planned": true
+      },
+      "result": {
+        "$defs": {
+          "DebugToolBreakpoint": {
+            "description": "A breakpoint as the tools show it.",
+            "properties": {
+              "byAgent": {
+                "description": "An agent set or changed it (Pitwall marks it in the editor gutter).",
+                "type": "boolean"
+              },
+              "condition": {
+                "description": "Stop only when this expression is true (evaluated inside the debugged program).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "enabled": {
+                "description": "Disabled breakpoints are kept but not sent to the debug adapter.",
+                "type": "boolean"
+              },
+              "hitCondition": {
+                "description": "Stop only on some hits (the debug adapter's syntax, evaluated by the adapter).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "line": {
+                "description": "1-based line.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "logMessage": {
+                "description": "Log this message instead of stopping (`{expr}` parts are evaluated inside the debugged program).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "line",
+              "enabled",
+              "condition",
+              "logMessage",
+              "hitCondition",
+              "byAgent"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "breakpoint": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DebugToolBreakpoint"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The breakpoint at that line now (`null` after a removal)."
+          },
+          "breakpoints": {
+            "description": "All breakpoints of that file now.",
+            "items": {
+              "$ref": "#/$defs/DebugToolBreakpoint"
+            },
+            "type": "array"
+          },
+          "file": {
+            "description": "The file (absolute path in the worktree asked for).",
+            "type": "string"
+          },
+          "line": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Path relative to the project root.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "file",
+          "line",
+          "breakpoint",
+          "breakpoints"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
+    "debug.tool.state": {
+      "description": "The state of this project's debug session: `noSession`, `starting`, `running`, or `stopped` with why, the threads,\nthe stopped thread's top 20 frames and the top frame's variables one level deep (values cut to 512 characters, the\nresponse to about 192 KiB). It only reads; there is no tool to step, continue or evaluate. A `sessionId` that is not a\ndebug session of this project is `noSession`.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "sessionId": {
+            "default": null,
+            "description": "A debug session (its run id, `kind = \"debug\"` in `run_status`). Without it, a stopped session of the project if\nthere is one, else any.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DebugToolFrame": {
+            "description": "A stack frame (the top one first).",
+            "properties": {
+              "column": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "line": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "path": {
+                "description": "Source file (absolute path as the debug adapter gave it — it can be outside the project).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "path",
+              "line",
+              "column"
+            ],
+            "type": "object"
+          },
+          "DebugToolScope": {
+            "description": "One scope of the top frame (locals, arguments, registers …).",
+            "properties": {
+              "more": {
+                "description": "More variables than listed (at most 100 per scope are read, and fewer when the response is cut).",
+                "type": "boolean"
+              },
+              "name": {
+                "type": "string"
+              },
+              "skipped": {
+                "description": "The debug adapter says this scope is expensive to read; it was not read.",
+                "type": "boolean"
+              },
+              "variables": {
+                "items": {
+                  "$ref": "#/$defs/DebugToolVariable"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "name",
+              "skipped",
+              "variables",
+              "more"
+            ],
+            "type": "object"
+          },
+          "DebugToolSessionState": {
+            "description": "Where a debug session is.",
+            "oneOf": [
+              {
+                "const": "noSession",
+                "description": "No debug session of this project (or no such session).",
+                "type": "string"
+              },
+              {
+                "const": "starting",
+                "description": "The debug adapter is still starting.",
+                "type": "string"
+              },
+              {
+                "const": "running",
+                "description": "Running — not stopped. Nothing else is read.",
+                "type": "string"
+              },
+              {
+                "const": "stopped",
+                "description": "Stopped (at a breakpoint, after a step, on an exception, paused).",
+                "type": "string"
+              }
+            ]
+          },
+          "DebugToolStop": {
+            "properties": {
+              "allThreadsStopped": {
+                "type": "boolean"
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason": {
+                "description": "`breakpoint`, `step`, `exception`, `pause`, `entry` … (the debug adapter's word).",
+                "type": "string"
+              },
+              "threadId": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "reason",
+              "description",
+              "threadId",
+              "allThreadsStopped"
+            ],
+            "type": "object"
+          },
+          "DebugToolThread": {
+            "properties": {
+              "id": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "type": "object"
+          },
+          "DebugToolVariable": {
+            "properties": {
+              "clipped": {
+                "description": "The name, value or type was cut.",
+                "type": "boolean"
+              },
+              "expandable": {
+                "description": "It has children; they are not read (one level only).",
+                "type": "boolean"
+              },
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "value": {
+                "description": "The value as the debug adapter shows it, cut to 512 characters (`clipped`).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value",
+              "type",
+              "expandable",
+              "clipped"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "frames": {
+            "description": "The stopped thread's top 20 frames (only when stopped).",
+            "items": {
+              "$ref": "#/$defs/DebugToolFrame"
+            },
+            "type": "array"
+          },
+          "locals": {
+            "description": "The top frame's variables, one level (only when stopped).",
+            "items": {
+              "$ref": "#/$defs/DebugToolScope"
+            },
+            "type": "array"
+          },
+          "otherSessions": {
+            "description": "The project's other debug sessions (run ids).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "problem": {
+            "description": "What could not be read from the debug adapter (it may have resumed meanwhile).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sessionId": {
+            "description": "The debug session shown (its run id).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/$defs/DebugToolSessionState"
+          },
+          "stop": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DebugToolStop"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it stopped (only when stopped)."
+          },
+          "threads": {
+            "description": "Threads (at most 100; only when stopped).",
+            "items": {
+              "$ref": "#/$defs/DebugToolThread"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "Frames or variables were left out to keep the response under about 192 KiB.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "state",
+          "sessionId",
+          "otherSessions",
+          "stop",
+          "threads",
+          "frames",
+          "locals",
+          "truncated",
+          "problem"
         ],
         "type": "object"
       },
