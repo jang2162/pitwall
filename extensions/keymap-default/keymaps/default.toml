@@ -785,3 +785,50 @@ mac = "cmd+p"
 win = "ctrl+p"
 linux = "ctrl+p"
 when = "editorFocus"
+
+# 디버그(17-m6-plan M6-18, 10-ui.md 「키맵」 의 「실행 · 디버그」 표, src/debug/debug-actions.ts). 스텝 · 계속 · 식 평가는 디버그 세션이
+# 도는 동안만(`debugging` — 창이 내는 상태 키, src/keymap/context.ts `provideContext`). 그 밖에서 F7 · F8 은 디버그 액션이 아니다 —
+# diff 뷰의 F7(`diffFocus`)은 포커스 층이라 세션이 돌아도 diff 뷰 안에서는 그쪽이 이긴다. 실행 / 디버그(현재 구성)의 `⌃D` 는 M6-07 의
+# 실행 액션 묶음이다.
+
+[[bindings]]
+action = "debug.stepOver"
+key = "f8"
+when = "debugging"
+
+[[bindings]]
+action = "debug.stepInto"
+key = "f7"
+when = "debugging"
+
+[[bindings]]
+action = "debug.stepOut"
+key = "shift+f8"
+when = "debugging"
+
+[[bindings]]
+action = "debug.resume"
+mac = "cmd+alt+r"
+win = "f9"
+linux = "f9"
+when = "debugging"
+
+[[bindings]]
+action = "debug.evaluate"
+mac = "alt+f8"
+win = "alt+f8"
+linux = "alt+f8"
+when = "debugging"
+
+[[bindings]]
+action = "debug.toggleBreakpoint"
+mac = "cmd+f8"
+win = "ctrl+f8"
+linux = "ctrl+f8"
+when = "editorFocus"
+
+[[bindings]]
+action = "debug.viewBreakpoints"
+mac = "cmd+shift+f8"
+win = "ctrl+shift+f8"
+linux = "ctrl+shift+f8"

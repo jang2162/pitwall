@@ -159,6 +159,8 @@ describe("default keymap overlaps", () => {
         // 변경 롤백(M2) 과 테이블 데이터의 변경 되돌리기(M3-17 — 10-ui §4.2 「DB」, 테이블 데이터에 포커스가 있을 때만).
         ["⌥⌘Z", ["git.rollback []", "db.tableData.revert [dbTableDataFocus]"]],
         // 에디터의 선언으로 이동(M4-08)과 DB 탐색기의 DDL 보기(M3-13) — 10-ui §4.2 「코드」 · 「DB」.
+        // diff 뷰의 다음 차이(M2-15 — diff 뷰에 포커스)와 디버그의 들어가기(M6-18 — 세션이 도는 동안). diff 뷰 안에서는 포커스 층이 이긴다.
+        ["F7", ["diff.nextChange [diffFocus]", "debug.stepInto [debugging]"]],
         ["⌘B", ["db.explorer.ddl [dbExplorerFocus]", "lsp.gotoDeclaration [editorFocus]"]],
       ],
       win: [
@@ -194,6 +196,8 @@ describe("default keymap overlaps", () => {
         ["Ctrl+Shift+C", ["terminal.copy [terminalFocus]", "db.grid.copyAs [dbGridFocus]"]],
         // 변경 롤백(M2)과 테이블 데이터의 변경 되돌리기(M3-17).
         ["Ctrl+Alt+Z", ["git.rollback []", "db.tableData.revert [dbTableDataFocus]"]],
+        // diff 뷰의 다음 차이(M2-15)와 디버그의 들어가기(M6-18 — 세션이 도는 동안).
+        ["F7", ["diff.nextChange [diffFocus]", "debug.stepInto [debugging]"]],
         // 에디터의 선언으로 이동(M4-08)과 DB 탐색기의 DDL 보기(M3-13).
         ["Ctrl+B", ["db.explorer.ddl [dbExplorerFocus]", "lsp.gotoDeclaration [editorFocus]"]],
       ],
@@ -229,6 +233,8 @@ describe("default keymap overlaps", () => {
         ["Ctrl+Shift+C", ["terminal.copy [terminalFocus]", "db.grid.copyAs [dbGridFocus]"]],
         // 변경 롤백(M2)과 테이블 데이터의 변경 되돌리기(M3-17).
         ["Ctrl+Alt+Z", ["git.rollback []", "db.tableData.revert [dbTableDataFocus]"]],
+        // diff 뷰의 다음 차이(M2-15)와 디버그의 들어가기(M6-18 — 세션이 도는 동안).
+        ["F7", ["diff.nextChange [diffFocus]", "debug.stepInto [debugging]"]],
         // 에디터의 선언으로 이동(M4-08)과 DB 탐색기의 DDL 보기(M3-13).
         ["Ctrl+B", ["db.explorer.ddl [dbExplorerFocus]", "lsp.gotoDeclaration [editorFocus]"]],
       ],

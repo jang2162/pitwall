@@ -9,6 +9,9 @@ import {
 import type { ConfigView } from "@pitwall/rpc-client";
 import { describe, expect, it } from "vitest";
 
+import { debugActions } from "../debug/debug-actions";
+import { DebugSessions } from "../debug/debug-session";
+import { debugStrings } from "../debug/strings";
 import { createDocumentStore } from "../editor/documents";
 import { editorActions } from "../editor/editor-actions";
 import { editorOpsActions } from "../editor/editor-ops";
@@ -228,6 +231,13 @@ const ACTION_IDS = new Set(
       writeClipboard: async () => {},
       readClipboard: async () => "",
       onClipboardFailed() {},
+    }),
+    ...debugActions(debugStrings(bundledTranslator("ko")).actions, {
+      sessions: new DebugSessions(),
+      editor: () => undefined,
+      toggleBreakpoint() {},
+      viewBreakpoints() {},
+      failed() {},
     }),
     ...findActions({ strings: { action: "find" }, open() {} }),
     ...projectSearchActions({

@@ -69,6 +69,8 @@ lsp-locations-none = 찾은 곳이 없다
 lsp-locations-pin = { $key } 검색 결과에 고정
 # 루트 밖 문서(외부 소스) 탭의 머리. $server: 그 위치를 돌려준 언어 서버
 lsp-outside-bar = 외부 소스 · 읽기 전용 · { $server }
+# 디버그 프레임의 루트 밖 소스 탭 머리(M6-18). $adapter: 디버그 어댑터 id
+debug-source-bar = 디버그 소스 · 읽기 전용 · { $adapter }
 # $message: 오류 원문
 lsp-outside-failed = 외부 소스를 열지 못했다: { $message }
 # $encoding: 짐작한 인코딩 이름(예: EUC-KR, UTF-16LE)

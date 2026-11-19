@@ -108,6 +108,8 @@ export function projectStrings(t: Translate) {
         none: t("lsp-locations-none"),
         pin: (key: string) => t("lsp-locations-pin", { key }),
         outsideBar: (server: string) => t("lsp-outside-bar", { server }),
+        /** 디버그 프레임의 루트 밖 소스(M6-18) — `adapter` 는 어댑터 id. */
+        debugSourceBar: (adapter: string) => t("debug-source-bar", { adapter }),
         outsideFailed: (message: string) => t("lsp-outside-failed", { message }),
       },
       /** 포맷(M4-13). */

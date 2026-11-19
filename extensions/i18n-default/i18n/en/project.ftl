@@ -69,6 +69,8 @@ lsp-locations-none = Nothing found
 lsp-locations-pin = { $key } to pin in Search Results
 # $server: the language server that returned the location
 lsp-outside-bar = Outside source · read-only · { $server }
+# Header of an outside debug frame source tab (M6-18). $adapter: debug adapter id
+debug-source-bar = Debug source · read-only · { $adapter }
 # $message: the error text
 lsp-outside-failed = Could not open the outside source: { $message }
 # $encoding: the guessed encoding name (e.g. EUC-KR, UTF-16LE)

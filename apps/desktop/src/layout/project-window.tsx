@@ -113,6 +113,8 @@ import { McpApprovals } from "../mcp/approvals-host";
 import { McpStatus } from "../mcp/mcp-status";
 import { RuntimeStatus } from "../runtime/runtime-status";
 import { useRunClosePrompt } from "../run/run-close";
+import { DebugFeature } from "../debug/debug-feature";
+import { DebugToolWindow } from "../debug/debug-tool-window";
 import { RunFeature } from "../run/run-feature";
 import { RunPickerFeature } from "../run/run-picker";
 import { windowRuns } from "../run/run-tabs";
@@ -172,6 +174,7 @@ const TOOL_WINDOWS: Readonly<Record<string, ComponentType<IDockviewPanelProps>>>
   agent: AgentActivityToolWindow,
   commit: CommitToolWindow,
   database: DbExplorerToolWindow,
+  debug: DebugToolWindow,
   git: GitLogToolWindow,
   notifications: NotificationsToolWindow,
   problems: ProblemsToolWindow,
@@ -949,6 +952,7 @@ function ProjectWindowBody({
           {projectId !== undefined && <McpStatus projectId={projectId} />}
           {projectId !== undefined && <RunFeature projectId={projectId} />}
           {projectId !== undefined && <RunPickerFeature projectId={projectId} api={api} />}
+          {projectId !== undefined && <DebugFeature projectId={projectId} workspace={workspace} />}
           {projectId !== undefined && (
             <DbStatus projectId={projectId} workspace={workspace} api={api} />
           )}

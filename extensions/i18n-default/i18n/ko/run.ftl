@@ -178,3 +178,74 @@ run-editor-kept = 프로필 · [debug] 같은 폼 밖의 값은 그대로 둔다
 
 run-settings-title = 실행
 run-settings-body = 실행 구성은 프로젝트마다 다르다. 프로젝트 창 타이틀바의 실행 구성 선택(▾) → 「구성 편집…」 에서 만들고 고친다.
+
+## 디버그(M6-18 — 「디버그」 툴 윈도우 · 브레이크포인트 거터 · 편집 · 목록, src/debug/)
+
+debug-no-host = Host 에 연결되지 않았다
+debug-no-session = 디버그 세션이 없다. 디버그 단추나 「디버그(현재 구성)」 로 시작한다.
+debug-sessions-label = 디버그 세션
+# $state: running · stopped · ended
+debug-state = { $state ->
+    [running] 실행 중
+    [stopped] 멈춤
+   *[ended] 끝남
+}
+# $reason: 어댑터가 준 까닭(breakpoint · step · exception · pause …) — 그대로 보인다
+debug-stopped-reason = 멈춤: { $reason }
+debug-resume = 계속
+debug-pause = 일시 정지
+debug-step-over = 넘기기
+debug-step-into = 들어가기
+debug-step-out = 나오기
+debug-stop = 중지
+debug-debugger = 디버거
+debug-frames = 프레임
+debug-threads = 스레드
+debug-variables = 변수
+debug-watches = 워치
+debug-console = 콘솔
+debug-no-frames = 프로그램이 멈추면 프레임이 보인다.
+debug-no-variables = 프레임을 고르면 변수가 보인다.
+debug-outside-frame = 프로젝트 밖 — 읽기 전용으로 연다
+debug-add-watch = 워치 식 더하기…
+debug-remove-watch = 워치 지우기
+debug-console-input = 멈춘 프로그램 안에서 평가할 식
+debug-console-hint = Enter 는 그 식을 프로그램 안에서 돌린다. ↑ ↓ 로 기록을 오간다.
+# $count: 다음 쪽이 더 읽는 자식 수
+debug-more = { $count }개 더…
+debug-value-cut = (잘림 — 값이 더 길다)
+debug-too-deep = (너무 깊어 보이지 않는다)
+# $message: 오류 원문
+debug-read-failed = 읽지 못했다: { $message }
+debug-start-failed = 디버그를 시작하지 못했다
+debug-control-failed = 디버거가 하지 못했다
+# $file: 파일 이름, $line: 줄 번호
+debug-bp-title = 브레이크포인트 · { $file }:{ $line }
+debug-bp-enabled = 켬
+debug-bp-condition = 조건(참일 때만 멈춘다)
+debug-bp-log-message = 로그 메시지(멈추지 않는다 — { "{" }식{ "}" } 은 평가된다)
+debug-bp-hit-condition = hit count
+debug-bp-remove = 지우기
+debug-bp-done = 닫기
+debug-bp-plain = 브레이크포인트
+# $text: 적은 식 · 메시지 그대로
+debug-bp-describe-condition = 조건: { $text }
+debug-bp-describe-log = 로그: { $text }
+debug-bp-describe-hit = hit count: { $text }
+debug-bp-disabled = 꺼 둠
+# $message: 어댑터가 확인하지 못한 까닭(빌 수 있다)
+debug-bp-unverified = 디버거가 확인하지 못했다 { $message }
+debug-bp-agent = 에이전트가 둠
+debug-bp-list-title = 브레이크포인트
+debug-bp-list-empty = 브레이크포인트가 없다
+debug-bp-list-unsaved = 저장 전 — 파일을 저장하면 디버거에 간다
+# $message: Host 의 까닭(영어)
+debug-bp-list-problem = 저장된 브레이크포인트를 읽지 못했다: { $message }
+action-debug-step-over = 넘기기
+action-debug-step-into = 들어가기
+action-debug-step-out = 나오기
+action-debug-resume = 프로그램 계속
+action-debug-pause = 프로그램 일시 정지
+action-debug-toggle-breakpoint = 줄 브레이크포인트 토글
+action-debug-view-breakpoints = 브레이크포인트 보기
+action-debug-evaluate = 식 평가

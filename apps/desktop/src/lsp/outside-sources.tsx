@@ -9,6 +9,8 @@
 // - 보기는 읽기 전용 CodeMirror 다(`EditorState.readOnly` — 편집 키는 아무것도 하지 않는다). 머리에 경로와 출처(그 위치를 돌려준
 //   서버)를 보인다. 구문 강조는 리비전 텍스트와 같은 길(구문 분석 서비스에 그 글로 문서 하나 — git/diff/revision-syntax.ts). 그
 //   안의 hover · 정의 · 사용처는 같은 서버로 간다(./navigation.ts 의 토큰 요청 길 — 진단 · 편집은 없다).
+// - 디버그 프레임의 루트 밖 소스(17-m6-plan M6-18 — 같은 규칙)도 이 탭으로 연다. 그 토큰은 `debug.source` 로 읽고(`remember` 의
+//   `read`), 머리에 「디버그 소스」 와 어댑터를 보이며, 언어 서버의 내비게이션을 걸지 않는다(서버가 준 토큰이 아니다).
 // - 키맵 문맥은 에디터 글자 영역(`editorFocus`)이라 `⌘B` · `F1` 등 내비게이션 키가 돈다.
 
 import { EditorState } from "@codemirror/state";
@@ -68,6 +70,8 @@ export interface OutsideSpec {
   readonly language: string | null;
   /** 그 토큰을 받은 문서의 워크트리 — 이 탭 안에서 루트 안 위치로 갈 때 · 미리볼 때 쓴다(리뷰 L4). 메인 체크아웃이면 없다. */
   readonly worktree?: string;
+  /** 디버그 프레임의 소스다(`server` 는 어댑터 id) — 내비게이션을 걸지 않는다. */
+  readonly debug?: boolean;
 }
 
 /** 탭의 외부 소스 칸. 외부 소스 탭이 아니면 `undefined`. */
@@ -81,6 +85,9 @@ interface Meta {
   server: string;
   language: string | null;
   worktree?: string;
+  /** 토큰을 읽는 길(디버그 프레임 — `debug.source`). 없으면 `lsp.document.read`. */
+  read?: () => Promise<{ text: string; path: string; server: string }>;
+  debug?: boolean;
 }
 
 /** 창의 것(늦게 붙는다 — 작업 공간을 만든 뒤). */
@@ -157,14 +164,17 @@ export function createOutsideSources(): OutsideSourcesRuntime {
       const { token } = location;
       if (!texts.has(token)) {
         try {
-          const read = await b.services.call("lsp.document.read", { token });
-          texts.set(token, read.text);
           const known = metas.get(token);
+          const read = known?.read
+            ? await known.read()
+            : await b.services.call("lsp.document.read", { token });
+          texts.set(token, read.text);
           metas.set(token, {
             path: read.path,
             server: read.server,
             language: known?.language ?? null,
             ...(known?.worktree !== undefined && { worktree: known.worktree }),
+            ...(known?.debug && { debug: true }),
           });
         } catch (e) {
           if (!travel) b.failed?.(e instanceof Error ? e.message : String(e));
@@ -176,7 +186,14 @@ export function createOutsideSources(): OutsideSourcesRuntime {
       if (!panel) {
         const params = {
           path: `${OUTSIDE_KEY_PREFIX}${token}`,
-          outside: { token, ...meta } satisfies OutsideSpec,
+          outside: {
+            token,
+            path: meta.path,
+            server: meta.server,
+            language: meta.language,
+            ...(meta.worktree !== undefined && { worktree: meta.worktree }),
+            ...(meta.debug && { debug: true }),
+          } satisfies OutsideSpec,
         };
         panel = api.addPanel({
           id: nextId(api),
@@ -277,16 +294,18 @@ export function OutsideSourcePanel({ panelId, spec }: { panelId: string; spec: O
           // 호버 등 툴팁은 패널에 잘리지 않게 툴팁 층에(editor/tooltip-layer.ts) — 탭의 보임을 따른다.
           editorTooltips(),
           popupBase,
-          navigationExtension(
-            tokenSource({
-              token: spec.token,
-              path: spec.path,
-              language: spec.language,
-              ...(spec.worktree !== undefined && { worktree: spec.worktree }),
-              services,
-            }),
-            projectId,
-          ),
+          spec.debug
+            ? []
+            : navigationExtension(
+                tokenSource({
+                  token: spec.token,
+                  path: spec.path,
+                  language: spec.language,
+                  ...(spec.worktree !== undefined && { worktree: spec.worktree }),
+                  services,
+                }),
+                projectId,
+              ),
           EditorView.updateListener.of((u) => {
             if (!u.selectionSet) return;
             // 사람이 옮긴 커서만 큰 이동으로 본다(위치로 가기가 둔 커서는 아니다).
@@ -306,7 +325,18 @@ export function OutsideSourcePanel({ panelId, spec }: { panelId: string; spec: O
       runtime?.keepCursor(panelId, cursorOf(view));
       view.destroy();
     };
-  }, [runtime, text, spec.token, spec.path, spec.language, panelId, workspace, font, tab]);
+  }, [
+    runtime,
+    text,
+    spec.token,
+    spec.path,
+    spec.language,
+    spec.debug,
+    panelId,
+    workspace,
+    font,
+    tab,
+  ]);
 
   return (
     <div
@@ -319,7 +349,9 @@ export function OutsideSourcePanel({ panelId, spec }: { panelId: string; spec: O
         data-outside-source-bar=""
         className="flex flex-none items-center gap-2 border-b border-ui-border bg-ui-toolbar px-2 py-0.5 text-[12px] text-ui-muted-foreground"
       >
-        <span className="flex-none">{T.lsp.outsideBar(spec.server)}</span>
+        <span className="flex-none">
+          {spec.debug ? T.lsp.debugSourceBar(spec.server) : T.lsp.outsideBar(spec.server)}
+        </span>
         <span className="min-w-0 truncate font-mono" title={spec.path}>
           {spec.path}
         </span>

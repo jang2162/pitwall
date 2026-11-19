@@ -182,3 +182,74 @@ run-editor-kept = Values outside the form (profiles, [debug]) are kept as they a
 
 run-settings-title = Run
 run-settings-body = Run configurations belong to each project. Create and edit them from the project window's title bar: the run configuration selector (▾) → "Edit configurations…".
+
+## Debug (M6-18 — the Debug tool window, the breakpoint gutter, the breakpoint editor and list, src/debug/)
+
+debug-no-host = Not connected to the Host
+debug-no-session = No debug session. Start one with the debug button or Debug (current configuration).
+debug-sessions-label = Debug sessions
+# $state: running · stopped · ended
+debug-state = { $state ->
+    [running] Running
+    [stopped] Paused
+   *[ended] Ended
+}
+# $reason: the reason the adapter gave (breakpoint, step, exception, pause …) — shown as is
+debug-stopped-reason = Paused: { $reason }
+debug-resume = Resume
+debug-pause = Pause
+debug-step-over = Step Over
+debug-step-into = Step Into
+debug-step-out = Step Out
+debug-stop = Stop
+debug-debugger = Debugger
+debug-frames = Frames
+debug-threads = Threads
+debug-variables = Variables
+debug-watches = Watches
+debug-console = Console
+debug-no-frames = Frames appear when the program pauses.
+debug-no-variables = Variables appear when a frame is selected.
+debug-outside-frame = Outside the project — opens read-only
+debug-add-watch = Add a watch expression…
+debug-remove-watch = Remove watch
+debug-console-input = Expression to evaluate in the paused program
+debug-console-hint = Enter runs the expression inside the program. ↑ ↓ go through the history.
+# $count: how many more children the next page loads
+debug-more = { $count } more…
+debug-value-cut = (cut — the value is longer)
+debug-too-deep = (too deep to show)
+# $message: the error text
+debug-read-failed = Could not read: { $message }
+debug-start-failed = Could not start debugging
+debug-control-failed = The debugger did not do it
+# $file: file name, $line: line number
+debug-bp-title = Breakpoint · { $file }:{ $line }
+debug-bp-enabled = Enabled
+debug-bp-condition = Condition (pause only when true)
+debug-bp-log-message = Log message (do not pause — { "{" }expr{ "}" } is evaluated)
+debug-bp-hit-condition = Hit count
+debug-bp-remove = Remove
+debug-bp-done = Done
+debug-bp-plain = Breakpoint
+# $text: the expression or message as written
+debug-bp-describe-condition = Condition: { $text }
+debug-bp-describe-log = Logs: { $text }
+debug-bp-describe-hit = Hit count: { $text }
+debug-bp-disabled = Disabled
+# $message: why the adapter could not verify it (may be empty)
+debug-bp-unverified = Not verified by the debugger { $message }
+debug-bp-agent = Set by an agent
+debug-bp-list-title = Breakpoints
+debug-bp-list-empty = No breakpoints
+debug-bp-list-unsaved = Unsaved — goes to the debugger when the file is saved
+# $message: the Host's reason (English)
+debug-bp-list-problem = The stored breakpoints could not be read: { $message }
+action-debug-step-over = Step Over
+action-debug-step-into = Step Into
+action-debug-step-out = Step Out
+action-debug-resume = Resume Program
+action-debug-pause = Pause Program
+action-debug-toggle-breakpoint = Toggle Line Breakpoint
+action-debug-view-breakpoints = View Breakpoints
+action-debug-evaluate = Evaluate Expression
