@@ -77,7 +77,7 @@ LSP · 편집 행 여섯(15-m4-plan.md 결정 M4-D19 — 2026-11-02, 사용자)�
 | D7 | 편집 수준 | **L2 + 멀티 커서** (자동완성 · 포맷 · 시그니처 · rename · 멀티 커서). 리팩터링 등 L3는 비목표 | 04 F4 |
 | D8 | DB | **PostgreSQL · MySQL/MariaDB · SQLite · Redis**. 그 외는 이후(MSSQL), Oracle 등은 JDBC 브리지 확장으로 검토 | 04 F6 |
 | D9 | `.pitwall/` | **하이브리드** — `.pitwall/*.toml` 커밋, `*.local.toml` 무시. 프로젝트별로 개인 전용 전환 가능 | 03 §5 |
-| D10 | 라이선스 | **MIT**. 의존성은 MIT/Apache-2.0/BSD 등 허용형만 (GPL 계열 번들 금지, `cargo-deny`로 검사). Pitwall 이 링크 · 동봉하지 않고 사람이 라이선스를 확인한 뒤 원 배포처에서 받는 별도 도구(언어 서버 등 — D51)는 의존성이 아니다(2026-11-02, 사용자) | LICENSE, 07 |
+| D10 | 라이선스 | **MIT**. 의존성은 MIT/Apache-2.0/BSD 등 허용형만 (GPL 계열 번들 금지, `cargo-deny`로 검사). Pitwall 이 링크 · 동봉하지 않고 사람이 라이선스를 확인한 뒤 원 배포처에서 받는 별도 도구(언어 서버 등 — D51)는 의존성이 아니다(2026-11-02, 사용자). **예외**: java-debug 의 수정 클래스 셋(EPL-1.0, 결정 D71 — 서버 소켓을 `127.0.0.1` 에만 묶는 한 줄 패치)은 앱 바이너리에 동봉한다. EPL-1.0 은 파일 단위의 약한 카피레프트라 그 파일의 소스 공개로 족하고 나머지 MIT 코드에 닿지 않는다 — 소스는 `crates/pw-tools/patches/java-debug/`, 고지는 `licenses/vendored.md` · `THIRD_PARTY_NOTICES.md` · 설치된 jar 옆 NOTICE(2026-11-19, 사용자) | LICENSE, 07 |
 | D11 | 연결 | **A + D: 직접 연결 + Tailscale**. Relay Hub는 만들지 않음 (`Transport` 추상만 유지) | 08 §3 |
 | D12 | 모바일 플랫폼 | Android 먼저 (모바일 재개 시 적용) | 08 §6 |
 | D13 | 모바일 | **MVP · 로드맵에서 제외 (보류)**. 확인할 정보가 구체화되면 재검토. role/페어링 구조만 유지 | 04 F12, 08 §6 |
