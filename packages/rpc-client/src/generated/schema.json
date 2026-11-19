@@ -16848,6 +16848,57 @@
       ],
       "tier": "read"
     },
+    "debug.source": {
+      "description": "프레임 소스를 토큰으로 읽는다(루트 밖 파일 · 어댑터가 쥔 소스 — 결정 M4-D13 과 같은 규칙, 읽기 전용). 그 프로젝트의 창 연결만\n부른다 — 다른 연결 · 에이전트 범위는 permission denied, 이 연결이 받지 않은 토큰 · 끝난 실행의 토큰은 not found.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "token": {
+            "description": "`debug.stack` 의 프레임이 준 토큰.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "token"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "adapter": {
+            "description": "그 세션의 어댑터 id.",
+            "type": "string"
+          },
+          "path": {
+            "description": "보일 경로(어댑터가 보고한 것). 어댑터가 쥔 소스면 없다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "description": "글 전부(5 MiB 까지, UTF-8).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "path",
+          "adapter"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "debug.stack": {
       "description": "한 스레드의 콜스택(쪽 단위).",
       "kind": "unary",
@@ -16936,6 +16987,13 @@
                   "integer",
                   "null"
                 ]
+              },
+              "token": {
+                "description": "소스가 프로젝트 루트 밖(일반 파일)이거나 어댑터가 내용을 쥔 것(`sourceReference`)이면 `debug.source` 로 읽는 토큰 — 이\n연결 · 이 실행에만 산다(M6-18). 루트 안이면 없다(창이 `fs.*` 로 연다).",
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -16945,7 +17003,8 @@
               "sourceReference",
               "line",
               "column",
-              "presentationHint"
+              "presentationHint",
+              "token"
             ],
             "type": "object"
           }

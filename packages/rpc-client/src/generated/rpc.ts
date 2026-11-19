@@ -412,6 +412,11 @@ export type UnaryMethods = {
 	 */
 	"debug.scopes": { params: DebugScopesParams; result: DebugScopes };
 	/**
+	 * 프레임 소스를 토큰으로 읽는다(루트 밖 파일 · 어댑터가 쥔 소스 — 결정 M4-D13 과 같은 규칙, 읽기 전용). 그 프로젝트의 창 연결만
+	 * 부른다 — 다른 연결 · 에이전트 범위는 permission denied, 이 연결이 받지 않은 토큰 · 끝난 실행의 토큰은 not found.
+	 */
+	"debug.source": { params: DebugSourceParams; result: DebugSource };
+	/**
 	 * 한 스레드의 콜스택(쪽 단위).
 	 */
 	"debug.stack": { params: DebugStackParams; result: DebugStack };
@@ -1575,6 +1580,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"debug.evaluate": {"name":"debug.evaluate","kind":"unary","tier":"exec","roles":["owner"],"params":"DebugEvaluateParams","output":"DebugEvaluated","doc":" 식을 디버그 대상 안에서 평가한다(콘솔 · 워치 · 마우스 올림) — 대상 안에서 코드를 돌리므로 exec 이다.\n","mcp":null,"fileScope":false},
 	"debug.exceptions.set": {"name":"debug.exceptions.set","kind":"unary","tier":"write","roles":["owner"],"params":"DebugExceptionsParams","output":"DebugExceptions","doc":" 예외 브레이크포인트: 어댑터가 알린 필터만 켜고 끈다(알리지 않은 이름은 invalid params). 어댑터마다 저장한다.\n","mcp":null,"fileScope":false},
 	"debug.scopes": {"name":"debug.scopes","kind":"unary","tier":"read","roles":["owner"],"params":"DebugScopesParams","output":"DebugScopes","doc":" 한 프레임의 범위(지역 · 전역 등). 변수는 펼칠 때 `debug.variables` 로.\n","mcp":null,"fileScope":false},
+	"debug.source": {"name":"debug.source","kind":"unary","tier":"read","roles":["owner"],"params":"DebugSourceParams","output":"DebugSource","doc":" 프레임 소스를 토큰으로 읽는다(루트 밖 파일 · 어댑터가 쥔 소스 — 결정 M4-D13 과 같은 규칙, 읽기 전용). 그 프로젝트의 창 연결만\n 부른다 — 다른 연결 · 에이전트 범위는 permission denied, 이 연결이 받지 않은 토큰 · 끝난 실행의 토큰은 not found.\n","mcp":null,"fileScope":false},
 	"debug.stack": {"name":"debug.stack","kind":"unary","tier":"read","roles":["owner"],"params":"DebugStackParams","output":"DebugStack","doc":" 한 스레드의 콜스택(쪽 단위).\n","mcp":null,"fileScope":false},
 	"debug.start": {"name":"debug.start","kind":"unary","tier":"exec","roles":["owner"],"params":"DebugStartParams","output":"DebugStarted","doc":" 실행 구성의 `[debug]` 로 디버그 세션을 연다 — 세션은 실행 하나다(`kind = \"debug\"`, 콘솔은 `run.attach`, 끝내기는 `run.stop`).\n `mode = \"attach\"` 면 프로그램을 띄우지 않고 붙기만 한다. 그 프로젝트의 창이 아니면 permission denied, 미신뢰 프로젝트면 어댑터를\n 띄우지 않고 permission denied(`data.reason = \"untrusted\"`), 없는 구성은 not found, `[debug]` 가 없거나 어댑터를 쓸 수 없으면\n invalid params(`data.reason` — `noDebug` · `adapterMissing` · `adapterDisabled` · `adapterArgs` · `runtimeMissing` ·\n `languageServerNotRunning`). 어댑터가 시작에 실패하면 그 실행은 끝난 실행으로 남고 오류의 `data.runId` 가 그것이다.\n","mcp":null,"fileScope":false},
 	"debug.threads": {"name":"debug.threads","kind":"unary","tier":"read","roles":["owner"],"params":"DebugSessionParams","output":"DebugThreads","doc":" 스레드 목록.\n","mcp":null,"fileScope":false},
@@ -4080,6 +4086,11 @@ export type DebugFrame = {
 	line: number,
 	column: number,
 	presentationHint: string | null,
+	/**
+	 *  소스가 프로젝트 루트 밖(일반 파일)이거나 어댑터가 내용을 쥔 것(`sourceReference`)이면 `debug.source` 로 읽는 토큰 — 이
+	 *  연결 · 이 실행에만 산다(M6-18). 루트 안이면 없다(창이 `fs.*` 로 연다).
+	 */
+	token: string | null,
 };
 
 /**  `launch` starts the program under the debugger; `attach` only connects to a program that is already running. */
@@ -4119,6 +4130,21 @@ export type DebugSessionParams = {
 	runId: string,
 	/**  세션 나무의 세션(`startDebugging` 의 자식). 없으면 뿌리. */
 	session?: number | null,
+};
+
+export type DebugSource = {
+	/**  글 전부(5 MiB 까지, UTF-8). */
+	text: string,
+	/**  보일 경로(어댑터가 보고한 것). 어댑터가 쥔 소스면 없다. */
+	path: string | null,
+	/**  그 세션의 어댑터 id. */
+	adapter: string,
+};
+
+export type DebugSourceParams = {
+	runId: string,
+	/**  `debug.stack` 의 프레임이 준 토큰. */
+	token: string,
 };
 
 export type DebugStack = {
