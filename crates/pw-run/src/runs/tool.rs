@@ -587,7 +587,7 @@ fn tool_exit(exit: RunExit) -> RunToolExit {
 }
 
 /// 띄운 자리는 사람 · 에이전트만 — 세션 id · 클라이언트 이름은 싣지 않는다(머리 주석 「띄운 자리」).
-fn tool_run(info: RunInfo) -> RunToolRun {
+pub(crate) fn tool_run(info: RunInfo) -> RunToolRun {
     RunToolRun {
         run_id: info.run_id,
         config: info.config,

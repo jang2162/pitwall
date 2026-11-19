@@ -1239,11 +1239,33 @@ export type UnaryMethods = {
 	 */
 	"run.tool.logs": { params: RunToolLogsParams; result: RunToolLogs };
 	/**
+	 * Stop a run of this project, wait until it ended, and start its configuration again as a new run (`restartOf` points
+	 * to the old one). The configuration is read again, so the person approves what runs now, the same way as
+	 * `run_start`. A run a person started is always asked about.
+	 */
+	"run.tool.restart": { params: RunToolRunParams; result: RunToolStarted };
+	/**
+	 * Start a run configuration (see `run_config_list`) in Pitwall. A process configuration is started and returned at
+	 * once with its `runId` (read the output with `run_logs`, stop it with `run_stop`); an `sql` configuration runs its
+	 * files on its DB connection and this waits until it ends. The person approves what runs in Pitwall first — the
+	 * command line, working directory, profile and environment values — unless they already saw and ran this exact
+	 * configuration content in a trusted project, or the `sql` configuration only queries. A configuration changed since
+	 * (its file, its `.env` files, the script it names, the runtime files) is asked again. Untrusted projects do not run.
+	 * An `sql` configuration's connection must have been opened by the person in Pitwall, and every statement that is not
+	 * a query is approved each time.
+	 */
+	"run.tool.start": { params: RunToolStartParams; result: RunToolStarted };
+	/**
 	 * This project's runs: running ones and the finished ones Pitwall still keeps (the latest 20 per project) — state,
 	 * exit code or signal, pid, working directory, start and end times, and whether a person (from the Pitwall window)
 	 * or an agent started it. With `runId`, that run only (`not found` if it is not a run of this project).
 	 */
 	"run.tool.status": { params: RunToolStatusParams; result: RunToolStatus };
+	/**
+	 * Stop a run of this project (also one a person started — then the person is asked). The process tree gets SIGTERM,
+	 * then SIGKILL after 5 seconds; an `sql` run is interrupted and its open transaction rolled back. Returns at once.
+	 */
+	"run.tool.stop": { params: RunToolRunParams; result: RunToolStopped };
 	/**
 	 * 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).
 	 * 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.
@@ -1690,7 +1712,10 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"run.tool.configList": {"name":"run.tool.configList","kind":"unary","tier":"read","roles":["owner"],"params":"RunToolConfigListParams","output":"RunToolConfigList","doc":" This project's run configurations: usable ones (merged from the shared `.pitwall/run/<id>.toml` and the\n person's `<id>.local.toml`), files that cannot be used and why, and tasks detected from project files (npm\n scripts, Make targets, just recipes, compose services — with the file they came from). `env` values whose name\n points to a secret are `[redacted]` and URL passwords in `env` values are masked. Runs nothing and writes nothing.\n","mcp":{"group":"run","name":"run_config_list"},"fileScope":false},
 	"run.tool.configUpsert": {"name":"run.tool.configUpsert","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<RunToolConfigUpsertParams>","output":"RunToolConfigUpsert","doc":" Create or change a run configuration — `.pitwall/run/<id>.toml` (shared, committed; the default) or `<id>.local.toml`\n (personal, `location: \"local\"`). `config` is the whole configuration of that file, checked against the run\n configuration schema (`type`: shell, npm, gradle, maven, cargo, go, python, docker-compose, mise-task) before anything is\n asked: `cwd` and `envFile` must stay inside the project root, and `env` takes no secrets (names with a secret word are\n refused — use `envFile`). The person sees the file's diff and approves it in Pitwall first. Saving does not approve\n running: `run_start` still asks the person for a configuration an agent created or changed.\n","mcp":{"group":"run","name":"run_config_upsert"},"fileScope":false},
 	"run.tool.logs": {"name":"run.tool.logs","kind":"unary","tier":"read","roles":["owner"],"params":"RunToolLogsParams","output":"RunToolLogs","doc":" Read a run's output (also of runs a person started). By default the last 200 lines; `tail` sets the count,\n `since` reads on from an offset (`nextSince` of an earlier call — poll with it for new output), `grep` keeps\n only lines matching a regular expression. Terminal escapes are removed. The result is cut to about 192 KiB\n (`truncated`). Output is kept in memory only: the last 8 MiB while running, the last 1 MiB after the run ends,\n and only for the latest 20 finished runs of the project — older output is gone (`logStart`, `dropped`). A\n `runId` that is not a run of this project is `not found`.\n","mcp":{"group":"run","name":"run_logs"},"fileScope":false},
+	"run.tool.restart": {"name":"run.tool.restart","kind":"unary","tier":"dangerous","roles":["owner"],"params":"Planned<RunToolRunParams>","output":"RunToolStarted","doc":" Stop a run of this project, wait until it ended, and start its configuration again as a new run (`restartOf` points\n to the old one). The configuration is read again, so the person approves what runs now, the same way as\n `run_start`. A run a person started is always asked about.\n","mcp":{"group":"run","name":"run_restart"},"fileScope":false},
+	"run.tool.start": {"name":"run.tool.start","kind":"unary","tier":"dangerous","roles":["owner"],"params":"Planned<RunToolStartParams>","output":"RunToolStarted","doc":" Start a run configuration (see `run_config_list`) in Pitwall. A process configuration is started and returned at\n once with its `runId` (read the output with `run_logs`, stop it with `run_stop`); an `sql` configuration runs its\n files on its DB connection and this waits until it ends. The person approves what runs in Pitwall first — the\n command line, working directory, profile and environment values — unless they already saw and ran this exact\n configuration content in a trusted project, or the `sql` configuration only queries. A configuration changed since\n (its file, its `.env` files, the script it names, the runtime files) is asked again. Untrusted projects do not run.\n An `sql` configuration's connection must have been opened by the person in Pitwall, and every statement that is not\n a query is approved each time.\n","mcp":{"group":"run","name":"run_start"},"fileScope":false},
 	"run.tool.status": {"name":"run.tool.status","kind":"unary","tier":"read","roles":["owner"],"params":"RunToolStatusParams","output":"RunToolStatus","doc":" This project's runs: running ones and the finished ones Pitwall still keeps (the latest 20 per project) — state,\n exit code or signal, pid, working directory, start and end times, and whether a person (from the Pitwall window)\n or an agent started it. With `runId`, that run only (`not found` if it is not a run of this project).\n","mcp":{"group":"run","name":"run_status"},"fileScope":false},
+	"run.tool.stop": {"name":"run.tool.stop","kind":"unary","tier":"exec","roles":["owner"],"params":"Planned<RunToolRunParams>","output":"RunToolStopped","doc":" Stop a run of this project (also one a person started — then the person is asked). The process tree gets SIGTERM,\n then SIGKILL after 5 seconds; an `sql` run is interrupted and its open transaction rolled back. Returns at once.\n","mcp":{"group":"run","name":"run_stop"},"fileScope":false},
 	"runtime.get": {"name":"runtime.get","kind":"unary","tier":"read","roles":["owner"],"params":"RuntimeGetParams","output":"RuntimeInfo","doc":" 그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n 없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"runtime.reload": {"name":"runtime.reload","kind":"unary","tier":"write","roles":["owner"],"params":"RuntimeReloadParams","output":"()","doc":" 「환경 다시 읽기」: 로그인 셸 환경과 디렉터리별 캐시를 잊고 `runtime.changed` 를 낸다. 셸은 다음 요청에서 다시 돈다\n (백그라운드로 미리 시작한다). 이미 띄운 프로세스(열린 터미널)의 환경은 바뀌지 않는다.\n","mcp":null,"fileScope":false},
 	"search.files": {"name":"search.files","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SearchFilesParams","output":"SearchFiles","doc":" 프로젝트의 파일을 이름 · 경로로 퍼지 매칭한다(`⌘⇧O` · Search Everywhere). 목록은 창이 `fs.watch` 로 보는 루트마다 메모리에\n 있고 변경을 따라간다(`pw_fs::index` 머리 주석). 처음 만드는 중이면 다 만들 때까지 기다린다. 빈 질의는 경로순 앞에서부터다.\n","mcp":null,"fileScope":false},
@@ -8313,6 +8338,16 @@ export type PlanRules = {
 	policyAuto: boolean,
 };
 
+/**
+ *  계획의 한 단계가 띄울 구성과 그 내용 해시([`ToolPlan::seen`]). `hash` 는 `run_seen::SeenHash` 의 글(`sha256:<64 hex>`)이다 —
+ *  기록하는 쪽이 `SeenHash::parse` 로 꼴을 다시 본다.
+ */
+export type PlanSeen = {
+	/**  구성 열쇠(구성 id). */
+	key: string,
+	hash: string,
+};
+
 export type Pong = {
 	nonce: string,
 	hostId: string,
@@ -9243,6 +9278,39 @@ export type RunToolRun = {
 	ports: RunPort[],
 };
 
+export type RunToolRunParams = {
+	projectId: string,
+	/**  The run (`runId` from `run_start` or `run_status`). A run of another project is `not found`. */
+	runId: string,
+};
+
+export type RunToolStartParams = {
+	projectId: string,
+	/**
+	 *  Top of the worktree (absolute path). The configuration is read from that worktree and runs in the project root
+	 *  inside it. Empty means the session's worktree, or else the main checkout.
+	 */
+	worktree?: string | null,
+	/**  Run configuration id (see `run_config_list`). Detected tasks run after saving them with `run_config_upsert`. */
+	configId: string,
+	/**  A profile of that configuration (`profiles` — its `env` and `args` override the configuration's). */
+	profile?: string | null,
+};
+
+/**  What `run_start` and `run_restart` started. */
+export type RunToolStarted = {
+	/**  The new run. A process run is returned as soon as it started — read its output with `run_logs`. */
+	run: RunToolRun,
+	/**
+	 *  For an `sql` configuration, which waits until the run ends: statements run, the transactions and how each ended
+	 *  (`committed` · `rolledBack` · `unknown` · `readOnly` · `autoCommitted`), the failed statement if one failed, whether
+	 *  it was stopped, and the files that did not run. The console output is also in `run_logs`.
+	 */
+	sql: JsonValue | null,
+	/**  Audit details: the configuration id, its content hash and the run id (no command line or values). */
+	audit: string,
+};
+
 export type RunToolState = "running" | 
 /**  A stop was sent and the run has not ended yet. */
 "stopping" | "exited";
@@ -9256,6 +9324,15 @@ export type RunToolStatusParams = {
 	projectId: string,
 	/**  One run. Without it, every run of the project that Pitwall still keeps. */
 	runId?: string | null,
+};
+
+/**  What `run_stop` did. */
+export type RunToolStopped = {
+	/**
+	 *  The run after the stop was sent (`stopping`, or `exited` if it had already ended). It ends with SIGTERM, then
+	 *  SIGKILL after 5 seconds; an `sql` run is interrupted and rolled back.
+	 */
+	run: RunToolRun,
 };
 
 export type RunToolTaskList = {
@@ -10249,6 +10326,13 @@ export type ToolPlan = {
 	rules: PlanRules,
 	/**  `sha256:<hex>`. 승인은 이것에 묶인다. */
 	hash: string,
+	/**
+	 *  이 계획을 사람이 [허용] 하면 「사람이 본 구성」 으로 기록할 것(17-m6-plan M6-14 ③ — 실행 툴만, 단계마다 구성 열쇠와 그
+	 *  내용 해시). 툴 핸들러는 기록하지 않는다 — 에이전트 범위라 기록 증거(`run_seen::SeenBy`)를 만들 수 없고, 승인 표(해시만)로는
+	 *  사람의 답과 정책 자동 · `auto_approve` 를 가를 수 없다. 기록은 사람의 답이 오는 자리(`mcp.approval.answer` 의 허용 갈래)가
+	 *  그 창의 연결 범위로 한다. 해시에 든다(비었으면 덮지 않는다).
+	 */
+	seen?: PlanSeen[],
 };
 
 export type ToolSource = 

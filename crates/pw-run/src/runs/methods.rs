@@ -269,6 +269,7 @@ async fn blocking<T: Send + 'static>(
 pub fn register(router: &mut Router, runs: Runs) {
     // 실행 툴 ① 조회(M6-12) — MCP 툴 메서드.
     super::tool::register(router, runs.clone());
+    super::exec_tool::register(router, runs.clone());
     let (start, stop, restart, list, attach_runs, input, resize) = (
         runs.clone(),
         runs.clone(),

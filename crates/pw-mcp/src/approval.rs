@@ -426,6 +426,18 @@ impl Approvals {
         id: u64,
         answer: McpApprovalAnswer,
     ) -> Result<(), AnswerError> {
+        self.answer_seen(by, id, answer).map(|_| ())
+    }
+
+    /// [`Self::answer`] 인데, 허용(거절이 아닌 답)이 묻던 쪽에 닿았고 그 요청이 프로젝트의 것이면 그 프로젝트와 계획의 「사람이 본
+    /// 구성」 단계([`pw_core::registry::plan::ToolPlan::seen`])를 돌려준다 — `mcp.approval.answer` 가 그 창의 연결 범위로 기록한다
+    /// (17-m6-plan M6-14 ③). 묻던 쪽이 이미 그만뒀으면(끊긴 세션 — 돌지 않는다) 돌려주지 않는다.
+    pub fn answer_seen(
+        &self,
+        by: &Answerer<'_>,
+        id: u64,
+        answer: McpApprovalAnswer,
+    ) -> Result<Option<(String, Vec<pw_core::registry::plan::PlanSeen>)>, AnswerError> {
         let mut state = self.lock();
         let Some(pending) = state.pending.get(&id) else {
             return Err(AnswerError::NotFound);
@@ -449,6 +461,13 @@ impl Approvals {
             }
             _ => None,
         };
+        let seen = match (&pending.route, answer) {
+            (_, McpApprovalAnswer::Deny) => None,
+            (Route::Project(project), _) if !pending.request.plan.seen.is_empty() => {
+                Some((project.clone(), pending.request.plan.seen.clone()))
+            }
+            _ => None,
+        };
         let pending = state.pending.get_mut(&id).expect("위에서 찾았다");
         let reply = pending.reply.take().ok_or(AnswerError::NotFound)?;
         if reply.send(Ok(answer)).is_err() {
@@ -458,7 +477,7 @@ impl Approvals {
         if let Some(entry) = remember {
             state.cli.insert(entry);
         }
-        Ok(())
+        Ok(seen)
     }
 
     /// 승인을 지나는 호출 하나 — 버릴 때까지 [`Self::shutdown_and_wait`] 가 기다린다.

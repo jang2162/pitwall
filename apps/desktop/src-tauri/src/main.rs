@@ -67,7 +67,9 @@ fn local_host(
 }
 
 /// [`local_host`] 와 같고 그 Host 의 DB 세션도 돌려준다 — 시험이 실행 길에 끼워 넣는 자리(`DbSessions::test_hooks`)를 쓴다.
+/// `mcp_sessions` 는 시험의 MCP 세션들이 쓰는 등록부와 같은 것을 넘긴다 — 앱처럼 `mcp.approval.answer` RPC 가 그 승인 허브에 닿는다.
 #[cfg(test)]
+#[allow(clippy::too_many_arguments)] // local_host_with 와 같다.
 fn local_host_and_db(
     paths: AppPaths,
     diagnostics: Arc<Diagnostics>,
@@ -75,6 +77,7 @@ fn local_host_and_db(
     i18n: Arc<I18n>,
     fs: Arc<Fs>,
     askpass: pw_git::write::Askpass,
+    mcp_sessions: pw_mcp::sessions::Sessions,
 ) -> (LocalHost, Arc<pw_db::DbSessions>) {
     local_host_parts(
         paths,
@@ -84,7 +87,7 @@ fn local_host_and_db(
         fs,
         askpass,
         pw_core::open::OpenRequests::default(),
-        pw_mcp::sessions::Sessions::default(),
+        mcp_sessions,
     )
 }
 

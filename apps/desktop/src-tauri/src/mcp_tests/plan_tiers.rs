@@ -12,7 +12,7 @@
 //!
 //! 이 표가 보지 않는 것: 선언과 **같은** 등급의 계획을 툴이 실제로 내는지는 보지 않는다(낮추면 세션이, 높이면 세션이 거절한다).
 
-use pw_rpc::Tier::{self, Dangerous, Read, Write};
+use pw_rpc::Tier::{self, Dangerous, Exec, Read, Write};
 
 /// 계획을 내는 툴 전부: (이름, 선언 등급, 낼 수 있는 계획 등급). 이름순.
 const PLAN_TIERS: &[(&str, Tier, &[Tier])] = &[
@@ -30,6 +30,11 @@ const PLAN_TIERS: &[(&str, Tier, &[Tier])] = &[
     ("project_register", Write, &[Write]),
     ("run_config_delete", Write, &[Write]),
     ("run_config_upsert", Write, &[Write]),
+    // 실행 툴(M6-14 ①): 프로세스 구성 `exec`, `sql` 구성은 조회만이면 `read` · 그 밖 `dangerous`.
+    ("run_restart", Dangerous, &[Read, Exec, Dangerous]),
+    ("run_start", Dangerous, &[Read, Exec, Dangerous]),
+    // 끄기는 늘 `exec`.
+    ("run_stop", Exec, &[Exec]),
 ];
 
 #[test]

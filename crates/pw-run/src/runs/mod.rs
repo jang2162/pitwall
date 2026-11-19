@@ -35,6 +35,7 @@
 //! `runId` 를 받는 것은 모두 **그 실행의 프로젝트로 판정한다**. 다른 프로젝트의 `runId` 는 없는 실행과 같은 오류다
 //! ([`no_such_run`] — 있다는 것을 알리지 않는다). RPC 의 범위 판정은 [`methods`] 에 있다.
 
+pub mod exec_tool;
 pub mod log;
 pub mod methods;
 pub mod ports;
@@ -140,6 +141,50 @@ pub enum LaunchedBy {
 pub struct AgentLaunch {
     pub session: String,
     pub client: Option<String>,
+}
+
+/// [`Runs::start_agent_with`] 의 나머지.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentStart {
+    /// PTY 크기(없으면 [`DEFAULT_SIZE`]).
+    pub size: Option<(u16, u16)>,
+    /// 실행 목록에 보이는 워크트리(툴 입력의 `worktree`).
+    pub worktree: Option<String>,
+    /// 다시 실행한 앞 실행.
+    pub restart_of: Option<RunId>,
+}
+
+/// 지금 푼 프로세스 구성 하나([`Runs::resolve_process`] — 창의 띄우기와 에이전트의 계획이 같이 쓴다).
+pub(crate) struct Resolved {
+    pub key: String,
+    pub root: PathBuf,
+    pub config: crate::config::RunConfig,
+    pub cwd: PathBuf,
+    pub run_env: RunEnv,
+    /// 그 작업 폴더의 런타임 환경.
+    pub runtime: pw_runtime::RuntimeEnv,
+    pub login_shell: Vec<String>,
+    /// 띄울 argv(`keep_path_first` 앞 — 해시하는 값).
+    pub argv: Vec<String>,
+    pub definition: Option<String>,
+    /// 런타임 기준 환경의 `HOME`(런타임 원천 파일 찾기가 멈추는 자리).
+    pub home: Option<PathBuf>,
+}
+
+impl Resolved {
+    /// 「사람이 본 구성」 해시(M6-11 — `crate::seen::hash`).
+    pub fn seen_hash(&self) -> Result<pw_core::registry::run_seen::SeenHash, String> {
+        crate::seen::hash(&crate::seen::SeenParts {
+            key: &self.key,
+            root: &self.root,
+            config: &self.config,
+            argv: &self.argv,
+            cwd: &self.cwd,
+            home: self.home.as_deref(),
+            env: &self.run_env,
+            definition: self.definition.as_deref(),
+        })
+    }
 }
 
 #[derive(
@@ -268,6 +313,9 @@ pub struct Run {
     profile: Option<String>,
     started_at: i64,
     restart_of: Option<RunId>,
+    /// 사람이 띄웠다 — 띄운 자리가 창이거나, 다시 실행한 앞 실행이 사람이 띄운 것(`restartOf` 를 따라 처음까지). 앞 실행을 표에서
+    /// 찾지 못하면 사람이 띄운 것으로 본다(엄한 쪽 — [`Run::launched_by_person`]).
+    by_person: bool,
     relaunch: Relaunch,
     size: Mutex<(u16, u16)>,
     log: Mutex<RunLog>,
@@ -306,6 +354,28 @@ impl Run {
 
     pub fn launched_by(&self) -> &LaunchedBy {
         &self.launched_by
+    }
+
+    /// 사람이 띄운 실행인가(17-m6-plan M6-14 ⑦ · 결정 M6-D7 · D69): 창에서 띄웠거나, `restartOf` 를 따라간 어느 앞 실행이든 창에서
+    /// 띄운 것. 에이전트가 사람의 실행을 `run_restart` 로 다시 띄운 새 실행도 사람의 실행이다 — 그렇지 않으면 그 뒤의 `run_stop` 이
+    /// 사람의 실행에 닿는 정책 자동을 받는다(M6-02 리뷰 R6). 앞 실행이 표에서 이미 빠졌으면 사람이 띄운 것으로 본다.
+    pub fn launched_by_person(&self) -> bool {
+        self.by_person
+    }
+
+    /// 실행의 구성 열쇠.
+    pub fn config(&self) -> &str {
+        &self.config
+    }
+
+    /// 실행이 든 워크트리(창이 준 것 · 에이전트가 준 것).
+    pub fn worktree(&self) -> Option<&str> {
+        self.worktree.as_deref()
+    }
+
+    /// 실행의 프로필.
+    pub fn profile(&self) -> Option<&str> {
+        self.profile.as_deref()
     }
 
     pub fn info(&self) -> RunInfo {
@@ -458,6 +528,8 @@ struct Inner {
     runtime: Arc<Runtime>,
     launcher: Arc<dyn ProcessLauncher>,
     host: OnceLock<HostParts>,
+    /// `sql` 구성의 에이전트 실행(M6-14 — pw-db 가 `pw_db::run_sql::register` 에서 붙인다). 없으면 `run_start` 가 `sql` 구성을 거절한다.
+    sql_tool: OnceLock<Arc<dyn exec_tool::SqlRunTool>>,
     limits: RunLimits,
     meter: Meter,
     table: Mutex<Table>,
@@ -490,6 +562,7 @@ impl Runs {
                 runtime,
                 launcher,
                 host: OnceLock::new(),
+                sql_tool: OnceLock::new(),
                 limits,
                 meter: Meter::default(),
                 table: Mutex::default(),
@@ -508,6 +581,12 @@ impl Runs {
     /// 두 번째부터는 무시한다.
     pub fn attach(&self, parts: HostParts) {
         let _ = self.inner.host.set(parts);
+    }
+
+    /// `sql` 구성을 에이전트의 `run_start` · `run_restart` 로 돌리는 것(M6-14 — pw-run 은 pw-db 에 의존하지 않으므로 pw-db 가 붙인다).
+    /// 두 번째부터는 무시한다.
+    pub fn attach_sql_tool(&self, tool: Arc<dyn exec_tool::SqlRunTool>) {
+        let _ = self.inner.sql_tool.set(tool);
     }
 
     pub fn limits(&self) -> RunLimits {
@@ -555,68 +634,25 @@ impl Runs {
         launched_by: LaunchedBy,
         what: Relaunched,
     ) -> Result<RunInfo, RpcError> {
-        let host = self.inner.host()?;
-        let project = host.projects.get(project_id).map_err(registry_error)?;
-        if !host.projects.is_trusted(&project.id) {
-            return Err(untrusted(&project.id));
-        }
-        let place = RunConfigPlace::new(&host.paths, &project, what.worktree.as_deref())?;
-        let set = read(&place);
-        let Some(loaded) = set.get(&what.config_id) else {
-            if let Some(unusable) = set.unusable.iter().find(|u| u.id == what.config_id) {
-                return Err(RpcError::invalid_params(format!(
-                    "run config `{}` cannot be used: {}",
-                    unusable.id, unusable.reason
-                )));
-            }
-            return Err(RpcError::new(
-                code::NOT_FOUND,
-                format!("run config `{}` does not exist", what.config_id),
-            ));
-        };
-        let config = &loaded.config;
-        let cwd = match &config.cwd {
-            Some(rel) => crate::config::root::inside(&place.root, rel)
-                .map_err(|why| RpcError::invalid_params(format!("cwd {why}")))?,
-            None => normalize(&place.root).unwrap_or_else(|_| place.root.clone()),
-        };
-        if !cwd.is_dir() {
-            return Err(RpcError::invalid_params(format!(
-                "cwd `{}` is not a directory",
-                cwd.display()
-            )));
-        }
-        // 신뢰는 위에서 봤다 — `.env` 는 그 뒤에 읽는다(M6-03 머리 주석). 오류 글에는 값이 없다(이름 · 경로 · 줄만).
-        let run_env = RunEnv::resolve(config, what.profile.as_deref(), &place.root)
-            .map_err(|e| RpcError::invalid_params(e.to_string()))?;
-        let runtime = self.inner.runtime.env(&project.id, &cwd);
-        let login_shell = crate::shell::default_argv(&runtime.env);
-        let argv = argv(
-            config,
+        let (project, place) = self.config_place(project_id, what.worktree.as_deref())?;
+        let (key, config) = config_of(&place, &what.config_id)?;
+        let resolved = self.resolve_process(
+            &project.id,
+            &place.root,
+            &key,
+            &config,
             what.profile.as_deref(),
-            &ArgvContext {
-                root: &place.root,
-                cwd: &cwd,
-                login_shell: &login_shell,
-            },
-        )
-        .map_err(RpcError::invalid_params)?;
-        let mut env = crate::shell::child_env(&run_env.apply(&runtime.env));
-        let argv_seen = argv.clone();
-        let mut argv = argv;
-        keep_path_first(&mut argv, &mut env, &login_shell);
-        // 정의 본문(npm script)은 띄우기 전에 읽는다 — 띄운 값으로 해시한다(`seen` 머리 주석 「다시 읽지 않는다」, 리뷰 R7).
-        let definition = what
-            .seen
-            .as_ref()
-            .and_then(|_| npm_definition(&loaded.id, config, &place.root, &cwd));
+        )?;
+        let mut env = crate::shell::child_env(&resolved.run_env.apply(&resolved.runtime));
+        let mut argv = resolved.argv.clone();
+        keep_path_first(&mut argv, &mut env, &resolved.login_shell);
         let new = NewRun {
             project_id: project.id.clone(),
-            config: loaded.id.clone(),
+            config: key.clone(),
             name: config.name.clone(),
             launched_by,
             worktree: what.worktree.clone(),
-            cwd: Some(cwd.clone()),
+            cwd: Some(resolved.cwd.clone()),
             profile: what.profile.clone(),
             relaunch: Relaunch::Config {
                 config_id: what.config_id,
@@ -628,39 +664,69 @@ impl Runs {
         };
         let info = self.start_process(new, argv, env)?;
         if let Some(by) = what.seen {
-            self.record_seen(
-                &by,
-                &loaded.id,
-                &place.root,
-                config,
-                &argv_seen,
-                &cwd,
-                &run_env,
-                definition.as_deref(),
-            );
+            match resolved.seen_hash() {
+                Ok(hash) => self.record_seen(&by, &key, hash),
+                Err(why) => {
+                    tracing::debug!(target: "pw_run", key, %why, "the run started but its seen hash could not be made");
+                }
+            }
         }
         Ok(info)
     }
 
-    /// 창에서 띄운 구성을 「사람이 본 구성」 으로 기록한다(17-m6-plan M6-02 ⑧ · M6-11): 띄운 값 그대로(argv · 작업 폴더 · M6-03 이 푼
-    /// env · 정의 본문)를 `pw_run::seen::hash` 로 해시해 `Registry::record_run_seen` 에 적는다. 해시를 만들지 못하거나(정의 본문이
-    /// 없는 `mise-task` — M6-05 전) 기록하지 못하면(`readOnly` · `memory`) 건너뛴다 — 실행을 막지 않고, 다음 에이전트 실행이 한 번
-    /// 묻는다.
-    #[allow(clippy::too_many_arguments)] // 해시의 재료 그대로다.
-    fn record_seen(
+    /// 프로젝트(레지스트리에 있고 신뢰한 것)와 그 워크트리의 구성 자리. 미신뢰 프로젝트는 구성을 읽기 전에 거절한다(M6-P6).
+    fn config_place(
         &self,
-        by: &SeenBy,
-        key: &str,
+        project_id: &str,
+        worktree: Option<&str>,
+    ) -> Result<(pw_core::registry::Project, RunConfigPlace), RpcError> {
+        let host = self.inner.host()?;
+        let project = host.projects.get(project_id).map_err(registry_error)?;
+        if !host.projects.is_trusted(&project.id) {
+            return Err(untrusted(&project.id));
+        }
+        let place = RunConfigPlace::new(&host.paths, &project, worktree)?;
+        Ok((project, place))
+    }
+
+    /// 프로세스 구성 하나를 지금 푼다(블로킹): 작업 폴더 · M6-03 의 env(`.env` 를 지금 읽는다) · 런타임 환경 · argv · 정의 본문.
+    /// 창의 길([`Self::start_config`])과 에이전트의 계획(`exec_tool`)이 같은 함수로 풀어야 「사람이 본 구성」 해시가 같다(M6-11).
+    /// 신뢰는 부르는 쪽이 이미 봤다(`.env` 는 그 뒤에 읽는다 — M6-03 머리 주석). 오류 글에는 값이 없다(이름 · 경로 · 줄만).
+    fn resolve_process(
+        &self,
+        project_id: &str,
         root: &Path,
+        key: &str,
         config: &crate::config::RunConfig,
-        argv: &[String],
-        cwd: &Path,
-        env: &RunEnv,
-        definition: Option<&str>,
-    ) {
-        let Ok(host) = self.inner.host() else {
-            return;
+        profile: Option<&str>,
+    ) -> Result<Resolved, RpcError> {
+        let cwd = match &config.cwd {
+            Some(rel) => crate::config::root::inside(root, rel)
+                .map_err(|why| RpcError::invalid_params(format!("cwd {why}")))?,
+            None => normalize(root).unwrap_or_else(|_| root.to_path_buf()),
         };
+        if !cwd.is_dir() {
+            return Err(RpcError::invalid_params(format!(
+                "cwd `{}` is not a directory",
+                cwd.display()
+            )));
+        }
+        let run_env = RunEnv::resolve(config, profile, root)
+            .map_err(|e| RpcError::invalid_params(e.to_string()))?;
+        let runtime = self.inner.runtime.env(project_id, &cwd);
+        let login_shell = crate::shell::default_argv(&runtime.env);
+        let argv = argv(
+            config,
+            profile,
+            &ArgvContext {
+                root,
+                cwd: &cwd,
+                login_shell: &login_shell,
+            },
+        )
+        .map_err(RpcError::invalid_params)?;
+        // 정의 본문(npm script)은 띄우기 전에 읽는다 — 띄운 값으로 해시한다(`seen` 머리 주석 「다시 읽지 않는다」, 리뷰 R7).
+        let definition = npm_definition(key, config, root, &cwd);
         let home = self
             .inner
             .runtime
@@ -669,25 +735,30 @@ impl Runs {
             .env
             .get("HOME")
             .map(PathBuf::from);
-        let parts = crate::seen::SeenParts {
-            key,
-            root,
-            config,
-            argv,
+        Ok(Resolved {
+            key: key.to_owned(),
+            root: root.to_path_buf(),
+            config: config.clone(),
             cwd,
-            home: home.as_deref(),
-            env,
+            run_env,
+            runtime: runtime.env.clone(),
+            login_shell,
+            argv,
             definition,
+            home,
+        })
+    }
+
+    /// 창에서 띄운 구성을 「사람이 본 구성」 으로 기록한다(17-m6-plan M6-02 ⑧ · M6-11): 띄운 값 그대로(argv · 작업 폴더 · M6-03 이 푼
+    /// env · 정의 본문)를 `pw_run::seen::hash` 로 해시한 것([`Resolved::seen_hash`])을 `Registry::record_run_seen` 에 적는다. 해시를
+    /// 만들지 못하거나(정의 본문이 없는 `mise-task` — M6-05 전) 기록하지 못하면(`readOnly` · `memory`) 건너뛴다 — 실행을 막지 않고,
+    /// 다음 에이전트 실행이 한 번 묻는다.
+    fn record_seen(&self, by: &SeenBy, key: &str, hash: pw_core::registry::run_seen::SeenHash) {
+        let Ok(host) = self.inner.host() else {
+            return;
         };
-        match crate::seen::hash(&parts) {
-            Ok(hash) => {
-                if let Err(e) = host.projects.record_run_seen(by, &[(key.to_owned(), hash)]) {
-                    tracing::debug!(target: "pw_run", key, error = %e, "the run started but was not recorded as seen");
-                }
-            }
-            Err(why) => {
-                tracing::debug!(target: "pw_run", key, %why, "the run started but its seen hash could not be made");
-            }
+        if let Err(e) = host.projects.record_run_seen(by, &[(key.to_owned(), hash)]) {
+            tracing::debug!(target: "pw_run", key, error = %e, "the run started but was not recorded as seen");
         }
     }
 
@@ -700,6 +771,26 @@ impl Runs {
         by: AgentLaunch,
         size: Option<(u16, u16)>,
     ) -> Result<RunInfo, RpcError> {
+        self.start_agent_with(
+            grant,
+            step,
+            by,
+            AgentStart {
+                size,
+                ..AgentStart::default()
+            },
+        )
+    }
+
+    /// [`Self::start_agent`] 에 워크트리(실행 목록에 보이는 칸)와 다시 실행한 앞 실행(`restartOf` — M6-14 의 `run_restart`)을 준다.
+    /// 앞 실행을 사람이 띄웠으면 새 실행도 사람이 띄운 실행으로 다룬다([`Run::launched_by_person`] — 결정 M6-D7).
+    pub fn start_agent_with(
+        &self,
+        grant: &AgentRunGrant,
+        step: usize,
+        by: AgentLaunch,
+        start: AgentStart,
+    ) -> Result<RunInfo, RpcError> {
         let spec = grant.runs().get(step).ok_or_else(|| {
             RpcError::internal(format!("the approved plan has no run step {step}"))
         })?;
@@ -710,8 +801,9 @@ impl Runs {
                 session: by.session,
                 client: by.client,
             },
-            size.unwrap_or(DEFAULT_SIZE),
-            None,
+            start.size.unwrap_or(DEFAULT_SIZE),
+            start.restart_of,
+            start.worktree,
         )
     }
 
@@ -722,6 +814,7 @@ impl Runs {
         launched_by: LaunchedBy,
         size: (u16, u16),
         restart_of: Option<RunId>,
+        worktree: Option<String>,
     ) -> Result<RunInfo, RpcError> {
         let host = self.inner.host()?;
         if !host.projects.is_trusted(project_id) {
@@ -742,7 +835,7 @@ impl Runs {
             config: spec.config.clone(),
             name: spec.config.clone(),
             launched_by,
-            worktree: None,
+            worktree,
             cwd: Some(cwd),
             profile: spec.profile.clone(),
             relaunch: Relaunch::Spec(Box::new(spec.clone())),
@@ -814,6 +907,13 @@ impl Runs {
             self.inner.nonce,
             self.inner.next.fetch_add(1, Ordering::Relaxed)
         );
+        let by_person = matches!(new.launched_by, LaunchedBy::Window { .. })
+            || new.restart_of.as_ref().is_some_and(|before| {
+                lock(&self.inner.table)
+                    .runs
+                    .get(before)
+                    .is_none_or(|run| run.by_person)
+            });
         let run = Arc::new(Run {
             id: id.clone(),
             project_id: new.project_id,
@@ -825,6 +925,7 @@ impl Runs {
             profile: new.profile,
             started_at: now_ms(),
             restart_of: new.restart_of,
+            by_person,
             relaunch: new.relaunch,
             size: Mutex::new(new.size),
             log: Mutex::new(RunLog::new(
@@ -980,6 +1081,7 @@ impl Runs {
                 launched_by,
                 size,
                 Some(run.id.clone()),
+                run.worktree.clone(),
             ),
             Relaunch::None => unreachable!("checked above"),
         })
@@ -1031,6 +1133,27 @@ pub fn project_closed(project_id: &str) {
     for inner in managers {
         Runs { inner }.stop_project(project_id);
     }
+}
+
+/// 구성 자리에서 쓸 수 있는 구성 하나(열쇠, 구성). 쓸 수 없으면 그 까닭(invalid params), 없으면 not found.
+fn config_of(
+    place: &RunConfigPlace,
+    config_id: &str,
+) -> Result<(String, crate::config::RunConfig), RpcError> {
+    let set = read(place);
+    let Some(loaded) = set.get(config_id) else {
+        if let Some(unusable) = set.unusable.iter().find(|u| u.id == config_id) {
+            return Err(RpcError::invalid_params(format!(
+                "run config `{}` cannot be used: {}",
+                unusable.id, unusable.reason
+            )));
+        }
+        return Err(RpcError::new(
+            code::NOT_FOUND,
+            format!("run config `{config_id}` does not exist"),
+        ));
+    };
+    Ok((loaded.id.clone(), loaded.config.clone()))
 }
 
 /// [`Runs::start_config`] 가 받는 것(창의 시작 · 다시 실행).

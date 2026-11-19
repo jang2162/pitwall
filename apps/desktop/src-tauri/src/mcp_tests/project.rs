@@ -349,7 +349,7 @@ impl ToolSession {
             tokio::io::split(server_io),
             cancel.clone(),
         ));
-        let client = rmcp::ServiceExt::serve((), client_io)
+        let client = rmcp::ServiceExt::serve(rmcp::model::ClientConfig::default(), client_io)
             .await
             .expect("MCP 세션이 열리지 않았다");
         ToolSession { client, cancel }

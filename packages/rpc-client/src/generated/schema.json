@@ -38114,6 +38114,23 @@
             ],
             "type": "object"
           },
+          "PlanSeen": {
+            "description": "계획의 한 단계가 띄울 구성과 그 내용 해시([`ToolPlan::seen`]). `hash` 는 `run_seen::SeenHash` 의 글(`sha256:<64 hex>`)이다 —\n기록하는 쪽이 `SeenHash::parse` 로 꼴을 다시 본다.",
+            "properties": {
+              "hash": {
+                "type": "string"
+              },
+              "key": {
+                "description": "구성 열쇠(구성 id).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "hash"
+            ],
+            "type": "object"
+          },
           "Remember": {
             "description": "세션 허용이 기억하는 단위.",
             "oneOf": [
@@ -38301,6 +38318,14 @@
               "rules": {
                 "$ref": "#/$defs/PlanRules"
               },
+              "seen": {
+                "default": [],
+                "description": "이 계획을 사람이 [허용] 하면 「사람이 본 구성」 으로 기록할 것(17-m6-plan M6-14 ③ — 실행 툴만, 단계마다 구성 열쇠와 그\n내용 해시). 툴 핸들러는 기록하지 않는다 — 에이전트 범위라 기록 증거(`run_seen::SeenBy`)를 만들 수 없고, 승인 표(해시만)로는\n사람의 답과 정책 자동 · `auto_approve` 를 가를 수 없다. 기록은 사람의 답이 오는 자리(`mcp.approval.answer` 의 허용 갈래)가\n그 창의 연결 범위로 한다. 해시에 든다(비었으면 덮지 않는다).",
+                "items": {
+                  "$ref": "#/$defs/PlanSeen"
+                },
+                "type": "array"
+              },
               "summary": {
                 "description": "한 줄 요약(영어가 아니어도 된다 — 사람의 화면이 보인다. 에이전트가 보낸 글이 섞이면 화면이 거른다).",
                 "type": "string"
@@ -38315,7 +38340,8 @@
               "summary",
               "changes",
               "rules",
-              "hash"
+              "hash",
+              "seen"
             ],
             "type": "object"
           }
@@ -46927,6 +46953,466 @@
       ],
       "tier": "read"
     },
+    "run.tool.restart": {
+      "description": "Stop a run of this project, wait until it ended, and start its configuration again as a new run (`restartOf` points\nto the old one). The configuration is read again, so the person approves what runs now, the same way as\n`run_start`. A run a person started is always asked about.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "runId": {
+            "description": "The run (`runId` from `run_start` or `run_status`). A run of another project is `not found`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId",
+          "runId"
+        ],
+        "type": "object",
+        "x-pitwall-planned": true
+      },
+      "result": {
+        "$defs": {
+          "RunToolExit": {
+            "properties": {
+              "code": {
+                "description": "Exit code. `null` if a signal ended it.",
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "signal": {
+                "description": "The signal that ended it (for example `Terminated: 15`). `null` if it exited with a code.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "code",
+              "signal"
+            ],
+            "type": "object"
+          },
+          "RunToolLauncher": {
+            "description": "Who started a run.",
+            "oneOf": [
+              {
+                "const": "person",
+                "description": "A person, from the project window.",
+                "type": "string"
+              },
+              {
+                "const": "agent",
+                "description": "An agent, through a run tool.",
+                "type": "string"
+              }
+            ]
+          },
+          "RunToolRun": {
+            "description": "One run.",
+            "properties": {
+              "config": {
+                "description": "Configuration id, or the detected task's key.",
+                "type": "string"
+              },
+              "cwd": {
+                "description": "Working directory (absolute path).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "endedAt": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "exit": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RunToolExit"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Set once the run has ended."
+              },
+              "kind": {
+                "description": "`process` (later also `sql` and `debug`).",
+                "type": "string"
+              },
+              "launchedBy": {
+                "$ref": "#/$defs/RunToolLauncher"
+              },
+              "logEnd": {
+                "description": "Log end offset (bytes written so far).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "logStart": {
+                "description": "First log offset still kept (output before it was dropped).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "pid": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "restartOf": {
+                "description": "The run this one restarted.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "runId": {
+                "description": "`runId` for `run_logs`.",
+                "type": "string"
+              },
+              "startedAt": {
+                "description": "Start time (Unix milliseconds).",
+                "format": "int64",
+                "type": "integer"
+              },
+              "state": {
+                "$ref": "#/$defs/RunToolState"
+              },
+              "worktree": {
+                "description": "The worktree the person's window had active, if not the main checkout.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "runId",
+              "config",
+              "name",
+              "kind",
+              "launchedBy",
+              "worktree",
+              "cwd",
+              "profile",
+              "pid",
+              "state",
+              "exit",
+              "startedAt",
+              "endedAt",
+              "restartOf",
+              "logStart",
+              "logEnd"
+            ],
+            "type": "object"
+          },
+          "RunToolState": {
+            "oneOf": [
+              {
+                "enum": [
+                  "running",
+                  "exited"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "stopping",
+                "description": "A stop was sent and the run has not ended yet.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "What `run_start` and `run_restart` started.",
+        "properties": {
+          "audit": {
+            "description": "Audit details: the configuration id, its content hash and the run id (no command line or values).",
+            "type": "string"
+          },
+          "run": {
+            "$ref": "#/$defs/RunToolRun",
+            "description": "The new run. A process run is returned as soon as it started — read its output with `run_logs`."
+          },
+          "sql": {
+            "description": "For an `sql` configuration, which waits until the run ends: statements run, the transactions and how each ended\n(`committed` · `rolledBack` · `unknown` · `readOnly` · `autoCommitted`), the failed statement if one failed, whether\nit was stopped, and the files that did not run. The console output is also in `run_logs`."
+          }
+        },
+        "required": [
+          "run",
+          "sql",
+          "audit"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "dangerous"
+    },
+    "run.tool.start": {
+      "description": "Start a run configuration (see `run_config_list`) in Pitwall. A process configuration is started and returned at\nonce with its `runId` (read the output with `run_logs`, stop it with `run_stop`); an `sql` configuration runs its\nfiles on its DB connection and this waits until it ends. The person approves what runs in Pitwall first — the\ncommand line, working directory, profile and environment values — unless they already saw and ran this exact\nconfiguration content in a trusted project, or the `sql` configuration only queries. A configuration changed since\n(its file, its `.env` files, the script it names, the runtime files) is asked again. Untrusted projects do not run.\nAn `sql` configuration's connection must have been opened by the person in Pitwall, and every statement that is not\na query is approved each time.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "configId": {
+            "description": "Run configuration id (see `run_config_list`). Detected tasks run after saving them with `run_config_upsert`.",
+            "type": "string"
+          },
+          "profile": {
+            "default": null,
+            "description": "A profile of that configuration (`profiles` — its `env` and `args` override the configuration's).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "description": "Top of the worktree (absolute path). The configuration is read from that worktree and runs in the project root\ninside it. Empty means the session's worktree, or else the main checkout.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "configId"
+        ],
+        "type": "object",
+        "x-pitwall-planned": true
+      },
+      "result": {
+        "$defs": {
+          "RunToolExit": {
+            "properties": {
+              "code": {
+                "description": "Exit code. `null` if a signal ended it.",
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "signal": {
+                "description": "The signal that ended it (for example `Terminated: 15`). `null` if it exited with a code.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "code",
+              "signal"
+            ],
+            "type": "object"
+          },
+          "RunToolLauncher": {
+            "description": "Who started a run.",
+            "oneOf": [
+              {
+                "const": "person",
+                "description": "A person, from the project window.",
+                "type": "string"
+              },
+              {
+                "const": "agent",
+                "description": "An agent, through a run tool.",
+                "type": "string"
+              }
+            ]
+          },
+          "RunToolRun": {
+            "description": "One run.",
+            "properties": {
+              "config": {
+                "description": "Configuration id, or the detected task's key.",
+                "type": "string"
+              },
+              "cwd": {
+                "description": "Working directory (absolute path).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "endedAt": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "exit": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RunToolExit"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Set once the run has ended."
+              },
+              "kind": {
+                "description": "`process` (later also `sql` and `debug`).",
+                "type": "string"
+              },
+              "launchedBy": {
+                "$ref": "#/$defs/RunToolLauncher"
+              },
+              "logEnd": {
+                "description": "Log end offset (bytes written so far).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "logStart": {
+                "description": "First log offset still kept (output before it was dropped).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "pid": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "restartOf": {
+                "description": "The run this one restarted.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "runId": {
+                "description": "`runId` for `run_logs`.",
+                "type": "string"
+              },
+              "startedAt": {
+                "description": "Start time (Unix milliseconds).",
+                "format": "int64",
+                "type": "integer"
+              },
+              "state": {
+                "$ref": "#/$defs/RunToolState"
+              },
+              "worktree": {
+                "description": "The worktree the person's window had active, if not the main checkout.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "runId",
+              "config",
+              "name",
+              "kind",
+              "launchedBy",
+              "worktree",
+              "cwd",
+              "profile",
+              "pid",
+              "state",
+              "exit",
+              "startedAt",
+              "endedAt",
+              "restartOf",
+              "logStart",
+              "logEnd"
+            ],
+            "type": "object"
+          },
+          "RunToolState": {
+            "oneOf": [
+              {
+                "enum": [
+                  "running",
+                  "exited"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "stopping",
+                "description": "A stop was sent and the run has not ended yet.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "What `run_start` and `run_restart` started.",
+        "properties": {
+          "audit": {
+            "description": "Audit details: the configuration id, its content hash and the run id (no command line or values).",
+            "type": "string"
+          },
+          "run": {
+            "$ref": "#/$defs/RunToolRun",
+            "description": "The new run. A process run is returned as soon as it started — read its output with `run_logs`."
+          },
+          "sql": {
+            "description": "For an `sql` configuration, which waits until the run ends: statements run, the transactions and how each ended\n(`committed` · `rolledBack` · `unknown` · `readOnly` · `autoCommitted`), the failed statement if one failed, whether\nit was stopped, and the files that did not run. The console output is also in `run_logs`."
+          }
+        },
+        "required": [
+          "run",
+          "sql",
+          "audit"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "dangerous"
+    },
     "run.tool.status": {
       "description": "This project's runs: running ones and the finished ones Pitwall still keeps (the latest 20 per project) — state,\nexit code or signal, pid, working directory, start and end times, and whether a person (from the Pitwall window)\nor an agent started it. With `runId`, that run only (`not found` if it is not a run of this project).",
       "kind": "unary",
@@ -47178,6 +47664,219 @@
         "owner"
       ],
       "tier": "read"
+    },
+    "run.tool.stop": {
+      "description": "Stop a run of this project (also one a person started — then the person is asked). The process tree gets SIGTERM,\nthen SIGKILL after 5 seconds; an `sql` run is interrupted and its open transaction rolled back. Returns at once.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "runId": {
+            "description": "The run (`runId` from `run_start` or `run_status`). A run of another project is `not found`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId",
+          "runId"
+        ],
+        "type": "object",
+        "x-pitwall-planned": true
+      },
+      "result": {
+        "$defs": {
+          "RunToolExit": {
+            "properties": {
+              "code": {
+                "description": "Exit code. `null` if a signal ended it.",
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "signal": {
+                "description": "The signal that ended it (for example `Terminated: 15`). `null` if it exited with a code.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "code",
+              "signal"
+            ],
+            "type": "object"
+          },
+          "RunToolLauncher": {
+            "description": "Who started a run.",
+            "oneOf": [
+              {
+                "const": "person",
+                "description": "A person, from the project window.",
+                "type": "string"
+              },
+              {
+                "const": "agent",
+                "description": "An agent, through a run tool.",
+                "type": "string"
+              }
+            ]
+          },
+          "RunToolRun": {
+            "description": "One run.",
+            "properties": {
+              "config": {
+                "description": "Configuration id, or the detected task's key.",
+                "type": "string"
+              },
+              "cwd": {
+                "description": "Working directory (absolute path).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "endedAt": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "exit": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RunToolExit"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Set once the run has ended."
+              },
+              "kind": {
+                "description": "`process` (later also `sql` and `debug`).",
+                "type": "string"
+              },
+              "launchedBy": {
+                "$ref": "#/$defs/RunToolLauncher"
+              },
+              "logEnd": {
+                "description": "Log end offset (bytes written so far).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "logStart": {
+                "description": "First log offset still kept (output before it was dropped).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "pid": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "restartOf": {
+                "description": "The run this one restarted.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "runId": {
+                "description": "`runId` for `run_logs`.",
+                "type": "string"
+              },
+              "startedAt": {
+                "description": "Start time (Unix milliseconds).",
+                "format": "int64",
+                "type": "integer"
+              },
+              "state": {
+                "$ref": "#/$defs/RunToolState"
+              },
+              "worktree": {
+                "description": "The worktree the person's window had active, if not the main checkout.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "runId",
+              "config",
+              "name",
+              "kind",
+              "launchedBy",
+              "worktree",
+              "cwd",
+              "profile",
+              "pid",
+              "state",
+              "exit",
+              "startedAt",
+              "endedAt",
+              "restartOf",
+              "logStart",
+              "logEnd"
+            ],
+            "type": "object"
+          },
+          "RunToolState": {
+            "oneOf": [
+              {
+                "enum": [
+                  "running",
+                  "exited"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "stopping",
+                "description": "A stop was sent and the run has not ended yet.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "What `run_stop` did.",
+        "properties": {
+          "run": {
+            "$ref": "#/$defs/RunToolRun",
+            "description": "The run after the stop was sent (`stopping`, or `exited` if it had already ended). It ends with SIGTERM, then\nSIGKILL after 5 seconds; an `sql` run is interrupted and rolled back."
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
     },
     "runtime.get": {
       "description": "그 디렉터리에서 띄울 프로세스의 환경: 제공자 · 출처 · 상태(03 §5-1). 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n없는 프로젝트 · 상대 경로 · 프로젝트(와 그 연결 워크트리) 밖의 `dir` 은 invalid params 오류.",

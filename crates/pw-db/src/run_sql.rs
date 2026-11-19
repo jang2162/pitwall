@@ -47,6 +47,9 @@ use crate::script::{
 use crate::session::{DbSessions, blocking, db_error};
 use crate::tool_plan::sql_grade;
 
+mod agent;
+pub use agent::AgentSqlRuns;
+
 /// 한 실행이 읽는 파일 합계의 상한(바이트) — `db_query` · `db_execute` 의 `file` 하나와 같은 5 MiB(결정 D33,
 /// `crate::script::MAX_FILE_BYTES`). 파일 수의 상한은 `pw_run::config::SQL_MAX_FILES`(64). 넘으면 띄우기 전에 거절한다.
 pub const MAX_TOTAL_BYTES: u64 = crate::script::MAX_FILE_BYTES;
@@ -110,9 +113,18 @@ pub struct SqlRunPlan {
     /// `crate::tool_plan::db_plan`).
     target_key: Option<String>,
     files: Vec<PlannedFile>,
+    /// 다시 실행이면 앞 실행(M6-14 의 `run_restart` — 새 실행의 `restartOf`).
+    restart_of: Option<String>,
 }
 
 impl SqlRunPlan {
+    /// 다시 실행한 앞 실행을 단다(새 실행의 `restartOf`).
+    #[must_use]
+    pub fn with_restart_of(mut self, restart_of: Option<String>) -> Self {
+        self.restart_of = restart_of;
+        self
+    }
+
     pub fn target(&self) -> &SqlRunTarget {
         &self.target
     }
@@ -701,6 +713,7 @@ impl DbSessions {
             marks,
             target_key,
             files,
+            restart_of: None,
         })
     }
 
@@ -785,7 +798,7 @@ impl DbSessions {
             profile: None,
             relaunch: Relaunch::None,
             size: SIZE,
-            restart_of: None,
+            restart_of: plan.restart_of.clone(),
         };
         let sessions = Arc::clone(self);
         let kind_control = Arc::clone(&control);
@@ -1347,6 +1360,8 @@ async fn start_from_window(
 
 /// `run.sql.start` 를 붙인다(데스크톱 Host 가 실행 관리자와 함께 부른다).
 pub fn register(router: &mut Router, sessions: Arc<DbSessions>, runs: Runs) {
+    // 에이전트의 `run_start` · `run_restart` 가 `sql` 구성을 이 길로 돌린다(M6-14 — pw-run 은 pw-db 에 의존하지 않는다).
+    runs.attach_sql_tool(Arc::new(AgentSqlRuns::new(Arc::clone(&sessions))));
     router.unary(RunSqlStart, move |ctx, params: RunSqlStartParams| {
         let (sessions, runs) = (Arc::clone(&sessions), runs.clone());
         let granted = db_grant(ctx.scope(), &params.project_id);

@@ -237,6 +237,34 @@ impl Mcp {
         let _ = self.parts.set(parts);
     }
 
+    /// 사람이 그 프로젝트 창에서 [허용] 한 실행 계획의 구성 내용을 「사람이 본 구성」 으로 기록한다(17-m6-plan M6-14 ③ — 기록 자리
+    /// `SeenPlace::Approval`). 증거는 답한 연결의 범위로만 만든다(그 프로젝트 창이 아니면 만들어지지 않는다). 꼴이 틀린 해시는
+    /// 건너뛴다. 기록하지 못해도(`readOnly` · `memory`) 답은 그대로 간다 — 다음 호출이 다시 묻는다.
+    fn record_seen(
+        &self,
+        scope: &ConnectionScope,
+        project: &str,
+        steps: &[pw_core::registry::plan::PlanSeen],
+    ) {
+        use pw_core::registry::run_seen::{SeenBy, SeenHash, SeenPlace};
+        let Ok(parts) = self.parts() else {
+            return;
+        };
+        let Ok(by) = SeenBy::window(scope, project, SeenPlace::Approval) else {
+            return;
+        };
+        let entries: Vec<(String, SeenHash)> = steps
+            .iter()
+            .filter_map(|s| SeenHash::parse(&s.hash).map(|h| (s.key.clone(), h)))
+            .collect();
+        if entries.is_empty() {
+            return;
+        }
+        if let Err(e) = parts.projects.record_run_seen(&by, &entries) {
+            tracing::debug!(project, error = %e, "the approved run was not recorded as seen");
+        }
+    }
+
     pub(crate) fn parts(&self) -> Result<&HostParts, RpcError> {
         self.parts
             .get()
@@ -419,13 +447,14 @@ pub fn register(router: &mut Router, mcp: Arc<Mcp>) {
         },
     );
     let approvals = mcp.sessions.approvals().clone();
+    let recorder = Arc::clone(&mcp);
     router.unary(
         McpApprovalAnswerMethod,
         move |ctx, params: McpApprovalAnswerParams| {
-            let approvals = approvals.clone();
+            let (approvals, mcp) = (approvals.clone(), Arc::clone(&recorder));
             async move {
                 approvals
-                    .answer(
+                    .answer_seen(
                         &Answerer {
                             scope: ctx.scope(),
                             connection: Connection::of(ctx.session()),
@@ -433,6 +462,11 @@ pub fn register(router: &mut Router, mcp: Arc<Mcp>) {
                         params.id,
                         params.answer,
                     )
+                    .map(|seen| {
+                        if let Some((project, steps)) = seen {
+                            mcp.record_seen(ctx.scope(), &project, &steps);
+                        }
+                    })
                     .map_err(|e| match e {
                         AnswerError::NotFound => RpcError::new(
                             code::NOT_FOUND,

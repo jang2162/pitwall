@@ -42,6 +42,19 @@ pub struct RunEnv {
     vars: BTreeMap<String, String>,
     files: Vec<EnvFileDigest>,
     profile: Option<String>,
+    /// [`Self::vars`] 의 이름마다 그 값을 낸 자리(마지막에 이긴 것). 승인 계획(M6-14 ②)이 「어느 파일에서 왔는지」 를 보인다.
+    origins: BTreeMap<String, EnvOrigin>,
+}
+
+/// 얹는 변수 하나의 값을 낸 자리([`RunEnv::origin`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnvOrigin {
+    /// `env_file` 의 그 파일(구성에 적힌 경로).
+    File(String),
+    /// 구성의 `env`.
+    Config,
+    /// 고른 프로필의 `env`.
+    Profile,
 }
 
 /// 읽은 `.env` 파일 하나: 구성에 적힌 경로(프로젝트 루트 기준 — 워크트리와 무관하다)와, [`RunEnv::vars`] 의 값을 낸 바로 그
@@ -70,6 +83,7 @@ impl RunEnv {
                 .clone(),
         };
         let mut vars = BTreeMap::new();
+        let mut origins = BTreeMap::new();
         let mut files = Vec::with_capacity(config.env_file.len());
         for rel in &config.env_file {
             let bytes = read_env_file(root, rel)?;
@@ -80,6 +94,7 @@ impl RunEnv {
                 error,
             })?;
             for (name, value) in pairs {
+                insert(&mut origins, name.clone(), EnvOrigin::File(rel.clone()));
                 insert(&mut vars, name, value);
             }
             files.push(EnvFileDigest {
@@ -87,13 +102,19 @@ impl RunEnv {
                 sha256: hex(&Sha256::digest(&bytes)),
             });
         }
-        for (name, value) in config.env.iter().chain(&profile_env) {
+        for (name, value) in &config.env {
+            insert(&mut origins, name.clone(), EnvOrigin::Config);
+            insert(&mut vars, name.clone(), value.clone());
+        }
+        for (name, value) in &profile_env {
+            insert(&mut origins, name.clone(), EnvOrigin::Profile);
             insert(&mut vars, name.clone(), value.clone());
         }
         Ok(Self {
             vars,
             files,
             profile: profile.map(str::to_owned),
+            origins,
         })
     }
 
@@ -110,6 +131,11 @@ impl RunEnv {
     /// 읽은 `.env` 파일들의 다이제스트(구성의 순서) — 「사람이 본 구성」 해시(M6-11)의 입력.
     pub fn files(&self) -> &[EnvFileDigest] {
         &self.files
+    }
+
+    /// [`Self::vars`] 의 그 이름의 값을 낸 자리(마지막에 이긴 것). 없는 이름이면 `None`.
+    pub fn origin(&self, name: &str) -> Option<&EnvOrigin> {
+        self.origins.get(name)
     }
 
     /// 고른 프로필.
@@ -244,7 +270,7 @@ fn read_env_file(root: &Path, rel: &str) -> Result<Vec<u8>, EnvError> {
 }
 
 /// 뒤의 것이 이긴다. Windows 는 이름의 대소문자를 가리지 않으므로 같은 이름의 다른 꼴을 지운다.
-fn insert(vars: &mut BTreeMap<String, String>, name: String, value: String) {
+fn insert<V>(vars: &mut BTreeMap<String, V>, name: String, value: V) {
     if cfg!(windows) {
         vars.retain(|existing, _| !existing.eq_ignore_ascii_case(&name));
     }

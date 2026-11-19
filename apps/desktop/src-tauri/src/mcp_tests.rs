@@ -36,6 +36,7 @@ mod plan_tiers;
 mod project;
 mod project_write;
 mod run;
+mod run_exec;
 mod run_read;
 
 /// 앱 Host 가 내는 툴 전부. 이름순.
@@ -64,7 +65,10 @@ const APP_TOOLS: &[&str] = &[
     "run_config_list",
     "run_config_upsert",
     "run_logs",
+    "run_restart",
+    "run_start",
     "run_status",
+    "run_stop",
     "settings_get",
     "symbol_search",
 ];
@@ -85,7 +89,10 @@ const PROJECT_RECORD_TOOLS: &[&str] = &[
     // 실행은 Host 범위이고 프로젝트에 속한다(체크아웃이 아니다 — 17-m6-plan M6-P1). 실행마다 띄운 워크트리 · 작업 폴더를 싣는다.
     // `worktree` 로 거르면 세션 워크트리가 채워져 주 체크아웃에서 띄운 실행이 말없이 빠진다.
     "run_logs",
+    // `runId` 로 겨눈다 — 다시 띄우기는 그 실행이 띄운 워크트리를 그대로 쓴다(17-m6-plan M6-14 ⑦).
+    "run_restart",
     "run_status",
+    "run_stop",
 ];
 
 fn names(catalog: &pw_mcp::Catalog) -> Vec<&str> {
@@ -711,6 +718,8 @@ impl ToolHost {
         // macOS 의 /var → /private/var 처럼 레지스트리가 저장하는 꼴로 맞춘다.
         let base = pw_core::registry::path::simplify(std::fs::canonicalize(tmp.path()).unwrap());
         let paths = AppPaths::under(&base.join("app"));
+        // 앱처럼 MCP 세션과 `mcp.*` RPC 가 같은 등록부(승인 허브)를 쓴다.
+        let sessions = pw_mcp::sessions::Sessions::default();
         let (host, db) = crate::local_host_and_db(
             paths.clone(),
             Arc::new(pw_diag::Diagnostics::new(base.join("logs"), "0.0.0")),
@@ -718,15 +727,10 @@ impl ToolHost {
             Arc::new(pw_i18n::I18n::new(pw_i18n::Catalog::default(), Vec::new())),
             Arc::new(pw_fs::Fs::new()),
             pw_git::write::Askpass::default(),
+            sessions.clone(),
         );
         let host = Arc::new(host);
-        let services = mcp::services(
-            &host,
-            &paths,
-            "test",
-            pw_mcp::HostKind::App,
-            Default::default(),
-        );
+        let services = mcp::services(&host, &paths, "test", pw_mcp::HostKind::App, sessions);
         Self {
             _tmp: tmp,
             base,
@@ -781,8 +785,73 @@ impl ToolHost {
             tokio::io::split(server_io),
             cancel.clone(),
         ));
-        let client = ().serve(client_io).await.expect("MCP 세션이 열리지 않았다");
+        let client = rmcp::model::ClientConfig::default()
+            .serve(client_io)
+            .await
+            .expect("MCP 세션이 열리지 않았다");
         ToolSession { client, cancel }
+    }
+
+    /// [`Self::session`] 인데 클라이언트 이름이 CLI(`pitwall-cli`)다 — 세션이 CLI 호출로 본다(셋째 답이 「CLI 허용」).
+    pub async fn cli_session(&self) -> ToolSession {
+        use rmcp::model::{ClientCapabilities, ClientConfig, Implementation};
+        let (server_io, client_io) = tokio::io::duplex(256 * 1024);
+        let cancel = CancellationToken::new();
+        tokio::spawn(pw_mcp::serve(
+            Arc::clone(&self.services),
+            SessionRequest::default(),
+            tokio::io::split(server_io),
+            cancel.clone(),
+        ));
+        let client = ClientConfig::new(
+            ClientCapabilities::default(),
+            Implementation::new(crate::tool_cli::CLIENT_NAME, env!("CARGO_PKG_VERSION")),
+        )
+        .serve(client_io)
+        .await
+        .expect("MCP 세션이 열리지 않았다");
+        ToolSession { client, cancel }
+    }
+
+    /// `pitwall tool <args>` 를 이 Host(앱)에 붙여 돌린다 — (종료 코드, stdout, stderr).
+    pub async fn cli(&self, args: &[&str]) -> (i32, String, String) {
+        use crate::tool_cli::{Action, Call, Request, execute, parse, read_input};
+        let args: Vec<std::ffi::OsString> = args.iter().map(Into::into).collect();
+        let invocation = parse(&args).unwrap();
+        let input = match &invocation.action {
+            Action::Call(Call {
+                input: Some(input), ..
+            }) => Some(read_input(input, std::io::empty()).unwrap()),
+            _ => None,
+        };
+        let (server_io, client_io) = tokio::io::duplex(256 * 1024);
+        tokio::spawn(pw_mcp::serve(
+            Arc::clone(&self.services),
+            SessionRequest::default(),
+            tokio::io::split(server_io),
+            CancellationToken::new(),
+        ));
+        let linked = pw_mcp::Catalog::linked();
+        let request = Request {
+            action: &invocation.action,
+            input,
+            linked: &linked,
+            headless: None,
+        };
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = execute(
+            request,
+            client_io,
+            std::future::pending(),
+            &mut out,
+            &mut err,
+        )
+        .await;
+        (
+            code,
+            String::from_utf8(out).unwrap(),
+            String::from_utf8(err).unwrap(),
+        )
     }
 
     /// 그 프로젝트 창의 연결(`ConnectionScope::Project`)로 RPC 하나를 부른다 — 사람이 창에서 한 일.
@@ -875,7 +944,7 @@ fn read_audit(file: &Path) -> Vec<AuditRow> {
 
 /// 열린 MCP 세션 하나.
 pub(crate) struct ToolSession {
-    client: RunningService<RoleClient, ()>,
+    client: RunningService<RoleClient, rmcp::model::ClientConfig>,
     cancel: CancellationToken,
 }
 

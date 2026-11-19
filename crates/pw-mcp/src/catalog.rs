@@ -40,7 +40,13 @@ pub const GROUPS: [&str; 7] = ["project", "run", "debug", "db", "git", "code", "
 /// `run_restart`). 데스크톱 크레이트의 회귀 표(`mcp_tests::plan_tiers`)가 이 목록과 맞춰 본다.
 ///
 /// 실행 파일에 링크되지 않은 툴의 줄은 무시한다(그 툴이 카탈로그에 없다). 선언 이상의 등급을 적으면 카탈로그가 실패한다.
-pub const LOWERED_PLAN_TIERS: &[(&str, &[Tier])] = &[];
+pub const LOWERED_PLAN_TIERS: &[(&str, &[Tier])] = &[
+    // 실행 툴(17-m6-plan M6-14 ① ⑧): 선언 `dangerous` 는 `sql` 구성의 쓰기에 닿기 때문이다. 프로세스 구성의 계획은 `exec`
+    // (명령을 띄운다 — 05 의 `exec` 규칙), `sql` 구성은 실행하는 그때 분류해 조회만이면 `read`(읽기 전용 트랜잭션). 세션 허용 ·
+    // CLI 허용은 그 구성의 그 내용(`<구성 열쇠>@<내용 해시>`)에만 닿는다 — 낮춘 계획의 허용이 다른 구성 · 고친 구성에 닿지 않는다.
+    ("run_restart", &[Tier::Read, Tier::Exec]),
+    ("run_start", &[Tier::Read, Tier::Exec]),
+];
 
 /// MCP 툴 이름의 최대 길이. 클라이언트가 서버 이름과 이어 붙이므로(`mcp__pitwall__project_list`) 짧게 둔다.
 pub const MAX_NAME: usize = 64;
@@ -624,7 +630,14 @@ mod tests {
                 tier: Tier::Write
             }
         );
-        assert!(LOWERED_PLAN_TIERS.is_empty());
+        // 낮춤은 실행 툴 둘뿐이다(17-m6-plan M6-14) — 다른 툴이 줄을 더하면 그 행이 여기와 데스크톱 회귀 표를 함께 고친다.
+        assert_eq!(
+            LOWERED_PLAN_TIERS
+                .iter()
+                .map(|(n, _)| *n)
+                .collect::<Vec<_>>(),
+            ["run_restart", "run_start"]
+        );
     }
 
     /// `write` 이상 툴은 `Planned` 입력이어야 한다(fail-closed) — 아니면 카탈로그가 실패한다. 표지는 보이는 스키마에서 지운다.

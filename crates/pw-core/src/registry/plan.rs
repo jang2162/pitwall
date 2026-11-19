@@ -65,6 +65,13 @@ pub struct ToolPlan {
     pub rules: PlanRules,
     /// `sha256:<hex>`. 승인은 이것에 묶인다.
     pub hash: String,
+    /// 이 계획을 사람이 [허용] 하면 「사람이 본 구성」 으로 기록할 것(17-m6-plan M6-14 ③ — 실행 툴만, 단계마다 구성 열쇠와 그
+    /// 내용 해시). 툴 핸들러는 기록하지 않는다 — 에이전트 범위라 기록 증거(`run_seen::SeenBy`)를 만들 수 없고, 승인 표(해시만)로는
+    /// 사람의 답과 정책 자동 · `auto_approve` 를 가를 수 없다. 기록은 사람의 답이 오는 자리(`mcp.approval.answer` 의 허용 갈래)가
+    /// 그 창의 연결 범위로 한다. 해시에 든다(비었으면 덮지 않는다).
+    #[serde(default)]
+    #[specta(optional)]
+    pub seen: Vec<PlanSeen>,
     /// 띄울 것([`PlanBuilder::runs`] — 실행 툴만). 해시에 들고 [`Approved`] 로 넘어가 `exec::agent_run_grant` 가 띄운다. 직렬화하지
     /// 않는다 — 사람의 화면에는 툴이 [`PlanChange`] 로 가린 꼴을 보이고(env 의 비밀 값), 직렬화한 계획(세션 · 창이 받은 것)에서
     /// 되살린 값은 띄울 것이 없다. 이 칸은 비공개라 계획은 [`PlanBuilder`] 로만 만든다.
@@ -72,6 +79,18 @@ pub struct ToolPlan {
     #[specta(skip)]
     #[schemars(skip)]
     runs: Vec<RunSpec>,
+}
+
+/// 계획의 한 단계가 띄울 구성과 그 내용 해시([`ToolPlan::seen`]). `hash` 는 `run_seen::SeenHash` 의 글(`sha256:<64 hex>`)이다 —
+/// 기록하는 쪽이 `SeenHash::parse` 로 꼴을 다시 본다.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanSeen {
+    /// 구성 열쇠(구성 id).
+    pub key: String,
+    pub hash: String,
 }
 
 /// 바뀔 것 하나. 다른 꼴이 필요한 툴 행이 갈래를 더한다.
@@ -256,6 +275,7 @@ pub struct PlanBuilder {
     targets: Map<String, Value>,
     rules: PlanRules,
     runs: Vec<RunSpec>,
+    seen: Vec<PlanSeen>,
 }
 
 impl ToolPlan {
@@ -270,6 +290,7 @@ impl ToolPlan {
             targets: Map::new(),
             rules: PlanRules::default(),
             runs: Vec::new(),
+            seen: Vec::new(),
         }
     }
 }
@@ -308,6 +329,16 @@ impl PlanBuilder {
         self
     }
 
+    /// 사람이 [허용] 하면 「사람이 본 구성」 으로 기록할 단계 하나([`ToolPlan::seen`]). 해시에 든다.
+    #[must_use]
+    pub fn seen(mut self, key: impl Into<String>, hash: impl Into<String>) -> Self {
+        self.seen.push(PlanSeen {
+            key: key.into(),
+            hash: hash.into(),
+        });
+        self
+    }
+
     pub fn build(self) -> ToolPlan {
         let mut covered = serde_json::json!({
             "method": self.method,
@@ -322,6 +353,9 @@ impl PlanBuilder {
         if !self.runs.is_empty() {
             covered["runs"] = to_value(&self.runs);
         }
+        if !self.seen.is_empty() {
+            covered["seen"] = to_value(&self.seen);
+        }
         let mut hasher = Sha256::new();
         hasher.update(canonical(&covered).as_bytes());
         let hash = format!("sha256:{}", hex(&hasher.finalize()));
@@ -333,6 +367,7 @@ impl PlanBuilder {
             rules: self.rules,
             hash,
             runs: self.runs,
+            seen: self.seen,
         }
     }
 }
