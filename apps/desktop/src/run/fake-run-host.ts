@@ -21,6 +21,7 @@ export function runInfo(patch: Partial<RunInfo> & { runId: string }): RunInfo {
     restartOf: null,
     logStart: 0,
     logEnd: 0,
+    ports: [],
     ...patch,
   };
 }

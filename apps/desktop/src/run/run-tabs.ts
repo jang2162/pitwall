@@ -1,6 +1,6 @@
 // 창 하나의 실행 탭들(17-m6-plan M6-06 ① ⑤). 실행은 Host 의 것이라(메인 판정 M6-P1) 탭은 Host 가 알려 주는 실행을 따라간다:
 //
-// - 창이 Host 에 붙으면 프로젝트 이벤트 `run.started` · `run.exited` 를 듣고, 그 뒤 `run.list` 로 이미 있는 실행의 탭을 만든다 —
+// - 창이 Host 에 붙으면 프로젝트 이벤트 `run.started` · `run.exited` · `run.ports`(M6-08)를 듣고, 그 뒤 `run.list` 로 이미 있는 실행의 탭을 만든다 —
 //   창을 다시 불러와도(⌘R · 창 다시 열기) 탭이 되살아나고, 콘솔은 `run.attach { since: 0 }` 으로 남은 출력을 처음부터 받는다.
 //   구독을 먼저 걸고 목록을 읽어 그 사이에 시작한 실행도 빠지지 않는다(같은 실행이 두 번 오면 하나로 합친다).
 // - 에이전트가 띄운 실행(`launchedBy.kind = "agent"`)도 `run.started` 로 탭이 생긴다. 사람이 이 창에서 띄운 것과 달리 활성 탭을
@@ -26,6 +26,8 @@ import { RunStream } from "./run-stream";
 
 export const TOPIC_STARTED = "run.started";
 export const TOPIC_EXITED = "run.exited";
+/** 실행의 듣는 포트가 바뀌었다(M6-08 — payload 는 `RunInfo` 전체). */
+export const TOPIC_PORTS = "run.ports";
 
 export interface RunTab {
   /** 탭의 열쇠 — 처음 실행의 `runId`. 다시 실행해도 그대로다. */
@@ -253,12 +255,16 @@ export class RunTabs {
     let unsubscribe: (() => Promise<void>) | undefined;
     const onEvent = (event: EventMessage) => {
       if (closed) return;
-      if (event.topic === TOPIC_STARTED || event.topic === TOPIC_EXITED) {
+      if (
+        event.topic === TOPIC_STARTED ||
+        event.topic === TOPIC_EXITED ||
+        event.topic === TOPIC_PORTS
+      ) {
         this.upsert(event.payload as unknown as RunInfo);
       }
     };
     void client
-      .subscribe({ projectId, topics: [TOPIC_STARTED, TOPIC_EXITED] }, onEvent)
+      .subscribe({ projectId, topics: [TOPIC_STARTED, TOPIC_EXITED, TOPIC_PORTS] }, onEvent)
       .then((s) => {
         unsubscribe = () => s.unsubscribe();
         if (closed) void s.unsubscribe().catch(() => {});
@@ -347,6 +353,11 @@ export class RunTabs {
       .getState()
       .tabs.map((t) => t.run)
       .filter(isLive);
+  }
+
+  /** 바깥 브라우저로 연다(포트 칩 — run-ports.tsx). 창이 배선하기 전이면 아무것도 하지 않는다. */
+  openUrl(url: string): void {
+    this.deps?.openUrl?.(url);
   }
 
   async stop(key: string): Promise<void> {

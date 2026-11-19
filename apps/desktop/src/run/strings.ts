@@ -46,7 +46,8 @@ export function runStrings(t: Translate) {
     attachFailed: (message: string) => t("run-attach-failed", { message }),
     /** 포트 칩(탭 머리 · 상태바 — 내용은 M6-08 의 포트를 받아 채운다, run-ports.tsx). */
     port: {
-      label: (port: number) => t("run-port-label", { port }),
+      // 글로 넘긴다 — 숫자면 Fluent 가 자리수를 묶어 `:5,173` 이 된다.
+      label: (port: number) => t("run-port-label", { port: String(port) }),
       open: (url: string) => t("run-port-open", { url }),
       allAddresses: t("run-port-all-addresses"),
     },

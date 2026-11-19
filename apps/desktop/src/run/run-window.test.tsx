@@ -29,6 +29,13 @@ const host = vi.hoisted(() => ({
   send: (_m: object) => {},
 }));
 
+const opened = vi.hoisted(() => [] as string[]);
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  openUrl: async (url: string) => {
+    opened.push(url);
+  },
+}));
+
 vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }),
 }));
@@ -310,4 +317,64 @@ it("closes without asking when nothing is running", async () => {
   });
   await expect(answer).resolves.toBe(true);
   expect(document.querySelector("[data-testid=run-close-dialog]")).toBeNull();
+});
+
+it("shows the ports a run listens on and opens them in the browser", async () => {
+  opened.length = 0;
+  host.runs = [runInfo({ runId: "r1", name: "dev" })];
+  await mount();
+  await openRunToolWindow();
+  await vi.waitFor(() => expect(host.runSubscriptions.length).toBeGreaterThan(0));
+  expect(document.querySelector("[data-testid=run-tab-port]")).toBeNull();
+  await act(async () =>
+    event(
+      "run.ports",
+      runInfo({
+        runId: "r1",
+        name: "dev",
+        ports: [
+          { port: 5173, allAddresses: false, addresses: ["127.0.0.1"] },
+          { port: 8080, allAddresses: true, addresses: ["0.0.0.0", "::"] },
+          { port: 9229, allAddresses: false, addresses: ["::1"] },
+        ],
+      }),
+    ),
+  );
+  await settle();
+  const chips = [...document.querySelectorAll<HTMLElement>("[data-testid=run-tab-port]")];
+  expect(chips.map((c) => [c.dataset.port, c.dataset.allAddresses])).toEqual([
+    ["5173", "false"],
+    ["8080", "true"],
+    ["9229", "false"],
+  ]);
+  expect(chips[0]!.textContent).toBe(":5173");
+  // 「모든 주소」 표지는 0.0.0.0 · :: 에 듣는 포트에만.
+  expect(chips[1]!.querySelector("[data-testid=run-port-all-addresses]")?.textContent).toBe(
+    "모든 주소",
+  );
+  expect(chips[0]!.querySelector("[data-testid=run-port-all-addresses]")).toBeNull();
+  expect(chips[0]!.title).toBe("http://localhost:5173 열기");
+  // 상태바에도 보인다.
+  const status = [...document.querySelectorAll<HTMLElement>("[data-testid=status-run-port]")];
+  expect(status.map((c) => c.dataset.port)).toEqual(["5173", "8080", "9229"]);
+
+  // 누르면 바깥 브라우저 — 모든 주소여도 localhost, IPv6 에만 들으면 [::1].
+  await act(async () => chips[0]!.click());
+  await act(async () => chips[1]!.click());
+  await act(async () => chips[2]!.click());
+  await act(async () => status[0]!.click());
+  expect(opened).toEqual([
+    "http://localhost:5173",
+    "http://localhost:8080",
+    "http://[::1]:9229",
+    "http://localhost:5173",
+  ]);
+
+  // 끝나면 칩이 사라진다.
+  await act(async () =>
+    event("run.exited", runInfo({ runId: "r1", state: "exited", exit: { code: 0, signal: null } })),
+  );
+  await settle();
+  expect(document.querySelector("[data-testid=run-tab-port]")).toBeNull();
+  expect(document.querySelector("[data-testid=status-run-port]")).toBeNull();
 });
