@@ -1364,6 +1364,14 @@ fn debug_connect_takes_only_a_loopback_address_in_an_attach_config() {
             "only for `mode = \"attach\"`",
         ),
         (
+            "[debug]\nmode = 'attach'\nconnect = { port = 5678 }\nlisten = { port = 5679 }",
+            "cannot be used with debug.listen",
+        ),
+        (
+            "[debug]\nmode = 'attach'\nconnect = { port = 5678 }\npid = 42",
+            "cannot be used with debug.pid",
+        ),
+        (
             "[debug]\nmode = 'attach'\nconnect = { port = 0 }",
             "from 1 to 65535",
         ),

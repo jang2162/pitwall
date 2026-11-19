@@ -48,6 +48,8 @@ struct FakeAdapters {
     attach_connect: std::sync::atomic::AtomicBool,
     /// 설치돼 있지 않은 것으로 푼다.
     missing: std::sync::atomic::AtomicBool,
+    /// `requires` 의 런타임을 찾지 못한다(`find_runtimes` 가 `runtimeMissing`).
+    runtime_missing: std::sync::atomic::AtomicBool,
 }
 
 fn definition(scenario: &Path, args: Option<Vec<String>>) -> DebugAdapterDecl {
@@ -126,6 +128,16 @@ impl Adapters for FakeAdapters {
             env: RuntimeEnv::process(),
             definition: def,
         })
+    }
+
+    fn find_runtimes(&self, _setup: &mut AdapterSetup) -> Result<(), RpcError> {
+        if self.runtime_missing.load(Ordering::SeqCst) {
+            return Err(
+                RpcError::invalid_params("the debug adapter `fake` needs python")
+                    .with_data(json!({ "reason": "runtimeMissing", "adapter": "fake" })),
+            );
+        }
+        Ok(())
     }
 }
 
@@ -222,6 +234,7 @@ impl Fixture {
             via_language_server: Default::default(),
             attach_connect: Default::default(),
             missing: Default::default(),
+            runtime_missing: Default::default(),
         });
         let launcher = Arc::new(Counting::default());
         let debugger = Debugger::with(
@@ -906,6 +919,32 @@ async fn a_connect_config_attaches_to_the_adapter_the_program_started() {
         .count();
     assert_eq!(spawned, 1);
     stop(&f, &mut c, &run_id).await;
+}
+
+/// M6-19b: 어댑터를 띄우지 않는 `connect` 갈래만 `requires` 런타임 검사를 건너뛴다 — 런타임이 없으면 launch 구성은 거절되고
+/// `connect` 구성은 붙는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_a_connect_config_skips_the_runtime_check() {
+    let f = Fixture::new();
+    f.adapters.attach_connect.store(true, Ordering::SeqCst);
+    f.adapters.runtime_missing.store(true, Ordering::SeqCst);
+    let mut c = f.client();
+    let e = c.err("debug.start", start_params(&f, "app")).await;
+    assert_eq!(
+        e.data.as_ref().unwrap()["reason"],
+        "runtimeMissing",
+        "{e:?}"
+    );
+
+    let (_target, port) = target_adapter(&f);
+    f.config(
+        &f.root,
+        "app",
+        &format!("mode = \"attach\"\nport = 9229\nconnect = {{ port = {port} }}"),
+    );
+    let started = c.ok("debug.start", start_params(&f, "app")).await;
+    assert_eq!(f.received("attach").len(), 1);
+    stop(&f, &mut c, started["run"]["runId"].as_str().unwrap()).await;
 }
 
 /// M6-19b: 정의가 허락하지 않는 어댑터(`attach_connect` 없음)의 `connect` 구성은 붙지 않고 거절한다.

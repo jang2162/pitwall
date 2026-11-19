@@ -321,7 +321,7 @@ pub enum DebugMode {
 impl DebugConfig {
     /// `[debug] connect = { port = 5678, host = "127.0.0.1" }` — 디버그 대상이 이미 띄운 어댑터(debugpy `--listen`)의 주소
     /// (17-m6-plan.md M6-19b). 없으면 `None`. attach 구성에서만, 주소는 loopback 만(`host` 생략 · `127.0.0.1` · `::1` · `localhost`
-    /// — `localhost` 는 이름을 풀지 않고 `127.0.0.1` 로 본다). 그 어댑터 정의가 허락하는지(`attach_connect`)는 디버그 시작이 본다.
+    /// — `localhost` 는 이름을 풀지 않고 `127.0.0.1` 로 본다), `listen` · `pid` 와 함께 쓰지 않는다. 그 어댑터 정의가 허락하는지(`attach_connect`)는 디버그 시작이 본다.
     pub fn connect(&self) -> Result<Option<std::net::SocketAddr>, String> {
         use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
         let Some(value) = self.settings.get("connect") else {
@@ -329,6 +329,15 @@ impl DebugConfig {
         };
         if self.mode != DebugMode::Attach {
             return Err("debug.connect is only for `mode = \"attach\"`".to_owned());
+        }
+        // 대상이 띄운 어댑터에 붙는 길은 어댑터를 듣게 하거나 주입하는 다른 attach 꼴과 함께 쓰지 않는다 — 그 값이 상대에게 그대로 간다.
+        if let Some(key) = ["listen", "pid"]
+            .into_iter()
+            .find(|k| self.settings.contains_key(*k))
+        {
+            return Err(format!(
+                "debug.connect cannot be used with debug.{key} — connect attaches to an adapter the program already started"
+            ));
         }
         let Value::Object(table) = value else {
             return Err("debug.connect must be a table like { port = 5678 }".to_owned());

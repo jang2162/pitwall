@@ -418,6 +418,20 @@ impl Tree {
         });
         lock(&self.sessions).insert(id, Arc::clone(&session));
         tokio::spawn(pump(Arc::clone(self), Arc::clone(&session), inbound));
+        // 상대의 주인을 보지 못하는 플랫폼이면 뿌리 세션의 첫 출력으로 사람에게 알린다(M6-19b 메인 판정 — 로그만으로는 보이지 않는다).
+        if parent.is_none()
+            && let Some(output) =
+                unchecked_peer_notice(&self.adapter.transport, peer::OWNER_CHECKED)
+        {
+            self.emit(
+                &session,
+                SessionEventKind::Output(OutputEvent {
+                    category: Some("important".to_owned()),
+                    output,
+                    ..OutputEvent::default()
+                }),
+            );
+        }
         // 어댑터 프로세스가 끝나면 그 프로세스에 붙은 연결을 닫는다(리뷰 F1 b) — 연결의 상대가 어댑터가 아니어도(포트를 먼저
         // 차지한 다른 프로세스) 세션이 어댑터보다 오래 살지 않는다.
         if let Some(process) = session.process.clone() {
@@ -570,6 +584,37 @@ async fn owned_by_us(stream: &TcpStream, deadline: tokio::time::Instant) -> Resu
             }
             PeerOwner::NotFound => tokio::time::sleep(Duration::from_millis(25)).await,
         }
+    }
+}
+
+/// 대상이 띄운 어댑터에 붙었는데 이 플랫폼에서 상대의 주인을 보지 못했을 때 디버그 콘솔에 남길 줄(`checked` 는
+/// [`peer::OWNER_CHECKED`]).
+fn unchecked_peer_notice(transport: &Transport, checked: bool) -> Option<String> {
+    match transport {
+        Transport::Listening { addr } if !checked => Some(format!(
+            "[debug] Pitwall cannot check on this platform which user's process holds {addr} — make sure it is the debug adapter your program started.\n"
+        )),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use super::*;
+
+    /// 주인을 보지 못하는 플랫폼에서 대상이 띄운 어댑터에 붙을 때만 알린다.
+    #[test]
+    fn only_an_unchecked_listening_peer_is_announced() {
+        let addr: SocketAddr = ([127, 0, 0, 1], 5678).into();
+        let listening = Transport::Listening { addr };
+        let notice = unchecked_peer_notice(&listening, false).expect("a notice");
+        assert!(notice.contains("127.0.0.1:5678"), "{notice}");
+        assert_eq!(unchecked_peer_notice(&listening, true), None);
+        assert_eq!(
+            unchecked_peer_notice(&Transport::Connect { port: 5005 }, false),
+            None
+        );
+        assert_eq!(unchecked_peer_notice(&Transport::Stdio, false), None);
     }
 }
 

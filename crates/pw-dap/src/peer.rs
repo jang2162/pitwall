@@ -15,6 +15,9 @@
 
 use std::net::SocketAddr;
 
+/// 이 플랫폼에서 상대 끝의 주인을 보는가(아니면 [`peer_owner`] 가 늘 [`PeerOwner::Unchecked`] 다 — 세션은 사람에게 그것을 알린다).
+pub(crate) const OWNER_CHECKED: bool = cfg!(any(target_os = "linux", target_os = "macos"));
+
 /// 상대 끝의 주인.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(
