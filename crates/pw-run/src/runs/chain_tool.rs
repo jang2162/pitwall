@@ -22,7 +22,9 @@ use pw_rpc::{Ctx, RpcError, Tier};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::chain::{ChainExec, ChainStepRun, StopChainOnDrop, combined, plan_changed};
+use super::chain::{
+    ChainExec, ChainStepRun, StopChainOnDrop, attach_or_stop, combined, plan_changed,
+};
 use super::exec_tool::{
     AgentGrantRef, Before, Prepared, RunToolStarted, SqlToolLaunch, SqlToolRequest, StartTarget,
     blocking, fallback_content, human_key, shown_changes, with_audit,
@@ -31,6 +33,12 @@ use super::tool::tool_run;
 use super::{AgentLaunch, AgentStart, LaunchedBy, Runs};
 use crate::config::graph::{self, Chain};
 use crate::config::{RunConfig, RunConfigPlace, RunKindConfig};
+
+/// 사슬의 `sql` 단계 하나의 끝(구성 열쇠, 요약 · 감사 상세).
+type SqlDone = (String, tokio::sync::oneshot::Receiver<(Value, String)>);
+
+/// 사슬이 끝난 뒤 `sql` 단계의 요약을 기다리는 시한(실행이 끝난 뒤 요약이 오는 틈 — 길지 않다).
+const SQL_SUMMARY_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// 승인을 지난 사슬(띄울 것).
 pub(crate) struct ChainPlanned {
@@ -377,6 +385,8 @@ impl Runs {
         let project_id = agent.project_id().to_owned();
         let agent_project = agent.project().clone();
         let mut runs_of = Vec::with_capacity(steps.len());
+        // `sql` 단계의 끝(요약 · 감사 상세 — 단독 `sql` 실행과 같은 것, 리뷰 F3). 사슬이 끝난 뒤 모은다.
+        let sql_done: Arc<std::sync::Mutex<Vec<SqlDone>>> = Arc::default();
         for step in steps {
             match step {
                 AgentStep::Process {
@@ -391,9 +401,10 @@ impl Runs {
                         (worktree.clone(), session.clone(), agent_project.clone());
                     let restart_of = before.filter(|b| b.config == key).map(|b| b.run_id.clone());
                     let step_key = key.clone();
+                    let project_id = project_id.clone();
                     runs_of.push(ChainStepRun {
                         key,
-                        launch: Box::new(move |recheck| {
+                        launch: Box::new(move |recheck, ctl| {
                             Box::pin(blocking(move || {
                                 if recheck {
                                     let now = runs.plan_process_for(
@@ -413,7 +424,8 @@ impl Runs {
                                         return Err(plan_changed(&step_key));
                                     }
                                 }
-                                runs.start_agent_with(
+                                super::chain::launch_hook(&step_key);
+                                let info = runs.start_agent_with(
                                     &grant,
                                     spec,
                                     AgentLaunch {
@@ -425,7 +437,9 @@ impl Runs {
                                         worktree,
                                         restart_of,
                                     },
-                                )
+                                )?;
+                                // 블로킹 작업 안에서 넣는다 — 그사이 호출이 버려져 사슬이 멈췄으면 이 실행도 멈춘다(리뷰 F4).
+                                attach_or_stop(&runs, &project_id, &step_key, info, &ctl)
                             }))
                         }),
                     });
@@ -441,9 +455,10 @@ impl Runs {
                     let (approved, no_return, session) =
                         (approved.clone(), no_return.clone(), session.clone());
                     let step_key = key.clone();
+                    let (done_list, project_id) = (Arc::clone(&sql_done), project_id.clone());
                     runs_of.push(ChainStepRun {
                         key,
-                        launch: Box::new(move |recheck| {
+                        launch: Box::new(move |recheck, ctl| {
                             Box::pin(async move {
                                 if recheck {
                                     let sql = sql.ok_or_else(|| plan_changed(&step_key))?;
@@ -462,7 +477,7 @@ impl Runs {
                                 let started = launch
                                     .launch(
                                         approved,
-                                        runs,
+                                        runs.clone(),
                                         LaunchedBy::Agent {
                                             session,
                                             client: None,
@@ -470,7 +485,11 @@ impl Runs {
                                         no_return,
                                     )
                                     .await?;
-                                Ok(started.info)
+                                done_list
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                    .push((step_key.clone(), started.done));
+                                attach_or_stop(&runs, &project_id, &step_key, started.info, &ctl)
                             })
                         }),
                     });
@@ -495,10 +514,25 @@ impl Runs {
             chain.key,
             chain.steps.len()
         );
-        let launched = exec
-            .run(chain.root)
-            .await
-            .map_err(|e| with_audit(e, &audit))?;
+        let result = exec.run(chain.root).await;
+        // `sql` 단계의 요약 · 감사 상세(트랜잭션의 끝 — `transaction=committed` · `unknown` …)를 성공이든 실패든 싣는다.
+        let done = std::mem::take(
+            &mut *sql_done
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        let mut summaries = serde_json::Map::new();
+        let mut audit = audit;
+        for (key, rx) in done {
+            match tokio::time::timeout(SQL_SUMMARY_WAIT, rx).await {
+                Ok(Ok((summary, sql_audit))) => {
+                    audit.push_str(&format!(" step={key} {sql_audit}"));
+                    summaries.insert(key, summary);
+                }
+                _ => audit.push_str(&format!(" step={key} transaction=unknown")),
+            }
+        }
+        let launched = result.map_err(|e| with_audit(e, &audit))?;
         let ids: Vec<&str> = launched.iter().map(|r| r.run_id.as_str()).collect();
         let audit = format!("{audit} runIds={}", ids.join(","));
         let last = launched
@@ -507,7 +541,7 @@ impl Runs {
             .ok_or_else(|| RpcError::internal("the chain started nothing"))?;
         Ok(RunToolStarted {
             run: tool_run(last),
-            sql: None,
+            sql: (!summaries.is_empty()).then(|| Value::Object(summaries)),
             audit,
             chain: launched.into_iter().map(tool_run).collect(),
         })

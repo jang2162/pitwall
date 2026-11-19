@@ -13,6 +13,7 @@
 // - 콘솔(evaluate)은 사람이 입력해 누를 때만 부른다. 기록은 프로젝트별로 localStorage 에 남긴다(`pitwall.debug.history.<id>`).
 
 import type {
+  DbConfirmed,
   DebugAction,
   DebugEvaluated,
   DebugFrame,
@@ -204,7 +205,13 @@ export class DebugSessions {
   /** 구성으로 디버그 세션을 연다(`debug.start`). M6-07 의 `debug.current` · 🐞 가 부른다. */
   async start(
     configId: string,
-    opts: { worktree?: string; profile?: string } = {},
+    opts: {
+      worktree?: string;
+      profile?: string;
+      /** 구성에 `before` 가 있으면 그 사슬의 확인(17-m6-plan M6-21 — run-confirm.ts `withRunConfirms` 가 채운다). */
+      confirmed?: string | null;
+      sqlConfirmed?: Record<string, DbConfirmed> | null;
+    } = {},
   ): Promise<DebugStarted> {
     const deps = this.need();
     const started = await deps.client.call("debug.start", {
@@ -212,6 +219,8 @@ export class DebugSessions {
       configId,
       ...(opts.worktree !== undefined && { worktree: opts.worktree }),
       ...(opts.profile !== undefined && { profile: opts.profile }),
+      ...(opts.confirmed != null && { confirmed: opts.confirmed }),
+      ...(opts.sqlConfirmed != null && { sqlConfirmed: opts.sqlConfirmed }),
     });
     this.add(started.run, started.adapter);
     this.select(started.run.runId);

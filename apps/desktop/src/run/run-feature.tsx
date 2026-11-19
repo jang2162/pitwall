@@ -14,9 +14,11 @@ import { useHost } from "../rpc/host";
 import { STATUS_SLOTS, useStatusBarItem } from "../status-bar/status-bar";
 import { useTheme } from "../theme/theme-switcher";
 import { terminalTheme } from "../terminal/terminal-theme";
+import { useRiskConfirm } from "../db/safety/risk-confirm";
 import { RunChainNotices } from "./run-chain";
 import { RunStatusPorts } from "./run-ports";
 import { isLive, type RunTabs, windowRuns } from "./run-tabs";
+import { sqlRunQuestion } from "./sql-run";
 import { useRunStrings } from "./strings";
 
 /** 상태바 항목: 이 프로젝트에서 도는 실행 수. 0 이면 그리지 않는다. */
@@ -57,6 +59,8 @@ export function RunFeature({
   const { platform, takesKey } = useKeymap();
   const workspace = useEditorWorkspace();
   const theme = useTheme((s) => s.theme);
+  // 다시 실행하는 사슬의 `sql` 단계 위험 확인(M6-21) — SQL 콘솔과 같은 다이얼로그.
+  const risk = useRiskConfirm();
   const appearance = useTheme((s) => s.appearance);
 
   if (client) {
@@ -73,6 +77,10 @@ export function RunFeature({
       failedLine: T.attachFailed,
       linkHint: terminalStrings.linkHint,
       log: (message) => console.info("[run]", message),
+      askSql: async (data) => {
+        const answer = await risk.confirm(sqlRunQuestion(data));
+        return answer === undefined || answer === "busy" ? undefined : answer;
+      },
     });
   }
 
@@ -87,5 +95,10 @@ export function RunFeature({
   }, [tabs, theme, appearance]);
 
   useStatusBarItem({ id: "run", ...STATUS_SLOTS.run, component: RunStatusItem });
-  return client ? <RunChainNotices client={client} projectId={projectId} /> : null;
+  return (
+    <>
+      {client && <RunChainNotices client={client} projectId={projectId} />}
+      {risk.element}
+    </>
+  );
 }

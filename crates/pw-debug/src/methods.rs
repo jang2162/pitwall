@@ -58,6 +58,13 @@ pub struct DebugStartParams {
     pub cols: Option<u16>,
     #[serde(default)]
     pub rows: Option<u16>,
+    /// 구성에 `before` 가 있으면(17-m6-plan M6-21) 그 사슬을 먼저 끝까지 돌린다 — `run.start` 와 같은 첫 실행 확인(7001)의 열쇠.
+    #[serde(default)]
+    pub confirmed: Option<String>,
+    /// `before` 의 `sql` 단계마다의 위험 확인(`run.start` 의 `sqlConfirmed` 와 같다).
+    #[serde(default)]
+    #[specta(type = Option<std::collections::BTreeMap<String, pw_rpc::JsonValue>>)]
+    pub sql_confirmed: Option<std::collections::BTreeMap<String, serde_json::Value>>,
 }
 
 /// 어댑터가 `initialize` 로 알린 예외 필터 하나와 켰는가.
@@ -716,7 +723,21 @@ pub fn register(router: &mut Router, debugger: Debugger) {
                     )
                 });
             let window = ctx.window().map(str::to_owned);
-            async move { debugger.start(granted?, window, params).await }
+            let scope = ctx.scope().clone();
+            // `before` 사슬은 창의 `run.start` 와 같이 사람이 본 구성으로 기록한다(M6-21).
+            let seen = pw_core::registry::run_seen::SeenBy::window(
+                ctx.scope(),
+                &params.project_id,
+                pw_core::registry::run_seen::SeenPlace::Run,
+            )
+            .ok();
+            async move {
+                let grant = granted?;
+                debugger
+                    .run_before(grant.project_id(), scope, seen, window.clone(), &params)
+                    .await?;
+                debugger.start(grant, window, params).await
+            }
         })
         .unary(DebugControl, move |ctx, p: DebugControlParams| {
             let found = controlling_project(ctx.scope()).and_then(|project| {

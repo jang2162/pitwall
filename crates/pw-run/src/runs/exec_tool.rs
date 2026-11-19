@@ -92,7 +92,8 @@ pub struct RunToolRunParams {
 pub struct RunToolStarted {
     /// The new run. A process run is returned as soon as it started — read its output with `run_logs`.
     pub run: RunToolRun,
-    /// For an `sql` configuration, which waits until the run ends: statements run, the transactions and how each ended
+    /// For an `sql` configuration, which waits until the run ends (for a chain: an object from each `sql` step's
+    /// configuration id to its summary): statements run, the transactions and how each ended
     /// (`committed` · `rolledBack` · `unknown` · `readOnly` · `autoCommitted`), the failed statement if one failed, whether
     /// it was stopped, and the files that did not run. The console output is also in `run_logs`.
     #[specta(type = Option<pw_rpc::JsonValue>)]

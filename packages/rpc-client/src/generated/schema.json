@@ -17074,6 +17074,14 @@
             "description": "구성 id(`.pitwall/run/<id>.toml` — `[debug]` 가 있어야 한다).",
             "type": "string"
           },
+          "confirmed": {
+            "default": null,
+            "description": "구성에 `before` 가 있으면(17-m6-plan M6-21) 그 사슬을 먼저 끝까지 돌린다 — `run.start` 와 같은 첫 실행 확인(7001)의 열쇠.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "profile": {
             "default": null,
             "type": [
@@ -17091,6 +17099,15 @@
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "sqlConfirmed": {
+            "additionalProperties": true,
+            "default": null,
+            "description": "`before` 의 `sql` 단계마다의 위험 확인(`run.start` 의 `sqlConfirmed` 와 같다).",
+            "type": [
+              "object",
               "null"
             ]
           },
@@ -48815,7 +48832,7 @@
             "description": "The new run. A process run is returned as soon as it started — read its output with `run_logs`."
           },
           "sql": {
-            "description": "For an `sql` configuration, which waits until the run ends: statements run, the transactions and how each ended\n(`committed` · `rolledBack` · `unknown` · `readOnly` · `autoCommitted`), the failed statement if one failed, whether\nit was stopped, and the files that did not run. The console output is also in `run_logs`."
+            "description": "For an `sql` configuration, which waits until the run ends (for a chain: an object from each `sql` step's\nconfiguration id to its summary): statements run, the transactions and how each ended\n(`committed` · `rolledBack` · `unknown` · `readOnly` · `autoCommitted`), the failed statement if one failed, whether\nit was stopped, and the files that did not run. The console output is also in `run_logs`."
           }
         },
         "required": [
@@ -49098,7 +49115,7 @@
             "description": "The new run. A process run is returned as soon as it started — read its output with `run_logs`."
           },
           "sql": {
-            "description": "For an `sql` configuration, which waits until the run ends: statements run, the transactions and how each ended\n(`committed` · `rolledBack` · `unknown` · `readOnly` · `autoCommitted`), the failed statement if one failed, whether\nit was stopped, and the files that did not run. The console output is also in `run_logs`."
+            "description": "For an `sql` configuration, which waits until the run ends (for a chain: an object from each `sql` step's\nconfiguration id to its summary): statements run, the transactions and how each ended\n(`committed` · `rolledBack` · `unknown` · `readOnly` · `autoCommitted`), the failed statement if one failed, whether\nit was stopped, and the files that did not run. The console output is also in `run_logs`."
           }
         },
         "required": [

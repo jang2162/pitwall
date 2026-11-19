@@ -8,7 +8,7 @@
 //   「실행」 툴 윈도우의 탭이 된다(`windowRuns().upsert`, M6-06).
 
 import type { DockviewApi } from "dockview-react";
-import type { RunConfigEntry, RunInfo } from "@pitwall/rpc-client";
+import type { RunConfigEntry, RunInfo, RunSqlConfirmRequired } from "@pitwall/rpc-client";
 import { Command } from "cmdk";
 import { Bug, ChevronDown, Play, Square, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -61,6 +61,13 @@ function useLauncher(configs: RunConfigs, tabs: RunTabs, api: DockviewApi | unde
   const T = useRunStrings().picker;
   const notify = useNotify();
   const risk = useRiskConfirm();
+  const askSql = useCallback(
+    async (data: RunSqlConfirmRequired) => {
+      const answer = await risk.confirm(sqlRunQuestion(data));
+      return answer === undefined || answer === "busy" ? undefined : answer;
+    },
+    [risk],
+  );
   const launch = useCallback(
     async (entry: RunConfigEntry, profile: string | null) => {
       const place = configs.place();
@@ -87,10 +94,7 @@ function useLauncher(configs: RunConfigs, tabs: RunTabs, api: DockviewApi | unde
                 confirmed,
                 sqlConfirmed,
               }),
-            async (data) => {
-              const answer = await risk.confirm(sqlRunQuestion(data));
-              return answer === undefined || answer === "busy" ? undefined : answer;
-            },
+            askSql,
           );
         }
         if (!run) return;
@@ -111,16 +115,23 @@ function useLauncher(configs: RunConfigs, tabs: RunTabs, api: DockviewApi | unde
       const place = configs.place();
       if (!place) return;
       try {
-        await windowDebug().start(entry.id, {
-          ...(place.worktree !== null &&
-            place.worktree !== undefined && { worktree: place.worktree }),
-          ...(profile !== null && { profile }),
-        });
+        // `before` 가 있는 구성은 그 사슬을 먼저 돌린다 — `run.start` 와 같은 확인(7001 · 3001)을 받는다(M6-21).
+        await withRunConfirms(
+          (confirmed, sqlConfirmed) =>
+            windowDebug().start(entry.id, {
+              ...(place.worktree !== null &&
+                place.worktree !== undefined && { worktree: place.worktree }),
+              ...(profile !== null && { profile }),
+              confirmed,
+              sqlConfirmed,
+            }),
+          askSql,
+        );
       } catch (e) {
         notify({ level: "error", title: T.debugFailed(errorText(e)) });
       }
     },
-    [configs, notify, T],
+    [configs, notify, T, askSql],
   );
   return { launch, debug, riskElement: risk.element };
 }

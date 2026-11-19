@@ -151,7 +151,13 @@ impl ChainCtl {
             if state.stopped {
                 return false;
             }
-            state.runs.push(Arc::downgrade(run));
+            if !state
+                .runs
+                .iter()
+                .any(|w| std::ptr::eq(w.as_ptr(), Arc::as_ptr(run)))
+            {
+                state.runs.push(Arc::downgrade(run));
+            }
         }
         *lock(&run.chain) = Some(Arc::clone(self));
         true
@@ -176,7 +182,44 @@ pub(crate) struct ChainStepRun {
     pub key: String,
     /// 확인 · 승인 때 푼 내용으로 띄운다. 인자가 참이면(이미 무엇이 돈 뒤) 먼저 지금 내용을 다시 풀어 확인 · 승인 때와 견주고,
     /// 다르면 띄우지 않고 [`plan_changed`].
-    pub launch: Box<dyn FnOnce(bool) -> BoxFuture<Result<RunInfo, RpcError>> + Send>,
+    ///
+    /// 띄운 실행은 그 자리에서(블로킹 작업 안에서도) [`attach_or_stop`] 으로 사슬에 넣는다 — 호출이 버려진 뒤 끝난 띄우기도 멈춘
+    /// 사슬을 보고 그 실행을 멈춘다(리뷰 F4).
+    pub launch: Box<dyn FnOnce(bool, Arc<ChainCtl>) -> BoxFuture<Result<RunInfo, RpcError>> + Send>,
+}
+
+/// 띄운 실행을 사슬에 넣는다. 사슬이 이미 멈췄으면 그 실행을 멈추고 `chainStopped`.
+pub(crate) fn attach_or_stop(
+    runs: &Runs,
+    project_id: &str,
+    key: &str,
+    info: RunInfo,
+    ctl: &Arc<ChainCtl>,
+) -> Result<RunInfo, RpcError> {
+    let run = runs.find(project_id, &info.run_id)?;
+    if ctl.attach(&run) {
+        Ok(info)
+    } else {
+        stop_run(&run);
+        Err(chain_stopped(key))
+    }
+}
+
+/// 시험이 단계 띄우기 안(재확인 뒤 · 띄우기 앞, 블로킹 작업 안)에 끼우는 자리 — 구성 열쇠를 받는다.
+type LaunchHook = Arc<dyn Fn(&str) + Send + Sync>;
+static LAUNCH_HOOK: Mutex<Option<LaunchHook>> = Mutex::new(None);
+
+/// 시험 전용: 에이전트 사슬의 프로세스 단계를 띄우기 직전에 부를 함수(nextest 는 시험마다 프로세스가 따로다).
+#[doc(hidden)]
+pub fn set_launch_hook(hook: Option<LaunchHook>) {
+    *lock(&LAUNCH_HOOK) = hook;
+}
+
+pub(crate) fn launch_hook(key: &str) {
+    let hook = lock(&LAUNCH_HOOK).clone();
+    if let Some(hook) = hook {
+        hook(key);
+    }
 }
 
 /// 앞 단계가 도는 사이 단계의 내용이 바뀌었다(`PERMISSION_DENIED`, `data.reason = "planChanged"`) — 그 단계는 돌지 않았다.
@@ -205,9 +248,11 @@ fn step_failed(key: &str, exit: &RunExit) -> RpcError {
     .with_data(json!({ "reason": "stepFailed", "config": key, "exit": exit }))
 }
 
+/// 사슬이 멈춰 그 단계를 띄우지 않았다(`CONFLICT`, `data.reason = "chainStopped"`). `CANCELLED` 가 아니다 — 그 코드면 MCP 세션이
+/// 감사 상세를 「취소」 로 덮어 앞 단계(커밋한 `sql` 단계)의 상세가 사라진다.
 fn chain_stopped(key: &str) -> RpcError {
     RpcError::new(
-        code::CANCELLED,
+        code::CONFLICT,
         format!("the chain was stopped before run config `{key}` started"),
     )
     .with_data(json!({ "reason": "chainStopped", "config": key }))
@@ -231,6 +276,8 @@ pub(crate) struct ChainExec {
     /// 에이전트 호출의 취소(되돌릴 수 없는 지점 뒤에도 남은 단계를 띄우지 않게).
     cancel: Option<CancellationToken>,
     failed: Mutex<Option<(String, String)>>,
+    /// 처음 실패한 단계의 오류(다른 갈래가 그 뒤에 받은 `chainStopped` 가 아니라 — 리뷰 F2).
+    first_error: Mutex<Option<RpcError>>,
 }
 
 impl ChainExec {
@@ -262,6 +309,7 @@ impl ChainExec {
             first: Mutex::new(Some(tx)),
             cancel,
             failed: Mutex::default(),
+            first_error: Mutex::default(),
         });
         (exec, rx)
     }
@@ -272,8 +320,22 @@ impl ChainExec {
 
     /// 사슬을 끝까지(모든 단계를 띄우거나 실패할 때까지) 돌린다. 띄운 실행들(띄운 차례).
     pub(crate) async fn run(self: Arc<Self>, root: Node) -> Result<Vec<RunInfo>, RpcError> {
+        self.run_with(root, false).await
+    }
+
+    /// [`Self::run`] 인데 `wait_all` 이면 마지막 단계의 끝까지 기다린다(디버그 시작 앞의 `before` 사슬).
+    pub(crate) async fn run_with(
+        self: Arc<Self>,
+        root: Node,
+        wait_all: bool,
+    ) -> Result<Vec<RunInfo>, RpcError> {
         self.publish(RunChainState::Running);
-        let result = Arc::clone(&self).node(root, false).await;
+        let result = Arc::clone(&self).node(root, wait_all).await;
+        // 병렬 갈래의 결과는 목록 차례로 모인다 — 사슬이 알릴 것은 처음 실패한 단계다.
+        let result = match (result, lock(&self.first_error).take()) {
+            (Err(_), Some(first)) => Err(first),
+            (result, _) => result,
+        };
         self.ctl.finish();
         let state = match &result {
             Ok(()) => RunChainState::Done,
@@ -330,8 +392,17 @@ impl ChainExec {
             .take()
             .ok_or_else(|| RpcError::internal(format!("chain step {i} ran twice")))?;
         let result = self.launch_step(step, wait).await;
-        if result.is_err() {
+        if let Err(e) = &result {
             self.halted.store(true, Ordering::SeqCst);
+            let follow_up = e
+                .data
+                .as_ref()
+                .and_then(|d| d.get("reason"))
+                .is_some_and(|r| r == "chainStopped")
+                && !self.ctl.stopped();
+            if !follow_up {
+                lock(&self.first_error).get_or_insert_with(|| e.clone());
+            }
         }
         result
     }
@@ -348,19 +419,26 @@ impl ChainExec {
             return Err(chain_stopped(&key));
         }
         let recheck = self.started.swap(true, Ordering::SeqCst);
-        let info = (step.launch)(recheck).await?;
+        let info = (step.launch)(recheck, Arc::clone(&self.ctl)).await?;
+        let info = attach_or_stop(&self.runs, &self.project_id, &key, info, &self.ctl)?;
         let run = self.runs.find(&self.project_id, &info.run_id)?;
-        if !self.ctl.attach(&run) {
-            stop_run(&run);
-            return Err(chain_stopped(&key));
-        }
         lock(&self.launched).push(info.clone());
         if let Some(tx) = lock(&self.first).take() {
             let _ = tx.send(Ok(info));
         }
         self.publish(RunChainState::Running);
         if wait {
-            let exit = run.exited().await;
+            // 에이전트 호출의 취소(되돌릴 수 없는 지점 뒤에도 — 리뷰 R2)는 기다리던 단계까지 사슬 전체를 멈춘다.
+            let exit = match &self.cancel {
+                Some(cancel) => tokio::select! {
+                    exit = run.exited() => exit,
+                    () = cancel.cancelled() => {
+                        self.ctl.stop();
+                        return Err(chain_stopped(&key));
+                    }
+                },
+                None => run.exited().await,
+            };
             if exit.code != Some(0) {
                 return Err(if self.ctl.stopped() {
                     chain_stopped(&key)
@@ -588,10 +666,36 @@ impl Runs {
         chain: Chain,
         restart: Option<Arc<Run>>,
     ) -> Result<RunInfo, RpcError> {
+        self.window_chain(
+            grant.project_id().to_owned(),
+            scope,
+            seen,
+            window,
+            params,
+            chain,
+            restart,
+            false,
+        )
+        .await?
+        .ok_or_else(|| RpcError::internal("the chain started nothing"))
+    }
+
+    /// 창의 사슬(머리 주석 「창의 길」). `before_only` 면 끝까지 기다리고 `None`.
+    #[allow(clippy::too_many_arguments)]
+    async fn window_chain(
+        &self,
+        project_id: String,
+        scope: ConnectionScope,
+        seen: Option<SeenBy>,
+        window: Option<String>,
+        params: RunStartParams,
+        chain: Chain,
+        restart: Option<Arc<Run>>,
+        before_only: bool,
+    ) -> Result<Option<RunInfo>, RpcError> {
         let restart_of = restart
             .as_ref()
             .map(|run| (run.config().to_owned(), run.id().to_owned()));
-        let project_id = grant.project_id().to_owned();
         let size = size_of(params.cols, params.rows)?;
         if params.profile.is_some() && chain_top(&chain).is_none() {
             return Err(RpcError::invalid_params(format!(
@@ -744,7 +848,7 @@ impl Runs {
                 let by = launched_by.clone();
                 runs_of.push(ChainStepRun {
                     key,
-                    launch: Box::new(move |recheck| prepared.launch(runs, by, recheck)),
+                    launch: Box::new(move |recheck, _ctl| prepared.launch(runs, by, recheck)),
                 });
                 continue;
             }
@@ -755,7 +859,7 @@ impl Runs {
             let (runs, project, by) = (self.clone(), project_id.clone(), launched_by.clone());
             runs_of.push(ChainStepRun {
                 key,
-                launch: Box::new(move |recheck| {
+                launch: Box::new(move |recheck, ctl| {
                     Box::pin(async move {
                         blocking(move || {
                             if recheck {
@@ -766,7 +870,7 @@ impl Runs {
                                 }
                             }
                             let new = NewRun {
-                                project_id: project,
+                                project_id: project.clone(),
                                 config: ready.key.clone(),
                                 name: ready.name.clone(),
                                 launched_by: by,
@@ -781,7 +885,8 @@ impl Runs {
                                 size: what.size,
                                 restart_of: restart,
                             };
-                            runs.start_process(new, ready.argv, ready.env)
+                            let info = runs.start_process(new, ready.argv, ready.env)?;
+                            attach_or_stop(&runs, &project, &ready.key, info, &ctl)
                         })
                         .await
                     })
@@ -790,11 +895,55 @@ impl Runs {
         }
         let (exec, first) =
             ChainExec::new(self, &project_id, &chain.key, launched_by, runs_of, None);
-        tracing::info!(target: "pw_run", chain = %exec.id, config = %chain.key, steps = chain.steps.len(), "starting a chain from the window");
+        tracing::info!(target: "pw_run", chain = %exec.id, config = %chain.key, steps = chain.steps.len(), before_only, "starting a chain from the window");
+        if before_only {
+            // 디버그 시작 앞: 끝까지 기다린다. 부른 쪽(창의 RPC)이 버려지면 사슬도 멈춘다.
+            let _guard = StopChainOnDrop(exec.ctl());
+            exec.run_with(chain.root, true).await?;
+            return Ok(None);
+        }
         tokio::spawn(exec.run(chain.root));
         first
             .await
             .map_err(|_| RpcError::internal("the chain ended without starting a run"))?
+            .map(Some)
+    }
+
+    /// 디버그 시작(`debug.start` — M6-18)의 앞: 구성에 `before` 가 있으면 그 사슬을 창의 길과 같은 확인(7001 · 3001)을 받아 끝까지
+    /// 돌린다(모두 끝 코드 0). 맨 위 구성은 띄우지 않는다 — 부른 쪽이 디버그로 띄운다. `before` 가 없으면 아무것도 하지 않는다.
+    #[allow(clippy::too_many_arguments)] // `start_window` 와 같은 재료.
+    pub async fn run_before_window(
+        &self,
+        project_id: &str,
+        scope: ConnectionScope,
+        seen: Option<SeenBy>,
+        window: Option<String>,
+        params: RunStartParams,
+    ) -> Result<(), RpcError> {
+        let chain = {
+            let (runs, project, worktree, id) = (
+                self.clone(),
+                project_id.to_owned(),
+                params.worktree.clone(),
+                params.config_id.clone(),
+            );
+            blocking(move || runs.chain_of(&project, worktree.as_deref(), &id)).await?
+        };
+        let Some(before) = chain.and_then(|c| c.before_part()) else {
+            return Ok(());
+        };
+        self.window_chain(
+            project_id.to_owned(),
+            scope,
+            seen,
+            window,
+            params,
+            before,
+            None,
+            true,
+        )
+        .await
+        .map(|_| ())
     }
 }
 

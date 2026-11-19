@@ -21,7 +21,7 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import type { TerminalScreen } from "../terminal/terminal-session";
 import { xtermDeps } from "../terminal/terminal-tabs";
 import { XtermView } from "../terminal/xterm-view";
-import { withRunConfirm } from "./run-confirm";
+import { type SqlStepAsker, withRunConfirms } from "./run-confirm";
 import { LevelHighlighter } from "./run-levels";
 import { RunStream } from "./run-stream";
 
@@ -62,6 +62,8 @@ export interface RunDeps {
   droppedLine(bytes: number): string;
   failedLine(message: string): string;
   log?(message: string): void;
+  /** 사슬의 `sql` 단계 위험 확인에 답한다(다시 실행 — run-confirm.ts `withRunConfirms`). 없으면 그 확인은 오류로 끝난다. */
+  askSql?: SqlStepAsker;
 }
 
 /** 지금 도는(끝나지 않은) 실행인가. */
@@ -374,8 +376,11 @@ export class RunTabs {
     if (!deps || !tab) return;
     // 구성을 다시 읽어 띄우므로 첫 실행 확인(M6-07 ⑥ — run-confirm.ts)을 지난다. 취소하면 앞 실행은 그대로 돈다.
     const runId = tab.run.runId;
-    const next = await withRunConfirm((confirmed) =>
-      deps.client.call("run.restart", { runId, confirmed }),
+    // 구성이 사슬(`before` · 복합 구성)이면 `sql` 단계의 위험 확인(3001)도 받는다(M6-21).
+    const next = await withRunConfirms(
+      (confirmed, sqlConfirmed) =>
+        deps.client.call("run.restart", { runId, confirmed, sqlConfirmed }),
+      deps.askSql,
     );
     if (next) this.upsert(next);
   }

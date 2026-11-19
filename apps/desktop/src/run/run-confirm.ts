@@ -68,8 +68,11 @@ export async function withRunConfirm<T>(
 /** 사슬의 `sql` 단계 위험 확인에 답한다(sql-run.ts 와 같은 다이얼로그). 취소 · 다른 확인이 떠 있으면 `undefined`. */
 export type SqlStepAsker = (data: RunSqlConfirmRequired) => Promise<DbConfirmed | undefined>;
 
-/** 사슬(`before` · 복합 구성 — 단계가 여럿이라 확인도 여럿)을 다시 묻는 횟수의 상한. */
-const MAX_CHAIN_ASKS = 16;
+/**
+ * 사슬(`before` · 복합 구성 — 단계가 여럿이라 확인도 여럿)을 다시 묻는 횟수의 상한: 사슬의 단계 상한(32 —
+ * `pw_run::config::graph::MAX_STEPS`)의 `sql` 확인 모두와 첫 실행 확인, 그리고 그사이 바뀐 내용으로 한 번 더.
+ */
+const MAX_CHAIN_ASKS = 32 + 2;
 
 /**
  * 사슬도 띄우는 `run.start`(17-m6-plan M6-21 — crates/pw-run/src/runs/chain.rs 「창의 길」): Host 는 모든 확인을 첫 단계를 띄우기
@@ -78,7 +81,7 @@ const MAX_CHAIN_ASKS = 16;
  */
 export async function withRunConfirms<T>(
   call: (confirmed: string | null, sqlConfirmed: Record<string, DbConfirmed> | null) => Promise<T>,
-  askSql: SqlStepAsker,
+  askSql: SqlStepAsker | undefined,
   ask: RunConfirmAsker | undefined = asker,
 ): Promise<T | undefined> {
   let confirmed: string | null = null;
@@ -102,7 +105,7 @@ export async function withRunConfirms<T>(
       const config = (e instanceof RpcCallError ? e.data : undefined) as
         | { config?: unknown }
         | undefined;
-      if (!sql || typeof config?.config !== "string") throw e;
+      if (!sql || typeof config?.config !== "string" || !askSql) throw e;
       const answer = await askSql(sql);
       if (answer === undefined) return undefined;
       sqlConfirmed[config.config] = answer;

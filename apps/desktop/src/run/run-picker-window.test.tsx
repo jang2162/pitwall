@@ -433,8 +433,8 @@ it("asks the same question when a tab reruns changed content", async () => {
   );
   await act(async () => restart);
   expect(calls("run.restart").map((c) => c.params)).toEqual([
-    { runId: "r1", confirmed: null },
-    { runId: "r1", confirmed: CONFIRM.hash },
+    { runId: "r1", confirmed: null, sqlConfirmed: null },
+    { runId: "r1", confirmed: CONFIRM.hash, sqlConfirmed: null },
   ]);
   expect(windowRuns().tab("r1")?.run.runId).toBe("r2");
 });

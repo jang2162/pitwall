@@ -218,6 +218,37 @@ impl Debugger {
     }
 
     /// 디버그 세션을 연다(머리 주석 「시작」). `grant` 는 `pw_dap::debug_grant` 를 지난 것이다.
+    /// 디버그 시작 앞(17-m6-plan M6-21 — 리뷰 F5): 구성의 `before` 사슬을 `run.start` 와 같은 확인(7001 · 3001)으로 끝까지 돌린다.
+    /// `before` 가 없으면 아무것도 하지 않는다. 확인이 필요하면 그 오류로 답한다 — 디버그 세션은 열지 않는다.
+    pub async fn run_before(
+        &self,
+        project_id: &str,
+        scope: pw_rpc::ConnectionScope,
+        seen: Option<pw_core::registry::run_seen::SeenBy>,
+        window: Option<String>,
+        params: &DebugStartParams,
+    ) -> Result<(), RpcError> {
+        self.inner
+            .runs
+            .run_before_window(
+                project_id,
+                scope,
+                seen,
+                window,
+                pw_run::runs::RunStartParams {
+                    project_id: params.project_id.clone(),
+                    worktree: params.worktree.clone(),
+                    config_id: params.config_id.clone(),
+                    profile: params.profile.clone(),
+                    cols: params.cols,
+                    rows: params.rows,
+                    confirmed: params.confirmed.clone(),
+                    sql_confirmed: params.sql_confirmed.clone(),
+                },
+            )
+            .await
+    }
+
     pub async fn start(
         &self,
         grant: DebugGrant,

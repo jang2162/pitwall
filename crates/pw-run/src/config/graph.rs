@@ -53,6 +53,26 @@ pub struct Chain {
 }
 
 impl Chain {
+    /// 맨 위 프로세스 구성을 뺀 `before` 사슬(디버그 시작이 먼저 돌린다 — 맨 위 구성은 디버그로 띄운다). 맨 위가 복합 구성이거나
+    /// `before` 가 없으면 `None`.
+    pub fn before_part(&self) -> Option<Chain> {
+        let Node::Sequence(items) = &self.root else {
+            return None;
+        };
+        let top = self.steps.len().checked_sub(1)?;
+        if !matches!(items.last(), Some(Node::Step(i)) if *i == top) || !self.steps[top].top {
+            return None;
+        }
+        let mut items = items.clone();
+        items.pop();
+        Some(Chain {
+            key: self.key.clone(),
+            steps: self.steps[..top].to_vec(),
+            compounds: self.compounds.clone(),
+            root: Node::Sequence(items),
+        })
+    }
+
     /// 사람에게 보일 차례 한 줄(예: `seed, then (api and web together)`).
     pub fn order_text(&self) -> String {
         fn text(chain: &Chain, node: &Node) -> String {

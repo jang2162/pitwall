@@ -674,3 +674,304 @@ async fn the_chain_audit_has_no_command_text() {
     stop_all(&alpha);
     session.close().await;
 }
+
+// --- 리뷰 회차(F1 ~ F5) ------------------------------------------------------------------------------------------------
+
+/// F1 창: 사람이 확인한 뒤 앞 단계가 뒤 `sql` 단계의 파일을 바꾸면 그 단계 앞에서 멈춘다 — 확인 때 글도 바뀐 글도 돌지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_window_sql_step_changed_after_the_confirmation_stops_the_chain() {
+    let host = ToolHost::app();
+    enable(&host, "");
+    let (alpha, root) = sql_project(&host, false, "all");
+    std::fs::write(root.join("two.sql"), "INSERT INTO t VALUES ('seeded');\n").unwrap();
+    open_in_window(&host, &alpha).await;
+    shell(
+        &root,
+        "touch-sql",
+        "sleep 1; echo \\\"INSERT INTO t VALUES ('sneaked');\\\" > two.sql",
+        &[],
+    );
+    shell(&root, "migrate", "sleep 30", &["touch-sql", "seed"]);
+    let mut events = chain_events(&host, &alpha);
+    let (_, asked) = window_chain(&host, &alpha, "migrate").await;
+    assert!(asked.contains(&"3001:seed".to_owned()), "{asked:?}");
+    let end = chain_end(&mut events).await;
+    assert_eq!(
+        (end["state"].as_str(), end["step"].as_str()),
+        (Some("failed"), Some("seed")),
+        "{end}"
+    );
+    assert!(runs_of(&host, &alpha, "seed").await.is_empty());
+    assert!(runs_of(&host, &alpha, "migrate").await.is_empty());
+    let n: i64 = rusqlite::Connection::open(root.join("app.db"))
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM t WHERE v IN ('sneaked', 'seeded')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(n, 0);
+    stop_all(&alpha);
+}
+
+/// F1 복합 구성 자체: 단계는 그대로 두고 복합 구성의 `mode` · 차례만 바꿔도 창도 에이전트도 묻는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn changing_only_the_compound_asks_again() {
+    let host = ToolHost::app();
+    enable(&host, "");
+    let (alpha, root) = trusted(&host, "alpha");
+    sleeper(&root, "api", "one");
+    sleeper(&root, "web", "one");
+    compound(&root, "all", &["api", "web"], "parallel");
+    window_chain(&host, &alpha, "all").await;
+    stop_all(&alpha);
+    compound(&root, "all", &["api", "web"], "sequence");
+    let (_, asked) = window_chain(&host, &alpha, "all").await;
+    assert_eq!(asked, ["7001"], "the window asks for a changed compound");
+    stop_all(&alpha);
+    compound(&root, "all", &["web", "api"], "sequence");
+    let session = host.session(SessionRequest::default()).await;
+    let mut window = listen(&host, &alpha);
+    let (asked, request) = tokio::join!(
+        start(&session, &alpha, "all"),
+        hub_answers(&host, &mut window, &alpha, McpApprovalAnswer::Deny)
+    );
+    assert_eq!(asked.is_error, Some(true));
+    assert!(
+        !request.plan.rules.policy_auto,
+        "the agent is asked for a changed compound"
+    );
+    session.close().await;
+    stop_all(&alpha);
+}
+
+/// F2 병렬 갈래 하나가 실패하면 사슬 이벤트와 에이전트 오류가 **실패한 단계**를 알린다 — 다른 갈래가 그 뒤에 멈춘 단계가 아니라.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_parallel_failure_names_the_step_that_failed() {
+    let host = ToolHost::app();
+    enable(&host, "");
+    let (alpha, root) = trusted(&host, "alpha");
+    shell(&root, "pslow", "sleep 2", &[]);
+    shell(&root, "p", "sleep 30", &["pslow"]);
+    shell(&root, "qfail", "exit 3", &[]);
+    shell(&root, "q", "sleep 30", &["qfail"]);
+    compound(&root, "all", &["p", "q"], "parallel");
+    let mut events = chain_events(&host, &alpha);
+    window_chain(&host, &alpha, "all").await;
+    let end = chain_end(&mut events).await;
+    assert_eq!(end["state"], "failed", "{end}");
+    assert_eq!(end["step"], "qfail", "{end}");
+    stop_all(&alpha);
+
+    let session = host.session(SessionRequest::default()).await;
+    let failed = start(&session, &alpha, "all").await;
+    assert_eq!(failed.is_error, Some(true));
+    let text = super::text(&failed);
+    assert!(
+        text.contains("stepFailed") && text.contains("qfail"),
+        "{text}"
+    );
+    session.close().await;
+    stop_all(&alpha);
+}
+
+/// F3 사슬의 `sql` 단계도 단독 `sql` 실행과 같이 요약과 감사 상세(파일 · 트랜잭션의 끝)를 남긴다. 커밋 뒤에 호출이 취소되면 커밋은
+/// 남고 감사에 `transaction=committed` 와 「되돌릴 수 없는 지점 뒤 취소」 가 남으며, 남은 단계는 띄우지 않는다(R2).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_chains_sql_step_keeps_its_summary_and_audit_also_when_cancelled_after_the_commit() {
+    use rmcp::model::{CallToolRequest, CallToolRequestParams, ClientRequest};
+    use rmcp::service::PeerRequestOptions;
+    let host = ToolHost::app();
+    enable(&host, "");
+    let (alpha, root) = sql_project(&host, false, "all");
+    std::fs::write(root.join("two.sql"), "INSERT INTO t VALUES ('one');\n").unwrap();
+    open_in_window(&host, &alpha).await;
+    shell(&root, "app", "sleep 30", &["seed"]);
+    let session = host.session(SessionRequest::default()).await;
+    let mut window = listen(&host, &alpha);
+
+    let (ran, _) = tokio::join!(
+        start(&session, &alpha, "app"),
+        hub_answers(&host, &mut window, &alpha, McpApprovalAnswer::Once)
+    );
+    let ran = ok(&ran);
+    assert_eq!(ran["sql"]["seed"]["statements"], 2, "{ran:?}");
+    let audit = ran["audit"].as_str().unwrap();
+    assert!(
+        audit.contains("step=seed")
+            && audit.contains("file=two.sql")
+            && audit.contains("transaction=committed"),
+        "{audit}"
+    );
+    stop_all(&alpha);
+
+    // 커밋 뒤 취소.
+    let (reached, at_hook) = tokio::sync::oneshot::channel();
+    let (go, released) = tokio::sync::oneshot::channel::<()>();
+    host.db.test_hooks.set_after_commit_point(Box::new(move || {
+        Box::pin(async move {
+            let _ = reached.send(());
+            let _ = released.await;
+        })
+    }));
+    let params = CallToolRequestParams::new("run_start").with_arguments(
+        json!({ "projectId": alpha, "configId": "app" })
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    let before = runs_of(&host, &alpha, "app").await.len();
+    let handle = session
+        .client
+        .peer()
+        .clone()
+        .send_cancellable_request(
+            ClientRequest::CallToolRequest(CallToolRequest::new(params)),
+            PeerRequestOptions::no_options(),
+        )
+        .await
+        .unwrap();
+    hub_answers(&host, &mut window, &alpha, McpApprovalAnswer::Once).await;
+    tokio::time::timeout(Duration::from_secs(10), at_hook)
+        .await
+        .expect("the sql step never reached the commit")
+        .unwrap();
+    handle.cancel(Some("test".into())).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    go.send(()).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let row = loop {
+        let rows = host.audit_rows(1);
+        let done: Vec<_> = rows
+            .into_iter()
+            .filter(|r| r.tool == "run_start" && r.outcome != "started")
+            .collect();
+        if done.len() >= 2 {
+            break done[1].clone();
+        }
+        assert!(std::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    let detail = row.detail.clone().unwrap_or_default();
+    assert!(
+        detail.contains("step=seed") && detail.contains("transaction=committed"),
+        "{row:?}"
+    );
+    // 감사 상세는 길이 상한에서 잘린다 — 끝에 붙는 「되돌릴 수 없는 지점 뒤 취소」 의 앞부분을 본다.
+    assert!(
+        detail.contains(&pw_mcp::server::CANCELLED_AFTER_THE_POINT[..16]),
+        "{detail}"
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        runs_of(&host, &alpha, "app").await.len(),
+        before,
+        "the rest of the chain did not start"
+    );
+    let count: i64 = rusqlite::Connection::open(root.join("app.db"))
+        .unwrap()
+        .query_row("SELECT count(*) FROM t WHERE v = 'one'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 2, "both commits stayed");
+    session.close().await;
+    stop_all(&alpha);
+}
+
+/// F4 에이전트의 호출이 버려지면(MCP 취소) 그때 띄우는 중이던 단계도 사슬과 함께 끝난다 — 블로킹 작업 안에서 떠도 남지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_call_also_ends_the_step_it_was_starting() {
+    use rmcp::model::{CallToolRequest, CallToolRequestParams, ClientRequest};
+    use rmcp::service::PeerRequestOptions;
+    let host = ToolHost::app();
+    enable(&host, "");
+    let (alpha, root) = trusted(&host, "alpha");
+    shell(&root, "prep", "true", &[]);
+    shell(&root, "server", "sleep 30", &["prep"]);
+    // `server` 를 띄우기 직전(블로킹 작업 안)에서 멈춰 두고, 그동안 호출을 취소한다.
+    let (reached_tx, reached_rx) = std::sync::mpsc::channel::<()>();
+    let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+    let reached_tx = std::sync::Mutex::new(reached_tx);
+    let go_rx = std::sync::Mutex::new(go_rx);
+    pw_run::runs::chain::set_launch_hook(Some(std::sync::Arc::new(move |key: &str| {
+        if key == "server" {
+            let _ = reached_tx.lock().unwrap().send(());
+            let _ = go_rx.lock().unwrap().recv_timeout(Duration::from_secs(20));
+        }
+    })));
+    let session = host.session(SessionRequest::default()).await;
+    let mut window = listen(&host, &alpha);
+    let params = CallToolRequestParams::new("run_start").with_arguments(
+        json!({ "projectId": alpha, "configId": "server" })
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    let handle = session
+        .client
+        .peer()
+        .clone()
+        .send_cancellable_request(
+            ClientRequest::CallToolRequest(CallToolRequest::new(params)),
+            PeerRequestOptions::no_options(),
+        )
+        .await
+        .unwrap();
+    hub_answers(&host, &mut window, &alpha, McpApprovalAnswer::Once).await;
+    tokio::task::spawn_blocking(move || reached_rx.recv_timeout(Duration::from_secs(20)))
+        .await
+        .unwrap()
+        .expect("the server step never started launching");
+    handle.cancel(Some("test".into())).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    go_tx.send(()).unwrap();
+    wait_until("the started server ended", || async {
+        let server = runs_of(&host, &alpha, "server").await;
+        !server.is_empty() && server.iter().all(|r| r["state"] == "exited")
+    })
+    .await;
+    pw_run::runs::chain::set_launch_hook(None);
+    session.close().await;
+    stop_all(&alpha);
+}
+
+/// F5 디버그 시작(🐞 · ⌃D — `debug.start`)도 `before` 사슬을 지난다: 같은 첫 실행 확인(7001 — `before` 의 단계)을 받고, `before` 가
+/// 실패하면 디버그 세션을 열지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn starting_a_debug_session_runs_its_before_chain_first() {
+    let host = ToolHost::app();
+    let (alpha, root) = trusted(&host, "alpha");
+    shell(&root, "fail", "exit 3", &[]);
+    write_config(
+        &root,
+        "app",
+        "name = \"app\"\ntype = \"shell\"\ncommand = \"sleep 30\"\nbefore = [\"fail\"]\n[debug]\nadapter = \"none\"\n",
+    );
+    let params = json!({ "projectId": alpha, "configId": "app" });
+    let asked = host
+        .window_call(&alpha, "debug.start", params.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(asked["code"], 7001, "{asked}");
+    let steps: Vec<&str> = asked["data"]["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(steps, ["fail"], "the before chain's steps");
+    assert!(
+        runs(&host, &alpha).await.is_empty(),
+        "nothing ran while asking"
+    );
+    let mut confirmed = params.clone();
+    confirmed["confirmed"] = asked["data"]["hash"].clone();
+    let failed = host
+        .window_call(&alpha, "debug.start", confirmed)
+        .await
+        .unwrap_err();
+    assert!(failed.to_string().contains("stepFailed"), "{failed}");
+    let all = runs(&host, &alpha).await;
+    assert_eq!(all.len(), 1, "only the before step ran: {all:?}");
+    assert_eq!(all[0]["config"], "fail");
+}

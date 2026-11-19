@@ -4,6 +4,7 @@
 // 브라우저 · 창 제목에 닿지 않는다.
 
 import type { IBufferRange, ILink } from "@xterm/xterm";
+import { RpcCallError } from "@pitwall/rpc-client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { oscLinkHandler } from "../terminal/xterm-view";
@@ -160,6 +161,44 @@ describe("OSC 8 links in a run console", () => {
 });
 
 describe("run tabs", () => {
+  it("restart a chain through its sql step's risk confirmation (M6-21)", async () => {
+    // 다시 띄우는 구성이 사슬이고 `sql` 단계가 위험 확인(3001, `data.config`)을 청한다 — 그 확인을 받아 `sqlConfirmed` 로 다시 부른다.
+    const next = runInfo({ runId: "B", restartOf: "A" });
+    host.results["run.restart"] = (p) => {
+      if (!p.sqlConfirmed)
+        throw new RpcCallError({
+          code: 3001,
+          message: "confirm",
+          data: {
+            config: "seed",
+            request: { statementsHash: "s1", grade: "write" },
+            connection: { id: "lite", name: "lite", production: false, readOnly: false },
+            files: [],
+            transaction: "all",
+            sql: "UPDATE t SET v = 1;",
+          } as never,
+        });
+      return next;
+    };
+    const asked: string[] = [];
+    tabs.setDeps({
+      ...deps(),
+      askSql: async (data) => {
+        asked.push(data.request.statementsHash);
+        return { statementsHash: data.request.statementsHash, grade: "write", name: null };
+      },
+    });
+    tabs.upsert(runInfo({ runId: "A" }));
+    await tabs.restart("A");
+    expect(asked).toEqual(["s1"]);
+    const sent = host.calls.filter((c) => c.method === "run.restart").map((c) => c.params);
+    expect(sent.at(-1)).toMatchObject({
+      runId: "A",
+      sqlConfirmed: { seed: { statementsHash: "s1", grade: "write", name: null } },
+    });
+    expect(tabs.store.getState().tabs.map((t) => t.run.runId)).toEqual(["B"]);
+  });
+
   it("keep a closed tab closed after a reload even when it was rerun", async () => {
     // 리뷰 재현: A → 다시 실행 B(restartOf A) → B 가 끝난 뒤 탭을 닫고 창을 다시 불러온다. 목록은 [A, B] 시작 순이다.
     const a = runInfo({ runId: "A", state: "exited", exit: { code: 0, signal: null } });
@@ -232,7 +271,7 @@ describe("run tabs", () => {
     expect(list.map((t) => [t.key, t.run.runId])).toEqual([["r1", "r2"]]);
     expect(host.calls).toContainEqual({
       method: "run.restart",
-      params: { runId: "r1", confirmed: null },
+      params: { runId: "r1", confirmed: null, sqlConfirmed: null },
     });
   });
 

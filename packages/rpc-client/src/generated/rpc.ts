@@ -4189,6 +4189,10 @@ export type DebugStartParams = {
 	/**  콘솔 크기. 없으면 120 × 30. */
 	cols?: number | null,
 	rows?: number | null,
+	/**  구성에 `before` 가 있으면(17-m6-plan M6-21) 그 사슬을 먼저 끝까지 돌린다 — `run.start` 와 같은 첫 실행 확인(7001)의 열쇠. */
+	confirmed?: string | null,
+	/**  `before` 의 `sql` 단계마다의 위험 확인(`run.start` 의 `sqlConfirmed` 와 같다). */
+	sqlConfirmed?: { [key in string]: JsonValue } | null,
 };
 
 export type DebugStarted = {
@@ -9692,7 +9696,8 @@ export type RunToolStarted = {
 	/**  The new run. A process run is returned as soon as it started — read its output with `run_logs`. */
 	run: RunToolRun,
 	/**
-	 *  For an `sql` configuration, which waits until the run ends: statements run, the transactions and how each ended
+	 *  For an `sql` configuration, which waits until the run ends (for a chain: an object from each `sql` step's
+	 *  configuration id to its summary): statements run, the transactions and how each ended
 	 *  (`committed` · `rolledBack` · `unknown` · `readOnly` · `autoCommitted`), the failed statement if one failed, whether
 	 *  it was stopped, and the files that did not run. The console output is also in `run_logs`.
 	 */
