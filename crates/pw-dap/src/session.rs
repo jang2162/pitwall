@@ -598,26 +598,6 @@ fn unchecked_peer_notice(transport: &Transport, checked: bool) -> Option<String>
     }
 }
 
-#[cfg(test)]
-mod notice_tests {
-    use super::*;
-
-    /// 주인을 보지 못하는 플랫폼에서 대상이 띄운 어댑터에 붙을 때만 알린다.
-    #[test]
-    fn only_an_unchecked_listening_peer_is_announced() {
-        let addr: SocketAddr = ([127, 0, 0, 1], 5678).into();
-        let listening = Transport::Listening { addr };
-        let notice = unchecked_peer_notice(&listening, false).expect("a notice");
-        assert!(notice.contains("127.0.0.1:5678"), "{notice}");
-        assert_eq!(unchecked_peer_notice(&listening, true), None);
-        assert_eq!(
-            unchecked_peer_notice(&Transport::Connect { port: 5005 }, false),
-            None
-        );
-        assert_eq!(unchecked_peer_notice(&Transport::Stdio, false), None);
-    }
-}
-
 /// [`owned_by_us`] 가 상대가 `accept` 하기를 기다리는 시한.
 const PEER_CHECK: Duration = Duration::from_secs(3);
 
@@ -1187,5 +1167,25 @@ impl Drop for DebugSession {
                 p.kill();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use super::*;
+
+    /// 주인을 보지 못하는 플랫폼에서 대상이 띄운 어댑터에 붙을 때만 알린다.
+    #[test]
+    fn only_an_unchecked_listening_peer_is_announced() {
+        let addr: SocketAddr = ([127, 0, 0, 1], 5678).into();
+        let listening = Transport::Listening { addr };
+        let notice = unchecked_peer_notice(&listening, false).expect("a notice");
+        assert!(notice.contains("127.0.0.1:5678"), "{notice}");
+        assert_eq!(unchecked_peer_notice(&listening, true), None);
+        assert_eq!(
+            unchecked_peer_notice(&Transport::Connect { port: 5005 }, false),
+            None
+        );
+        assert_eq!(unchecked_peer_notice(&Transport::Stdio, false), None);
     }
 }
