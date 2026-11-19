@@ -185,11 +185,12 @@ default = "zed"      # 외부 도구 id (04 F8)
 # .pitwall/run/dev-server.toml — 스키마는 17-m6-plan M6-01(`pw_run::config`)
 schema = 1
 name = "Dev Server"
-type = "gradle"               # shell | npm | gradle | maven | cargo | go | python | docker-compose | mise-task | sql (compound 는 M6-21)
+type = "gradle"               # shell | npm | gradle | maven | cargo | go | python | docker-compose | mise-task | sql | compound(configs · mode = sequence | parallel — 프로세스가 없다)
 tasks = ["bootRun"]           # shell 만 글(command — 로그인 셸의 -c)이고, 그 밖 종류는 필드 값 하나가 argv 한 칸이다(래퍼 gradlew 가 있으면 그것)
 cwd = "."                     # 프로젝트 루트 기준. 루트 밖(.. · 링크 · 절대 경로)이면 쓸 수 없다
 env = { SPRING_PROFILES_ACTIVE = "local" }
 env_file = [".env.local"]     # 목록, 프로젝트 루트 안만(링크로 밖이면 거절), 파일 하나 5 MiB 까지. 변수 확장은 하지 않는다(`PATH=./bin:$PATH` 도 글자 그대로 — PATH 를 통째로 바꾼다). 덮는 순서는 런타임 환경 → env_file → env → 프로필 env(`pw_run::env` — 17-m6-plan M6-03)
+before = ["migrate"]          # 먼저 끝까지 돌릴 구성 id(차례대로, 끝 코드 0 이어야 다음). 없는 구성 · 순환 · 깊이 8 · 단계 32 초과면 쓸 수 없다(17-m6-plan M6-21 — `pw_run::config::graph`, 실행은 `pw_run::runs::chain`)
 [profiles.prod-like]          # 실행 선택기에서 고르는 덮어쓰기 — env 는 키별로 얹고 args 는 통째로 바꾼다(args 는 cargo · go · python 만)
 env = { SPRING_PROFILES_ACTIVE = "prod" }
 [debug]                       # ⌃D — 어댑터 정의의 launch · attach 틀이 읽는다(M6-17). adapter · mode 밖의 키는 그대로 넘긴다
