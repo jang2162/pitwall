@@ -46,8 +46,9 @@ pub use pw_core::secret::{REDACTED, SECRET_WORDS};
 /// 원문은 짧으면 리터럴 값까지 통째로 남으므로 남기지 않는다 — `db_query` · `db_execute` 는 감사 상세에 문장 해시를 따로 남긴다
 /// (16-m5-plan.md M5-07 리뷰 F1). 명령줄 원문(`command` · `args` — `open_with_upsert` 의 argv, `run_config_upsert` 의 셸 명령 ·
 /// 인자)과 env 의 값(`env` — 구성의 `env` 표 · `envFile` 의 경로까지)도 같다(17-m6-plan M6-13, 메인 판정 2026-11-18). 비밀 키이기도
-/// 하면 [`REDACTED`] 가 앞선다(글자 수도 남기지 않는다).
-pub const CONTENT_WORDS: &[&str] = &["sql", "command", "args", "env"];
+/// 하면 [`REDACTED`] 가 앞선다(글자 수도 남기지 않는다). 디버그 대상 안에서 평가되는 식(`condition` · `hitCondition` ·
+/// `logMessage` — `breakpoint_set_expr`, 17-m6-plan M6-20)도 같다.
+pub const CONTENT_WORDS: &[&str] = &["sql", "command", "args", "env", "condition", "log"];
 
 /// `[mcp.audit] retention_days` 가 없을 때의 보관 일수(결정 M5-D10).
 pub const DEFAULT_RETENTION_DAYS: u32 = 90;
@@ -868,6 +869,36 @@ mod tests {
             })
         );
         assert!(!summarize(&json!({ "sql": sql })).contains("123-45-6789"));
+    }
+
+    /// 디버그 식(`condition` · `hitCondition` · `logMessage` — 17-m6-plan M6-20)도 원문 키다. 단어로 견주므로 `login` ·
+    /// `catalog` · `logic` · `conditional` 처럼 한 단어 안에 든 것은 아니다.
+    #[test]
+    fn breakpoint_expressions_keep_only_their_length() {
+        let summary: Value = serde_json::from_str(&summarize(&json!({
+            "condition": "secret.len() > 3",
+            "hitCondition": ">= 2",
+            "logMessage": "token={token}",
+            "login": "kept",
+            "catalog": "kept",
+            "logic": "kept",
+            "conditional": "kept",
+            "line": 4,
+        })))
+        .unwrap();
+        assert_eq!(
+            summary,
+            json!({
+                "condition": "[16 chars]",
+                "hitCondition": "[4 chars]",
+                "logMessage": "[13 chars]",
+                "login": "kept",
+                "catalog": "kept",
+                "logic": "kept",
+                "conditional": "kept",
+                "line": 4,
+            })
+        );
     }
 
     /// 명령줄 원문 · env 의 값(`command` · `args` · `env` — 17-m6-plan M6-13)도 원문 키다: 실행 구성 쓰기 툴의 셸 명령 · 인자 ·

@@ -16,6 +16,9 @@ use pw_rpc::Tier::{self, Dangerous, Exec, Read, Write};
 
 /// 계획을 내는 툴 전부: (이름, 선언 등급, 낼 수 있는 계획 등급). 이름순.
 const PLAN_TIERS: &[(&str, Tier, &[Tier])] = &[
+    // 그 줄의 브레이크포인트(17-m6-plan M6-20) — 식이 있는 것은 따로 `exec` 툴이다(메인 판정 M6-P17).
+    ("breakpoint_set", Write, &[Write]),
+    ("breakpoint_set_expr", Exec, &[Exec]),
     // 「이 연결 열기」 · 프로덕션 `ask` 의 시험 — `connection_tool` 의 계획은 늘 선언 그대로 `write`.
     ("db_connection_test", Write, &[Write]),
     ("db_connection_upsert", Write, &[Write]),

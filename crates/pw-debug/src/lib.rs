@@ -33,6 +33,7 @@ pub mod adapter;
 pub mod breakpoints;
 pub mod methods;
 pub mod run;
+pub mod tool;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -394,6 +395,7 @@ impl Debugger {
         if run.finished.swap(true, Ordering::SeqCst) {
             return;
         }
+        run.session_ended(None);
         let mut adapter_exit = None;
         if let Some(session) = session {
             let ended = session
@@ -448,38 +450,55 @@ impl Debugger {
                         },
                     );
                 }
-                SessionEventKind::Stopped(s) => self.publish(
-                    &run.project_id,
-                    TOPIC_STOPPED,
-                    &DebugStoppedEvent {
-                        project_id: run.project_id.clone(),
-                        run_id: run.run_id().to_owned(),
-                        session: event.session,
-                        reason: s.reason,
-                        description: s.description,
-                        thread_id: s.thread_id,
-                        text: s.text,
-                        all_threads_stopped: s.all_threads_stopped.unwrap_or(false),
-                        hit_breakpoint_ids: s.hit_breakpoint_ids,
-                    },
-                ),
-                SessionEventKind::Continued(c) => self.publish(
-                    &run.project_id,
-                    TOPIC_CONTINUED,
-                    &DebugContinuedEvent {
-                        project_id: run.project_id.clone(),
-                        run_id: run.run_id().to_owned(),
-                        session: event.session,
-                        thread_id: Some(c.thread_id),
-                        all_threads_continued: c.all_threads_continued.unwrap_or(true),
-                    },
-                ),
+                SessionEventKind::Stopped(s) => {
+                    let all_threads_stopped = s.all_threads_stopped.unwrap_or(false);
+                    run.stopped(
+                        event.session,
+                        run::Stop {
+                            reason: s.reason.clone(),
+                            description: s.description.clone(),
+                            thread_id: s.thread_id,
+                            all_threads_stopped,
+                        },
+                    );
+                    self.publish(
+                        &run.project_id,
+                        TOPIC_STOPPED,
+                        &DebugStoppedEvent {
+                            project_id: run.project_id.clone(),
+                            run_id: run.run_id().to_owned(),
+                            session: event.session,
+                            reason: s.reason,
+                            description: s.description,
+                            thread_id: s.thread_id,
+                            text: s.text,
+                            all_threads_stopped,
+                            hit_breakpoint_ids: s.hit_breakpoint_ids,
+                        },
+                    )
+                }
+                SessionEventKind::Continued(c) => {
+                    let all = c.all_threads_continued.unwrap_or(true);
+                    run.resumed(event.session, (!all).then_some(c.thread_id));
+                    self.publish(
+                        &run.project_id,
+                        TOPIC_CONTINUED,
+                        &DebugContinuedEvent {
+                            project_id: run.project_id.clone(),
+                            run_id: run.run_id().to_owned(),
+                            session: event.session,
+                            thread_id: Some(c.thread_id),
+                            all_threads_continued: all,
+                        },
+                    )
+                }
                 SessionEventKind::Exited(e) => {
                     if is_root {
                         *lock(&run.debuggee_exit) = i32::try_from(e.exit_code).ok();
                     }
                 }
                 SessionEventKind::Terminated(_) | SessionEventKind::Ended(_) => {
+                    run.session_ended(Some(event.session));
                     // 시작이 끝나기 전(뿌리를 아직 모른다)의 끝도 뿌리의 것으로 본다 — 끝내기 표지는 남아 있다가 시작 뒤에 끝낸다.
                     if is_root {
                         run.end.notify_one();
@@ -736,6 +755,30 @@ impl Debugger {
             path: rel,
             breakpoints: saved,
         })
+    }
+
+    /// 한 줄을 바꾸고(지금 것이 `expected` 일 때만 — [`Breakpoints::replace_line`]) 세션마다 곧바로 보낸다(M6-20 의 툴이 승인 뒤에).
+    pub async fn replace_breakpoint(
+        &self,
+        project_id: &str,
+        path: &str,
+        line: u32,
+        expected: Option<&Breakpoint>,
+        new: Option<Breakpoint>,
+    ) -> Result<FileBreakpoints, RpcError> {
+        let store = self.breakpoints()?;
+        let saved = store.replace_line(project_id, path, line, expected, new)?;
+        let rel = breakpoints::relative_path(path)?;
+        self.changed(project_id, &rel, &saved).await;
+        Ok(FileBreakpoints {
+            path: rel,
+            breakpoints: saved,
+        })
+    }
+
+    /// Host 의 프로젝트 레지스트리(툴의 관문 — `agent_grant`).
+    pub(crate) fn projects(&self) -> Result<Registry, RpcError> {
+        Ok(self.host()?.parts.projects.clone())
     }
 
     async fn changed(&self, project_id: &str, rel: &str, saved: &[Breakpoint]) {

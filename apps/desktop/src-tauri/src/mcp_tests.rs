@@ -31,6 +31,7 @@ use crate::mcp;
 
 mod code;
 mod db;
+mod debug;
 mod git;
 mod plan_tiers;
 mod project;
@@ -41,6 +42,9 @@ mod run_read;
 
 /// 앱 Host 가 내는 툴 전부. 이름순.
 const APP_TOOLS: &[&str] = &[
+    "breakpoint_list",
+    "breakpoint_set",
+    "breakpoint_set_expr",
     "db_connection_list",
     "db_connection_test",
     "db_connection_upsert",
@@ -49,6 +53,7 @@ const APP_TOOLS: &[&str] = &[
     "db_kv_scan",
     "db_query",
     "db_schema",
+    "debug_state",
     "diagnostics",
     "git_blame",
     "git_branch_list",
@@ -93,6 +98,8 @@ const PROJECT_RECORD_TOOLS: &[&str] = &[
     "run_restart",
     "run_status",
     "run_stop",
+    // 디버그 세션도 실행이다(17-m6-plan M6-P15) — `run_status` 와 같은 까닭. 세션은 그 프로젝트의 것을 모두 본다(M6-20).
+    "debug_state",
 ];
 
 fn names(catalog: &pw_mcp::Catalog) -> Vec<&str> {

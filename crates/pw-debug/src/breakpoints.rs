@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use pw_core::registry::state::{PROJECTS_DIR, valid_id};
-use pw_rpc::RpcError;
+use pw_rpc::{RpcError, code};
 use serde::{Deserialize, Serialize};
 
 /// 파일 이름.
@@ -60,6 +60,10 @@ pub struct Breakpoint {
     /// 몇 번째에 멈추나(어댑터의 문법 — 대상 안에서 평가된다).
     #[serde(default)]
     pub hit_condition: Option<String>,
+    /// 에이전트가 두었거나 바꾸었다(M6-20 의 툴 — 거터의 표지). 사람이 같은 줄을 다른 내용으로 저장하면 사람 것이 된다
+    /// ([`Breakpoints::set_file`] — 같은 줄 · 같은 내용이면 화면이 이 칸을 되돌려 보내지 않아도 남긴다).
+    #[serde(default)]
+    pub agent: bool,
 }
 
 fn yes() -> bool {
@@ -74,6 +78,18 @@ impl Breakpoint {
             condition: None,
             log_message: None,
             hit_condition: None,
+            agent: false,
+        }
+    }
+
+    /// 표지(`agent`)를 빼고 같은가 — 사람의 저장이 그 줄을 바꾸었는지 볼 때.
+    pub fn same_content(&self, other: &Self) -> bool {
+        Self {
+            agent: false,
+            ..self.clone()
+        } == Self {
+            agent: false,
+            ..other.clone()
         }
     }
 
@@ -311,6 +327,60 @@ impl Breakpoints {
         let path = relative_path(path)?;
         let list = normalized(list)?;
         self.change(project_id, |s| {
+            // 같은 줄 · 같은 내용(표지 빼고)이던 에이전트의 것은 표지를 남긴다 — 화면은 이 칸을 되돌려 보내지 않아도 된다.
+            let before = s.files.get(&path).cloned().unwrap_or_default();
+            let list: Vec<Breakpoint> = list
+                .into_iter()
+                .map(|mut b| {
+                    if before
+                        .iter()
+                        .any(|old| old.agent && old.line == b.line && old.same_content(&b))
+                    {
+                        b.agent = true;
+                    }
+                    b
+                })
+                .collect();
+            s.files.insert(path, list.clone());
+            Ok(list)
+        })
+    }
+
+    /// 한 줄을 바꾼다 — 그 줄의 지금 것이 `expected` 일 때만(없음도 값이다). 다르면 `CONFLICT`(`data.reason = "changed"`)이고
+    /// 아무것도 바꾸지 않는다. `new` 가 없으면 그 줄을 지운다(`new` 의 줄은 `line` 이어야 한다). 그 파일의 목록을 돌려준다.
+    ///
+    /// 툴(M6-20)이 승인 뒤에 쓴다: 계획 때 읽은 그 줄을 `expected` 로 넘겨, 승인을 기다리는 동안 사람이 그 줄을 바꾸었으면(조건을
+    /// 넣음 · 지움) 승인 화면에 없던 것을 덮어쓰거나 켜지 않는다.
+    pub fn replace_line(
+        &self,
+        project_id: &str,
+        path: &str,
+        line: u32,
+        expected: Option<&Breakpoint>,
+        new: Option<Breakpoint>,
+    ) -> Result<Vec<Breakpoint>, RpcError> {
+        let path = relative_path(path)?;
+        if new.as_ref().is_some_and(|b| b.line != line) {
+            return Err(RpcError::internal(
+                "replace_line: the new breakpoint is on another line",
+            ));
+        }
+        self.change(project_id, |s| {
+            let mut list = s.files.get(&path).cloned().unwrap_or_default();
+            let now = list.iter().find(|b| b.line == line);
+            if now != expected {
+                return Err(RpcError::new(
+                    code::CONFLICT,
+                    format!(
+                        "the breakpoint at {path}:{line} changed after this call was planned; nothing was changed — \
+                         read it again with breakpoint_list"
+                    ),
+                )
+                .with_data(serde_json::json!({ "reason": "changed" })));
+            }
+            list.retain(|b| b.line != line);
+            list.extend(new);
+            let list = normalized(list)?;
             s.files.insert(path, list.clone());
             Ok(list)
         })
@@ -635,6 +705,54 @@ mod tests {
     }
 
     /// 리뷰 권고 1(C): 조건 · 로그 메시지 · hit count 글 하나는 상한까지만.
+    /// 한 줄 바꾸기는 그 줄의 지금 것이 기대한 것일 때만이다(없음도 값이다) — 다르면 `CONFLICT` 이고 아무것도 바꾸지 않는다.
+    #[test]
+    fn a_line_is_replaced_only_when_it_is_what_was_expected() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Breakpoints::new(dir.path().to_path_buf());
+        let plain = Breakpoint::at(4);
+        let conditional = Breakpoint {
+            condition: Some("n == 2".into()),
+            ..Breakpoint::at(4)
+        };
+        store
+            .set_file("p1", "a.rs", vec![conditional.clone()])
+            .unwrap();
+        // 계획 때는 없던 줄 · 평범한 것이었다 — 지금은 사람의 조건이 있다.
+        for expected in [None, Some(&plain)] {
+            let e = store
+                .replace_line(
+                    "p1",
+                    "a.rs",
+                    4,
+                    expected,
+                    Some(Breakpoint {
+                        agent: true,
+                        ..plain.clone()
+                    }),
+                )
+                .unwrap_err();
+            assert_eq!(e.code, code::CONFLICT);
+            let e = store
+                .replace_line("p1", "a.rs", 4, expected, None)
+                .unwrap_err();
+            assert_eq!(e.code, code::CONFLICT);
+        }
+        assert_eq!(
+            store.get("p1").unwrap().files["a.rs"],
+            std::slice::from_ref(&conditional)
+        );
+        let off = Breakpoint {
+            enabled: false,
+            agent: true,
+            ..conditional.clone()
+        };
+        let saved = store
+            .replace_line("p1", "a.rs", 4, Some(&conditional), Some(off.clone()))
+            .unwrap();
+        assert_eq!(saved, [off]);
+    }
+
     #[test]
     fn a_text_over_its_limit_is_refused() {
         let over = Breakpoint {

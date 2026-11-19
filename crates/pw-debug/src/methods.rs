@@ -619,7 +619,7 @@ fn project_window(scope: &ConnectionScope, project_id: &str) -> Result<(), RpcEr
     }
 }
 
-fn adapter_error(e: pw_dap::RequestError) -> RpcError {
+pub(crate) fn adapter_error(e: pw_dap::RequestError) -> RpcError {
     match e {
         pw_dap::RequestError::Adapter(e) => RpcError::invalid_params(e.message),
         other => RpcError::internal(other.to_string()),
@@ -639,6 +639,8 @@ pub fn register(router: &mut Router, debugger: Debugger) {
         d.clone(),
         d.clone(),
     );
+    // 툴 메서드(M6-20 — `crate::tool`).
+    crate::tool::register(router, d.clone());
     let (list, set, remove) = (d.clone(), d.clone(), d);
     router
         .unary(DebugStart, move |ctx, params: DebugStartParams| {
@@ -658,10 +660,14 @@ pub fn register(router: &mut Router, debugger: Debugger) {
             async move { debugger.start(granted?, window, params).await }
         })
         .unary(DebugControl, move |ctx, p: DebugControlParams| {
-            let found = controlling_project(ctx.scope())
-                .and_then(|project| control.dap_session(project, &p.run_id, p.session));
+            let found = controlling_project(ctx.scope()).and_then(|project| {
+                Ok((
+                    control.find(project, &p.run_id)?,
+                    control.dap_session(project, &p.run_id, p.session)?,
+                ))
+            });
             async move {
-                let s = found?;
+                let (run, s) = found?;
                 let step = protocol::StepArguments {
                     thread_id: p.thread_id,
                     ..protocol::StepArguments::default()
@@ -684,7 +690,12 @@ pub fn register(router: &mut Router, debugger: Debugger) {
                         .await
                         .map(drop),
                 }
-                .map_err(adapter_error)
+                .map_err(adapter_error)?;
+                // 계속 · 스텝을 받은 스레드는 더 멈춰 있지 않다(어댑터가 `continued` 를 알리지 않아도 — DAP 는 그 요청의 답으로 갈음한다).
+                if p.action != DebugAction::Pause {
+                    run.resumed(s.id(), Some(p.thread_id));
+                }
+                Ok(())
             }
         })
         .unary(DebugThreadsMethod, move |ctx, p: DebugSessionParams| {

@@ -12,7 +12,7 @@
 //! `kind`(external 거절)를 보고, 여기서 실행 관리자의 띄우기 규칙을 그대로 지난다 — 런타임 환경(D26) 위에 어댑터가 준 env, 셸 없이
 //! argv, PTY(F7-3), 작업 폴더를 띄우기 바로 앞과 띄운 뒤 두 번 본다(`pw_run::runs::PtyLauncher` — M6-02 ⑦).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
@@ -56,6 +56,19 @@ pub struct DebugRun {
     pub(crate) debuggee_exit: Mutex<Option<i32>>,
     /// (세션, 어댑터의 브레이크포인트 id) → (상대 경로, 저장된 줄) — 어댑터가 `breakpoint` 이벤트로 줄을 옮기면 찾는다.
     pub(crate) ids: Mutex<HashMap<(SessionId, i64), (String, u32)>>,
+    /// 지금 멈춰 있는 DAP 세션과 그 까닭(`stopped` 이벤트로 넣고 `continued` · 계속 · 스텝 · 그 세션의 끝으로 지운다 — M6-20
+    /// `debug_state`).
+    pub(crate) stops: Mutex<BTreeMap<SessionId, Stop>>,
+}
+
+/// 멈춘 자리(어댑터가 `stopped` 이벤트로 알린 것).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stop {
+    /// `breakpoint` · `step` · `exception` · `pause` 등(어댑터의 글).
+    pub reason: String,
+    pub description: Option<String>,
+    pub thread_id: Option<i64>,
+    pub all_threads_stopped: bool,
 }
 
 impl DebugRun {
@@ -83,6 +96,7 @@ impl DebugRun {
             finished: AtomicBool::new(false),
             debuggee_exit: Mutex::new(None),
             ids: Mutex::default(),
+            stops: Mutex::default(),
         }
     }
 
@@ -96,6 +110,50 @@ impl DebugRun {
 
     pub fn session(&self) -> Option<&Arc<DebugSession>> {
         self.session.get()
+    }
+
+    /// 실행(디버그 세션)이 끝났는가.
+    pub fn is_finished(&self) -> bool {
+        self.finished.load(Ordering::SeqCst)
+    }
+
+    /// 지금 멈춰 있는 DAP 세션들(세션 id 차례).
+    pub fn stops(&self) -> Vec<(SessionId, Stop)> {
+        lock(&self.stops)
+            .iter()
+            .map(|(id, stop)| (*id, stop.clone()))
+            .collect()
+    }
+
+    pub(crate) fn stopped(&self, session: SessionId, stop: Stop) {
+        lock(&self.stops).insert(session, stop);
+    }
+
+    /// `thread` 가 다시 돈다(`None` 이면 그 세션의 모든 스레드). 멈춘 스레드가 그것이거나, 모든 스레드가 함께 멈췄거나 · 돈다면
+    /// 그 세션은 더 멈춰 있지 않다.
+    pub(crate) fn resumed(&self, session: SessionId, thread: Option<i64>) {
+        let mut stops = lock(&self.stops);
+        let gone = match (stops.get(&session), thread) {
+            (None, _) => false,
+            (Some(_), None) => true,
+            (Some(stop), Some(t)) => {
+                stop.all_threads_stopped || stop.thread_id.is_none_or(|s| s == t)
+            }
+        };
+        if gone {
+            stops.remove(&session);
+        }
+    }
+
+    /// 그 세션이 끝났다(`None` 이면 나무 전체).
+    pub(crate) fn session_ended(&self, session: Option<SessionId>) {
+        let mut stops = lock(&self.stops);
+        match session {
+            Some(id) => {
+                stops.remove(&id);
+            }
+            None => stops.clear(),
+        }
     }
 
     /// 콘솔에 쓴다(줄바꿈은 터미널의 `\r\n` 으로).

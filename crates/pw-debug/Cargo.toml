@@ -25,6 +25,8 @@ pw-ext = { path = "../pw-ext" }
 pw-lsp = { path = "../pw-lsp" }
 # 어댑터 해석 · `[dap.<id>]` 설정(M6-16).
 pw-lsp-servers = { path = "../pw-lsp-servers" }
+# 툴의 경로 판정(루트 안의 실제 경로 — M6-20).
+pw-fs = { path = "../pw-fs" }
 pw-rpc = { path = "../pw-rpc" }
 # 디버그 세션은 실행 하나다(메인 판정 M6-P15) — 실행 관리자 · 실행 구성 · `.env`(M6-01 ~ 03).
 pw-run = { path = "../pw-run" }
@@ -32,6 +34,8 @@ pw-runtime = { path = "../pw-runtime" }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+# `breakpoint_set_expr` 의 세션 허용 열쇠(식의 해시 — M6-20). 판은 pw-core 와 같다.
+sha2 = "0.10.9"
 specta = { workspace = true, features = ["derive"] }
 # io-util · net · process · io-std 는 가짜 어댑터 바이너리(pw-dap 의 소스)가 쓴다.
 tokio = { workspace = true, features = [
