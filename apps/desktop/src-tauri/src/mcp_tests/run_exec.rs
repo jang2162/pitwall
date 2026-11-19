@@ -956,3 +956,165 @@ async fn the_cli_exits_0_for_a_seen_config_and_3_when_denied() {
     );
     stop_all(&alpha);
 }
+
+// --- 리뷰 회차 -------------------------------------------------------------------------------------------------------
+
+/// 리뷰 B1: 사람이 띄운 실행 R1 의 `run_restart` 에 [이 세션 동안 허용] 을 준 뒤 에이전트가 구성을 고치고 R1 을 또 다시 띄우면
+/// 묻는다 — 허용의 열쇠가 `human:<runId>:<내용 해시>` 라 그 실행을 그 내용으로 다시 띄우는 것에만 닿는다. 같은 내용이면 묻지
+/// 않는다(허용은 그대로 쓰인다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_allowance_for_a_persons_run_reaches_only_that_content() {
+    let host = ToolHost::app();
+    enable(&host, "");
+    let (alpha, root) = trusted(&host, "alpha");
+    sleeper(&root, "dev", "one");
+    let human = window_starts(&host, &alpha, "dev").await;
+    let session = host.session(SessionRequest::default()).await;
+    let mut window = listen(&host, &alpha);
+    let restart = || session.call("run_restart", json!({ "projectId": alpha, "runId": human }));
+
+    let (first, request) = tokio::join!(
+        restart(),
+        hub_answers(&host, &mut window, &alpha, McpApprovalAnswer::Session)
+    );
+    ok(&first);
+    match &request.plan.rules.remember {
+        pw_core::registry::plan::Remember::Key { key } => {
+            assert!(key.starts_with(&format!("human:{human}:sha256:")), "{key}");
+        }
+        other => panic!("{other:?}"),
+    }
+    // 같은 내용: 허용이 닿는다.
+    ok(&restart().await);
+    assert_eq!(last_approval(&host, 2).await.as_deref(), Some("session"));
+
+    // 에이전트가 파일 도구로 명령을 바꾼다 → 다시 묻는다.
+    sleeper(&root, "dev", "EVIL");
+    let (changed, request) = tokio::join!(
+        restart(),
+        hub_answers(&host, &mut window, &alpha, McpApprovalAnswer::Deny)
+    );
+    assert_eq!(
+        changed.is_error,
+        Some(true),
+        "a changed config is asked again"
+    );
+    assert!(
+        request
+            .plan
+            .changes
+            .iter()
+            .any(|c| matches!(c, PlanChange::Text { text, .. } if text.contains("EVIL"))),
+        "the person sees the changed command"
+    );
+    stop_all(&alpha);
+    session.close().await;
+}
+
+/// 리뷰 B1 의 `sql` 갈래: 사람이 띄운 조회만 `sql` 실행의 `run_restart` 에 준 세션 허용은 파일 내용이 바뀌면(여전히 조회만이어도)
+/// 닿지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_allowance_for_a_persons_sql_run_reaches_only_that_content() {
+    let host = ToolHost::app();
+    enable(&host, "");
+    let (alpha, root) = sql_project(&host, false, "all");
+    open_in_window(&host, &alpha).await;
+    let started = host
+        .window_call(
+            &alpha,
+            "run.sql.start",
+            json!({ "projectId": alpha, "configId": "seed" }),
+        )
+        .await
+        .unwrap();
+    let human = started["runId"].as_str().unwrap().to_owned();
+    let session = host.session(SessionRequest::default()).await;
+    let mut window = listen(&host, &alpha);
+    let restart = || session.call("run_restart", json!({ "projectId": alpha, "runId": human }));
+    let (first, request) = tokio::join!(
+        restart(),
+        hub_answers(&host, &mut window, &alpha, McpApprovalAnswer::Session)
+    );
+    ok(&first);
+    assert_eq!(request.plan.tier, pw_rpc::Tier::Read);
+    assert!(
+        !request.plan.rules.policy_auto,
+        "a person's run is asked about"
+    );
+    ok(&restart().await);
+    assert_eq!(last_approval(&host, 2).await.as_deref(), Some("session"));
+
+    std::fs::write(
+        root.join("two.sql"),
+        "SELECT count(*) FROM t WHERE v = 'z';\n",
+    )
+    .unwrap();
+    let (changed, _) = tokio::join!(
+        restart(),
+        hub_answers(&host, &mut window, &alpha, McpApprovalAnswer::Deny)
+    );
+    assert_eq!(
+        changed.is_error,
+        Some(true),
+        "changed files are asked again"
+    );
+    session.close().await;
+}
+
+/// 리뷰 권고 R1: [허용] 이 기록하는 길(`mcp.approval.answer`)에서도 묻는 동안 구성이 바뀌면 돌지 않는다 — 사람이 본 내용 A 로
+/// 묻는 동안 처음 보는 B 로 바꾸면 `plan_changed` 이고 기록되는 것은 사람이 본 A 다. 그 뒤 A 로 되돌리면 본 내용이라 묻지 않고
+/// 돌며, 돈 것은 그 하나뿐이다(B 는 돌지 않았다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_change_while_asking_is_refused_on_the_recording_path_too() {
+    let host = ToolHost::app();
+    enable(&host, "");
+    let (alpha, root) = trusted(&host, "alpha");
+    sleeper(&root, "dev", "A");
+    let session = host.session(SessionRequest::default()).await;
+    let mut window = listen(&host, &alpha);
+    let registry = host.host.registry().unwrap();
+
+    // 묻는 동안 B 로 바꾸고 [이번만 허용](기록 길): 돌지 않는다. 기록되는 것은 사람이 본 A 다.
+    let changed = async {
+        let request = next_request(&mut window).await;
+        sleeper(&root, "dev", "B");
+        host.window_call(
+            &alpha,
+            "mcp.approval.answer",
+            json!({ "id": request.id, "answer": "once" }),
+        )
+        .await
+        .unwrap();
+        request
+    };
+    let (result, request) = tokio::join!(start(&session, &alpha, "dev"), changed);
+    assert_eq!(
+        mark(&result),
+        Some(pw_mcp::marker::Mark::denied(
+            pw_mcp::marker::Reason::PlanChanged
+        )),
+        "{}",
+        text(&result)
+    );
+    let seen = registry
+        .run_seen(&alpha, "dev")
+        .unwrap()
+        .expect("A is recorded");
+    assert_eq!(seen.hash.as_str(), request.plan.seen[0].hash);
+
+    // A 로 되돌린다: 사람이 본 것이라 묻지 않는다(정책). 실행은 이것 하나뿐이다.
+    sleeper(&root, "dev", "A");
+    ok(&start(&session, &alpha, "dev").await);
+    assert_eq!(last_approval(&host, 2).await.as_deref(), Some("policy"));
+    let runs = host
+        .window_call(&alpha, "run.list", json!({ "projectId": alpha }))
+        .await
+        .unwrap();
+    assert_eq!(
+        runs["runs"].as_array().unwrap().len(),
+        1,
+        "only A ran: {runs}"
+    );
+    stop_all(&alpha);
+    session.close().await;
+}

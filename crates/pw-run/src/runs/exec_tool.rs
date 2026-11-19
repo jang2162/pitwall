@@ -300,8 +300,14 @@ impl Runs {
                 rules.policy_auto = false;
                 rules.auto_approve = false;
                 if rules.remember != Remember::Never {
+                    let content = planned_sql
+                        .targets
+                        .iter()
+                        .find(|(name, _)| name == "content")
+                        .and_then(|(_, v)| v.as_str())
+                        .unwrap_or_default();
                     rules.remember = Remember::Key {
-                        key: human_key(before),
+                        key: human_key(before, content),
                     };
                 }
             }
@@ -364,7 +370,7 @@ impl Runs {
                 PlanRules {
                     auto_approve: false,
                     remember: Remember::Key {
-                        key: human_key(before),
+                        key: human_key(before, &content),
                     },
                     policy_auto: false,
                 }
@@ -651,9 +657,12 @@ struct StartTarget<'a> {
 /// 관문을 지난 프로젝트(블로킹 스레드로 넘기는 꼴).
 struct AgentGrantRef<'a>(&'a pw_core::registry::Project);
 
-fn human_key(before: Option<&Before>) -> String {
+/// 사람이 띄운 실행을 다시 띄우는 허용의 열쇠 `human:<runId>:<내용 해시>`(결정 D69 · M6-14 ⑦ ⑧): 「이 세션 동안 허용」 은 그 실행
+/// 하나를 **그 내용으로** 다시 띄우는 것에만 닿는다 — 허용 뒤 구성 · `.env` · `sql` 파일이 바뀌면 다른 열쇠라 다시 묻는다(그 실행은
+/// 끝난 뒤에도 표에 남아 같은 `runId` 로 또 부를 수 있다). `run_stop` 은 띄우는 것이 없어 `human:<runId>` 다.
+fn human_key(before: Option<&Before>, content: &str) -> String {
     format!(
-        "{HUMAN_KEY_PREFIX}{}",
+        "{HUMAN_KEY_PREFIX}{}:{content}",
         before.map(|b| b.run_id.as_str()).unwrap_or_default()
     )
 }
