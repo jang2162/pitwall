@@ -764,6 +764,7 @@ impl ToolsInstaller {
         let generated =
             delegate_launchers(&dir, &plan.resolved.bin).map_err(|e| failed("bin", &name, e))?;
         write_launchers(&dir, &generated).map_err(|e| failed("bin", &name, e))?;
+        commonjs_scope(&dir, &plan.resolved.bin).map_err(|e| failed("bin", &name, e))?;
 
         // 실행 파일.
         let mut bins = BTreeMap::new();
@@ -1750,6 +1751,21 @@ fn launcher_path(bin: &str) -> String {
 
 /// 위임 런처를 두는 폴더(설치 폴더 기준).
 const LAUNCHER_DIR: &str = "pitwall-bin";
+
+/// `node:` 실행 파일이 있는 설치 폴더에 `{"type": "commonjs"}` 인 `package.json` 을 둔다(설치 폴더 꼭대기에 없을 때만). Node 는
+/// `.js` 를 그 파일에서 가장 가까운 위쪽 `package.json` 의 `type` 으로 읽는다 — js-debug 처럼 `package.json` 없이 배포된 스크립트는
+/// 설치 폴더 바깥(`$DATA` 의 위 — 사람의 홈 등)에 `"type": "module"` 인 파일이 있으면 ESM 으로 읽혀 바로 끝난다(M6-19 dap-live 가
+/// 저장소 안 `target/` 에서 겪었다). 받은 파일은 건드리지 않는다.
+fn commonjs_scope(dir: &Path, bins: &BTreeMap<String, ToolBin>) -> Result<(), String> {
+    if !bins.values().any(|b| matches!(b, ToolBin::Node(_))) {
+        return Ok(());
+    }
+    let file = dir.join("package.json");
+    if fs::symlink_metadata(&file).is_ok() {
+        return Ok(());
+    }
+    fs::write(&file, "{ \"type\": \"commonjs\" }\n").map_err(|e| format!("package.json: {e}"))
+}
 
 /// `node:` · `pyvenv:` 실행 파일의 런처(17-m6-plan.md M6-16 ③). 키는 [`write_launchers`] 의 경로(Windows 의 `.cmd` 를 뺀 것)다.
 /// 설치 폴더의 절대 경로를 박는다 — 실행 링크(`$DATA/tools/bin/<이름>`)로 불려도 같은 파일을 가리키게.

@@ -7,7 +7,8 @@
 //! registry 는 이 Pitwall 판의 고정 스냅숏(`registry.toml` · 내장 스냅숏)이고, 고정 해시 · 압축 풀기 검사 · npm · pip 격리가 앱과
 //! 같다. npm · python 은 이 프로세스의 PATH 에서 찾는다(`ProcessToolchains`). 라이선스 · 출처 확인(4001)은 이 명령을 부른 것을
 //! 확인으로 보고 그 값을 표준 오류에 찍은 뒤 받아들인다 — 사람의 앱에서는 창이 묻는다. 끝나면 실행 파일의 절대 경로를 JSON 으로
-//! 표준 출력에 낸다: `{"name", "version", "checksum", "bins": {"<이름>": "<경로>"}}`.
+//! 표준 출력에 낸다: `{"name", "version", "checksum", "bins": {"<이름>": "<경로>"}, "shares": {"<이름>": "<경로>"}}` — `shares` 는
+//! 실행 파일 없이 jar 만 있는 패키지(java-debug 의 jdtls 플러그인 — `scripts/dap-live.mjs`)를 찾는 데 쓴다.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -89,6 +90,16 @@ async fn main() -> ExitCode {
             bins.insert(bin, json!(path));
         }
     }
+    let mut shares = serde_json::Map::new();
+    for share in record
+        .current_entry()
+        .map(|e| e.shares.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default()
+    {
+        if let Located::Installed { path, .. } = locator.locate_share(name, &share) {
+            shares.insert(share, json!(path));
+        }
+    }
     println!(
         "{}",
         json!({
@@ -96,6 +107,7 @@ async fn main() -> ExitCode {
             "version": result.version,
             "checksum": result.checksum,
             "bins": bins,
+            "shares": shares,
         })
     );
     ExitCode::SUCCESS

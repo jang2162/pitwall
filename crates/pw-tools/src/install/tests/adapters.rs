@@ -343,6 +343,18 @@ async fn exec_node_and_pyvenv_bins_run_from_the_install_folder() {
         out,
         format!("node\n{}\n4711\n127.0.0.1\nit's x\n", script.display())
     );
+    // `package.json` 없는 배포물의 스크립트가 바깥 폴더의 `"type": "module"` 을 따르지 않게 설치 폴더 꼭대기에 commonjs 표지가
+    // 있다(M6-19). `node:` 가 없는 설치(debugpy)에는 두지 않는다.
+    assert_eq!(
+        std::fs::read_to_string(dir.join("package.json")).unwrap(),
+        "{ \"type\": \"commonjs\" }\n"
+    );
+    assert!(
+        !layout
+            .version_dir("debugpy", "1.8.22")
+            .join("package.json")
+            .exists()
+    );
     // PATH 에 node 가 없으면 그렇다고 적고 127 로 끝난다.
     let (code, _, err) = run(&js, &["4711"], "/nonexistent-pitwall-bin");
     assert_eq!(code, Some(127));
