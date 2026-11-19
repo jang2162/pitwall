@@ -510,6 +510,64 @@ async fn breakpoint_set_keeps_expressions_and_cannot_turn_them_on() {
     .await
     .unwrap();
     assert!(f.stored(&f.project, "src/main.rs").is_empty());
+
+    // 식이 하나뿐인 꺼진 것도 켜지 못한다 — hit count 만, 로그 메시지만.
+    let hit_only = Breakpoint {
+        enabled: false,
+        hit_condition: Some(">= 3".into()),
+        ..Breakpoint::at(7)
+    };
+    let log_only = Breakpoint {
+        enabled: false,
+        log_message: Some("here".into()),
+        ..Breakpoint::at(9)
+    };
+    store
+        .set_file(
+            &f.project,
+            "src/lib.rs",
+            vec![hit_only.clone(), log_only.clone()],
+        )
+        .unwrap();
+    for line in [7, 9] {
+        let e = c
+            .err(
+                SET,
+                json!({ "projectId": f.project, "path": "src/lib.rs", "line": line }),
+            )
+            .await;
+        assert_eq!(
+            e.data.as_ref().unwrap()["reason"],
+            "hasExpressions",
+            "line {line}: {e:?}"
+        );
+    }
+    assert_eq!(f.stored(&f.project, "src/lib.rs"), [hit_only, log_only]);
+}
+
+/// 메인 판정 F1: 미신뢰 프로젝트에서 `breakpoint_set_expr` 는 묻기 전에 거절이고(`untrusted`, 계획 없음, 저장 없음),
+/// `breakpoint_set` 은 된다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_untrusted_project_takes_plain_breakpoints_but_no_expressions() {
+    let f = Fixture::new();
+    f.projects.set_trust(&f.project, false).unwrap();
+    let mut c = f.agent();
+    let e = c
+        .err(
+            SET_EXPR,
+            json!({ "projectId": f.project, "path": "src/main.rs", "line": 2, "condition": "x > 1" }),
+        )
+        .await;
+    assert_eq!(e.code, code::PERMISSION_DENIED, "{e:?}");
+    assert_eq!(e.data.as_ref().unwrap()["reason"], "untrusted");
+    assert!(f.stored(&f.project, "src/main.rs").is_empty());
+    c.set(
+        SET,
+        json!({ "projectId": f.project, "path": "src/main.rs", "line": 2 }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(f.stored(&f.project, "src/main.rs").len(), 1);
 }
 
 /// 승인 뒤에는 계획 때 본 그 줄일 때만 바꾼다: 승인을 기다리는 동안 사람이 그 줄에 조건을 넣었으면 돌지 않고 사람의 것이 남는다

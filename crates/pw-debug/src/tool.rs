@@ -13,6 +13,9 @@
 //!   아무것도 쓰지 않는다. 승인 뒤에는 계획 때 읽은 그 줄과 지금 것이 같을 때만 바꾼다(`Breakpoints::replace_line` — 다르면
 //!   `CONFLICT`, 다시 묻지 않는다). 승인 규칙: `breakpoint_set` 은 기본(`auto_approve` 의 `write` · 세션 허용은 그 툴),
 //!   `breakpoint_set_expr` 는 `Remember::Key { key: <식의 해시> }` — 「이 세션 동안 허용」 이 같은 식에만 닿는다.
+//! - **미신뢰 프로젝트**에서는 `breakpoint_set_expr` 를 묻기 전에 거절한다(`PERMISSION_DENIED`, `data.reason = "untrusted"` —
+//!   메인 판정 2026-11-19 F1): 미신뢰 동안 저장된 식이 신뢰로 바뀐 뒤 사람이 모르게 돌지 않게. `breakpoint_set` 은 미신뢰에서도
+//!   된다.
 //! - 에이전트가 두거나 바꾼 브레이크포인트에는 표지(`Breakpoint::agent`)를 단다 — 거터가 그린다(M6-18). 저장되므로 사람이 나중에
 //!   띄우는 세션에서도 돈다(M6-P11).
 //! - **경로**: 프로젝트 루트(워크트리면 그 안의 프로젝트 루트) 안의 일반 파일만(`pw_fs::scope::Roots::readable` — 심링크를 푼 실제
@@ -516,8 +519,19 @@ fn planning(
     worktree: Option<&str>,
     path: &str,
     line: u32,
+    expressions: bool,
 ) -> Result<Planning, RpcError> {
-    let grant = agent_grant(scope, &debugger.projects()?, project_id)?;
+    let projects = debugger.projects()?;
+    let grant = agent_grant(scope, &projects, project_id)?;
+    // 식은 신뢰한 프로젝트에서만(메인 판정 2026-11-19 F1): 미신뢰 동안 저장된 식이 신뢰로 바뀐 뒤 사람이 모르게 도는 길을 닫는다.
+    // 평범한 브레이크포인트(위치 · 켬/끔 · 지우기)는 미신뢰에서도 둔다.
+    if expressions && !projects.is_trusted(grant.project_id()) {
+        return Err(RpcError::new(
+            code::PERMISSION_DENIED,
+            "trust the project before setting breakpoints with expressions — they run inside the debugged program",
+        )
+        .with_data(json!({ "reason": "untrusted", "projectId": grant.project_id() })));
+    }
     if line == 0 {
         return Err(RpcError::invalid_params("breakpoint lines start at 1"));
     }
@@ -599,6 +613,7 @@ impl Debugger {
                 params.worktree.as_deref(),
                 &params.path,
                 params.line,
+                false,
             )
         })
         .await?;
@@ -687,6 +702,7 @@ impl Debugger {
                 params.worktree.as_deref(),
                 &params.path,
                 params.line,
+                true,
             )
         })
         .await?;
@@ -1050,6 +1066,18 @@ mod tests {
         };
         assert_eq!(expressions_key(&a), expressions_key(&moved));
         assert_ne!(expressions_key(&a), expressions_key(&other));
+        // 로그 메시지 · hit count 만 다른 짝도 다른 열쇠다 — 세션 허용이 그 식에 닿지 않는다.
+        let logged = Breakpoint {
+            log_message: Some("x={x}".into()),
+            ..a.clone()
+        };
+        let counted = Breakpoint {
+            hit_condition: Some(">= 2".into()),
+            ..a.clone()
+        };
+        assert_ne!(expressions_key(&a), expressions_key(&logged));
+        assert_ne!(expressions_key(&a), expressions_key(&counted));
+        assert_ne!(expressions_key(&logged), expressions_key(&counted));
     }
 
     /// 응답 상한: 큰 변수가 많으면 덜어 내고 `truncated` 를 켠다.
