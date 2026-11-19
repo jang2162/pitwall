@@ -11,3 +11,12 @@ licenses = ["Apache-2.0", "LicenseRef-JetBrains-proprietary-components"]
 note = "Apache-2.0 (repository) + JetBrains proprietary components in the distribution"
 source = "https://github.com/Kotlin/kotlin-lsp/blob/main/README.md"
 checked = "2026-11-02"
+
+# java-debug(17-m6-plan.md M6-19 · 06-roadmap.md 결정 D71): 라이선스는 Mason 정의와 같은 EPL-1.0 이지만, Pitwall 은 받은 jar 의
+# `JavaDebugServer` 클래스 셋을 127.0.0.1 에만 묶도록 고친 것으로 바꿔 설치한다 — 확인 창에 그 사실을 함께 보인다(EPL-1.0 의 수정 고지는
+# 설치된 jar 옆 `NOTICE-pitwall-java-debug.txt` 와 THIRD_PARTY_NOTICES.md).
+[java-debug-adapter]
+licenses = ["EPL-1.0"]
+note = "EPL-1.0 — Pitwall replaces one class so the debug server listens on 127.0.0.1 only (see NOTICE-pitwall-java-debug.txt)"
+source = "https://github.com/microsoft/java-debug/blob/0.53.2/LICENSE.txt"
+checked = "2026-11-19"

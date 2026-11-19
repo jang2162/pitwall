@@ -81,7 +81,7 @@
 
 ### 2.5 디버깅: DAP
 - 언어별 디버거를 직접 구현하지 않고 Debug Adapter Protocol만 구현
-- 기본 번들 어댑터(06-roadmap.md 결정 D65 — 17-m6-plan 결정 M6-D2): `codelldb`(Rust) · `js-debug-adapter`(JavaScript/TypeScript — Node 만, 브라우저 디버깅은 뒤로) · `debugpy`(Python) · `java-debug-adapter`(Java — jdtls 플러그인, attach 만). Kotlin 은 같은 JDWP attach 로 확인만 하고 보장하지 않는다. `delve`(Go) 등 그 밖은 사람이 `[dap.<id>] path` 로 이미 설치한 어댑터를 쓴다(`golang` purl 설치기가 없다). 어댑터 정의 · 해석(`[dap.<id>] path` 포함) · 설치기는 있다(17-m6-plan M6-16), 디버그 세션 · 브레이크포인트 저장은 `pw-debug` 에 있다(M6-17), 번들 정의는 아직 없다(M6-19)
+- 기본 번들 어댑터(06-roadmap.md 결정 D65 — 17-m6-plan 결정 M6-D2): `codelldb`(Rust) · `js-debug-adapter`(JavaScript/TypeScript — Node 만, 브라우저 디버깅은 뒤로) · `debugpy`(Python) · `java-debug-adapter`(Java — jdtls 플러그인, attach 만). Kotlin 은 같은 JDWP attach 로 확인만 하고 보장하지 않는다. `delve`(Go) 등 그 밖은 사람이 `[dap.<id>] path` 로 이미 설치한 어댑터를 쓴다(`golang` purl 설치기가 없다). 어댑터 정의 · 해석(`[dap.<id>] path` 포함) · 설치기는 있다(17-m6-plan M6-16), 디버그 세션 · 브레이크포인트 저장은 `pw-debug` 에 있다(M6-17), 번들 정의(내장 언어 확장 넷)와 고정 해시 · 실 어댑터 시험 `dap-live` 는 M6-19 가 더했다. java-debug 는 상류 jar 가 아니라 서버 소켓을 127.0.0.1 에만 묶도록 클래스 하나를 고친 jar 를 설치한다(06 결정 D71 — `crates/pw-tools/patches/java-debug/`). Node 의 attach 는 아직 확인되지 않았다(M6-19 보고 — js-debug 가 attach 의 자식 세션에서 브레이크포인트를 묶지 않았다)
 
 ### 2.6 RPC 계약 우선
 - 코어 API는 Rust 타입으로 정의 → `specta`로 TS 타입 생성, MCP 툴 스키마도 같은 타입에서 `schemars`로 생성
