@@ -19,9 +19,17 @@
 //! - `{cwd}`: 구성의 `cwd`(프로젝트 루트 안 — 실행과 같은 판정)의 절대 경로.
 //! - `{env}`: 구성의 `env_file` · `env` · 프로필을 차례로 얹은 변수(표). 런타임 환경은 어댑터 프로세스가 이미 받았다.
 //! - `{root}`: 그 워크트리의 프로젝트 루트.
+//!
+//! # 대상이 띄운 어댑터에 붙기(17-m6-plan M6-19b)
+//!
+//! `[debug] connect = { port }`(attach 구성만, loopback 만 — `pw_run::config::DebugConfig::connect`)이면 어댑터를 띄우지 않고 디버그
+//! 대상이 이미 띄운 어댑터(debugpy `--listen`)에 붙는다(`pw_dap::Transport::Listening`). 정의가 `attach_connect = true` 여야 한다.
+//! 어댑터를 띄우지 않으므로 설치 여부 · `requires` 런타임은 보지 않는다(`[dap.<id>] enabled = false` 는 그대로 거절). `connect` 는
+//! Pitwall 이 읽는 키라 틀에는 가지 않는다.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -41,7 +49,7 @@ pub trait Adapters: Send + Sync + 'static {
     /// 등록된 정의(등록 순서).
     fn definitions(&self) -> Vec<DebugAdapterDecl>;
 
-    /// `adapter_id` 를 `dir`(프로젝트 루트)에서 띄울 해석. 정의의 `requires` 로 찾은 런타임까지 넣는다. 블로킹이다.
+    /// `adapter_id` 를 `dir`(프로젝트 루트)에서 띄울 해석. 블로킹이다.
     fn setup(
         &self,
         project_id: &str,
@@ -49,6 +57,12 @@ pub trait Adapters: Send + Sync + 'static {
         adapter_id: &str,
         dir: &Path,
     ) -> Result<AdapterSetup, RpcError>;
+
+    /// 어댑터 프로세스를 띄울 때: 정의의 `requires` 로 찾은 런타임을 `setup` 에 넣는다(없으면 거절). 대상이 띄운 어댑터에 붙을
+    /// 때(`[debug] connect`)는 부르지 않는다. 블로킹이다.
+    fn find_runtimes(&self, _setup: &mut AdapterSetup) -> Result<(), RpcError> {
+        Ok(())
+    }
 }
 
 impl Adapters for LspServers {
@@ -63,30 +77,35 @@ impl Adapters for LspServers {
         adapter_id: &str,
         dir: &Path,
     ) -> Result<AdapterSetup, RpcError> {
-        let mut setup = self.adapter_setup(project_id, worktree, adapter_id, dir)?;
+        self.adapter_setup(project_id, worktree, adapter_id, dir)
+    }
+
+    fn find_runtimes(&self, setup: &mut AdapterSetup) -> Result<(), RpcError> {
         // 런타임은 어댑터를 띄울 때만 찾는다(언어 서버 관리자와 같은 함수 · 같은 순서 — 결정 M4-D6).
-        if matches!(
+        if !matches!(
             setup.launch,
             AdapterLaunch::Process(LspResolution::Found { .. })
         ) {
-            for req in setup.definition.requires.clone() {
-                match pw_lsp::requires::find_runtime(&req, &setup.env) {
-                    Some(found) => setup.with_runtime(&found),
-                    None => {
-                        let tool = pw_lsp::requires::runtime_name(req.runtime);
-                        return Err(RpcError::new(
-                            code::INVALID_PARAMS,
-                            format!(
-                                "the debug adapter `{adapter_id}` needs {tool} {} — install it with mise",
-                                req.version
-                            ),
-                        )
-                        .with_data(json!({ "reason": "runtimeMissing", "adapter": adapter_id, "runtime": tool })));
-                    }
+            return Ok(());
+        }
+        let adapter_id = setup.definition.id.clone();
+        for req in setup.definition.requires.clone() {
+            match pw_lsp::requires::find_runtime(&req, &setup.env) {
+                Some(found) => setup.with_runtime(&found),
+                None => {
+                    let tool = pw_lsp::requires::runtime_name(req.runtime);
+                    return Err(RpcError::new(
+                        code::INVALID_PARAMS,
+                        format!(
+                            "the debug adapter `{adapter_id}` needs {tool} {} — install it with mise",
+                            req.version
+                        ),
+                    )
+                    .with_data(json!({ "reason": "runtimeMissing", "adapter": adapter_id, "runtime": tool })));
                 }
             }
         }
-        Ok(setup)
+        Ok(())
     }
 }
 
@@ -133,6 +152,25 @@ fn no_debug(config: &RunConfig) -> RpcError {
     .with_data(json!({ "reason": "noDebug" }))
 }
 
+/// `[debug] connect` 의 주소(없으면 `None`). 그 정의가 허락하지 않으면(`attach_connect`) 거절한다.
+pub fn listening(
+    definition: &DebugAdapterDecl,
+    config: &RunConfig,
+) -> Result<Option<SocketAddr>, RpcError> {
+    let debug = config.debug.as_ref().ok_or_else(|| no_debug(config))?;
+    let Some(addr) = debug.connect().map_err(RpcError::invalid_params)? else {
+        return Ok(None);
+    };
+    if !definition.attach_connect {
+        return Err(RpcError::invalid_params(format!(
+            "the debug adapter `{}` cannot attach to an adapter the program started — remove `connect` from [debug]",
+            definition.id
+        ))
+        .with_data(json!({ "reason": "noAttachConnect", "adapter": definition.id })));
+    }
+    Ok(Some(addr))
+}
+
 /// 정의의 요청 이름.
 pub fn request_of(mode: DebugMode) -> DapRequest {
     match mode {
@@ -170,6 +208,7 @@ pub fn request_arguments(
         )));
     }
     let mut values: BTreeMap<String, Value> = debug.settings.clone();
+    values.remove("connect");
     values.insert("cwd".into(), Value::String(path_text(cwd)));
     values.insert("root".into(), Value::String(path_text(root)));
     values.insert(
@@ -243,20 +282,37 @@ pub fn check_args(adapter: &str, transport: DapTransport, args: &[String]) -> Re
     Ok(())
 }
 
-/// 해석을 `pw-dap` 의 띄울 것으로 옮긴다. 언어 서버가 여는 어댑터면 `connect`(그 서버가 답한 포트)로 붙는다.
+/// 해석을 `pw-dap` 의 띄울 것으로 옮긴다. 언어 서버가 여는 어댑터면 `connect`(그 서버가 답한 포트)로, `[debug] connect` 면
+/// `listening`(대상이 띄운 어댑터의 주소 — [`listening`])으로 붙는다.
 pub fn spec(
     setup: &AdapterSetup,
     root: &Path,
     connect: Option<u16>,
+    listening: Option<SocketAddr>,
 ) -> Result<AdapterSpec, RpcError> {
     let id = setup.definition.id.clone();
+    let disabled = || {
+        RpcError::invalid_params(format!(
+            "the debug adapter `{id}` is turned off ([dap.{id}] enabled = false)"
+        ))
+        .with_data(json!({ "reason": "adapterDisabled", "adapter": id }))
+    };
+    if matches!(setup.launch, AdapterLaunch::Disabled) {
+        return Err(disabled());
+    }
+    if let Some(addr) = listening {
+        return Ok(AdapterSpec {
+            adapter_id: id,
+            program: PathBuf::new(),
+            args: Vec::new(),
+            transport: Transport::Listening { addr },
+            cwd: root.to_owned(),
+            env: setup.env.clone(),
+            extra_env: BTreeMap::new(),
+        });
+    }
     let program: PathBuf = match &setup.launch {
-        AdapterLaunch::Disabled => {
-            return Err(RpcError::invalid_params(format!(
-                "the debug adapter `{id}` is turned off ([dap.{id}] enabled = false)"
-            ))
-            .with_data(json!({ "reason": "adapterDisabled", "adapter": id })));
-        }
+        AdapterLaunch::Disabled => return Err(disabled()),
         AdapterLaunch::Process(LspResolution::Found { path, .. }) => path.clone(),
         AdapterLaunch::Process(other) => {
             return Err(RpcError::new(

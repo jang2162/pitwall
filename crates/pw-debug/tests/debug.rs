@@ -44,6 +44,10 @@ struct FakeAdapters {
     args: Mutex<Option<Vec<String>>>,
     /// 언어 서버가 여는 어댑터(java-debug 의 꼴 — `start`)로 푼다.
     via_language_server: std::sync::atomic::AtomicBool,
+    /// 정의가 `attach_connect = true`(debugpy 의 꼴 — M6-19b).
+    attach_connect: std::sync::atomic::AtomicBool,
+    /// 설치돼 있지 않은 것으로 푼다.
+    missing: std::sync::atomic::AtomicBool,
 }
 
 fn definition(scenario: &Path, args: Option<Vec<String>>) -> DebugAdapterDecl {
@@ -64,6 +68,7 @@ fn definition(scenario: &Path, args: Option<Vec<String>>) -> DebugAdapterDecl {
         requires: Vec::new(),
         project_local: None,
         start: None,
+        attach_connect: false,
     }
 }
 
@@ -81,7 +86,8 @@ impl Adapters for FakeAdapters {
     ) -> Result<AdapterSetup, RpcError> {
         self.setups.fetch_add(1, Ordering::SeqCst);
         assert_eq!(adapter_id, "fake");
-        let def = definition(&self.scenario.lock().unwrap(), None);
+        let mut def = definition(&self.scenario.lock().unwrap(), None);
+        def.attach_connect = self.attach_connect.load(Ordering::SeqCst);
         // 사람의 `[dap.fake] args` 흉내(있으면 정의의 것을 이긴다).
         let args = self
             .args
@@ -94,6 +100,12 @@ impl Adapters for FakeAdapters {
                 server: "jdtls".into(),
                 command: "vscode.java.startDebugSession".into(),
             }
+        } else if self.missing.load(Ordering::SeqCst) {
+            AdapterLaunch::Process(LspResolution::NotInstalled {
+                mason: None,
+                reinstall: None,
+                skipped: Vec::new(),
+            })
         } else {
             AdapterLaunch::Process(LspResolution::Found {
                 path: PathBuf::from(env!("CARGO_BIN_EXE_pw-debug-fake-adapter")),
@@ -208,6 +220,8 @@ impl Fixture {
             setups: AtomicUsize::new(0),
             args: Mutex::new(None),
             via_language_server: Default::default(),
+            attach_connect: Default::default(),
+            missing: Default::default(),
         });
         let launcher = Arc::new(Counting::default());
         let debugger = Debugger::with(
@@ -827,6 +841,92 @@ async fn an_attach_config_launches_nothing() {
         disconnect.last().unwrap()["arguments"]["terminateDebuggee"],
         false
     );
+}
+
+/// 디버그 대상이 띄운 어댑터(가짜 — 이 시험이 127.0.0.1 의 빈 포트에 띄운다).
+struct TargetAdapter(std::process::Child);
+
+impl Drop for TargetAdapter {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn target_adapter(f: &Fixture) -> (TargetAdapter, u16) {
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let scenario = f.adapters.scenario.lock().unwrap().clone();
+    let child = std::process::Command::new(env!("CARGO_BIN_EXE_pw-debug-fake-adapter"))
+        .arg(&scenario)
+        .args(["--port", &port.to_string(), "--host", "127.0.0.1"])
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let until = Instant::now() + SOON;
+    while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+        assert!(
+            Instant::now() < until,
+            "the target's adapter never listened"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    (TargetAdapter(child), port)
+}
+
+/// M6-19b: `[debug] connect` 는 어댑터를 띄우지 않고(설치돼 있지 않아도) 대상이 띄운 어댑터의 그 포트에 붙어 `attach` 를 보낸다.
+/// `connect` 는 틀에 가지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_connect_config_attaches_to_the_adapter_the_program_started() {
+    let f = Fixture::new();
+    f.adapters.attach_connect.store(true, Ordering::SeqCst);
+    f.adapters.missing.store(true, Ordering::SeqCst);
+    let (_target, port) = target_adapter(&f);
+    f.config(
+        &f.root,
+        "app",
+        &format!("mode = \"attach\"\nport = 9229\nconnect = {{ port = {port} }}"),
+    );
+    let mut c = f.client();
+    let started = c.ok("debug.start", start_params(&f, "app")).await;
+    assert_eq!(started["mode"], "attach");
+    let run_id = started["run"]["runId"].as_str().unwrap().to_owned();
+    let attach = f.received("attach");
+    assert_eq!(attach.len(), 1);
+    assert_eq!(attach[0]["arguments"], json!({ "port": 9229 }));
+    assert_eq!(f.launcher.calls.load(Ordering::SeqCst), 0);
+    // Pitwall 이 띄운 가짜 어댑터는 없다 — 기록의 `argv` 줄은 이 시험이 띄운 하나뿐이다.
+    let spawned = f
+        .records()
+        .iter()
+        .filter(|r| r.get("argv").is_some())
+        .count();
+    assert_eq!(spawned, 1);
+    stop(&f, &mut c, &run_id).await;
+}
+
+/// M6-19b: 정의가 허락하지 않는 어댑터(`attach_connect` 없음)의 `connect` 구성은 붙지 않고 거절한다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_connect_config_needs_an_adapter_that_allows_it() {
+    let f = Fixture::new();
+    let (_target, port) = target_adapter(&f);
+    f.config(
+        &f.root,
+        "app",
+        &format!("mode = \"attach\"\nport = 9229\nconnect = {{ port = {port} }}"),
+    );
+    let mut c = f.client();
+    let e = c.err("debug.start", start_params(&f, "app")).await;
+    assert_eq!(e.code, code::INVALID_PARAMS, "{e:?}");
+    assert_eq!(
+        e.data.as_ref().unwrap()["reason"],
+        "noAttachConnect",
+        "{e:?}"
+    );
+    assert!(f.received("initialize").is_empty());
 }
 
 /// launch 구성의 요청은 틀을 `[debug]` 의 값과 Pitwall 의 값(`{cwd}` · `{env}`)으로 채운 것이다. Pitwall 의 값을 `[debug]` 에

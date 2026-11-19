@@ -21,7 +21,7 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
 use pw_runtime::RuntimeEnv;
@@ -47,6 +47,11 @@ pub enum Transport {
     Socket { socket_args: Vec<String> },
     /// 이미 열린 `127.0.0.1` 의 포트에 붙기만 한다(프로세스를 띄우지 않는다 — 언어 서버가 연 포트).
     Connect { port: u16 },
+    /// **디버그 대상이 띄운** 어댑터가 듣는 loopback 주소에 붙기만 한다(debugpy 의 `--listen` — 17-m6-plan M6-19b). 그 포트는
+    /// Pitwall 이 고르지 않았으므로 상대를 믿지 않는다: loopback 이 아닌 주소는 붙지 않고([`LaunchError::NotLoopback`]), 붙은 뒤
+    /// 반대쪽이 이 사용자의 프로세스인지 보며(`crate::peer` — 아니면 [`LaunchError::Impostor`]), 그 세션의 역요청
+    /// `runInTerminal` 은 거절한다. `startDebugging` 의 자식도 같은 주소에만 붙는다.
+    Listening { addr: SocketAddr },
 }
 
 /// 띄울 어댑터(해석 — M6-16 — 이 끝난 것).
@@ -75,6 +80,8 @@ pub enum LaunchError {
     HostNotBound,
     /// 소켓 인자 꼴에 `{socket}` 이 없다.
     SocketMissing,
+    /// [`Transport::Listening`] 의 주소가 loopback 이 아니다.
+    NotLoopback(SocketAddr),
     /// 소켓을 연 프로세스가 그 어댑터가 아니다(까닭) — 붙지 않았다.
     Impostor(String),
     Io(std::io::Error),
@@ -96,6 +103,10 @@ impl fmt::Display for LaunchError {
                     "the adapter's socket arguments have no {SOCKET_PLACEHOLDER}"
                 )
             }
+            Self::NotLoopback(addr) => write!(
+                f,
+                "refused to connect to {addr}: a debug adapter is only reached on a loopback address"
+            ),
             Self::Impostor(why) => write!(f, "refused to connect: {why}"),
             Self::Io(e) => write!(f, "cannot start the debug adapter: {e}"),
         }

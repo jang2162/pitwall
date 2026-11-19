@@ -22,6 +22,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
@@ -36,6 +37,7 @@ use crate::adapter::{
 };
 use crate::connection::{Closed, Connection, Inbound, RequestError};
 use crate::grant::DebugGrant;
+use crate::peer::{self, PeerOwner};
 use crate::process::AdapterProcess;
 use crate::protocol::{
     self, Breakpoint, BreakpointEvent, Capabilities, Command, ContinuedEvent, Event, ExitedEvent,
@@ -217,6 +219,8 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 #[derive(Clone)]
 enum Endpoint {
     Port(u16),
+    /// 디버그 대상이 띄운 어댑터의 loopback 주소([`Transport::Listening`]) — 붙은 뒤 상대의 주인을 본다.
+    Listening(SocketAddr),
     /// 버려지면(나무가 끝나면) 폴더째 지운다.
     Socket(Arc<SocketPath>),
 }
@@ -349,6 +353,19 @@ impl Tree {
                 let (connection, inbound) = Connection::open(label, read, write, Box::new(|| {}));
                 Ok((connection, inbound, None, false))
             }
+            Transport::Listening { addr } => {
+                if !addr.ip().to_canonical().is_loopback() {
+                    return Err(StartError::Launch(LaunchError::NotLoopback(*addr)));
+                }
+                let endpoint = Endpoint::Listening(*addr);
+                *lock(&self.shared) = Some(SharedAdapter {
+                    endpoint: endpoint.clone(),
+                    process: None,
+                });
+                let (read, write) = connect(&endpoint, None, self.timeouts.connect).await?;
+                let (connection, inbound) = Connection::open(label, read, write, Box::new(|| {}));
+                Ok((connection, inbound, None, false))
+            }
         }
     }
 
@@ -369,7 +386,7 @@ impl Tree {
                     .map_err(StartError::Launch)?;
                 Ok((Endpoint::Socket(Arc::new(path)), args))
             }
-            Transport::Stdio | Transport::Connect { .. } => {
+            Transport::Stdio | Transport::Connect { .. } | Transport::Listening { .. } => {
                 Err(StartError::Launch(LaunchError::Io(std::io::Error::other(
                     "this adapter has no address to listen on",
                 ))))
@@ -486,6 +503,16 @@ async fn connect(
             Endpoint::Socket(path) => {
                 socket::connect_once(path.path(), process.and_then(AdapterProcess::pid)).await
             }
+            Endpoint::Listening(addr) => match TcpStream::connect(addr).await {
+                Ok(stream) => match owned_by_us(&stream, deadline).await {
+                    Ok(()) => {
+                        let (read, write) = stream.into_split();
+                        Attempt::Connected((Box::new(read), Box::new(write)))
+                    }
+                    Err(why) => Attempt::Impostor(why),
+                },
+                Err(e) => Attempt::NotYet(e),
+            },
         };
         let e = match attempt {
             Attempt::Connected(halves) => return Ok(halves),
@@ -515,6 +542,39 @@ async fn connect(
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
 }
+
+/// 디버그 대상이 띄운 어댑터에 붙은 연결의 반대쪽이 이 사용자의 프로세스인가(`crate::peer`). 아직 `accept` 전이면 찾지 못하므로
+/// 잠시(최대 [`PEER_CHECK`], `deadline` 안) 되풀이한다. 이 플랫폼에서 보지 못하면 통과시키고 로그를 남긴다.
+async fn owned_by_us(stream: &TcpStream, deadline: tokio::time::Instant) -> Result<(), String> {
+    let (local, peer) = (
+        stream.local_addr().map_err(|e| e.to_string())?,
+        stream.peer_addr().map_err(|e| e.to_string())?,
+    );
+    let until = deadline.min(tokio::time::Instant::now() + PEER_CHECK);
+    loop {
+        match peer::peer_owner(local, peer) {
+            PeerOwner::Ours => return Ok(()),
+            PeerOwner::Theirs(uid) => {
+                return Err(format!(
+                    "{peer} is held by another user's process (uid {uid}), not by the debug target"
+                ));
+            }
+            PeerOwner::Unchecked => {
+                tracing::warn!(target: "pw_dap", %peer, "cannot check who holds the debug adapter's port on this platform");
+                return Ok(());
+            }
+            PeerOwner::NotFound if tokio::time::Instant::now() >= until => {
+                return Err(format!(
+                    "no process of this user holds the other end of {peer} — another user's process may be listening there"
+                ));
+            }
+            PeerOwner::NotFound => tokio::time::sleep(Duration::from_millis(25)).await,
+        }
+    }
+}
+
+/// [`owned_by_us`] 가 상대가 `accept` 하기를 기다리는 시한.
+const PEER_CHECK: Duration = Duration::from_secs(3);
 
 /// 시작 순서(머리 주석).
 async fn configure(
@@ -772,6 +832,13 @@ async fn run_in_terminal(
     session: &Session,
     arguments: Value,
 ) -> Result<Value, String> {
+    // 디버그 대상이 띄운 어댑터는 Pitwall 이 띄우지 않았다 — 그 상대가 실행 관리자로 프로세스를 띄우게 두지 않는다(M6-19b 메인 판정).
+    if matches!(tree.adapter.transport, Transport::Listening { .. }) {
+        return Err(
+            "runInTerminal is refused: this debug adapter was started by the debug target, not by Pitwall"
+                .to_owned(),
+        );
+    }
     let args: RunInTerminalRequestArguments = serde_json::from_value(arguments)
         .map_err(|e| format!("bad runInTerminal arguments: {e}"))?;
     let ending = session.ending.load(Ordering::SeqCst) || session.ended.borrow().is_some();

@@ -747,3 +747,47 @@ fn only_an_mcp_session_may_call_them() {
     }
     assert!(!f.root.join(".pitwall").exists());
 }
+
+// --- `[debug] connect`(17-m6-plan M6-19b) --------------------------------------------------------------------------
+
+/// 에이전트가 쓰는 `[debug] connect` 도 쓰기 승인을 지난다: 계획의 파일 내용에 그 주소가 보이고 해시에 들어, 다른 포트로 바꾼
+/// 입력은 앞 계획의 해시로 쓰이지 않는다. loopback 이 아닌 주소는 묻기 전에 거절한다.
+#[test]
+fn debug_connect_is_shown_in_the_plan_and_bound_to_its_hash() {
+    let f = Fixture::new();
+    let attach = |port: u16, host: &str| {
+        json!({
+            "id": "attach",
+            "config": {
+                "name": "Attach",
+                "type": "shell",
+                "command": "python -m debugpy --listen 5678 app.py",
+                "debug": { "adapter": "debugpy", "mode": "attach", "connect": { "port": port, "host": host } },
+            },
+        })
+    };
+    let plan = plan_of(f.upsert(attach(5678, "127.0.0.1"), None)).plan;
+    let [(_, _, after)] = file_changes(&plan).try_into().unwrap();
+    let after = after.unwrap();
+    assert!(after.contains("connect"), "{after}");
+    assert!(after.contains("5678"), "{after}");
+    let other = plan_of(f.upsert(attach(5679, "127.0.0.1"), None)).plan;
+    assert_ne!(plan.hash, other.hash);
+    let refused = f
+        .upsert(attach(5679, "127.0.0.1"), Some(&plan.hash))
+        .unwrap_err();
+    assert_eq!(refused.code, APPROVAL_REQUIRED, "{refused:?}");
+    assert!(
+        f.read("attach.toml").is_none(),
+        "written with another plan's hash"
+    );
+    assert!(
+        f.upsert(attach(5678, "127.0.0.1"), Some(&plan.hash))
+            .unwrap()
+            .changed
+    );
+
+    let e = f.upsert(attach(5678, "10.0.0.5"), None).unwrap_err();
+    assert_eq!(e.code, pw_rpc::code::INVALID_PARAMS, "{e:?}");
+    assert!(format!("{e:?}").contains("is not allowed"), "{e:?}");
+}

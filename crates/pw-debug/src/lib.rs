@@ -122,6 +122,8 @@ struct Prepared {
     cwd: PathBuf,
     setup: pw_lsp_servers::AdapterSetup,
     arguments: serde_json::Map<String, serde_json::Value>,
+    /// `[debug] connect` — 대상이 띄운 어댑터의 주소(M6-19b).
+    listening: Option<std::net::SocketAddr>,
 }
 
 impl Debugger {
@@ -276,15 +278,19 @@ impl Debugger {
             blocking(move || prepare(&paths, &projects, &*adapters, &project_id, &root, &params))
                 .await?
         };
-        let port = adapter::language_server_port(
-            &project_id,
-            &root,
-            &prepared.setup,
-            self.inner.commands.get().cloned(),
-            self.inner.timeouts.connect,
-        )
-        .await?;
-        let spec = adapter::spec(&prepared.setup, &root, port)?;
+        let port = if prepared.listening.is_some() {
+            None
+        } else {
+            adapter::language_server_port(
+                &project_id,
+                &root,
+                &prepared.setup,
+                self.inner.commands.get().cloned(),
+                self.inner.timeouts.connect,
+            )
+            .await?
+        };
+        let spec = adapter::spec(&prepared.setup, &root, port, prepared.listening)?;
         let adapter_id = prepared.setup.definition.id.clone();
 
         let mut made: Option<Arc<DebugRun>> = None;
@@ -1003,7 +1009,11 @@ fn prepare(
         .map_err(|e| RpcError::invalid_params(e.to_string()))?;
     let definitions = adapters.definitions();
     let adapter_id = adapter::choose(config, &definitions)?;
-    let setup = adapters.setup(project_id, params.worktree.as_deref(), &adapter_id, root)?;
+    let mut setup = adapters.setup(project_id, params.worktree.as_deref(), &adapter_id, root)?;
+    let listening = adapter::listening(&setup.definition, config)?;
+    if listening.is_none() {
+        adapters.find_runtimes(&mut setup)?;
+    }
     let arguments =
         adapter::request_arguments(&setup.definition, config, &cwd, run_env.vars(), root)?;
     Ok(Prepared {
@@ -1013,6 +1023,7 @@ fn prepare(
         cwd,
         setup,
         arguments,
+        listening,
     })
 }
 

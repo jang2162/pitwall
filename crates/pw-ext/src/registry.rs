@@ -1595,6 +1595,16 @@ mod tests {
             )
         );
         assert!(py.launch.is_some() && py.attach.is_some());
+        // 대상이 띄운 어댑터(`--listen`)에 붙는 길은 debugpy 만 연다(17-m6-plan M6-19b). 빈 attach 인자를 debugpy 가 거절하므로
+        // 틀에 늘 `request` 가 있다.
+        assert_eq!(py.attach.as_ref().unwrap()["request"], "attach");
+        assert_eq!(py.launch.as_ref().unwrap()["request"], "launch");
+        assert_eq!(
+            ids.iter()
+                .filter(|id| get(id).attach_connect)
+                .collect::<Vec<_>>(),
+            [&"debugpy"]
+        );
 
         let java = get("java-debug");
         let start = java.start.as_ref().unwrap();

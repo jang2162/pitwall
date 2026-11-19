@@ -1318,3 +1318,89 @@ fn an_sql_config_reads_its_fields_and_has_no_argv() {
             .starts_with("files[0]")
     );
 }
+
+/// `[debug] connect`(17-m6-plan.md M6-19b): attach 구성에서 loopback 주소만 받는다 — 다른 주소 · 이름, launch, 틀이 틀린 값은
+/// 그 구성을 쓸 수 없게 한다(쓰기도 같은 `validate` 를 지난다). `localhost` 는 이름을 풀지 않고 127.0.0.1 이다.
+#[test]
+fn debug_connect_takes_only_a_loopback_address_in_an_attach_config() {
+    let f = Fixture::new();
+    for (connect, wanted) in [
+        ("{ port = 5678 }", "127.0.0.1:5678"),
+        ("{ port = 5678, host = '127.0.0.1' }", "127.0.0.1:5678"),
+        ("{ port = 5678, host = 'localhost' }", "127.0.0.1:5678"),
+        ("{ port = 5678, host = '::1' }", "[::1]:5678"),
+    ] {
+        let body = format!("[debug]\nmode = 'attach'\nconnect = {connect}\n");
+        assert_eq!(unusable_reason(&f, &body), None, "{connect}");
+        let config = parse(&format!(
+            "name = 'x'\ntype = 'shell'\ncommand = 'true'\n{body}"
+        ));
+        assert_eq!(
+            config
+                .debug
+                .unwrap()
+                .connect()
+                .unwrap()
+                .unwrap()
+                .to_string(),
+            wanted
+        );
+    }
+    for (body, wanted) in [
+        (
+            "[debug]\nmode = 'attach'\nconnect = { port = 5678, host = '192.168.0.10' }",
+            "is not allowed",
+        ),
+        (
+            "[debug]\nmode = 'attach'\nconnect = { port = 5678, host = 'example.com' }",
+            "is not allowed",
+        ),
+        (
+            "[debug]\nmode = 'attach'\nconnect = { port = 5678, host = '0.0.0.0' }",
+            "is not allowed",
+        ),
+        (
+            "[debug]\nconnect = { port = 5678 }",
+            "only for `mode = \"attach\"`",
+        ),
+        (
+            "[debug]\nmode = 'attach'\nconnect = { port = 0 }",
+            "from 1 to 65535",
+        ),
+        (
+            "[debug]\nmode = 'attach'\nconnect = { port = 70000 }",
+            "from 1 to 65535",
+        ),
+        (
+            "[debug]\nmode = 'attach'\nconnect = 5678",
+            "must be a table",
+        ),
+        (
+            "[debug]\nmode = 'attach'\nconnect = { port = 5678, address = 'x' }",
+            "unknown key `address`",
+        ),
+    ] {
+        let reason = unusable_reason(&f, body).unwrap_or_else(|| panic!("`{body}` was accepted"));
+        assert!(reason.contains(wanted), "`{body}`: {reason}");
+    }
+}
+
+/// `[debug] connect` 도 정규형(「사람이 본 구성」 해시의 재료 — M6-11)에 든다: 포트 · 주소가 다르면 다르다.
+#[test]
+fn debug_connect_is_part_of_the_canonical_form() {
+    let base = "name = 'x'\ntype = 'shell'\ncommand = 'true'\n[debug]\nmode = 'attach'\n";
+    let none = parse(base);
+    let a = parse(&format!("{base}connect = {{ port = 5678 }}\n"));
+    let b = parse(&format!("{base}connect = {{ port = 5679 }}\n"));
+    let c = parse(&format!(
+        "{base}connect = {{ port = 5678, host = '::1' }}\n"
+    ));
+    assert!(
+        a.canonical().contains("\"connect\":{\"port\":5678}"),
+        "{}",
+        a.canonical()
+    );
+    assert_ne!(none.canonical(), a.canonical());
+    assert_ne!(a.canonical(), b.canonical());
+    assert_ne!(a.canonical(), c.canonical());
+}

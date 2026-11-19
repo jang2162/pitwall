@@ -81,6 +81,10 @@ pub struct DebugAdapterDecl {
     /// 프로젝트 안의 실행 파일(프로젝트 루트 기준). 신뢰한 프로젝트에서만 본다.
     pub project_local: Option<RelPath>,
     pub start: Option<AdapterStart>,
+    /// `attach_connect = true` — attach 구성이 `[debug] connect` 로 **디버그 대상이 이미 띄운 어댑터**의 loopback 포트에 바로
+    /// 붙을 수 있다(debugpy 의 `python -m debugpy --listen` — 17-m6-plan M6-19b). 그 길은 어댑터를 띄우지 않으며, 붙는 상대를
+    /// 믿지 않는다(`pw_dap::Transport::Listening`). 기본 거짓.
+    pub attach_connect: bool,
 }
 
 impl DebugAdapterDecl {
@@ -305,7 +309,25 @@ impl Parser<'_> {
         let start = f
             .table(self, "start", false)
             .map(|(table, span)| self.adapter_start(table, span, &what, mason.is_some()));
+        let attach_connect = f.item(self, "attach_connect", false).and_then(|item| {
+            let value = item.as_bool();
+            if value.is_none() {
+                self.error(
+                    item.span(),
+                    format!("{what}: `attach_connect` must be true or false"),
+                );
+            }
+            value
+        });
         f.finish(self);
+        if attach_connect == Some(true) && attach.as_ref().is_none_or(Option::is_none) {
+            self.error(
+                at.clone(),
+                format!(
+                    "{what}: `attach_connect` needs an `attach` request template — it is a way to attach"
+                ),
+            );
+        }
 
         // 어느 쪽으로 띄우나: 실행 파일(`command`) 또는 언어 서버(`start`) — 하나만.
         let start = match start {
@@ -410,6 +432,7 @@ impl Parser<'_> {
             requires,
             project_local,
             start,
+            attach_connect: attach_connect.unwrap_or(false),
         })
     }
 

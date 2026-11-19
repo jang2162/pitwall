@@ -59,6 +59,7 @@ fn definition(scenario: &Path) -> DebugAdapterDecl {
         requires: Vec::new(),
         project_local: None,
         start: None,
+        attach_connect: false,
     }
 }
 

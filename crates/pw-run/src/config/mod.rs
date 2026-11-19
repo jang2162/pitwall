@@ -318,6 +318,52 @@ pub enum DebugMode {
     Attach,
 }
 
+impl DebugConfig {
+    /// `[debug] connect = { port = 5678, host = "127.0.0.1" }` — 디버그 대상이 이미 띄운 어댑터(debugpy `--listen`)의 주소
+    /// (17-m6-plan.md M6-19b). 없으면 `None`. attach 구성에서만, 주소는 loopback 만(`host` 생략 · `127.0.0.1` · `::1` · `localhost`
+    /// — `localhost` 는 이름을 풀지 않고 `127.0.0.1` 로 본다). 그 어댑터 정의가 허락하는지(`attach_connect`)는 디버그 시작이 본다.
+    pub fn connect(&self) -> Result<Option<std::net::SocketAddr>, String> {
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+        let Some(value) = self.settings.get("connect") else {
+            return Ok(None);
+        };
+        if self.mode != DebugMode::Attach {
+            return Err("debug.connect is only for `mode = \"attach\"`".to_owned());
+        }
+        let Value::Object(table) = value else {
+            return Err("debug.connect must be a table like { port = 5678 }".to_owned());
+        };
+        if let Some(key) = table
+            .keys()
+            .find(|k| !matches!(k.as_str(), "port" | "host"))
+        {
+            return Err(format!(
+                "debug.connect has an unknown key `{key}` (only `port` and `host`)"
+            ));
+        }
+        let port = table
+            .get("port")
+            .and_then(Value::as_u64)
+            .and_then(|p| u16::try_from(p).ok())
+            .filter(|p| *p != 0)
+            .ok_or("debug.connect.port must be a port number from 1 to 65535")?;
+        let ip = match table.get("host") {
+            None => IpAddr::V4(Ipv4Addr::LOCALHOST),
+            Some(Value::String(host)) => match host.as_str() {
+                "127.0.0.1" | "localhost" => IpAddr::V4(Ipv4Addr::LOCALHOST),
+                "::1" | "[::1]" => IpAddr::V6(Ipv6Addr::LOCALHOST),
+                other => {
+                    return Err(format!(
+                        "debug.connect.host `{other}` is not allowed — a debug adapter is only reached on 127.0.0.1, ::1 or localhost"
+                    ));
+                }
+            },
+            Some(_) => return Err("debug.connect.host must be a string".to_owned()),
+        };
+        Ok(Some(SocketAddr::new(ip, port)))
+    }
+}
+
 impl RunConfig {
     /// 정규형: 파싱한 값을 RPC 의 키 이름(camelCase)으로 JSON 으로 쓴 것 — 객체 키는 모든 깊이에서 사전순, 공백 없음, 빈 값도
     /// 적는다(없는 `cwd` 는 `null`, 빈 `env` 는 `{}`). 예외는 빈 `before` 하나다(M6-21 이 더한 필드 — 없는 것과 같은 글이라 그 전에
@@ -425,10 +471,11 @@ pub fn validate(config: &RunConfig, root: &std::path::Path) -> Result<(), String
             argv_items(&format!("profiles.{name}.args"), args)?;
         }
     }
-    if let Some(debug) = &config.debug
-        && let Some(adapter) = &debug.adapter
-    {
-        text("debug.adapter", adapter)?;
+    if let Some(debug) = &config.debug {
+        if let Some(adapter) = &debug.adapter {
+            text("debug.adapter", adapter)?;
+        }
+        debug.connect()?;
     }
     references("before", &config.before)?;
     if matches!(config.kind, RunKindConfig::Compound { .. }) {

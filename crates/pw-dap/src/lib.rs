@@ -18,6 +18,7 @@ pub mod adapter;
 mod connection;
 pub mod fake;
 pub mod grant;
+mod peer;
 mod process;
 pub mod protocol;
 pub mod session;

@@ -304,3 +304,45 @@ fn reads_a_socket_adapter_and_fills_its_socket_path() {
         ["--listen", "unix:/tmp/pw-0700/dap.sock"]
     );
 }
+
+/// `attach_connect`(17-m6-plan M6-19b): 적지 않으면 거짓, `true` 는 attach 틀이 있어야 하고, 참거짓이 아니면 오류다.
+#[test]
+fn reads_attach_connect_only_with_an_attach_template() {
+    let (manifest, diagnostics) = parse(
+        "\n[contributes.debug_adapters.debugpy]\nlanguages = [\"python\"]\ncommand = \"debugpy-adapter\"\nattach = { justMyCode = \"{just_my_code}\" }\nattach_connect = true\n",
+    );
+    assert_eq!(diagnostics, vec![]);
+    assert!(manifest.unwrap().contributes.debug_adapters[0].attach_connect);
+
+    let (manifest, _) = parse(ADAPTERS);
+    assert!(
+        manifest
+            .unwrap()
+            .contributes
+            .debug_adapters
+            .iter()
+            .all(|a| !a.attach_connect)
+    );
+
+    let (manifest, diagnostics) = parse(
+        "\n[contributes.debug_adapters.x]\nlanguages = [\"python\"]\ncommand = \"x\"\nlaunch = {}\nattach_connect = true\n",
+    );
+    assert!(manifest.is_none());
+    assert_eq!(
+        errors(&diagnostics),
+        [format!(
+            "{FILE}:7:29: error: debug adapter `x`: `attach_connect` needs an `attach` request template — it is a way to attach"
+        )]
+    );
+
+    let (manifest, diagnostics) = parse(
+        "\n[contributes.debug_adapters.x]\nlanguages = [\"python\"]\ncommand = \"x\"\nattach = {}\nattach_connect = \"yes\"\n",
+    );
+    assert!(manifest.is_none());
+    assert_eq!(
+        errors(&diagnostics),
+        [format!(
+            "{FILE}:11:18: error: debug adapter `x`: `attach_connect` must be true or false"
+        )]
+    );
+}

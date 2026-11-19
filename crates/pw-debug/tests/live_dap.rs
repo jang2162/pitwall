@@ -825,6 +825,51 @@ async fn live_dap_debugpy_attach_to_a_listening_process() {
     stop(&live, &mut c, &stopped.run_id).await;
 }
 
+/// 디버그 대상이 띄운 어댑터에 붙는 attach(17-m6-plan M6-19b): `python -m debugpy --listen 127.0.0.1:<포트>` 로 띄운 대상에 구성의
+/// `connect` 로 붙어 그 줄에서 멈춘다. Pitwall 은 어댑터를 띄우지 않는다 — 붙는 상대가 이 사용자의 프로세스인지 본 뒤에 말한다.
+#[cfg(pw_live_dap_debugpy)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_dap_debugpy_attach_to_a_listening_target() {
+    let live = debugpy();
+    let port = free_port();
+    live.file(
+        "wait.py",
+        "import time\nwhile True:\n    answer = 41 + 1\n    time.sleep(0.05)\n",
+    );
+    let listen = format!("127.0.0.1:{port}");
+    let _target = spawn(
+        &debugpy_python(),
+        &["-m", "debugpy", "--listen", &listen, "wait.py"],
+        &live.root,
+    );
+    // 붙어 보지 않고 듣기만 확인한다 — 빈 연결로 대상의 어댑터를 건드리지 않는다. 그 어댑터는 대상이 떼어 띄워 이 시험의 자손이
+    // 아니다(`listening_addresses` 가 못 본다) — 포트로 찾는다.
+    let until = Instant::now() + WAIT;
+    while !Command::new("lsof")
+        .args([
+            "-nP",
+            &format!("-iTCP@127.0.0.1:{port}"),
+            "-sTCP:LISTEN",
+            "-t",
+        ])
+        .output()
+        .is_ok_and(|o| !o.stdout.is_empty())
+    {
+        assert!(
+            Instant::now() < until,
+            "the target never listened on {port}"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    live.config(
+        "debugpy",
+        &format!("mode = \"attach\"\nconnect = {{ port = {port} }}"),
+    );
+    let mut c = live.client();
+    let stopped = break_and_inspect(&live, &mut c, "wait.py", 4, "answer", "42", &[port]).await;
+    stop(&live, &mut c, &stopped.run_id).await;
+}
+
 // ---- java-debug(JVM — attach 만) ------------------------------------------------------------------------------------------------
 
 #[cfg(pw_live_dap_java_debug)]
