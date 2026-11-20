@@ -534,6 +534,97 @@ it("starts debugging the current configuration from 🐞 and ⌃D when it has [d
   ]);
 });
 
+/** 어댑터가 없는 `debug.start`(crates/pw-debug/src/adapter.rs `spec`) — 처음 `missing` 번은 없고, 그 뒤는 열린다. */
+function adapterMissingUntilInstalled() {
+  let installed = false;
+  const TOOL_CONFIRM = {
+    name: "js-debug-adapter",
+    version: "1.2.3",
+    licenses: ["MIT"],
+    sourceDomains: ["github.com"],
+    size: null,
+    checksum: "pinned",
+    note: null,
+    rejected: null,
+  };
+  host.handlers["debug.start"] = () =>
+    installed
+      ? {
+          result: {
+            run: runInfo({ runId: "d1", kind: "debug", name: "Dev Server" }),
+            adapter: "js-debug",
+            mode: "launch",
+            exceptionFilters: [],
+          },
+        }
+      : {
+          error: {
+            code: -32602,
+            message: "the debug adapter `js-debug` is not installed",
+            data: {
+              reason: "adapterMissing",
+              adapter: "js-debug",
+              resolution: {
+                kind: "notInstalled",
+                mason: "js-debug-adapter",
+                reinstall: null,
+                skipped: [],
+              },
+            },
+          },
+        };
+  host.handlers["tools.install"] = (p) => {
+    if (p.confirmed === null)
+      return { error: { code: 4001, message: "confirm", data: TOOL_CONFIRM } };
+    installed = true;
+    return { result: { name: "js-debug-adapter", version: "1.2.3" } };
+  };
+  host.handlers["tools.registry.get"] = () => ({
+    error: { code: -32005, message: "not in this fake" },
+  });
+}
+
+it("asks to install a missing debug adapter, installs it, then starts debugging (e2e F-1)", async () => {
+  (host.list as RunConfigList).configs[0]!.config.debug = { mode: "launch" };
+  adapterMissingUntilInstalled();
+  await mount();
+  await vi.waitFor(() => expect(byTestId("run-debug")?.hasAttribute("disabled")).toBe(false));
+  await click(byTestId("run-debug"));
+  await vi.waitFor(() => expect(byTestId("tool-confirm-dialog")).not.toBeNull());
+  // 설정 > 도구와 같은 확인 창: 라이선스 · 출처, 처음 포커스는 [취소].
+  expect(byTestId("tool-confirm-license")?.textContent).toContain("MIT");
+  expect(byTestId("tool-confirm-source")?.textContent).toContain("github.com");
+  expect(document.activeElement).toBe(byTestId("tool-confirm-cancel"));
+  expect(calls("debug.start")).toHaveLength(1);
+  await click(byTestId("tool-confirm-accept"));
+  await vi.waitFor(() => expect(calls("debug.start")).toHaveLength(2));
+  expect(calls("tools.install").map((c) => c.params)).toEqual([
+    { name: "js-debug-adapter", version: null, confirmed: null },
+    {
+      name: "js-debug-adapter",
+      version: null,
+      confirmed: { version: "1.2.3", licenses: ["MIT"], sourceDomains: ["github.com"] },
+    },
+  ]);
+  await settle();
+  expect(byTestId("tool-confirm-dialog")).toBeNull();
+  expect(document.body.textContent).not.toContain("not installed");
+});
+
+it("does not start debugging when the adapter install is cancelled (e2e F-1)", async () => {
+  (host.list as RunConfigList).configs[0]!.config.debug = { mode: "launch" };
+  adapterMissingUntilInstalled();
+  await mount();
+  await vi.waitFor(() => expect(byTestId("run-debug")?.hasAttribute("disabled")).toBe(false));
+  await press("KeyD", { ctrlKey: true }, "d");
+  await vi.waitFor(() => expect(byTestId("tool-confirm-dialog")).not.toBeNull());
+  await click(byTestId("tool-confirm-cancel"));
+  await settle();
+  expect(byTestId("tool-confirm-dialog")).toBeNull();
+  expect(calls("tools.install").map((c) => c.params.confirmed)).toEqual([null]);
+  expect(calls("debug.start")).toHaveLength(1);
+});
+
 it("shows the command definition that runs, as written, in the first run confirmation", async () => {
   await mount();
   host.handlers["run.start"] = () => ({
@@ -603,4 +694,24 @@ it("shows every step of a chain in the first-run confirmation, in order (M6-21)"
   );
   expect(calls("run.start").map((c) => c.params.confirmed)).toEqual([null, chain.hash]);
   expect(calls("run.start")[1]?.params).toMatchObject({ sqlConfirmed: null });
+});
+
+it("titles a compound's first-run confirmation with the compound, not its last step (e2e O-3)", async () => {
+  await mount();
+  const combo: RunConfirmRequired = {
+    ...CONFIRM,
+    hash: "sha256:" + "d".repeat(64),
+    steps: [{ ...CONFIRM.shown, key: "build", name: "Build" }, CONFIRM.shown],
+    order: "build, then dev",
+    title: "Combo",
+  };
+  host.handlers["run.start"] = () => ({
+    error: { code: 7001, message: "not seen", data: combo },
+  });
+  await click(byTestId("run-start"));
+  await vi.waitFor(() => expect(byTestId("run-confirm-dialog")).not.toBeNull());
+  const title = byTestId("run-confirm-dialog")!.querySelector("h2")?.textContent ?? "";
+  expect(title).toContain("Combo");
+  expect(title).not.toContain("Dev Server");
+  await click(document.activeElement);
 });

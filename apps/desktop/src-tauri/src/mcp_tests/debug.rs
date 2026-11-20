@@ -133,6 +133,22 @@ fn the_debug_tools_are_project_tools_in_the_debug_group() {
     }
 }
 
+/// 어댑터가 없을 때 설치 확인으로 잇는 것은 사람의 🐞 · ⌃D 뿐이다(실기 F-1) — 에이전트에게는 디버그 세션을 여는 툴(`debug.start`)도
+/// 도구를 설치하는 툴(`tools.*`)도 없다. 그런 툴이 생기면 사람 몰래 설치를 띄우는 길인지 먼저 따진다.
+#[test]
+fn an_agent_can_neither_start_a_debug_session_nor_install_an_adapter() {
+    let host = ToolHost::app();
+    let reaching: Vec<(&str, &str)> = host
+        .services
+        .catalog
+        .tools()
+        .iter()
+        .filter(|t| t.method == "debug.start" || t.method.starts_with("tools."))
+        .map(|t| (t.name.as_str(), t.method))
+        .collect();
+    assert!(reaching.is_empty(), "{reaching:?}");
+}
+
 /// ① 프리셋 `standard`(설정 없음)에서는 `breakpoint_set` 이 보이고 `breakpoint_set_expr`(exec)는 없다 — `full` 에서만 보인다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_expression_tool_is_listed_only_with_the_full_preset() {

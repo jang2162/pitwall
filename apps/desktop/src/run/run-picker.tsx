@@ -9,6 +9,7 @@
 
 import type { DockviewApi } from "dockview-react";
 import type { RunConfigEntry, RunInfo, RunSqlConfirmRequired } from "@pitwall/rpc-client";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Command } from "cmdk";
 import { Bug, ChevronDown, Play, Square, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -16,12 +17,16 @@ import { createPortal } from "react-dom";
 import { useStore } from "zustand";
 
 import { useRiskConfirm } from "../db/safety/risk-confirm";
+import { startOrInstallAdapter } from "../debug/adapter-install";
 import { useKeymapPopup, useRegisterActions } from "../keymap/keymap-provider";
 import { showPanel } from "../layout/project-layout";
 import { useNotify } from "../notifications/notifications";
 import { windowDebug } from "../debug/debug-session";
 import { activeWorktreeStore } from "../open-with/active-worktree";
 import { useHost } from "../rpc/host";
+import { useToolConfirm } from "../tools/confirm-dialog";
+import { changeTool, type ToolsCall } from "../tools/install";
+import { useToolsStrings } from "../tools/strings";
 import { SEARCH_ITEM_CLASS, SearchPopup } from "../ui/search-popup";
 import { formOf, formOfEntry, idFromName, newForm } from "./config-form";
 import { openRunConfigEditor, RunConfigEditorHost } from "./config-editor";
@@ -59,8 +64,16 @@ export function runToStop(tabs: RunTabs, configId: string | undefined): string |
 /** 타이틀바 · 팝업 · 액션이 함께 쓰는 띄우기. */
 function useLauncher(configs: RunConfigs, tabs: RunTabs, api: DockviewApi | undefined) {
   const T = useRunStrings().picker;
+  const toolsT = useToolsStrings();
   const notify = useNotify();
   const risk = useRiskConfirm();
+  const { client } = useHost();
+  const toolsCall = useMemo<ToolsCall | undefined>(
+    () => (client ? (method, params) => client.call(method, params) : undefined),
+    [client],
+  );
+  // 디버그 어댑터 설치 확인(실기 F-1): 설정 > 도구 · 언어 서버 배너와 같은 확인 창.
+  const toolConfirm = useToolConfirm(toolsCall, (url) => void openUrl(url).catch(() => {}));
   const askSql = useCallback(
     async (data: RunSqlConfirmRequired) => {
       const answer = await risk.confirm(sqlRunQuestion(data));
@@ -114,26 +127,37 @@ function useLauncher(configs: RunConfigs, tabs: RunTabs, api: DockviewApi | unde
     async (entry: RunConfigEntry, profile: string | null) => {
       const place = configs.place();
       if (!place) return;
+      const call: ToolsCall = (method, params) => place.client.call(method, params);
       try {
         // `before` 가 있는 구성은 그 사슬을 먼저 돌린다 — `run.start` 와 같은 확인(7001 · 3001)을 받는다(M6-21).
-        await withRunConfirms(
-          (confirmed, sqlConfirmed) =>
-            windowDebug().start(entry.id, {
-              ...(place.worktree !== null &&
-                place.worktree !== undefined && { worktree: place.worktree }),
-              ...(profile !== null && { profile }),
-              confirmed,
-              sqlConfirmed,
-            }),
-          askSql,
-        );
+        const start = () =>
+          withRunConfirms(
+            (confirmed, sqlConfirmed) =>
+              windowDebug().start(entry.id, {
+                ...(place.worktree !== null &&
+                  place.worktree !== undefined && { worktree: place.worktree }),
+                ...(profile !== null && { profile }),
+                confirmed,
+                sqlConfirmed,
+              }),
+            askSql,
+          );
+        // 어댑터가 없으면 설치 확인 → 설치 → 같은 시작을 한 번 더(src/debug/adapter-install.ts). 취소하면 시작하지 않는다.
+        await startOrInstallAdapter(start, async ({ mason }) => {
+          try {
+            return (await changeTool(call, toolConfirm.ask, "install", mason)) !== undefined;
+          } catch (e) {
+            notify({ level: "error", title: toolsT.banner.failed(mason), body: errorText(e) });
+            return false;
+          }
+        });
       } catch (e) {
         notify({ level: "error", title: T.debugFailed(errorText(e)) });
       }
     },
-    [configs, notify, T, askSql],
+    [configs, notify, T, toolsT, askSql, toolConfirm.ask],
   );
-  return { launch, debug, riskElement: risk.element };
+  return { launch, debug, riskElement: risk.element, toolConfirmElement: toolConfirm.element };
 }
 
 /** 구성 고르기 팝업. `mode` 가 `run` 이면 고른 구성을 곧바로 띄운다(⌃⌥R). */
@@ -406,7 +430,7 @@ export function RunPickerFeature({
   const { client } = useHost();
   const worktree = useStore(activeWorktreeStore, (s) => s.top ?? null);
   const [chooser, setChooser] = useState<"select" | "run">();
-  const { launch, debug, riskElement } = useLauncher(configs, tabs, api);
+  const { launch, debug, riskElement, toolConfirmElement } = useLauncher(configs, tabs, api);
   const slot = useTitlebarSlot();
 
   useEffect(
@@ -486,6 +510,7 @@ export function RunPickerFeature({
       <RunConfirmHost />
       <RunConfigEditorHost configs={configs} />
       {riskElement}
+      {toolConfirmElement}
     </>
   );
 }
