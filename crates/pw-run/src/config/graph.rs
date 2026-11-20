@@ -44,6 +44,8 @@ pub enum Node {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Chain {
     pub key: String,
+    /// 고른 구성(`key`)의 보이는 이름 — 첫 실행 확인의 제목. `before` 만 떼어 낸 사슬([`Chain::before_part`])도 고른 구성의 것이다.
+    pub name: String,
     /// 띄울 단계(펼친 차례 — 왼쪽부터).
     pub steps: Vec<ChainStep>,
     /// 사슬이 지난 복합 구성(열쇠 순, 하나씩). 프로세스가 없어 단계가 아니지만 「사람이 본 구성」 의 대상이다(D68 — `configs` ·
@@ -67,6 +69,7 @@ impl Chain {
         items.pop();
         Some(Chain {
             key: self.key.clone(),
+            name: self.name.clone(),
             steps: self.steps[..top].to_vec(),
             compounds: self.compounds.clone(),
             root: Node::Sequence(items),
@@ -135,6 +138,11 @@ pub fn expand<'a>(
     }
     Ok(Chain {
         key: key.to_owned(),
+        name: if config.name.is_empty() {
+            key.to_owned()
+        } else {
+            config.name.clone()
+        },
         steps: walk.steps,
         compounds: walk.compounds.into_iter().collect(),
         root,

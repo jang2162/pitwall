@@ -159,3 +159,19 @@ fn a_config_without_references_is_not_a_chain() {
     assert_eq!(c.root, Node::Step(0));
     assert!(c.steps[0].top);
 }
+
+#[test]
+fn a_chain_and_its_before_part_carry_the_chosen_configs_name() {
+    let mut app = shell(&["seed"]);
+    app.name = "My App".to_owned();
+    let c = chain(&[("seed", shell(&[])), ("app", app)], "app");
+    assert_eq!(c.name, "My App");
+    assert_eq!(c.before_part().expect("has before").name, "My App");
+    let mut unnamed = compound(&["a", "b"], CompoundMode::Sequence);
+    unnamed.name = String::new();
+    let combo = chain(
+        &[("a", shell(&[])), ("b", shell(&[])), ("combo", unnamed)],
+        "combo",
+    );
+    assert_eq!(combo.name, "combo", "an empty name falls back to the key");
+}

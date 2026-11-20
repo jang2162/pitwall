@@ -106,12 +106,15 @@ export function RunConfirmDialog({
   shown,
   steps = [],
   order = null,
+  title = null,
   onAnswer,
 }: {
   shown: RunShown;
   /** 사슬(`before` · 복합 구성)이면 띄울 단계 모두(띄우는 차례). */
   steps?: RunShown[];
   order?: string | null;
+  /** 제목의 이름 — 사람이 고른 구성(사슬이면 Host 가 준다 — 복합 구성이면 그 이름). 없으면 `shown.name`. */
+  title?: string | null;
   onAnswer(run: boolean): void;
 }) {
   const T = useRunStrings().confirm;
@@ -124,7 +127,9 @@ export function RunConfirmDialog({
           data-testid="run-confirm-dialog"
           className="sheet-top fixed left-1/2 flex max-h-[80vh] w-[560px] max-w-[94vw] -translate-x-1/2 flex-col gap-3 overflow-y-auto rounded-b-md border border-t-0 border-ui-border bg-ui-panel px-4 py-3 text-ui-foreground shadow-lg"
         >
-          <Dialog.Title className="text-sm font-semibold">{T.title(shown.name)}</Dialog.Title>
+          <Dialog.Title className="text-sm font-semibold">
+            {T.title(title ?? shown.name)}
+          </Dialog.Title>
           <Dialog.Description className="text-ui-muted-foreground">{T.body}</Dialog.Description>
           {shown.secretLooking && (
             <p
@@ -221,6 +226,7 @@ export function RunConfirmHost() {
       shown={question.data.shown}
       steps={question.data.steps}
       order={question.data.order}
+      title={question.data.title}
       onAnswer={question.answer}
     />
   ) : null;

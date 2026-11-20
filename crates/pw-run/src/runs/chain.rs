@@ -776,6 +776,7 @@ impl Runs {
                     shown: main,
                     steps,
                     order: Some(chain.order_text()),
+                    title: Some(chain.name.clone()),
                 },
             ));
         }

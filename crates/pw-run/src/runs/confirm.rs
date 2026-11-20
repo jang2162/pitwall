@@ -47,6 +47,10 @@ pub struct RunConfirmRequired {
     /// 사슬의 차례 한 줄(예: `seed, then (api and web together)`).
     #[serde(default)]
     pub order: Option<String>,
+    /// 확인 창의 제목에 쓸 이름 — 사람이 고른 구성(사슬이면 그 구성: 복합 구성이면 복합 구성의 이름, 디버그의 `before` 면 디버그할
+    /// 구성). 사슬이 아니면 없다(`shown.name` 이 그것이다).
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 /// 첫 실행 확인에 보이는 것 — 띄울 그 값.
@@ -249,6 +253,7 @@ pub(super) fn confirm_required(hash: String, shown: RunShown) -> RpcError {
         shown,
         steps: Vec::new(),
         order: None,
+        title: None,
     })
 }
 

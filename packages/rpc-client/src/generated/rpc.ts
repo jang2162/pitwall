@@ -9168,6 +9168,11 @@ export type RunConfirmRequired = {
 	steps?: RunShown[],
 	/**  사슬의 차례 한 줄(예: `seed, then (api and web together)`). */
 	order?: string | null,
+	/**
+	 *  확인 창의 제목에 쓸 이름 — 사람이 고른 구성(사슬이면 그 구성: 복합 구성이면 복합 구성의 이름, 디버그의 `before` 면 디버그할
+	 *  구성). 사슬이 아니면 없다(`shown.name` 이 그것이다).
+	 */
+	title?: string | null,
 };
 
 /**  끝난 꼴. */

@@ -462,6 +462,33 @@ async fn a_compound_with_one_unseen_config_asks() {
     session.close().await;
 }
 
+/// 복합 구성의 첫 실행 확인은 그 복합 구성의 이름을 제목으로 준다(`title`) — `shown` 은 마지막 프로세스 단계(실기 O-3: 제목이
+/// 「dev 를 처음 실행」 이었다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_compound_confirmation_is_titled_with_the_compound() {
+    let host = ToolHost::app();
+    let (alpha, root) = trusted(&host, "alpha");
+    sleeper(&root, "build", "one");
+    sleeper(&root, "dev", "one");
+    write_config(
+        &root,
+        "combo",
+        "name = \"Combo\"\ntype = \"compound\"\nconfigs = [\"build\", \"dev\"]\n",
+    );
+    open_in_window(&host, &alpha).await;
+    let asked = host
+        .window_call(
+            &alpha,
+            "run.start",
+            json!({ "projectId": alpha, "configId": "combo" }),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(asked["code"], 7001, "{asked}");
+    assert_eq!(asked["data"]["shown"]["key"], "dev");
+    assert_eq!(asked["data"]["title"], "Combo");
+}
+
 /// ⑤ 앞 단계가 뒤 단계의 `.env`(프로세스) 또는 SQL 파일(`sql`)을 바꾸면 그 단계 앞에서 `planChanged` 로 멈춘다 — 다시 읽어 돌리지
 /// 않는다. 에이전트 · 창 둘 다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -960,6 +987,10 @@ async fn starting_a_debug_session_runs_its_before_chain_first() {
         .map(|s| s["key"].as_str().unwrap())
         .collect();
     assert_eq!(steps, ["fail"], "the before chain's steps");
+    assert_eq!(
+        asked["data"]["title"], "app",
+        "the title names the configuration being debugged, not its last before step"
+    );
     assert!(
         runs(&host, &alpha).await.is_empty(),
         "nothing ran while asking"
