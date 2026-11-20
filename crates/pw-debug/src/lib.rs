@@ -251,6 +251,23 @@ impl Debugger {
             .await
     }
 
+    /// `before` 사슬 앞의 어댑터 검사([`preflight`]) — 띄울 수 없으면 그 오류(`adapterMissing` 등). `run_before` 앞에 부른다.
+    pub async fn check_adapter(
+        &self,
+        grant: &DebugGrant,
+        params: &DebugStartParams,
+    ) -> Result<(), RpcError> {
+        let host = self.host()?;
+        let paths = host.parts.paths.clone();
+        let projects = host.parts.projects.clone();
+        let adapters = Arc::clone(&self.inner.adapters);
+        let project_id = grant.project_id().to_owned();
+        let root = grant.root().to_owned();
+        let params = params.clone();
+        blocking(move || preflight(&paths, &projects, &*adapters, &project_id, &root, &params))
+            .await
+    }
+
     pub async fn start(
         &self,
         grant: DebugGrant,
@@ -956,14 +973,13 @@ fn exception_filters(capabilities: &Capabilities, enabled: &[String]) -> Vec<Exc
 }
 
 /// 구성을 읽고 어댑터를 푼다(블로킹 — 머리 주석 「시작」 2 · 3).
-fn prepare(
+/// 구성을 읽는다(프로젝트 · 구성 자리 · 구성). [`prepare`] 와 [`preflight`] 가 함께 쓴다.
+fn load_config(
     paths: &AppPaths,
     projects: &Registry,
-    adapters: &dyn Adapters,
     project_id: &str,
-    root: &Path,
     params: &DebugStartParams,
-) -> Result<Prepared, RpcError> {
+) -> Result<(RunConfigPlace, String, pw_run::config::RunConfig), RpcError> {
     let project = projects.get(project_id).map_err(|e| match e {
         pw_core::registry::RegistryError::NotFound(id) => {
             RpcError::new(code::NOT_FOUND, format!("project `{id}` is not registered"))
@@ -984,14 +1000,63 @@ fn prepare(
             format!("run config `{}` does not exist", params.config_id),
         ));
     };
-    let config = &loaded.config;
-    let debug = config.debug.as_ref().ok_or_else(|| {
-        RpcError::invalid_params(format!(
-            "the run config `{}` has no [debug] section",
-            loaded.id
-        ))
+    let (id, config) = (loaded.id.clone(), loaded.config.clone());
+    Ok((place, id, config))
+}
+
+/// 구성의 어댑터를 해석한다: 고르기 · 해석 · `[debug] connect` · (띄울 때) 런타임.
+fn resolve_adapter(
+    adapters: &dyn Adapters,
+    project_id: &str,
+    root: &Path,
+    params: &DebugStartParams,
+    config: &pw_run::config::RunConfig,
+) -> Result<(pw_lsp_servers::AdapterSetup, Option<std::net::SocketAddr>), RpcError> {
+    let definitions = adapters.definitions();
+    let adapter_id = adapter::choose(config, &definitions)?;
+    let mut setup = adapters.setup(project_id, params.worktree.as_deref(), &adapter_id, root)?;
+    let listening = adapter::listening(&setup.definition, config)?;
+    if listening.is_none() {
+        adapters.find_runtimes(&mut setup)?;
+    }
+    Ok((setup, listening))
+}
+
+fn no_debug_section(id: &str) -> RpcError {
+    RpcError::invalid_params(format!("the run config `{id}` has no [debug] section"))
         .with_data(json!({ "reason": "noDebug" }))
-    })?;
+}
+
+/// `before` 사슬 앞의 검사(실기 F-1 후속 — 메인 판정 2026-11-21): 어댑터를 해석해 띄울 수 없으면(꺼짐 · 설치 안 됨 · 런타임 없음)
+/// 그 오류를 준다 — `before`(빌드 등)를 끝까지 돌린 뒤에야 「없다」 를 알지 않게. 시작은 [`prepare`] 로 다시 해석한다(그사이 설치 ·
+/// 정의가 바뀔 수 있다). `[debug] connect`(debugpy `attach_connect`)는 설치를 보지 않는다.
+fn preflight(
+    paths: &AppPaths,
+    projects: &Registry,
+    adapters: &dyn Adapters,
+    project_id: &str,
+    root: &Path,
+    params: &DebugStartParams,
+) -> Result<(), RpcError> {
+    let (_place, id, config) = load_config(paths, projects, project_id, params)?;
+    if config.debug.is_none() {
+        return Err(no_debug_section(&id));
+    }
+    let (setup, listening) = resolve_adapter(adapters, project_id, root, params, &config)?;
+    adapter::launchable(&setup, listening)
+}
+
+fn prepare(
+    paths: &AppPaths,
+    projects: &Registry,
+    adapters: &dyn Adapters,
+    project_id: &str,
+    root: &Path,
+    params: &DebugStartParams,
+) -> Result<Prepared, RpcError> {
+    let (place, id, config) = load_config(paths, projects, project_id, params)?;
+    let config = &config;
+    let debug = config.debug.as_ref().ok_or_else(|| no_debug_section(&id))?;
     let cwd = match &config.cwd {
         Some(rel) => pw_run::config::root::inside(&place.root, rel)
             .map_err(|why| RpcError::invalid_params(format!("cwd {why}")))?,
@@ -1007,17 +1072,11 @@ fn prepare(
     }
     let run_env = RunEnv::resolve(config, params.profile.as_deref(), &place.root)
         .map_err(|e| RpcError::invalid_params(e.to_string()))?;
-    let definitions = adapters.definitions();
-    let adapter_id = adapter::choose(config, &definitions)?;
-    let mut setup = adapters.setup(project_id, params.worktree.as_deref(), &adapter_id, root)?;
-    let listening = adapter::listening(&setup.definition, config)?;
-    if listening.is_none() {
-        adapters.find_runtimes(&mut setup)?;
-    }
+    let (setup, listening) = resolve_adapter(adapters, project_id, root, params, config)?;
     let arguments =
         adapter::request_arguments(&setup.definition, config, &cwd, run_env.vars(), root)?;
     Ok(Prepared {
-        config_id: loaded.id.clone(),
+        config_id: id,
         name: config.name.clone(),
         mode: debug.mode,
         cwd,

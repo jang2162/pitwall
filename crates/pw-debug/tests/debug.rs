@@ -1425,3 +1425,83 @@ async fn a_source_shows_its_real_path_and_prefers_the_adapters_reference() {
     stop(&f, &mut c, &a).await;
     stop(&f, &mut c, &b).await;
 }
+
+// ---- 디버그 시작 앞의 `before` 사슬(M6-21) · 어댑터 검사(실기 F-1 후속) ----------------------------------------------------
+
+/// 구성 `app`(cargo, `[debug]`) 앞에 `before` 를 둔다. `before` 의 단계는 셸 구성이다.
+fn chained(f: &Fixture, before: &str, command: &str) {
+    let dir = f.root.join(".pitwall/run");
+    fs::write(
+        dir.join(format!("{before}.toml")),
+        format!("schema = 1\nname = \"{before}\"\ntype = \"shell\"\ncommand = \"{command}\"\n"),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("app.toml"),
+        format!(
+            "schema = 1\nname = \"app\"\ntype = \"cargo\"\ncommand = \"run\"\nbefore = [\"{before}\"]\n[debug]\nprogram = \"target/debug/app\"\n"
+        ),
+    )
+    .unwrap();
+}
+
+/// 🐞 · ⌃D(`debug.start`)도 `before` 사슬을 지난다: 같은 첫 실행 확인(7001 — `before` 의 단계, 제목은 디버그할 구성)을 받고,
+/// `before` 가 실패하면 디버그 세션을 열지 않는다(어댑터도 띄우지 않는다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn starting_a_debug_session_runs_its_before_chain_first() {
+    let f = Fixture::new();
+    chained(&f, "fail", "exit 3");
+    let mut c = f.client();
+    let asked = c.err("debug.start", start_params(&f, "app")).await;
+    assert_eq!(asked.code, 7001, "{asked:?}");
+    let data = asked.data.clone().unwrap();
+    let steps: Vec<&str> = data["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(steps, ["fail"], "the before chain's steps");
+    assert_eq!(
+        data["title"], "app",
+        "the title names the configuration being debugged, not its last before step"
+    );
+    assert!(
+        f.runs.list(&f.project).is_empty(),
+        "nothing ran while asking"
+    );
+    let mut confirmed = start_params(&f, "app");
+    confirmed["confirmed"] = data["hash"].clone();
+    let failed = c.err("debug.start", confirmed).await;
+    assert!(format!("{failed:?}").contains("stepFailed"), "{failed:?}");
+    let all = f.runs.list(&f.project);
+    assert_eq!(all.len(), 1, "only the before step ran: {all:?}");
+    assert_eq!(all[0].config, "fail");
+    assert_eq!(f.launcher.calls.load(Ordering::SeqCst), 0);
+}
+
+/// 어댑터가 없으면 첫 실행 확인도 `before` 도 지나지 않고 곧바로 `adapterMissing`(실기 F-1 후속 — 메인 판정 2026-11-21): 빌드
+/// 같은 `before` 를 끝까지 돌린 뒤에야 「없다」 를 알면, 설치 뒤 이어 가기가 `before` 를 한 번 더 돈다. 확인을 실어 불러도 같다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_missing_adapter_fails_before_any_before_step_runs() {
+    let f = Fixture::new();
+    chained(&f, "build", "touch built");
+    let mut c = f.client();
+    // 어댑터가 있을 때의 확인 열쇠(아직 아무것도 돌지 않는다).
+    let asked = c.err("debug.start", start_params(&f, "app")).await;
+    assert_eq!(asked.code, 7001, "{asked:?}");
+    f.adapters.missing.store(true, Ordering::SeqCst);
+    let mut confirmed = start_params(&f, "app");
+    confirmed["confirmed"] = asked.data.unwrap()["hash"].clone();
+    for params in [start_params(&f, "app"), confirmed] {
+        let e = c.err("debug.start", params).await;
+        assert_eq!(e.code, code::INVALID_PARAMS, "{e:?}");
+        assert_eq!(
+            e.data.as_ref().unwrap()["reason"],
+            "adapterMissing",
+            "{e:?}"
+        );
+    }
+    assert!(f.runs.list(&f.project).is_empty(), "no before step ran");
+    assert!(!f.root.join("built").exists());
+}

@@ -280,6 +280,35 @@ pub fn check_args(adapter: &str, transport: DapTransport, args: &[String]) -> Re
     Ok(())
 }
 
+/// 어댑터를 띄울 수 있는가: 꺼졌으면 `adapterDisabled`, 설치되지 않았으면 `adapterMissing`(그 해석을 `resolution` 에 — 창이 설치
+/// 패키지를 읽는다). `[debug] connect`(`listening`)면 어댑터를 띄우지 않으므로 설치를 보지 않는다. [`spec`] 과 `before` 앞의 검사
+/// (`preflight` — lib.rs)가 같은 판정을 쓴다.
+pub fn launchable(setup: &AdapterSetup, listening: Option<SocketAddr>) -> Result<(), RpcError> {
+    let id = &setup.definition.id;
+    if matches!(setup.launch, AdapterLaunch::Disabled) {
+        return Err(RpcError::invalid_params(format!(
+            "the debug adapter `{id}` is turned off ([dap.{id}] enabled = false)"
+        ))
+        .with_data(json!({ "reason": "adapterDisabled", "adapter": id })));
+    }
+    if listening.is_some() {
+        return Ok(());
+    }
+    match &setup.launch {
+        AdapterLaunch::Process(LspResolution::Found { .. }) => Ok(()),
+        AdapterLaunch::Process(other) => Err(RpcError::new(
+            code::INVALID_PARAMS,
+            format!("the debug adapter `{id}` is not installed"),
+        )
+        .with_data(json!({
+            "reason": "adapterMissing",
+            "adapter": id,
+            "resolution": serde_json::to_value(other).unwrap_or(Value::Null),
+        }))),
+        AdapterLaunch::Disabled | AdapterLaunch::LanguageServer { .. } => Ok(()),
+    }
+}
+
 /// 해석을 `pw-dap` 의 띄울 것으로 옮긴다. 언어 서버가 여는 어댑터면 `connect`(그 서버가 답한 포트)로, `[debug] connect` 면
 /// `listening`(대상이 띄운 어댑터의 주소 — [`listening`])으로 붙는다.
 pub fn spec(
@@ -288,16 +317,8 @@ pub fn spec(
     connect: Option<u16>,
     listening: Option<SocketAddr>,
 ) -> Result<AdapterSpec, RpcError> {
+    launchable(setup, listening)?;
     let id = setup.definition.id.clone();
-    let disabled = || {
-        RpcError::invalid_params(format!(
-            "the debug adapter `{id}` is turned off ([dap.{id}] enabled = false)"
-        ))
-        .with_data(json!({ "reason": "adapterDisabled", "adapter": id }))
-    };
-    if matches!(setup.launch, AdapterLaunch::Disabled) {
-        return Err(disabled());
-    }
     if let Some(addr) = listening {
         return Ok(AdapterSpec {
             adapter_id: id,
@@ -310,18 +331,11 @@ pub fn spec(
         });
     }
     let program: PathBuf = match &setup.launch {
-        AdapterLaunch::Disabled => return Err(disabled()),
         AdapterLaunch::Process(LspResolution::Found { path, .. }) => path.clone(),
-        AdapterLaunch::Process(other) => {
-            return Err(RpcError::new(
-                code::INVALID_PARAMS,
-                format!("the debug adapter `{id}` is not installed"),
-            )
-            .with_data(json!({
-                "reason": "adapterMissing",
-                "adapter": id,
-                "resolution": serde_json::to_value(other).unwrap_or(Value::Null),
-            })));
+        AdapterLaunch::Disabled | AdapterLaunch::Process(_) => {
+            return Err(RpcError::internal(
+                "`launchable` let an unlaunchable adapter through",
+            ));
         }
         AdapterLaunch::LanguageServer { .. } => {
             let port = connect.ok_or_else(|| {

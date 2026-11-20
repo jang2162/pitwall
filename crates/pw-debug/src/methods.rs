@@ -733,6 +733,8 @@ pub fn register(router: &mut Router, debugger: Debugger) {
             .ok();
             async move {
                 let grant = granted?;
+                // 어댑터를 먼저 본다 — 없으면 `before` 를 하나도 띄우지 않고 그 오류(실기 F-1 후속).
+                debugger.check_adapter(&grant, &params).await?;
                 debugger
                     .run_before(grant.project_id(), scope, seen, window.clone(), &params)
                     .await?;
