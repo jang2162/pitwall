@@ -730,6 +730,8 @@ pub(super) fn sql_project(
     (alpha, root)
 }
 
+/// 창이 그 프로젝트의 DB 연결을 연다(`db.schema.objects`). sql 프로젝트(`sql_project`)에서만 — 연결 `lite` 를 연다(다른
+/// 프로젝트에는 그 연결이 없어 실패한다).
 pub(super) async fn open_in_window(host: &ToolHost, project: &str) {
     host.window_call(
         project,

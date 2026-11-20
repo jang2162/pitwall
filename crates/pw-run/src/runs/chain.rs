@@ -763,13 +763,15 @@ impl Runs {
                     None => sql_shown(&s.key, &s.config),
                 })
                 .collect();
-            let main = chain
+            let mut main = chain
                 .steps
                 .iter()
                 .enumerate()
                 .rev()
                 .find_map(|(i, _)| process.get(&i))
                 .map_or_else(|| steps[steps.len() - 1].clone(), |p| p.shown.clone());
+            // 맨 위 경고는 사슬 전체를 본다 — 앞 단계에만 비밀 같은 값이 있어도 뜬다(메인 판정 2026-11-21).
+            main.secret_looking = steps.iter().any(|s| s.secret_looking);
             return Err(confirm::confirm_required_with(
                 confirm::RunConfirmRequired {
                     hash: token,

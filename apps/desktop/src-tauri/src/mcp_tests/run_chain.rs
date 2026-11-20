@@ -463,12 +463,13 @@ async fn a_compound_with_one_unseen_config_asks() {
 }
 
 /// 복합 구성의 첫 실행 확인은 그 복합 구성의 이름을 제목으로 준다(`title`) — `shown` 은 마지막 프로세스 단계(실기 O-3: 제목이
-/// 「dev 를 처음 실행」 이었다).
+/// 「dev 를 처음 실행」 이었다). 맨 위 비밀 경고(`shown.secretLooking`)는 어느 단계에든 비밀 같은 값이 있으면 뜬다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_compound_confirmation_is_titled_with_the_compound() {
     let host = ToolHost::app();
     let (alpha, root) = trusted(&host, "alpha");
-    sleeper(&root, "build", "one");
+    // 앞 단계에만 비밀 같은 값(비밀번호가 든 URL) — 맨 위 경고(`shown.secretLooking`)는 사슬 전체를 본다.
+    shell(&root, "build", "echo postgres://u:pw@db/x", &[]);
     sleeper(&root, "dev", "one");
     write_config(
         &root,
@@ -486,6 +487,17 @@ async fn a_compound_confirmation_is_titled_with_the_compound() {
     assert_eq!(asked["code"], 7001, "{asked}");
     assert_eq!(asked["data"]["shown"]["key"], "dev");
     assert_eq!(asked["data"]["title"], "Combo");
+    let secret: Vec<&Value> = asked["data"]["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| &s["secretLooking"])
+        .collect();
+    assert_eq!(secret, [&json!(true), &json!(false)]);
+    assert_eq!(
+        asked["data"]["shown"]["secretLooking"], true,
+        "an earlier step's secret raises the warning"
+    );
 }
 
 /// ⑤ 앞 단계가 뒤 단계의 `.env`(프로세스) 또는 SQL 파일(`sql`)을 바꾸면 그 단계 앞에서 `planChanged` 로 멈춘다 — 다시 읽어 돌리지
