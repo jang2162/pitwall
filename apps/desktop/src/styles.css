@@ -126,9 +126,18 @@ body {
   --dv-active-sash-color: var(--pw-ui-accent);
 }
 
+/* 창 위에 뜨는 층(실기 F-2): body 바로 아래에서 앱 뿌리(#root)와 에디터 툴팁 층이 아닌 것 — Radix 의 포털(모달 대화상자 · 그
+   덮개 · 메뉴 · 팝업)과 body 에 붙는 메뉴 — 은 모두 창 안의 겹침 위에 둔다. 창 안에는 z-index 를 가진 것이 많다: CodeMirror 의 위쪽
+   패널(언어 서버 · 디스크 배너 — 10), dockview 의 탭(5 · 10)과 플로팅 그룹(999 + 2i), 툴팁 층(2000), 탭 전환기 · 탐색 팝업(2100).
+   z-index 가 없던 포털은 그것들 아래로 그려져 배너가 대화상자를 가렸다. 포털끼리는 DOM 순서다(나중에 연 것이 위). Radix 메뉴의
+   popper 감싸개는 안쪽 내용의 z-index 를 인라인(`auto`)으로 옮겨 적어 !important 로 덮는다. 값은 tooltip-layer.ts `PORTAL_Z`. */
+body > :not(#root, #pw-editor-tooltips) {
+  z-index: 2200 !important;
+}
+
 /* 에디터 툴팁 층(src/editor/tooltip-layer.ts): body 의 user-select: none 을 푼다(호버 · 진단 글을 골라 복사한다). 모달 대화상자 ·
-   메뉴가 열려 Radix 가 나머지에 `aria-hidden` 을 걸면 숨긴다 — Radix 의 포털은 z-index 없이 body 끝에 붙어, 숨기지 않으면 층
-   (z-index 2000)이 그 위에 그려진다. */
+   메뉴가 열려 Radix 가 나머지에 `aria-hidden` 을 걸면 숨긴다 — 포털이 층 위에 그려지지만(위 절) 모달 동안 층의 툴팁이 남아 보이지
+   않게. */
 #pw-editor-tooltips {
   -webkit-user-select: text;
   user-select: text;

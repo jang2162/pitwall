@@ -19,6 +19,7 @@ import {
   editorTooltips,
   followTab,
   OVERLAY_Z,
+  PORTAL_Z,
   setTooltipsShown,
   TOOLTIP_HOST_CLASS,
   TOOLTIP_LAYER_ID,
@@ -69,7 +70,7 @@ function mountEditor(tips = new Compartment()) {
 
 /** styles.css 의 툴팁 층 규칙만 문서에 넣는다(나머지는 Tailwind 가 처리하는 글이라 happy-dom 에 넣지 않는다). */
 function layerRules() {
-  const rules = source("../styles.css").match(/#pw-editor-tooltips[^{]*\{[^}]*\}/g) ?? [];
+  const rules = source("../styles.css").match(/^#pw-editor-tooltips[^{]*\{[^}]*\}/gm) ?? [];
   expect(rules.length).toBeGreaterThanOrEqual(2);
   const style = document.createElement("style");
   style.textContent = rules.join("\n");
@@ -140,6 +141,56 @@ it("hides the layer while a modal Radix dialog marks the rest aria-hidden, and s
   await act(async () => app.unmount());
   view.destroy();
   drop();
+});
+
+it("puts body portals (dialogs, their overlay, menus) over everything inside the window (e2e F-2)", async () => {
+  // 실기 F-2: CodeMirror 의 위쪽 패널(언어 서버 배너 — `.cm-panels` 의 z-index 10)이 z-index 없는 대화상자 위로 그려졌다. 겹침
+  // 자체(그림 순서)는 happy-dom 이 재지 않으므로 styles.css 의 규칙이 포털에 걸리는지와 그 값이 창 안의 겹침 위인지를 본다.
+  const rules = source("../styles.css").match(
+    /^body > :not\(#root, #pw-editor-tooltips\)\s*\{[^}]*\}/gm,
+  );
+  expect(rules).toHaveLength(1);
+  const style = document.createElement("style");
+  style.textContent = rules!.join("\n");
+  document.head.append(style);
+  const { view, root } = mountEditor();
+  const layer = document.getElementById(TOOLTIP_LAYER_ID)!;
+  const host = document.createElement("div");
+  root.append(host);
+  const app = createRoot(host);
+  await act(async () =>
+    app.render(
+      <Dialog.Root open>
+        <Dialog.Portal>
+          <Dialog.Overlay data-testid="overlay" className="fixed inset-0" />
+          <Dialog.Content data-testid="content" aria-describedby={undefined}>
+            <Dialog.Title>t</Dialog.Title>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>,
+    ),
+  );
+  // Radix 메뉴의 popper 감싸개처럼 인라인 `z-index: auto` 를 단 포털.
+  const popper = document.createElement("div");
+  popper.style.position = "fixed";
+  popper.style.zIndex = "auto";
+  document.body.append(popper);
+  for (const el of [
+    document.querySelector("[data-testid=overlay]")!,
+    document.querySelector("[data-testid=content]")!,
+    popper,
+  ]) {
+    expect(el.parentElement).toBe(document.body);
+    expect(getComputedStyle(el).zIndex).toBe(String(PORTAL_Z));
+  }
+  // 앱 뿌리와 툴팁 층은 그대로(층은 제 값, 뿌리는 겹침을 만들지 않는다 — 안의 탭 전환기 2100 이 층 위에 오도록).
+  expect(getComputedStyle(root).zIndex).not.toBe(String(PORTAL_Z));
+  expect(getComputedStyle(layer).zIndex).toBe(String(TOOLTIP_LAYER_Z));
+  expect(PORTAL_Z).toBeGreaterThan(OVERLAY_Z);
+  expect(source("../styles.css")).toContain(`z-index: ${PORTAL_Z} !important;`);
+  await act(async () => app.unmount());
+  view.destroy();
+  style.remove();
 });
 
 it("hides an editor's tooltips while the editor is hidden, also across a reconfiguration", () => {

@@ -5,10 +5,10 @@
 //   비율 < 1 을 보고 50 ms 뒤 다시 재는 그리기를 걸어 다음 키의 프레임을 밀었다. 층에 두면 툴팁은 창 안에서 옆 툴 윈도우 · 분할
 //   에디터 · 상태바 위로 겹쳐 뜬다(창 밖으로는 나가지 않는다 — CodeMirror 가 창 크기 안으로 맞춘다).
 // - 겹침 순서: 층은 `z-index: TOOLTIP_LAYER_Z`(2000)다 — 패널 안의 `z-10` · `z-20`, dockview 의 탭(5 · 10)과 플로팅 그룹
-//   (`999 + 2i`) 위. 창 안 모달(탭 전환기 · 탐색 팝업)과 blame 메뉴는 `OVERLAY_Z`(2100)로 층 위에 둔다. Radix 대화상자 · 메뉴는
-//   z-index 없이 body 끝에 붙어 층 아래로 겹치므로, 모달이 열려 Radix 가 나머지에 `aria-hidden` 을 걸면 층을 숨긴다(styles.css 의
-//   `#pw-editor-tooltips[aria-hidden="true"]`). `modal={false}` 인 Radix 나 Radix 가 아닌 body 포털이 생기면 층이 그 위로 온다 —
-//   그런 것은 `OVERLAY_Z` 를 단다.
+//   (`999 + 2i`) 위. 창 안 모달(탭 전환기 · 탐색 팝업)과 blame 메뉴는 `OVERLAY_Z`(2100)로 층 위에 둔다. body 에 붙는 포털(Radix
+//   대화상자 · 메뉴 등 — `#root` 와 이 층이 아닌 body 의 자식)은 모두 `PORTAL_Z`(2200)다(styles.css 「창 위에 뜨는 층」 — 실기 F-2:
+//   z-index 가 없던 때는 CodeMirror 패널의 배너가 대화상자를 가렸다). 모달이 열려 Radix 가 나머지에 `aria-hidden` 을 걸면 층을
+//   숨긴다(styles.css 의 `#pw-editor-tooltips[aria-hidden="true"]`).
 // - 글자 선택: body 의 `user-select: none`(styles.css)을 층에서 푼다 — 호버 · 진단 글을 전처럼 끌어 골라 복사한다.
 // - 보임: 에디터가 숨으면(다른 탭 · 비교 화면 — dockview 는 숨은 탭의 DOM 을 떼어 낸다) 툴팁도 숨긴다(`setTooltipsShown`). 전에는
 //   툴팁이 `view.dom` 안이라 함께 떨어졌다.
@@ -40,6 +40,8 @@ export const TOOLTIP_LAYER_ID = "pw-editor-tooltips";
 export const TOOLTIP_LAYER_Z = 2000;
 /** 툴팁 층 위에 올 창 안 겹침(탭 전환기 · 탐색 팝업 — `z-[2100]` — · blame 메뉴). */
 export const OVERLAY_Z = 2100;
+/** body 에 붙는 포털(대화상자 · 메뉴)의 겹침 — 창 안의 모든 겹침 위. styles.css 「창 위에 뜨는 층」 이 이 값을 쓴다. */
+export const PORTAL_Z = 2200;
 export const TOOLTIP_HOST_CLASS = "pw-editor-tooltip-host";
 
 /** 옮겨 적는 속성 — 키맵의 포커스 층(src/keymap/context.ts)이 가장 가까운 것을 본다. */
