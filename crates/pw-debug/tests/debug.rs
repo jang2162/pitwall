@@ -1505,3 +1505,21 @@ async fn a_missing_adapter_fails_before_any_before_step_runs() {
     assert!(f.runs.list(&f.project).is_empty(), "no before step ran");
     assert!(!f.root.join("built").exists());
 }
+
+/// 런타임이 없는 어댑터(`requires` — `runtimeMissing`)도 `before` 앞에서 거절된다 — 어댑터 없음과 같은 사전 검사(리뷰 권고 2).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_missing_runtime_fails_before_any_before_step_runs() {
+    let f = Fixture::new();
+    chained(&f, "build", "touch built");
+    f.adapters.runtime_missing.store(true, Ordering::SeqCst);
+    let mut c = f.client();
+    let e = c.err("debug.start", start_params(&f, "app")).await;
+    assert_eq!(e.code, code::INVALID_PARAMS, "{e:?}");
+    assert_eq!(
+        e.data.as_ref().unwrap()["reason"],
+        "runtimeMissing",
+        "{e:?}"
+    );
+    assert!(f.runs.list(&f.project).is_empty(), "no before step ran");
+    assert!(!f.root.join("built").exists());
+}

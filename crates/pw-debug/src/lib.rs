@@ -972,7 +972,6 @@ fn exception_filters(capabilities: &Capabilities, enabled: &[String]) -> Vec<Exc
         .collect()
 }
 
-/// 구성을 읽고 어댑터를 푼다(블로킹 — 머리 주석 「시작」 2 · 3).
 /// 구성을 읽는다(프로젝트 · 구성 자리 · 구성). [`prepare`] 와 [`preflight`] 가 함께 쓴다.
 fn load_config(
     paths: &AppPaths,
@@ -1046,6 +1045,7 @@ fn preflight(
     adapter::launchable(&setup, listening)
 }
 
+/// 구성을 읽고 어댑터를 푼다(블로킹 — 머리 주석 「시작」 2 · 3).
 fn prepare(
     paths: &AppPaths,
     projects: &Registry,
