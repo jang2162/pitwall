@@ -475,7 +475,6 @@ async fn a_compound_confirmation_is_titled_with_the_compound() {
         "combo",
         "name = \"Combo\"\ntype = \"compound\"\nconfigs = [\"build\", \"dev\"]\n",
     );
-    open_in_window(&host, &alpha).await;
     let asked = host
         .window_call(
             &alpha,
