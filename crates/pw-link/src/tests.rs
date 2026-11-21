@@ -1756,3 +1756,28 @@ async fn delivered_before_close(remote: &RemoteHost) -> usize {
     }
     got
 }
+
+/// 받아 둔 것을 다 꺼내면 창의 반이 안 모였어도 창을 돌려준다 — 남은 창보다 큰 다음 응답이 영영 나가지 못하는 일이 없게.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_drained_channel_returns_its_window_for_the_next_big_message() {
+    let fx = fixture(Setup {
+        limits: LinkLimits {
+            window: 64 * 1024 + 1024,
+            ..LinkLimits::default()
+        },
+        ..Setup::default()
+    });
+    fx.attach().await;
+    let mut client = Client::open(&*fx.remote, Caller::new(Role::Owner)).await;
+    // 창의 반에 못 미치는 응답 하나를 다 꺼낸 뒤, 그때 남은 창보다 큰 응답을 청한다.
+    let small = client
+        .call(1, "test.big", json!({"bytes": 20 * 1024}))
+        .await
+        .unwrap();
+    assert_eq!(small.as_str().unwrap().len(), 20 * 1024);
+    let big = client
+        .call(2, "test.big", json!({"bytes": 50 * 1024}))
+        .await
+        .unwrap();
+    assert_eq!(big.as_str().unwrap().len(), 50 * 1024);
+}
