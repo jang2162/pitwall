@@ -57,3 +57,15 @@ opt-level = 3
 
 [profile.dev.package.wasmparser]
 opt-level = 3
+
+# Relay 배포물(18-m7-plan M7-05 ④ — 원격 디스크 「바이너리 한 판 < 40 MiB」, 메인 판정 M7-P13). 기능을 빼지 않고 크기만 줄인다:
+# 한 덩어리 LTO · 코드 생성 단위 1 · 크기 최적화 · 기호 제거. macOS arm64 에서 잰 값(stripped): release 기본 81.6 MiB → fat LTO 63.8
+# → opt-level "s" 50.4 → "z" 41.2 MiB. "z" 의 유휴 RSS · 기동은 release 기본보다 낮았다(28.6 → 22.9 MiB). panic 은 unwind 그대로다
+# — RPC 세션이 핸들러 패닉을 `catch_unwind` 로 가둬 데몬이 살아남는다(`abort` 면 핸들러 하나의 패닉이 데몬을 끝낸다).
+# 데스크톱 앱 · 시험은 이 프로필을 쓰지 않는다. 쓰는 곳: scripts/relay-build.mjs(`mise run relay-build` · CI · 릴리스).
+[profile.relay]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+opt-level = "z"
+strip = "symbols"

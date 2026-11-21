@@ -66,6 +66,10 @@ run = [
   "node --test scripts/java-debug-patch.test.mjs",
   # 실 디버그 어댑터 시험 실행 개수 검사(scripts/dap-live.mjs)의 설정 읽기 · 설치 결과 읽기 — 실 어댑터 없이 돈다.
   "node --test scripts/dap-live.test.mjs",
+  # Relay 빌드 스크립트(scripts/relay-build.mjs)의 `file` 판정(정적 링크 · 아키텍처) · 타깃 표 — 빌드 없이 돈다.
+  "node --test scripts/relay-build.test.mjs",
+  # relay-live 실행 개수 검사(scripts/relay-live.mjs)의 하한 · 인자 — 도커 없이 돈다.
+  "node --test scripts/relay-live.test.mjs",
 ]
 
 # 실 DB 시험(live_*)을 DB 마다 따로 돌리고 실행 개수를 하한(scripts/db-live.toml)과 견준다 — CI 의 `db-live` 잡과 같은 명령이다.
@@ -91,6 +95,20 @@ run = "node scripts/lsp-live.mjs"
 [tasks.test-dap]
 description = "실 디버그 어댑터 시험(codelldb · js-debug · debugpy · java-debug)을 어댑터마다 돌리고 실행 개수 하한 검사(경로가 없는 어댑터는 건너뜀, --install 로 설치기로 받기)"
 run = "node scripts/dap-live.mjs"
+
+# Relay 바이너리를 `relay` 프로필로 만들어 `target/relay-dist/` 에 둔다(18-m7-plan M7-05 ② — 개발 Desktop(debug)이 원격에 올리는
+# 것, 결정 M7-D5). 이름 · 정적 링크 · 크기 상한(M7-P13) · 서명 없는 매니페스트까지 — scripts/relay-build.mjs 머리 주석. 인자 예:
+# `mise run relay-build -- --target x86_64-unknown-linux-musl`(Linux 에서, musl-tools 필요). 없으면 이 기기의 플랫폼(macOS 는 유니버설).
+[tasks.relay-build]
+description = "Relay 개발 빌드(relay 프로필 · 크기 상한 · 서명 없는 매니페스트 → target/relay-dist/)"
+run = "node scripts/relay-build.mjs"
+
+# relay-live(18-m7-plan M7-05 ③): sshd 컨테이너에 실제 ssh 로 Relay 를 올려 붙는 시험 — CI 의 `relay-live` 잡과 같은 명령이다. 도커가
+# 없으면 건너뛰고(종료 코드 3) 통과로 세지 않는다. **이 기기의 sshd 는 쓰지 않는다.** 컨테이너의 아키텍처(도커 호스트)와 같은 Linux
+# musl 바이너리가 든다 — 예: `mise run test-relay -- --bin target/relay-dist/pitwall-relay-<판>-linux-aarch64`.
+[tasks.test-relay]
+description = "relay-live: sshd 컨테이너에 Relay 를 ssh 로 올려 붙는 시험 + 실행 개수 하한(도커가 없으면 건너뜀)"
+run = "node scripts/relay-live.mjs"
 
 # 「release 빌드에서만 판정」하는 시험을 모아 돈다 — 기본 `test` 는 debug 라 시간 상한(검색 취소 100 ms · `fs.list` 1만 개 100 ms ·
 # 구문 강조 16 ms)을 판정하지 않는다. `--run-ignored all` 은 release 전용 `#[ignore]` 시험도 포함한다. 벽시계를 재므로 `-j 1`,
