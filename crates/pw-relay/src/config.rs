@@ -28,7 +28,12 @@ pub struct RelayConfig {
     /// 적힌 그대로(`~/` 만 홈으로 푼다). 정규화는 [`crate::roots::Roots`] 가 한다.
     pub roots: Vec<PathBuf>,
     pub idle: IdleConfig,
+    /// 이 판이 아직 쓰지 않는 표(`[listen]` — M7-24). 데몬은 경고만 남긴다 — 네트워크로 받지 않는 쪽이라 무시해도 넓어지지 않는다.
+    pub not_yet: Vec<String>,
 }
+
+/// 알지만 이 판이 아직 쓰지 않는 표.
+pub const NOT_YET: &[&str] = &["listen"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IdleConfig {
@@ -114,6 +119,7 @@ pub fn parse(text: &str, home: Option<&Path>) -> Result<RelayConfig, String> {
                     }
                 }
             }
+            other if NOT_YET.contains(&other) => config.not_yet.push(other.to_owned()),
             other => return Err(format!("unknown key `{other}`")),
         }
     }
@@ -179,6 +185,9 @@ stop_lsp_after = 90
         );
         assert_eq!(config.idle.exit_after, Duration::from_secs(7200));
         assert_eq!(config.idle.stop_lsp_after, Duration::from_secs(90));
+        assert!(config.not_yet.is_empty());
+        let later = parse("[listen]\nport = 7420\n", None).unwrap();
+        assert_eq!(later.not_yet, ["listen"]);
     }
 
     #[test]

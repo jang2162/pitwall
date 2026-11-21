@@ -156,6 +156,9 @@ fn daemon() -> ExitCode {
             return ExitCode::from(78);
         }
     };
+    for table in &config.not_yet {
+        tracing::warn!(table = %table, "relay.toml has a table this relay does not use yet; ignoring it");
+    }
     let socket = match socket_path(&paths) {
         Ok(socket) => socket,
         Err(code) => return code,

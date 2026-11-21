@@ -111,15 +111,19 @@ local_host = "127.0.0.1"           # 루프백(127.0.0.1 · ::1)만 받는다 �
 ### Relay 설정 예 (원격 쪽)
 
 ```toml
-# ~/.config/pitwall/relay.toml
+# ~/.config/pitwall/relay/relay.toml
+schema = 1
 name = "build-server"
 roots = ["~/work"]                 # 이 아래만 프로젝트로 노출
 [listen]
 port = 7420
 interfaces = ["tailscale", "lan"]  # 기본값. "all"은 명시적으로만
 [idle]
+exit_after = "30m"                 # 링크 · 실행 · 터미널이 없으면 이만큼 뒤 데몬이 끝난다
 stop_lsp_after = "30m"
 ```
+
+`roots` 가 없으면 아무것도 등록하지 않는다. `relay.toml`(`$CONFIG/relay/relay.toml`)은 그 머신의 사람이 쓰거나, 처음 「체크아웃 추가」 때 Desktop 이 사람에게 물어 SSH 로 쓴다 — RPC 로는 쓰지 않는다. `[idle] exit_after`(기본 30분)(18-m7-plan M7-04 · M7-06). 지금 읽는 키는 `schema` · `name` · `roots` · `[idle]` 이다 — 모르는 키 · 틀린 값이면 데몬이 뜨지 않는다. `[listen]` 은 M7-24 가 더할 때까지 경고만 남기고 무시한다(네트워크로 받지 않는다).
 
 ## 5. 원격 기능 범위
 
