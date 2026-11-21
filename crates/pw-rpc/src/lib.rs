@@ -8,6 +8,7 @@
 //! - 메서드가 참조하지 않는 TS 타입: [`rpc_type!`] → [`types`]
 //! - 핸들러 등록 · 열거: [`Router`]
 //! - 권한 검사: 호출자의 [`Role`] 이 메서드의 [`RoleSet`] 에 있어야 한다([`MethodMeta::permits`])
+//! - 이벤트 토픽 선언: [`rpc_event!`] → [`EventMeta`](이름 · 구독할 수 있는 role). 열거는 [`events`]
 //! - 스트림 · 취소 · 구독의 와이어 형식: [`protocol`]
 
 mod error;
@@ -20,7 +21,7 @@ mod session;
 mod typegen;
 
 pub use error::{RpcError, code};
-pub use events::EventHub;
+pub use events::{EventHub, EventMeta, event, events};
 pub use message::{
     Id, JsonRpcVersion, Notification, NotificationMessage, Outbound, RequestMessage, Response,
     ResponseMessage,

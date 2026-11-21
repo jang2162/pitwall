@@ -19,8 +19,10 @@ pub type TaskId = u64;
 
 /// 진행 알림의 토픽. 페이로드는 [`TaskProgressEvent`].
 pub const TOPIC_PROGRESS: &str = "task.progress";
+pw_rpc::rpc_event!(TOPIC_PROGRESS, roles: [Owner, Mobile, Readonly]);
 /// 종료 알림의 토픽. 페이로드는 [`TaskFinishedEvent`]. 작업마다 정확히 한 번 나간다.
 pub const TOPIC_FINISHED: &str = "task.finished";
+pw_rpc::rpc_event!(TOPIC_FINISHED, roles: [Owner, Mobile, Readonly]);
 
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,

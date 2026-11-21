@@ -44,6 +44,7 @@ use crate::session::{DbSession, DbSessions, DbTunnelLease, blocking, db_error, l
 
 /// 스키마가 바뀌었을 수 있다. 내용은 [`DbSchemaChanged`]. 그 프로젝트 범위로만 나간다.
 pub const TOPIC_SCHEMA_CHANGED: &str = "db.schemaChanged";
+pw_rpc::rpc_event!(TOPIC_SCHEMA_CHANGED, roles: [Owner, Mobile, Readonly]);
 
 /// 쪽 크기의 상한(객체 목록의 `limit`, 그 밖 목록의 기본값).
 pub const MAX_PAGE: u32 = 500;

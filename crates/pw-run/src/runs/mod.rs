@@ -79,8 +79,10 @@ pub type RunId = String;
 
 /// 실행이 시작될 때 버스로 내는 이벤트(프로젝트 범위). payload 는 [`RunInfo`].
 pub const TOPIC_STARTED: &str = "run.started";
+pw_rpc::rpc_event!(TOPIC_STARTED, roles: [Owner, Mobile, Readonly]);
 /// 실행이 끝날 때 버스로 내는 이벤트(프로젝트 범위). payload 는 [`RunInfo`](끝 코드 · 신호가 든다).
 pub const TOPIC_EXITED: &str = "run.exited";
+pw_rpc::rpc_event!(TOPIC_EXITED, roles: [Owner, Mobile, Readonly]);
 
 /// 창이 크기를 주지 않을 때의 PTY 크기. 콘솔이 붙으면 `run.resize` 로 바꾼다.
 pub const DEFAULT_SIZE: (u16, u16) = (120, 30);

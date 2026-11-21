@@ -2,11 +2,14 @@
 //!
 //! 구독의 범위는 둘이다: 프로젝트 하나(`projectId`)이거나 Host 전체(`projectId` 없음). 프로젝트 구독은 Host 범위
 //! 이벤트를 받지 않고 Host 구독은 프로젝트 이벤트를 받지 않는다 — 둘 다 필요한 창은 구독을 둘 연다.
-//! 구독할 수 있는 role 은 범위와 무관하게 같다(내장 프로토콜은 모든 role 이 쓴다, `crate::protocol` 머리 주석).
 //!
-//! ⚠ 토픽별 role 검사가 없으므로 **이벤트 payload 는 Read 등급 정보만 싣는다** — readonly · mobile 기기도 구독하면 받는다.
-//! Owner 전용 정보(다른 프로젝트의 경로, relay 페어링 상태 등)를 실을 토픽이 생기면 그 전에 토픽별 role 메타(메서드의
-//! `roles` 와 같은 모양)를 더한다. relay 연결 전에 구현한다(`docs/design/08-remote-mobile.md` 「RPC」 행).
+//! **토픽마다 구독할 수 있는 role 을 선언한다**([`rpc_event!`](crate::rpc_event) → [`EventMeta`]). `events.subscribe` 는
+//! 토픽 하나라도 호출자의 role 에 열려 있지 않으면 구독 전체를 `PERMISSION_DENIED` 로 거절한다. **선언이 없는 토픽은 어느
+//! role 도 구독할 수 없다** — 새 토픽이 말없이 열리지 않게(메서드의 `file_scope` 와 같은 방향). 토픽을 내는 크레이트가 그
+//! 토픽 상수 옆에 선언 한 줄을 둔다. owner 전용 정보(다른 프로젝트의 경로, relay 페어링 상태 등)를 싣는 토픽은
+//! `roles: [Owner]` 로 선언한다(`docs/design/18-m7-plan.md` M7-02).
+//!
+//! 발행(`publish`)은 선언을 보지 않는다 — 선언 없는 토픽을 내도 받을 구독이 없을 뿐이다.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -15,6 +18,7 @@ use serde::Serialize;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::message::{Outbound, notification};
+use crate::method::{Role, RoleSet};
 use crate::protocol::{EVENTS_EVENT, EventMessage, SubscriptionId};
 use crate::session::lock;
 
@@ -126,4 +130,132 @@ impl EventHub {
     pub(crate) fn unsubscribe(&self, id: SubscriptionId) {
         lock(&self.state).subscribers.remove(&id);
     }
+}
+
+/// 이벤트 토픽 하나의 선언: 이름과 구독할 수 있는 role. [`rpc_event!`](crate::rpc_event) 가 만든다.
+#[derive(Debug, Clone, Copy, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EventMeta {
+    /// `<module>.<event>`(`fs.changed`). 구독의 `topics` 와 정확히 일치해야 한다.
+    pub name: &'static str,
+    #[specta(type = Vec<Role>)]
+    pub roles: RoleSet,
+}
+
+impl EventMeta {
+    /// 선언 규칙 검사. `rpc_event!` 가 컴파일 타임에 부른다.
+    pub const fn validate(&self) -> Result<(), &'static str> {
+        let name = self.name.as_bytes();
+        if name.is_empty() || name[0] == b'.' || name[name.len() - 1] == b'.' {
+            return Err("event topic must be `<module>.<event>`");
+        }
+        let mut has_dot = false;
+        let mut i = 0;
+        while i < name.len() {
+            if name[i] == b'.' {
+                has_dot = true;
+            }
+            i += 1;
+        }
+        if !has_dot {
+            return Err("event topic must be `<module>.<event>`");
+        }
+        if self.roles.is_empty() {
+            return Err("event topic must allow at least one role");
+        }
+        Ok(())
+    }
+
+    /// 이 role 의 호출자가 이 토픽을 구독할 수 있는가.
+    pub const fn permits(&self, role: Role) -> bool {
+        self.roles.contains(role)
+    }
+}
+
+inventory::collect!(EventMeta);
+
+/// 링크된 모든 크레이트에서 선언된 이벤트 토픽을 이름순으로.
+///
+/// **링크된 크레이트의 선언만 보인다** — [`methods`](crate::methods) 와 같다. 토픽을 선언한 크레이트가 실행 파일에 링크되지
+/// 않으면 그 토픽은 구독할 수 없다(fail-closed).
+///
+/// # Panics
+/// 두 선언이 같은 토픽을 쓰면 패닉한다(프로그래밍 오류). 토픽은 그것을 내는 크레이트 한 곳에서만 선언한다.
+pub fn events() -> Vec<&'static EventMeta> {
+    let mut seen = HashMap::new();
+    for meta in inventory::iter::<EventMeta> {
+        let previous = seen.insert(meta.name, meta);
+        assert!(
+            previous.is_none(),
+            "event topic `{}` declared twice",
+            meta.name
+        );
+    }
+    let mut all: Vec<_> = seen.into_values().collect();
+    all.sort_by_key(|m| m.name);
+    all
+}
+
+/// 토픽의 선언. 선언이 없으면 `None` — 그 토픽은 구독할 수 없다.
+pub fn event(topic: &str) -> Option<&'static EventMeta> {
+    static TABLE: std::sync::OnceLock<HashMap<&'static str, &'static EventMeta>> =
+        std::sync::OnceLock::new();
+    TABLE
+        .get_or_init(|| events().into_iter().map(|m| (m.name, m)).collect())
+        .get(topic)
+        .copied()
+}
+
+/// `topics` 중 `role` 이 구독할 수 없는 것(선언이 없거나 role 이 열려 있지 않은 토픽). 비면 모두 구독할 수 있다.
+pub(crate) fn denied_topics(topics: &[String], role: Role) -> Vec<String> {
+    topics
+        .iter()
+        .filter(|t| !event(t).is_some_and(|m| m.permits(role)))
+        .cloned()
+        .collect()
+}
+
+/// 이벤트 토픽을 선언한다. 토픽을 내는 크레이트가 토픽 상수 옆에 한 줄로 둔다.
+///
+/// ```
+/// pub const TOPIC_CHANGED: &str = "fs.changed";
+/// pw_rpc::rpc_event!(TOPIC_CHANGED, roles: [Owner, Mobile, Readonly]);
+///
+/// fn main() {
+///     assert!(pw_rpc::event("fs.changed").is_some_and(|m| m.permits(pw_rpc::Role::Readonly)));
+/// }
+/// ```
+///
+/// - 토픽은 `&'static str` 상수식(상수 경로 · 리터럴)이다. `roles` 는 [`Role`] 의 변형 이름이고 생략할 수 없다 —
+///   payload 에 무엇이 실리는지는 토픽마다 고르는 것이다. Read 등급 정보만 싣는 토픽은 셋 모두로, owner 전용 정보를 싣는
+///   토픽은 `[Owner]` 로 선언한다.
+/// - 선언은 [`events`](crate::events) 레지스트리에 등록되고, 생성기가 TS 의 `TOPICS` 로 내보낸다.
+/// - 이름 규칙 · role 규칙은 [`EventMeta::validate`] 가 컴파일 타임에 검사한다.
+///
+/// ```compile_fail
+/// pw_rpc::rpc_event!("x.nobody", roles: []);
+/// ```
+///
+/// ```compile_fail
+/// pw_rpc::rpc_event!("nodot", roles: [Owner]);
+/// ```
+#[macro_export]
+macro_rules! rpc_event {
+    ($topic:expr, roles: [$($role:ident),* $(,)?] $(,)?) => {
+        const _: () = {
+            const META: $crate::EventMeta = $crate::EventMeta {
+                name: $topic,
+                roles: $crate::RoleSet::EMPTY $(.with($crate::Role::$role))*,
+            };
+            if let Err(reason) = META.validate() {
+                panic!("{}", reason)
+            }
+        };
+        $crate::__private::inventory::submit! {
+            $crate::EventMeta {
+                name: $topic,
+                roles: $crate::RoleSet::EMPTY $(.with($crate::Role::$role))*,
+            }
+        }
+    };
 }

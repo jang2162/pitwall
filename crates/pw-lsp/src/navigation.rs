@@ -53,6 +53,7 @@ use crate::uri::uri_path;
 
 /// 서버가 루트 안 문서를 열라고 했다(`window/showDocument`). 프로젝트 범위 — 내용은 [`LspShowDocument`].
 pub const TOPIC_SHOW_DOCUMENT: &str = "lsp.showDocument";
+pw_rpc::rpc_event!(TOPIC_SHOW_DOCUMENT, roles: [Owner, Mobile, Readonly]);
 /// 토큰 문서를 읽는 상한(편집 등급 — 결정 M1-D9 의 5 MiB).
 pub const READ_LIMIT: u64 = pw_fs::limits::EDITABLE_MAX;
 /// 한 답에 싣는 위치의 상한. 넘으면 `truncated`.

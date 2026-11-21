@@ -78,6 +78,7 @@ pub const EXECUTE_TIMEOUT: Duration = Duration::from_secs(300);
 pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(300);
 /// 서버가 거는 편집을 창에 넘기는 이벤트(프로젝트 범위). 내용은 [`LspApplyEditEvent`].
 pub const TOPIC_APPLY_EDIT: &str = "lsp.applyEdit";
+pw_rpc::rpc_event!(TOPIC_APPLY_EDIT, roles: [Owner, Mobile, Readonly]);
 
 // ---- 편집의 꼴 ---------------------------------------------------------------------------------------------------------------
 

@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::bus::{EventBus, Scope};
 
 pub const TOPIC_SHOW: &str = "notification.show";
+pw_rpc::rpc_event!(TOPIC_SHOW, roles: [Owner, Mobile, Readonly]);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

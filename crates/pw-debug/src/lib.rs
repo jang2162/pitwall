@@ -71,10 +71,15 @@ pub use run::{DebugRun, KIND};
 use crate::run::{RunTerminals, exit_of, lock};
 
 pub const TOPIC_STOPPED: &str = "debug.stopped";
+pw_rpc::rpc_event!(TOPIC_STOPPED, roles: [Owner, Mobile, Readonly]);
 pub const TOPIC_CONTINUED: &str = "debug.continued";
+pw_rpc::rpc_event!(TOPIC_CONTINUED, roles: [Owner, Mobile, Readonly]);
 pub const TOPIC_OUTPUT: &str = "debug.output";
+pw_rpc::rpc_event!(TOPIC_OUTPUT, roles: [Owner, Mobile, Readonly]);
 pub const TOPIC_ENDED: &str = "debug.ended";
+pw_rpc::rpc_event!(TOPIC_ENDED, roles: [Owner, Mobile, Readonly]);
 pub const TOPIC_BREAKPOINTS: &str = "debug.breakpoints";
+pw_rpc::rpc_event!(TOPIC_BREAKPOINTS, roles: [Owner, Mobile, Readonly]);
 
 /// 이벤트 채널의 크기(세션 하나).
 const EVENTS: usize = 512;

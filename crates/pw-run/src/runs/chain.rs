@@ -62,6 +62,7 @@ use crate::config::{RunConfig, RunKindConfig};
 
 /// 사슬 이벤트의 토픽(프로젝트 범위). payload 는 [`RunChainEvent`].
 pub const TOPIC_CHAIN: &str = "run.chain";
+pw_rpc::rpc_event!(TOPIC_CHAIN, roles: [Owner, Mobile, Readonly]);
 
 /// 사슬의 상태.
 #[derive(

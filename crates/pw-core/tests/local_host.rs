@@ -302,13 +302,14 @@ async fn project_events_reach_rpc_subscribers() {
     c.request(
         1,
         "events.subscribe",
-        json!({"projectId": "p1", "topics": ["fs.changed"]}),
+        // 구독할 수 있는 것은 선언한 토픽뿐이다 — 이 시험 실행 파일에 링크된 pw-core 의 토픽을 쓴다(`pw_rpc::events`).
+        json!({"projectId": "p1", "topics": ["config.changed"]}),
     );
     c.result(1).await;
 
     assert_eq!(
         project
-            .publish("fs.changed", &json!({"path": "a"}))
+            .publish("config.changed", &json!({"path": "a"}))
             .unwrap(),
         0
     );

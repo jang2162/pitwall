@@ -35,6 +35,14 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"fixture.wait": {"name":"fixture.wait","kind":"unary","tier":"exec","roles":["owner","mobile"],"params":"()","output":"()","doc":" 끝나지 않는다. 취소 시험용.\n","mcp":null,"fileScope":false},
 };
 
+/** 선언된 이벤트 토픽(`rpc_event!`). 선언 없는 토픽은 구독할 수 없다. */
+export type TopicName = "fs.changed";
+
+/** 토픽 메타데이터(구독할 수 있는 role). `events.subscribe` 는 호출자의 role 이 없는 토픽을 거절한다. */
+export const TOPICS: Record<TopicName, EventMeta> = {
+	"fs.changed": {"name":"fs.changed","roles":["owner","mobile","readonly"]},
+};
+
 /** 내장 프로토콜 메서드 이름. */
 export const PROTOCOL = {
 	REQUEST_CANCEL: "request.cancel",
@@ -92,6 +100,13 @@ export type EventMessage = {
 	projectId: string | null,
 	topic: string,
 	payload: JsonValue,
+};
+
+/**  이벤트 토픽 하나의 선언: 이름과 구독할 수 있는 role. [`rpc_event!`](crate::rpc_event) 가 만든다. */
+export type EventMeta = {
+	/**  `<module>.<event>`(`fs.changed`). 구독의 `topics` 와 정확히 일치해야 한다. */
+	name: string,
+	roles: Role[],
 };
 
 /**

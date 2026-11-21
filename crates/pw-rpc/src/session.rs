@@ -181,6 +181,19 @@ impl Inner {
                 {
                     return Err(RpcError::outside_file_scope(EVENTS_SUBSCRIBE));
                 }
+                // 선언이 없거나 호출자의 role 에 열려 있지 않은 토픽이 하나라도 있으면 구독 전체를 거절한다(`crate::events` 머리 주석).
+                let denied = crate::events::denied_topics(&p.topics, this.caller.role);
+                if !denied.is_empty() {
+                    return Err(RpcError::new(
+                        crate::error::code::PERMISSION_DENIED,
+                        "permission denied",
+                    )
+                    .with_data(json!({
+                        "method": EVENTS_SUBSCRIBE,
+                        "role": this.caller.role,
+                        "topics": denied,
+                    })));
+                }
                 // 확인과 등록을 같은 잠금 안에서 한다. close 는 토큰을 먼저 취소하고 이 잠금으로 걷으므로,
                 // 어느 쪽이 먼저 잠그든 close 뒤에 구독이 남지 않는다.
                 let mut subscriptions = lock(&this.subscriptions);

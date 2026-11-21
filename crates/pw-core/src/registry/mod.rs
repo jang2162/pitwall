@@ -49,6 +49,7 @@ pub use trust::{ProjectTrust, TrustState};
 
 /// 레지스트리가 바뀌면 [`Scope::Host`] 로 나가는 이벤트. payload 는 [`ProjectChanged`].
 pub const TOPIC_CHANGED: &str = "project.changed";
+pw_rpc::rpc_event!(TOPIC_CHANGED, roles: [Owner, Mobile, Readonly]);
 /// 지금 레지스트리가 다루는 Host. 원격 프로젝트(F9)는 이 값이 relay 의 id 가 된다.
 pub const LOCAL_HOST: &str = "local";
 

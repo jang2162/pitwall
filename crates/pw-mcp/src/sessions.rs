@@ -25,8 +25,10 @@ use crate::approval::Approvals;
 
 /// 세션이 열리거나 닫혔다. payload [`McpSessionsChanged`], Host 범위.
 pub const TOPIC_SESSIONS_CHANGED: &str = "mcp.sessionsChanged";
+pw_rpc::rpc_event!(TOPIC_SESSIONS_CHANGED, roles: [Owner, Mobile, Readonly]);
 /// 감사 로그에 새 행이 쓰였다. payload [`McpActivity`], 그 프로젝트 범위(프로젝트 없는 호출은 Host 범위).
 pub const TOPIC_ACTIVITY: &str = "mcp.activity";
+pw_rpc::rpc_event!(TOPIC_ACTIVITY, roles: [Owner, Mobile, Readonly]);
 
 /// 열린 세션 하나(`mcp.sessions` 의 원소). M5-11 이후 행이 칸을 더할 자리다 — 칸은 기본값을 가진 뒤에 더한다.
 #[derive(

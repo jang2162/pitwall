@@ -44,6 +44,7 @@ use crate::trust::code as trust_code;
 /// 연결에 비밀이 필요하다 — 그 프로젝트 창이 알림을 띄워 연결 편집 화면의 비밀 칸으로 보낸다. payload [`DbSecretRequested`],
 /// 그 프로젝트 범위.
 pub const TOPIC_SECRET_REQUESTED: &str = "db.secretRequested";
+pw_rpc::rpc_event!(TOPIC_SECRET_REQUESTED, roles: [Owner, Mobile, Readonly]);
 
 /// [`TOPIC_SECRET_REQUESTED`] 의 payload. 비밀 값은 없다.
 #[derive(

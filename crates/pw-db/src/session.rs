@@ -58,8 +58,10 @@ use crate::registry::DriverRegistry;
 
 /// 세션 상태가 바뀌었다. 내용은 [`DbSessionChanged`].
 pub const TOPIC_SESSION_CHANGED: &str = "db.sessionChanged";
+pw_rpc::rpc_event!(TOPIC_SESSION_CHANGED, roles: [Owner, Mobile, Readonly]);
 /// 실행의 진행. 내용은 [`DbQueryProgress`](crate::execute::DbQueryProgress).
 pub const TOPIC_QUERY_PROGRESS: &str = "db.queryProgress";
+pw_rpc::rpc_event!(TOPIC_QUERY_PROGRESS, roles: [Owner, Mobile, Readonly]);
 
 /// 그리드 보유 행 상한의 설정 키(전역 `settings` 의 `[db] grid_max_rows`)와 기본값(06 「성능 목표」 의 10만 행).
 pub const GRID_MAX_ROWS_KEY: &str = "db.grid_max_rows";

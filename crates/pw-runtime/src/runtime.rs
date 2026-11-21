@@ -24,6 +24,7 @@ use crate::provider::{Cancel, Layer, ProviderError, RuntimeProvider};
 
 /// 런타임 환경이 바뀌었다. 새 터미널 · 새로 띄우는 프로세스부터 새 환경을 쓴다.
 pub const TOPIC_CHANGED: &str = "runtime.changed";
+pw_rpc::rpc_event!(TOPIC_CHANGED, roles: [Owner, Mobile, Readonly]);
 
 /// `runtime.changed` 의 내용.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

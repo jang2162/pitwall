@@ -50,6 +50,7 @@ use super::{Inner, Run, RunInfo, RunState, lock};
 
 /// 실행의 포트가 바뀌었을 때 버스로 내는 이벤트(프로젝트 범위). payload 는 [`RunInfo`](`ports` 칸).
 pub const TOPIC_PORTS: &str = "run.ports";
+pw_rpc::rpc_event!(TOPIC_PORTS, roles: [Owner, Mobile, Readonly]);
 
 /// A TCP port the run's process tree listens on.
 #[derive(

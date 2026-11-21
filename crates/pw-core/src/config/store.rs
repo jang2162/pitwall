@@ -21,8 +21,10 @@ use crate::bus::{EventBus, Scope};
 
 /// 다시 읽은 결과 값이나 알림이 달라졌다. 페이로드는 [`ConfigChanged`].
 pub const TOPIC_CHANGED: &str = "config.changed";
+pw_rpc::rpc_event!(TOPIC_CHANGED, roles: [Owner, Mobile, Readonly]);
 /// 다시 읽기가 실패해 이전 설정을 유지한다. 페이로드는 [`ConfigFault`].
 pub const TOPIC_ERROR: &str = "config.error";
+pw_rpc::rpc_event!(TOPIC_ERROR, roles: [Owner, Mobile, Readonly]);
 
 /// 파일 감시의 기본 디바운스. 에디터의 「임시 파일 쓰기 → rename」 같은 연속 이벤트를 한 번의 다시 읽기로 묶는다.
 pub const DEFAULT_DEBOUNCE: Duration = Duration::from_millis(200);

@@ -18,6 +18,7 @@ use crate::manager::LspManager;
 
 /// 프로젝트의 서버 인스턴스 상태가 바뀌었다. 범위는 그 프로젝트, 내용은 [`LspStatus`](그 프로젝트의 인스턴스 전부).
 pub const TOPIC_STATUS: &str = "lsp.status";
+pw_rpc::rpc_event!(TOPIC_STATUS, roles: [Owner, Mobile, Readonly]);
 
 #[derive(
     Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,

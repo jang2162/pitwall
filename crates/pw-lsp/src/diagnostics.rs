@@ -53,6 +53,7 @@ use crate::uri::{file_uri, uri_path};
 
 /// 경로의 진단이 바뀌면 나가는 이벤트(프로젝트 범위). 내용은 [`LspDiagnosticsEvent`].
 pub const TOPIC_DIAGNOSTICS: &str = "lsp.diagnostics";
+pw_rpc::rpc_event!(TOPIC_DIAGNOSTICS, roles: [Owner, Mobile, Readonly]);
 /// 파일 하나(모든 서버를 합쳐)의 진단 상한.
 pub const FILE_LIMIT: usize = 1_000;
 /// 프로젝트 하나의 진단 상한.

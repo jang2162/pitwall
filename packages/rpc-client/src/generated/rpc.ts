@@ -1797,6 +1797,42 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"tools.updates": {"name":"tools.updates","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ToolsUpdates","doc":" 설치본 가운데 registry 의 판이 다른 것(업데이트 알림은 M4-17).\n","mcp":null,"fileScope":false},
 };
 
+/** 선언된 이벤트 토픽(`rpc_event!`). 선언 없는 토픽은 구독할 수 없다. */
+export type TopicName = "config.changed" | "config.error" | "db.queryProgress" | "db.schemaChanged" | "db.secretRequested" | "db.sessionChanged" | "debug.breakpoints" | "debug.continued" | "debug.ended" | "debug.output" | "debug.stopped" | "fs.changed" | "git.refsChanged" | "git.statusChanged" | "lsp.applyEdit" | "lsp.diagnostics" | "lsp.showDocument" | "lsp.status" | "mcp.activity" | "mcp.sessionsChanged" | "notification.show" | "project.changed" | "run.chain" | "run.exited" | "run.ports" | "run.started" | "runtime.changed" | "task.finished" | "task.progress";
+
+/** 토픽 메타데이터(구독할 수 있는 role). `events.subscribe` 는 호출자의 role 이 없는 토픽을 거절한다. */
+export const TOPICS: Record<TopicName, EventMeta> = {
+	"config.changed": {"name":"config.changed","roles":["owner","mobile","readonly"]},
+	"config.error": {"name":"config.error","roles":["owner","mobile","readonly"]},
+	"db.queryProgress": {"name":"db.queryProgress","roles":["owner","mobile","readonly"]},
+	"db.schemaChanged": {"name":"db.schemaChanged","roles":["owner","mobile","readonly"]},
+	"db.secretRequested": {"name":"db.secretRequested","roles":["owner","mobile","readonly"]},
+	"db.sessionChanged": {"name":"db.sessionChanged","roles":["owner","mobile","readonly"]},
+	"debug.breakpoints": {"name":"debug.breakpoints","roles":["owner","mobile","readonly"]},
+	"debug.continued": {"name":"debug.continued","roles":["owner","mobile","readonly"]},
+	"debug.ended": {"name":"debug.ended","roles":["owner","mobile","readonly"]},
+	"debug.output": {"name":"debug.output","roles":["owner","mobile","readonly"]},
+	"debug.stopped": {"name":"debug.stopped","roles":["owner","mobile","readonly"]},
+	"fs.changed": {"name":"fs.changed","roles":["owner","mobile","readonly"]},
+	"git.refsChanged": {"name":"git.refsChanged","roles":["owner","mobile","readonly"]},
+	"git.statusChanged": {"name":"git.statusChanged","roles":["owner","mobile","readonly"]},
+	"lsp.applyEdit": {"name":"lsp.applyEdit","roles":["owner","mobile","readonly"]},
+	"lsp.diagnostics": {"name":"lsp.diagnostics","roles":["owner","mobile","readonly"]},
+	"lsp.showDocument": {"name":"lsp.showDocument","roles":["owner","mobile","readonly"]},
+	"lsp.status": {"name":"lsp.status","roles":["owner","mobile","readonly"]},
+	"mcp.activity": {"name":"mcp.activity","roles":["owner","mobile","readonly"]},
+	"mcp.sessionsChanged": {"name":"mcp.sessionsChanged","roles":["owner","mobile","readonly"]},
+	"notification.show": {"name":"notification.show","roles":["owner","mobile","readonly"]},
+	"project.changed": {"name":"project.changed","roles":["owner","mobile","readonly"]},
+	"run.chain": {"name":"run.chain","roles":["owner","mobile","readonly"]},
+	"run.exited": {"name":"run.exited","roles":["owner","mobile","readonly"]},
+	"run.ports": {"name":"run.ports","roles":["owner","mobile","readonly"]},
+	"run.started": {"name":"run.started","roles":["owner","mobile","readonly"]},
+	"runtime.changed": {"name":"runtime.changed","roles":["owner","mobile","readonly"]},
+	"task.finished": {"name":"task.finished","roles":["owner","mobile","readonly"]},
+	"task.progress": {"name":"task.progress","roles":["owner","mobile","readonly"]},
+};
+
 /** 내장 프로토콜 메서드 이름. */
 export const PROTOCOL = {
 	REQUEST_CANCEL: "request.cancel",
@@ -4682,6 +4718,13 @@ export type EventMessage = {
 	projectId: string | null,
 	topic: string,
 	payload: JsonValue,
+};
+
+/**  이벤트 토픽 하나의 선언: 이름과 구독할 수 있는 role. [`rpc_event!`](crate::rpc_event) 가 만든다. */
+export type EventMeta = {
+	/**  `<module>.<event>`(`fs.changed`). 구독의 `topics` 와 정확히 일치해야 한다. */
+	name: string,
+	roles: Role[],
 };
 
 /**  어댑터가 `initialize` 로 알린 예외 필터 하나와 켰는가. */

@@ -276,4 +276,4 @@ Hub를 두지 않으므로 FCM 같은 서버 푸시를 쓰지 않는다.
 | `pw-relay` | Relay 데몬, 서비스 등록, roots 화이트리스트, 기기별 권한, SSH 설치 부트스트랩 |
 | `apps/relay` | `pitwall-relay` 바이너리 |
 | `apps/mobile` | Expo 앱 (Android 우선) |
-| RPC | 모든 메서드에 필요한 권한(role) 메타데이터 → Relay가 기기 role로 필터링. 이벤트(`events.subscribe`)에는 아직 토픽별 role 검사가 없다 — 이벤트 payload 는 Read 등급 정보만 싣는다. Owner 전용 정보를 실을 토픽이 생기면 그 전에 토픽별 role 메타를 더한다(relay 연결 전에 구현) |
+| RPC | 모든 메서드에 필요한 권한(role) 메타데이터 → Relay가 기기 role로 필터링. 이벤트 토픽도 같은 모양의 role 선언(`rpc_event!`)을 두고 `events.subscribe` 가 호출자의 role 로 검사한다 — 선언이 없거나 role 이 열려 있지 않은 토픽이 하나라도 있으면 구독 전체를 거절하고, 선언 없는 토픽은 어느 role 도 구독할 수 없다. 지금 토픽은 모두 Read 등급 payload 라 role 셋 모두로 선언했다. Owner 전용 정보를 싣는 토픽은 `[Owner]` 로 선언한다(18-m7-plan M7-02) |

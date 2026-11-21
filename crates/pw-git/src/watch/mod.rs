@@ -41,8 +41,10 @@ use classify::{Dirs, Effect};
 
 /// 작업 트리 상태가 바뀌었다. 내용은 [`GitStatusChanged`].
 pub const TOPIC_STATUS_CHANGED: &str = "git.statusChanged";
+pw_rpc::rpc_event!(TOPIC_STATUS_CHANGED, roles: [Owner, Mobile, Readonly]);
 /// ref · HEAD · 진행 중 작업이 바뀌었다. 내용은 [`GitRefsChanged`].
 pub const TOPIC_REFS_CHANGED: &str = "git.refsChanged";
+pw_rpc::rpc_event!(TOPIC_REFS_CHANGED, roles: [Owner, Mobile, Readonly]);
 
 /// 이보다 많은 경로가 한 창에 모이면 전체로 낸다.
 const MAX_PATHS: usize = 1000;

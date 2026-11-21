@@ -36,6 +36,7 @@ use engine::{Engine, Options, Sink};
 
 /// 바뀐 경로를 알리는 프로젝트 범위 토픽.
 pub const TOPIC_CHANGED: &str = "fs.changed";
+pw_rpc::rpc_event!(TOPIC_CHANGED, roles: [Owner, Mobile, Readonly]);
 
 /// 경로 하나의 변경. 창이 닫힐 때 디스크를 보고 정한다 — `removed` 는 확실하고 `created` · `modified` 는 힌트다([`batch`]).
 #[derive(

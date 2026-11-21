@@ -82,6 +82,9 @@ rpc_method! {
     }
 }
 
+// 골든 메시지가 구독하는 토픽. 선언 없는 토픽은 구독할 수 없다(`pw_rpc::events`).
+pw_rpc::rpc_event!("fs.changed", roles: [Owner, Mobile, Readonly]);
+
 const APP_ERROR: i32 = 1001;
 
 fn router() -> Router {
@@ -244,7 +247,7 @@ async fn main() -> ExitCode {
         &MethodInfo::unary::<Fail>(),
         &MethodInfo::unary::<Wait>(),
     ];
-    let ts = match or_exit(typescript(&methods, &[])) {
+    let ts = match or_exit(typescript(&methods, &[], &pw_rpc::events())) {
         Ok(ts) => ts,
         Err(code) => return code,
     };

@@ -77,6 +77,12 @@ rpc_method! {
     }
 }
 
+// 시험용 토픽 선언. 선언 없는 토픽은 어느 role 도 구독할 수 없다(`pw_rpc::events` 머리 주석).
+pw_rpc::rpc_event!("fs.changed", roles: [Owner, Mobile, Readonly]);
+pw_rpc::rpc_event!("git.statusChanged", roles: [Owner, Mobile, Readonly]);
+pw_rpc::rpc_event!("config.changed", roles: [Owner, Mobile, Readonly]);
+pw_rpc::rpc_event!("test.ownerOnly", roles: [Owner]);
+
 pub const APP_ERROR: i32 = 1001;
 
 /// 시험용 메서드 전부를 등록한 라우터. 테스트별 핸들러를 더 붙일 수 있게 `Router` 로 돌려준다.
