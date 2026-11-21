@@ -186,8 +186,12 @@ fn daemon() -> ExitCode {
             }
         };
         let pairings_file = pw_relay::pairings::file(&paths.data);
-        let pairings = pw_relay::pairings::initial(&pairings_file);
-        tokio::spawn(pw_relay::pairings::follow(pairings_file, pairings.clone()));
+        let (pairings, seen) = pw_relay::pairings::initial(&pairings_file);
+        tokio::spawn(pw_relay::pairings::follow(
+            pairings_file,
+            pairings.clone(),
+            seen,
+        ));
         let assembled = pw_relay::host::assemble(paths.clone(), &config, tokio::runtime::Handle::current());
         let host = Arc::new(assembled.host);
         let daemon = Daemon::new(DaemonParts {

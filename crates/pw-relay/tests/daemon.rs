@@ -402,3 +402,74 @@ async fn a_live_run_holds_off_the_idle_exit() {
         "the language servers were not stopped"
     );
 }
+
+fn owner_remote(fx: &Fixture, transport: transport::MemoryTransport) -> RemoteHost {
+    let desktop_key = Arc::new(DeviceKey::generate().unwrap());
+    fx.pairings.upsert(Pairing {
+        key: desktop_key.public(),
+        role: Role::Owner,
+        name: "mac".into(),
+    });
+    RemoteHost::new(
+        "box",
+        Arc::new(transport) as Arc<dyn Transport>,
+        Arc::new(DesktopIdentity {
+            key: desktop_key,
+            versions: pw_relay::versions(),
+        }),
+        Expect::Machine(fx.relay_key.id()),
+        LinkLimits::default(),
+    )
+}
+
+/// 붙은 링크가 있는 동안은 유휴 끝내기가 오지 않는다 — 실행 · 터미널이 없어도(리뷰 F1: Desktop 이 붙어 있는데 데몬이 끝나면 그
+/// 링크의 터미널 트리가 함께 끝난다). 링크가 닫히면 `exit_after` 뒤에 온다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_linked_desktop_holds_off_the_idle_exit() {
+    let short = Duration::from_millis(300);
+    let fx = fixture(
+        4,
+        IdleConfig {
+            exit_after: short,
+            stop_lsp_after: short,
+        },
+    );
+    let transport = serve_memory(&fx);
+    let remote = owner_remote(&fx, transport);
+    remote.attach().await.unwrap();
+    let presence = fx.daemon.presence();
+    eventually("the link is not counted", || presence.links().all == 1).await;
+    assert!(
+        tokio::time::timeout(short * 6, fx.daemon.wait_idle())
+            .await
+            .is_err(),
+        "the daemon went idle with a desktop linked"
+    );
+    remote.detach();
+    eventually("the closed link is still counted", || {
+        presence.links().all == 0
+    })
+    .await;
+    tokio::time::timeout(short * 6, fx.daemon.wait_idle())
+        .await
+        .expect("no idle exit after the link closed");
+}
+
+/// 첫 틀을 보내지 않는 연결은 `FIRST_FRAME_TIMEOUT`(5초) 뒤 닫히고 자리를 돌려준다(리뷰 권고 2 — E1).
+#[tokio::test(start_paused = true)]
+async fn a_connection_without_a_first_frame_is_closed_after_the_timeout() {
+    let fx = default_fixture();
+    let transport = serve_memory(&fx);
+    let mut silent = Framed::handshake(open(&transport).await);
+    let start = tokio::time::Instant::now();
+    let closed = tokio::time::timeout(Duration::from_secs(60), silent.read.read_value())
+        .await
+        .expect("the silent connection was kept past a minute");
+    assert!(closed.unwrap().is_none());
+    let waited = start.elapsed();
+    assert!(
+        waited >= pw_relay::daemon::FIRST_FRAME_TIMEOUT && waited < Duration::from_secs(6),
+        "{waited:?}"
+    );
+    assert_eq!(fx.daemon.unproven(), 0);
+}

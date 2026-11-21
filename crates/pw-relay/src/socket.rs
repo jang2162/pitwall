@@ -266,6 +266,26 @@ mod tests {
         assert!(lock(&a, uid).unwrap().is_some());
     }
 
+    /// 붙는 쪽도 폴더를 본다 — 0700 이 아닌 폴더의 소켓에는 (받는 쪽이 있어도) 붙지 않는다(리뷰 권고 2 — E4).
+    #[tokio::test]
+    async fn connect_refuses_a_socket_in_an_open_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let uid = current_uid();
+        let open = dir.path().join("open");
+        std::fs::create_dir(&open).unwrap();
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = open.join("1.0.0.sock");
+        let _listener = UnixListener::bind(&path).unwrap();
+        let err = connect(&path, uid)
+            .await
+            .err()
+            .expect("connected through an open folder");
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
+
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(connect(&path, uid).await.is_ok());
+    }
+
     #[test]
     fn a_deep_state_falls_back_to_the_temp_folder() {
         let deep = Path::new("/tmp").join("d".repeat(120));

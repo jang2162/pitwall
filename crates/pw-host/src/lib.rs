@@ -106,9 +106,12 @@ enum Flavor {
     Relay,
 }
 
-/// Relay 의 Host 에서 걷어 내는 메서드 갈래. 묶음(`bundle.*`)은 Desktop 의 것이다 — 묶음 저장은 사람의 Desktop 레지스트리에 있고,
-/// 원격 머신의 레지스트리에 묶음을 만들 까닭이 없다(M7-10 리뷰 권고 6).
-pub const RELAY_EXCLUDED_PREFIXES: &[&str] = &["bundle."];
+/// Relay 의 Host 에서 걷어 내는 메서드 갈래(18-m7-plan M7-04).
+/// - `bundle.` — 묶음은 Desktop 의 것이다. 묶음 저장은 사람의 Desktop 레지스트리에 있고, 원격 머신의 레지스트리에 묶음을 만들
+///   까닭이 없다(M7-10 리뷰 권고 6).
+/// - `openWith.` — 「다른 앱으로 열기」 는 그 머신에서 GUI 프로그램을 띄운다. 창 없는 원격 머신에서는 뜻이 없다(M7-04 리뷰 권고 4).
+/// - `cli.` — 「Shell 명령 설치」 안내(`cli.status`)는 Desktop 앱의 것이다. Relay 는 설치할 Shell 명령이 없다.
+pub const RELAY_EXCLUDED_PREFIXES: &[&str] = &["bundle.", "cli.", "openWith."];
 
 /// 부품으로 Host 를 조립한다. 메서드를 모두 등록하고, Host 의 설정 · 레지스트리가 있으면 그것을 기능들에 붙인다.
 pub fn assemble(parts: HostParts) -> Assembled {

@@ -69,26 +69,62 @@ pub fn spawn_daemon(program: &Path, args: &[&str]) -> io::Result<()> {
     command.spawn().map(drop)
 }
 
-/// stdin → 소켓, 소켓 → stdout. 어느 쪽이든 끝나면 돌아온다.
+/// stdin → 소켓, 소켓 → stdout. 데몬이 닫으면 끝난다. stdin 이 먼저 끝나면 소켓의 쓰기 쪽만 닫고(반닫기) 데몬이 남은 바이트를 다
+/// 보내고 닫을 때까지 stdout 으로 흘린다.
 pub async fn pipe(stream: UnixStream) -> io::Result<()> {
+    pipe_io(stream, tokio::io::stdin(), tokio::io::stdout()).await
+}
+
+/// [`pipe`] 의 몸통(시험은 stdin · stdout 대신 다른 스트림을 준다).
+pub async fn pipe_io(
+    stream: UnixStream,
+    mut input: impl tokio::io::AsyncRead + Unpin,
+    mut output: impl tokio::io::AsyncWrite + Unpin,
+) -> io::Result<()> {
     let (mut from_daemon, mut to_daemon) = stream.into_split();
-    let mut stdin = tokio::io::stdin();
-    let mut stdout = tokio::io::stdout();
+    let down = async {
+        tokio::io::copy(&mut from_daemon, &mut output).await?;
+        output.flush().await
+    };
+    tokio::pin!(down);
     let up = async {
-        tokio::io::copy(&mut stdin, &mut to_daemon).await?;
+        tokio::io::copy(&mut input, &mut to_daemon).await?;
         to_daemon.shutdown().await
     };
-    let down = async {
-        tokio::io::copy(&mut from_daemon, &mut stdout).await?;
-        stdout.flush().await
-    };
     tokio::select! {
-        result = up => result,
-        result = down => result,
+        result = &mut down => return result,
+        result = up => result?,
     }
+    down.await
 }
 
 /// 로그 파일 자리(진단 글에 싣는다).
 pub fn log_hint(paths: &pw_core::config::AppPaths) -> PathBuf {
     crate::paths::logs_dir(paths)
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::*;
+
+    /// stdin 이 먼저 끝나도 데몬이 그 뒤에 보낸 바이트는 stdout 에 다 나간다(데몬은 요청을 끝까지 읽은 뒤에 답한다).
+    #[tokio::test]
+    async fn the_answer_after_stdin_ends_still_reaches_stdout() {
+        let (proxy_side, mut daemon_side) = UnixStream::pair().unwrap();
+        let daemon = tokio::spawn(async move {
+            let mut request = Vec::new();
+            daemon_side.read_to_end(&mut request).await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            daemon_side.write_all(b"answer:").await.unwrap();
+            daemon_side.write_all(&request).await.unwrap();
+        });
+        let mut output = Vec::new();
+        pipe_io(proxy_side, &b"request"[..], &mut output)
+            .await
+            .unwrap();
+        daemon.await.unwrap();
+        assert_eq!(output, b"answer:request");
+    }
 }

@@ -202,3 +202,63 @@ fn status_without_a_daemon_does_not_start_one() {
             .exists()
     );
 }
+
+/// 같은 판 데몬을 직접 둘 띄우면 둘째는 판 잠금을 못 쥐고 곧 0 으로 끝난다 — 첫째의 소켓 파일(inode)은 그대로이고 `status` 는
+/// 첫째가 답한다(리뷰 F3: 잠금이 빠지면 둘째가 첫째의 소켓을 지우고 새로 열어 첫째가 고아가 된다).
+#[test]
+fn a_second_daemon_of_the_same_version_leaves_the_first_in_place() {
+    use std::os::unix::fs::MetadataExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let socket = root
+        .join("state/relay")
+        .join(format!("{}.sock", env!("CARGO_PKG_VERSION")));
+    let status = || {
+        let out = relay(root, &["status"]).output().unwrap();
+        out.status
+            .success()
+            .then(|| serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap())
+    };
+    let first = relay(root, &["daemon"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let first_pid = first.id() as i32;
+    let _first = Daemon(first_pid);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let answer = loop {
+        if let Some(answer) = status() {
+            break answer;
+        }
+        assert!(Instant::now() < deadline, "the first daemon did not answer");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(answer["pid"], serde_json::json!(first_pid));
+    let inode = std::fs::metadata(&socket).unwrap().ino();
+
+    let mut second = relay(root, &["daemon"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let _second = Daemon(second.id() as i32);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let exit = loop {
+        if let Some(exit) = second.try_wait().unwrap() {
+            break exit;
+        }
+        assert!(Instant::now() < deadline, "the second daemon kept running");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(exit.success(), "{exit:?}");
+    assert_eq!(
+        std::fs::metadata(&socket).unwrap().ino(),
+        inode,
+        "the socket was replaced"
+    );
+    assert_eq!(status().unwrap()["pid"], serde_json::json!(first_pid));
+}

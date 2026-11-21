@@ -90,11 +90,11 @@ async fn project_create_registers_only_inside_the_roots() {
     assert_eq!(list.as_array().unwrap().len(), 1);
 }
 
-/// Relay 의 메서드 목록은 Desktop 의 목록(`pw-host` 의 `methods.snapshot` — 이름 · 종류 · 등급 · role)에서 묶음(`bundle.*`)만 뺀
-/// 것이다. 그래서 `relay.toml` 을 쓰는 RPC 가 없다(18-m7-plan M7-04 시험 ② · 메인 판정 M7-P5): Relay 전용 메서드는 없고, Desktop 의
+/// Relay 의 메서드 목록은 Desktop 의 목록(`pw-host` 의 `methods.snapshot` — 이름 · 종류 · 등급 · role)에서 Desktop 전용 갈래만 뺀
+/// 것이다(`bundle.*` · `openWith.*` · `cli.*` — `pw_host::RELAY_EXCLUDED_PREFIXES`). 그래서 `relay.toml` 을 쓰는 RPC 가 없다(18-m7-plan M7-04 시험 ② · 메인 판정 M7-P5): Relay 전용 메서드는 없고, Desktop 의
 /// 설정 쓰기(`mcp.settings.set` 등)는 `settings.toml` · 프로젝트 파일만 쓴다. 메서드가 늘면 스냅숏을 다시 써야 해 리뷰에 걸린다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_relay_methods_are_the_desktop_methods_without_bundles() {
+async fn the_relay_methods_are_the_desktop_methods_without_desktop_only_ones() {
     let dir = tempfile::tempdir().unwrap();
     let assembled = assemble(dir.path(), Vec::new());
     let relay: Vec<String> = assembled
@@ -110,10 +110,21 @@ async fn the_relay_methods_are_the_desktop_methods_without_bundles() {
     .unwrap();
     let desktop: Vec<String> = snapshot
         .lines()
-        .filter(|line| !line.starts_with("bundle."))
+        .filter(|line| {
+            !pw_host::RELAY_EXCLUDED_PREFIXES
+                .iter()
+                .any(|p| line.starts_with(p))
+        })
         .map(str::to_owned)
         .collect();
-    assert!(snapshot.lines().any(|l| l.starts_with("bundle.")));
+    // 빼는 갈래는 이 셋이고, 셋 다 Desktop 목록에 있다(이름이 바뀌어 아무것도 빼지 않게 되면 실패한다).
+    assert_eq!(
+        pw_host::RELAY_EXCLUDED_PREFIXES,
+        ["bundle.", "cli.", "openWith."]
+    );
+    for prefix in pw_host::RELAY_EXCLUDED_PREFIXES {
+        assert!(snapshot.lines().any(|l| l.starts_with(prefix)), "{prefix}");
+    }
     assert_eq!(relay, desktop);
     assert!(
         !relay.iter().any(|m| m.to_lowercase().contains("relay")),
