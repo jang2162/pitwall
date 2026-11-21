@@ -1,0 +1,44 @@
+[package]
+name = "pw-link"
+description = "Pitwall link: transport, framing, handshake with device-key proof, channel multiplexing and the RemoteHost"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# 기기 키 · 서명 · 도전값을 글로 싣는다(틀 본문은 JSON — 18-m7-plan M7-03 ②).
+base64 = "0.22.1"
+# 기기 키와 도전 서명(18-m7-plan 결정 M7-D13 · 메인 판정 M7-P6). Noise(M7-23)도 같은 키를 쓴다.
+ed25519-dalek = "3.0.0"
+# 키 · 도전값의 난수. ed25519-dalek 의 rand_core 기능 대신 씨앗 32바이트를 OS 에서 받는다.
+getrandom = "0.4.3"
+# Desktop 기기 키를 OS 키체인에 둔다(pw-db 의 `KeyringStore` 와 같은 판).
+keyring = "4.2.0"
+pw-core = { path = "../pw-core" }
+pw-rpc = { path = "../pw-rpc" }
+# 링크 틀은 LSP · DAP 와 같은 `Content-Length` 틀이다(메인 판정 M7-P2).
+pw-wire = { path = "../pw-wire" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+# 머신 id = Relay 기기 공개키의 SHA-256 지문(메인 판정 M7-P6). ed25519-dalek 이 쓰는 판과 같다.
+sha2 = "0.11.1"
+tokio = { workspace = true, features = ["rt", "sync", "macros", "time", "io-util", "fs"] }
+tokio-util = { workspace = true }
+tracing = "0.1.44"
+zeroize = "1.9.1"
+
+[dev-dependencies]
+# 시험 메서드(`rpc_method!`)의 입출력 타입.
+schemars = { workspace = true }
+specta = { workspace = true, features = ["derive"] }
+tempfile = "3.27.0"
+tokio = { workspace = true, features = [
+  "rt",
+  "rt-multi-thread",
+  "sync",
+  "macros",
+  "time",
+  "io-util",
+  "test-util",
+] }
