@@ -124,13 +124,42 @@ pub struct DesktopLink {
     pending: Pending,
 }
 
-type Pending = Arc<Mutex<HashMap<u32, oneshot::Sender<Result<(), String>>>>>;
+/// 답을 기다리는 채널 열기.
+enum Slot {
+    Waiting(oneshot::Sender<Result<(), String>>),
+    /// 답 전에 버려진 열기 — 채널은 닫았고, 늦게 온 답은 버린다.
+    Abandoned,
+}
 
-fn take_pending(pending: &Pending, channel: u32) -> Option<oneshot::Sender<Result<(), String>>> {
+type Pending = Arc<Mutex<HashMap<u32, Slot>>>;
+
+fn take_pending(pending: &Pending, channel: u32) -> Option<Slot> {
     pending
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .remove(&channel)
+}
+
+/// 열기가 답 전에 버려지면(부른 쪽의 시한 · 취소) 채널을 닫는다 — 그러지 않으면 채널과 Relay 의 Host 연결이 링크가 죽을 때까지
+/// 남아 채널 상한을 채운다.
+struct OpenGuard<'a> {
+    mux: &'a Mux,
+    pending: &'a Pending,
+    channel: u32,
+    armed: bool,
+}
+
+impl Drop for OpenGuard<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.pending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(self.channel, Slot::Abandoned);
+        self.mux.close_channel(self.channel, "abandoned");
+    }
 }
 
 /// 전송 위에서 핸드셰이크를 하고 링크를 연다. 판 · 머신 id · Relay 서명이 맞지 않으면 서명하지 않고 끊는다.
@@ -163,9 +192,10 @@ pub async fn dial(
                     }
                 };
                 match take_pending(&pending, frame.channel) {
-                    Some(tx) => {
+                    Some(Slot::Waiting(tx)) => {
                         let _ = tx.send(outcome);
                     }
+                    Some(Slot::Abandoned) => {}
                     None => {
                         mux.shutdown(CloseReason::Protocol(
                             "an answer for no open request".to_owned(),
@@ -360,7 +390,13 @@ impl DesktopLink {
         self.pending
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(channel, tx);
+            .insert(channel, Slot::Waiting(tx));
+        let mut guard = OpenGuard {
+            mux: &self.mux,
+            pending: &self.pending,
+            channel,
+            armed: true,
+        };
         self.mux.send_control(&LinkFrame::new(
             channel,
             Kind::Connect,
@@ -371,6 +407,7 @@ impl DesktopLink {
             outcome = answer => outcome.unwrap_or_else(|_| Err("link closed".to_owned())),
             () = closed.cancelled() => Err("link closed".to_owned()),
         };
+        guard.armed = false;
         if let Err(why) = outcome {
             take_pending(&self.pending, channel);
             self.mux.forget_channel(channel);

@@ -94,6 +94,8 @@ pub async fn serve_framed(
     first: LinkFrame,
     parts: &RelayParts,
 ) -> Result<CloseReason, ServeError> {
+    // 표를 핸드셰이크 **전에** 구독한다 — role 을 읽은 뒤에 구독하면 그 사이의 해제 · role 변경을 「이미 본 값」 으로 놓친다.
+    let mut table = parts.pairings.watch();
     let proven = tokio::time::timeout(
         parts.limits.dead_after,
         handshake(&mut framed, first, parts),
@@ -104,8 +106,7 @@ pub async fn serve_framed(
     let (mux, mut inbox) = Mux::start(framed, parts.limits);
     let closed = mux.closed();
 
-    // 페어링이 바뀌면 끊는다.
-    let mut table = parts.pairings.watch();
+    // 페어링이 바뀌면 끊는다(핸드셰이크 뒤에 이미 바뀌었으면 `changed` 가 곧바로 깬다).
     let watcher = {
         let (mux, pairings, key, role) =
             (mux.clone(), parts.pairings.clone(), proven.key, proven.role);

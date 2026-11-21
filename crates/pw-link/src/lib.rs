@@ -23,8 +23,7 @@ pub mod transport;
 
 pub use desktop::{DesktopIdentity, DesktopLink, DialError, Expect, LinkState, RemoteHost, dial};
 pub use device::{
-    DeviceId, DeviceKey, DeviceKeyStore, KeychainKeyStore, MachineId, MemoryKeyStore, PublicKey,
-    RelayKeyFile,
+    DeviceId, DeviceKey, DeviceKeyStore, KeychainKeyStore, MachineId, PublicKey, RelayKeyFile,
 };
 pub use handshake::{PROTOCOL, RejectReason, Versions};
 pub use mux::{CloseReason, LinkLimits};

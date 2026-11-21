@@ -1,9 +1,12 @@
 //! 다중화(18-m7-plan M7-03 ④): 링크 하나(Desktop, 머신) 위의 논리 연결 여럿. `Host::connect` 하나가 채널 하나다.
 //!
-//! - **흐름 제어**: 채널마다 받는 쪽이 창([`LinkLimits::window`] 바이트)을 주고, 꺼내 쓴 만큼 `credit` 으로 돌려준다. 보내는 쪽은
-//!   창이 남았을 때만 그 채널의 틀을 내보낸다 — 한 창(window)이 읽지 않아도 그 채널만 멈추고 링크의 다른 채널은 돈다. 창을 넘겨
-//!   보낸 상대(규칙을 어긴 상대)의 채널은 닫는다 — 받는 쪽의 메모리는 창으로 묶인다(메인 판정 M7-P19 「받는 스트림은 credit ·
-//!   상한으로」).
+//! - **흐름 제어**: 채널마다 받는 쪽이 창([`LinkLimits::window`] 바이트)을 주고, 꺼내 쓴 만큼 `credit` 으로 돌려준다(창의 반이
+//!   모이거나 받아 둔 것을 다 꺼냈을 때). 보내는 쪽은 틀 하나가 **남은 창에 통째로 들어갈 때만** 그 채널의 틀을 내보낸다 — 한
+//!   창(window)이 읽지 않아도 그 채널만 멈추고 링크의 다른 채널은 돈다. 창보다 큰 메시지는 보내지 않고 그 채널을 닫는다. 남은 창을
+//!   넘는 틀을 보낸 상대(규칙을 어긴 상대)의 채널은 받는 쪽이 닫는다 — 받는 쪽 메모리는 채널마다 창을 넘지 않는다(메인 판정 M7-P19
+//!   「받는 스트림은 credit · 상한으로」).
+//! - **링크 틀 큐 상한**: `pong` · `credit` · 채널 응답처럼 이쪽이 내는 링크 틀이 [`LinkLimits::control_buffer`] 를 넘게 쌓이면
+//!   (상대가 읽지 않으며 `ping` · 나쁜 채널 열기를 몰아 보냄) 링크를 끊는다 — 증명된 상대 하나가 이쪽 메모리를 끝없이 늘리지 못하게.
 //! - **보내기 버퍼 상한**: 창이 없어 못 보낸 틀이 채널마다 [`LinkLimits::send_buffer`] 를 넘으면 그 채널을 닫는다(빈 버퍼에는 틀
 //!   하나를 크기와 무관하게 받는다 — 큰 응답 하나로 채널이 닫히지 않게). 닫힌 채널은 Host 쪽에서 그 연결이 닫힌다(진행 중 요청 ·
 //!   스트림 취소 · 구독 걷기 — `pw_core::host` 의 계약).
@@ -30,10 +33,13 @@ use crate::frame::{CONTROL, Framed, FramedRead, FramedWrite, Kind, LinkFrame};
 pub struct LinkLimits {
     /// 링크 하나의 채널 수 상한.
     pub max_channels: usize,
-    /// 채널마다 받는 쪽이 한 번에 받아 두는 바이트(흐름 제어의 창).
+    /// 채널마다 받는 쪽이 한 번에 받아 두는 바이트(흐름 제어의 창). 메시지 하나의 상한이기도 하다 — 그보다 큰 메시지는 그 채널을
+    /// 닫는다. 기본값은 틀 상한(`pw_wire::MAX_BODY_BYTES`)이라 한 번에 보낼 수 있는 응답(`fs.read` 50 MiB 등)이 채널을 닫지 않는다.
     pub window: usize,
     /// 채널마다 창이 없어 쌓인 보낼 바이트의 상한. 넘으면 그 채널을 닫는다.
     pub send_buffer: usize,
+    /// 이쪽이 내는 링크 틀(`pong` · `credit` · 채널 응답 · 닫기)이 못 나가고 쌓일 수 있는 바이트. 넘으면 링크를 끊는다.
+    pub control_buffer: usize,
     /// 하트비트 간격.
     pub ping_every: Duration,
     /// 이만큼 아무 틀도 받지 못하면 링크가 끊긴 것이다. 핸드셰이크의 시한이기도 하다.
@@ -44,8 +50,9 @@ impl Default for LinkLimits {
     fn default() -> Self {
         Self {
             max_channels: 256,
-            window: 1024 * 1024,
+            window: pw_wire::MAX_BODY_BYTES,
             send_buffer: 16 * 1024 * 1024,
+            control_buffer: 256 * 1024,
             ping_every: Duration::from_secs(10),
             dead_after: Duration::from_secs(30),
         }
@@ -115,6 +122,7 @@ struct Chan {
 #[derive(Default)]
 struct State {
     control: VecDeque<Vec<u8>>,
+    control_bytes: usize,
     channels: HashMap<u32, Chan>,
     ready: VecDeque<u32>,
     shut: bool,
@@ -150,7 +158,7 @@ impl ChannelRx {
     /// 다음 메시지. 채널이 닫히고 남은 것을 다 꺼냈으면 `None`.
     pub(crate) async fn recv(&mut self) -> Option<Value> {
         let (value, len) = self.rx.recv().await?;
-        self.mux.consumed(self.channel, len);
+        self.mux.consumed(self.channel, len, self.rx.is_empty());
         Some(value)
     }
 }
@@ -203,6 +211,7 @@ impl Mux {
             let mut state = lock(&self.shared.state);
             state.shut = true;
             state.control.clear();
+            state.control_bytes = 0;
             state.ready.clear();
             std::mem::take(&mut state.channels)
         };
@@ -255,11 +264,24 @@ impl Mux {
 
     /// 링크 자체의 틀(채널 열기 · 응답 · 핸드셰이크 뒤 제어). 채널 틀보다 먼저 나간다.
     pub(crate) fn send_control(&self, frame: &LinkFrame) {
+        self.push_control(frame.encode());
+    }
+
+    /// 링크 틀 하나를 큐에 넣는다. 큐가 [`LinkLimits::control_buffer`] 를 넘으면 링크를 끊는다.
+    fn push_control(&self, bytes: Vec<u8>) {
         let mut state = lock(&self.shared.state);
         if state.shut {
             return;
         }
-        state.control.push_back(frame.encode());
+        if state.control_bytes + bytes.len() > self.shared.limits.control_buffer {
+            drop(state);
+            self.shutdown(CloseReason::Protocol(
+                "the peer does not read our link frames".to_owned(),
+            ));
+            return;
+        }
+        state.control_bytes += bytes.len();
+        state.control.push_back(bytes);
         drop(state);
         self.shared.wake.notify_one();
     }
@@ -275,6 +297,12 @@ impl Mux {
         let Some(chan) = channels.get_mut(&channel) else {
             return false;
         };
+        if bytes.len() > self.shared.limits.window {
+            drop(state);
+            tracing::debug!(target: "pw_link", channel, "a message larger than the window; closing the channel");
+            self.close_channel(channel, "message larger than the window");
+            return false;
+        }
         if !chan.out.is_empty() && chan.out_bytes + bytes.len() > limit {
             drop(state);
             tracing::debug!(target: "pw_link", channel, "send buffer full; closing the channel");
@@ -296,19 +324,12 @@ impl Mux {
 
     /// 채널을 곧바로 닫는다 — 아직 못 보낸 틀은 버리고 상대에게 `close` 를 보낸다. 받는 쪽은 끝을 본다.
     pub(crate) fn close_channel(&self, channel: u32, reason: &str) {
-        let removed = {
-            let mut state = lock(&self.shared.state);
-            let removed = state.channels.remove(&channel);
-            if removed.is_some() && !state.shut {
-                state.control.push_back(
-                    LinkFrame::new(channel, Kind::Close, json!({ "reason": reason })).encode(),
-                );
-            }
-            removed
-        };
+        let removed = lock(&self.shared.state).channels.remove(&channel);
         if let Some(chan) = removed {
             chan.cancel.cancel();
-            self.shared.wake.notify_one();
+            self.push_control(
+                LinkFrame::new(channel, Kind::Close, json!({ "reason": reason })).encode(),
+            );
         }
     }
 
@@ -341,20 +362,23 @@ impl Mux {
     }
 
     /// 받는 쪽이 `len` 바이트를 꺼내 썼다. 창의 반을 넘게 모이면 상대에게 돌려준다.
-    fn consumed(&self, channel: u32, len: usize) {
+    fn consumed(&self, channel: u32, len: usize, drained: bool) {
         let mut state = lock(&self.shared.state);
         let half = (self.shared.limits.window / 2).max(1);
         let Some(chan) = state.channels.get_mut(&channel) else {
             return;
         };
         chan.recv_consumed += len;
-        if chan.recv_consumed < half {
+        // 받아 둔 것을 다 꺼냈으면 창을 모두 돌려준다 — 보내는 쪽은 틀이 통째로 들어갈 창을 기다리므로, 반이 안 모였다고 붙잡아
+        // 두면 큰 틀 하나가 영영 나가지 못한다.
+        if chan.recv_consumed == 0 || (chan.recv_consumed < half && !drained) {
             return;
         }
         let bytes = std::mem::take(&mut chan.recv_consumed);
         chan.recv_remaining = chan
             .recv_remaining
             .saturating_add(i64::try_from(bytes).unwrap_or(i64::MAX));
+        drop(state);
         let frame = LinkFrame::new(
             channel,
             Kind::Credit,
@@ -362,15 +386,14 @@ impl Mux {
                 bytes: bytes as u64
             }),
         );
-        state.control.push_back(frame.encode());
-        drop(state);
-        self.shared.wake.notify_one();
+        self.push_control(frame.encode());
     }
 
     /// 다음에 쓸 틀: 링크의 틀이 먼저, 그 다음 창이 남은 채널을 돌아가며 하나씩.
     fn next_outgoing(&self) -> Option<Vec<u8>> {
         let mut state = lock(&self.shared.state);
         if let Some(frame) = state.control.pop_front() {
+            state.control_bytes -= frame.len();
             return Some(frame);
         }
         let State {
@@ -384,7 +407,7 @@ impl Mux {
                 chan.queued = false;
                 continue;
             };
-            if front.windowed && chan.send_window <= 0 {
+            if !fits(front, chan.send_window) {
                 chan.queued = false;
                 continue;
             }
@@ -500,7 +523,8 @@ impl Mux {
             // 이미 닫은 채널에 오던 것.
             return;
         };
-        if chan.recv_remaining <= 0 {
+        // 틀은 남은 창에 통째로 들어가야 한다(보내는 쪽이 그렇게 보낸다) — 남은 창 1바이트에 큰 틀 하나를 받지 않는다.
+        if i64::try_from(len).unwrap_or(i64::MAX) > chan.recv_remaining {
             drop(state);
             tracing::debug!(target: "pw_link", channel, "the peer overran the window; closing the channel");
             self.close_channel(channel, "flow control violated");
@@ -558,7 +582,12 @@ impl Mux {
 fn sendable(chan: &Chan) -> bool {
     chan.out
         .front()
-        .is_some_and(|front| !front.windowed || chan.send_window > 0)
+        .is_some_and(|front| fits(front, chan.send_window))
+}
+
+/// 틀이 남은 창에 통째로 들어가는가(닫는 틀은 창과 무관하다).
+fn fits(out: &Out, window: i64) -> bool {
+    !out.windowed || i64::try_from(out.bytes.len()).unwrap_or(i64::MAX) <= window
 }
 
 /// 보낼 수 있으면 `ready` 줄에 넣는다. 새로 넣었으면 참(쓰는 쪽을 깨운다).

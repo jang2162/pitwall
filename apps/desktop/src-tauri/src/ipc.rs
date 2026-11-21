@@ -569,6 +569,24 @@ mod tests {
         assert_eq!(pong.host_id, "local");
     }
 
+    /// 창은 아직 원격 프로젝트(`Target::Member`)로 연결하지 못한다 — 창의 체크아웃별 연결(18-m7-plan M7-11)이 열 때까지. 대상이
+    /// 이 머신의 Host 여도, 자기 프로젝트여도 거절한다(거절이 없으면 라우터가 그 묶음으로 owner 연결을 연다).
+    #[test]
+    fn a_window_cannot_connect_to_a_member_target_yet() {
+        let f = fixture();
+        let w = window(&f.app, "project-p1");
+        let page = invoke(&w, "rpc_page", json!({})).unwrap();
+        let err = invoke(
+            &w,
+            "rpc_connect",
+            json!({"target": {"member": {"host": "local", "project": "p1"}},
+                   "channel": "__CHANNEL__:1", "page": page}),
+        )
+        .unwrap_err();
+        assert_eq!(err, json!({"kind": "projectScope"}));
+        assert_eq!(f.app.state::<IpcState>().connection_count("project-p1"), 0);
+    }
+
     /// 프로젝트 창은 자기 프로젝트로 연결한다(Host Router 가 고른다). 다른 프로젝트로는 연결하지 못하고, Host Router 가 모르는
     /// 프로젝트는 라우팅 오류다.
     #[test]

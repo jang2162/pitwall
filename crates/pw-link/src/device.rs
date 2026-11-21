@@ -11,7 +11,6 @@
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD};
@@ -271,12 +270,15 @@ impl DeviceKeyStore for KeychainKeyStore {
     }
 }
 
-/// 메모리 저장소(시험 — 사람의 키체인을 건드리지 않는다).
+/// 메모리 저장소(시험 전용 — 사람의 키체인을 건드리지 않는다). 프로세스가 새로 뜰 때마다 새 키라 제품에 쓰면 재시작마다 페어링이
+/// 풀린다 — 그래서 `cfg(test)` 로만 둔다.
+#[cfg(test)]
 #[derive(Default)]
-pub struct MemoryKeyStore {
-    seed: Mutex<Option<Zeroizing<[u8; 32]>>>,
+pub(crate) struct MemoryKeyStore {
+    seed: std::sync::Mutex<Option<Zeroizing<[u8; 32]>>>,
 }
 
+#[cfg(test)]
 impl DeviceKeyStore for MemoryKeyStore {
     fn load_or_create(&self) -> Result<DeviceKey, KeyStoreError> {
         let mut seed = self

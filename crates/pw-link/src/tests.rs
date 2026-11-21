@@ -169,6 +169,8 @@ struct Setup {
     desktop_versions: Versions,
     /// Desktop 이 기대하는 머신 id 를 다른 키의 것으로.
     expect_other_machine: bool,
+    /// 메모리 전송의 한 방향 버퍼(상대가 읽지 않으면 쓰기가 여기서 멈춘다).
+    buffer: usize,
 }
 
 impl Default for Setup {
@@ -178,6 +180,7 @@ impl Default for Setup {
             paired: Some(Role::Owner),
             desktop_versions: versions(),
             expect_other_machine: false,
+            buffer: 64 * 1024,
         }
     }
 }
@@ -197,7 +200,7 @@ fn fixture(setup: Setup) -> Fixture {
             .into_iter()
             .collect(),
     );
-    let (transport, acceptor) = transport::memory(64 * 1024);
+    let (transport, acceptor) = transport::memory(setup.buffer);
     let transport = Arc::new(transport);
     let parts = RelayParts {
         identity: Arc::new(RelayIdentity {
@@ -647,6 +650,14 @@ async fn a_frame_over_the_body_limit_breaks_the_link() {
 
 /// 손으로 짠 Relay 와 붙을 Desktop(그 Relay 키를 기대한다).
 fn desktop_for(transport: transport::MemoryTransport, relay_key: &DeviceKey) -> RemoteHost {
+    desktop_with(transport, relay_key, LinkLimits::default())
+}
+
+fn desktop_with(
+    transport: transport::MemoryTransport,
+    relay_key: &DeviceKey,
+    limits: LinkLimits,
+) -> RemoteHost {
     RemoteHost::new(
         "mini",
         Arc::new(transport),
@@ -655,7 +666,7 @@ fn desktop_for(transport: transport::MemoryTransport, relay_key: &DeviceKey) -> 
             versions: versions(),
         }),
         Expect::Machine(relay_key.id()),
-        LinkLimits::default(),
+        limits,
     )
 }
 
@@ -716,9 +727,10 @@ async fn wait_state(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn only_the_channel_with_a_full_send_buffer_closes() {
+    // 창에 응답 둘(32 KiB 씩)이 들어가고, 나머지 여덟(256 KiB)이 보내기 버퍼(128 KiB)를 넘는다.
     let limits = LinkLimits {
-        window: 4096,
-        send_buffer: 64 * 1024,
+        window: 64 * 1024 + 1024,
+        send_buffer: 128 * 1024,
         ..LinkLimits::default()
     };
     let fx = fixture(Setup {
@@ -773,7 +785,7 @@ async fn only_the_channel_with_a_full_send_buffer_closes() {
 async fn a_peer_that_overruns_the_window_loses_the_channel() {
     let (transport, acceptor) = transport::memory(1024 * 1024);
     let relay_key = Arc::new(DeviceKey::generate().unwrap());
-    let remote = desktop_for(transport, &relay_key);
+    let remote = desktop_with(transport, &relay_key, small_window());
     let key = Arc::clone(&relay_key);
     let relay = tokio::spawn(async move {
         let mut framed = raw_relay(&acceptor, &key, Role::Owner).await;
@@ -785,28 +797,27 @@ async fn a_peer_that_overruns_the_window_loses_the_channel() {
                     .write(&LinkFrame::new(frame.channel, Kind::Accepted, Value::Null))
                     .await
                     .unwrap();
-                // 창(기본 1 MiB)을 넘도록 credit 없이 보낸다.
+                // 창(512 KiB)을 넘도록 credit 없이 보낸다.
                 let big = "y".repeat(256 * 1024);
                 for i in 0..8 {
                     let body = json!({"jsonrpc": "2.0", "method": "flood", "params": {"i": i, "big": big}});
-                    framed
+                    // Desktop 이 링크를 먼저 닫았으면 쓰기가 실패한다 — 그때까지 받은 틀을 본다.
+                    if framed
                         .write
                         .write(&LinkFrame::new(frame.channel, Kind::Msg, body))
                         .await
-                        .unwrap();
+                        .is_err()
+                    {
+                        break;
+                    }
                 }
                 return read_until_closed(&mut framed).await;
             }
         }
     });
     remote.attach().await.unwrap();
-    let mut client = Client::open(&remote, Caller::new(Role::Owner)).await;
-    let mut got = 0;
-    // 창을 넘긴 메시지부터는 받지 않고 채널이 끝난다.
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    while client.next().await.is_some() {
-        got += 1;
-    }
+    // 창을 넘긴 메시지부터는 받지 않고 채널이 끝난다(열기가 돌아오기 전에 닫혔으면 열기가 실패한다).
+    let got = delivered_before_close(&remote).await;
     assert!(got < 8, "received {got} messages past the window");
     remote.detach();
     let seen = relay.await.unwrap();
@@ -1414,4 +1425,334 @@ async fn the_desktop_does_not_sign_for_a_relay_of_another_version() {
         seen.iter().all(|f| f.kind != Kind::Auth),
         "the desktop signed: {seen:?}"
     );
+}
+
+// ── 리뷰 반영(m7-03-review-report.md) ──────────────────────────────────────────────────────────────────────────────
+
+fn small_window() -> LinkLimits {
+    LinkLimits {
+        window: 512 * 1024,
+        ..LinkLimits::default()
+    }
+}
+
+/// 남은 창이 넉넉해도 창보다 큰 틀 하나는 받지 않는다 — 받는 쪽 메모리는 채널마다 창을 넘지 않는다(권고 2).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_frame_larger_than_the_window_closes_the_channel() {
+    let (transport, acceptor) = transport::memory(1024 * 1024);
+    let relay_key = Arc::new(DeviceKey::generate().unwrap());
+    let remote = desktop_with(transport, &relay_key, small_window());
+    let key = Arc::clone(&relay_key);
+    let relay = tokio::spawn(async move {
+        let mut framed = raw_relay(&acceptor, &key, Role::Owner).await;
+        loop {
+            let frame = raw_read(&mut framed).await.unwrap();
+            if frame.kind == Kind::Connect {
+                framed
+                    .write
+                    .write(&LinkFrame::new(frame.channel, Kind::Accepted, Value::Null))
+                    .await
+                    .unwrap();
+                let big = "y".repeat(600 * 1024);
+                let body = json!({"jsonrpc": "2.0", "method": "flood", "params": {"big": big}});
+                framed
+                    .write
+                    .write(&LinkFrame::new(frame.channel, Kind::Msg, body))
+                    .await
+                    .unwrap();
+                return read_until_closed(&mut framed).await;
+            }
+        }
+    });
+    remote.attach().await.unwrap();
+    assert_eq!(
+        delivered_before_close(&remote).await,
+        0,
+        "a frame larger than the window was delivered"
+    );
+    remote.detach();
+    let seen = relay.await.unwrap();
+    assert!(
+        seen.iter()
+            .any(|f| f.kind == Kind::Close && f.body["reason"] == "flow control violated"),
+        "{seen:?}"
+    );
+}
+
+/// 보내는 쪽도 창보다 큰 메시지는 내보내지 않고 그 채널을 닫는다(받는 쪽이 받지 않을 틀).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_message_larger_than_the_window_is_not_sent() {
+    let fx = fixture(Setup {
+        limits: LinkLimits {
+            window: 16 * 1024,
+            ..LinkLimits::default()
+        },
+        ..Setup::default()
+    });
+    fx.attach().await;
+    let mut big = Client::open(&*fx.remote, Caller::new(Role::Owner)).await;
+    let mut other = Client::open(&*fx.remote, Caller::new(Role::Owner)).await;
+    big.request(1, "test.big", json!({"bytes": 64 * 1024}));
+    assert_eq!(big.next().await, None);
+    assert_eq!(
+        other
+            .call(2, "test.echo", json!({"text": "ok"}))
+            .await
+            .unwrap()["text"],
+        "ok"
+    );
+}
+
+/// 읽지 않으며 `ping` 을 몰아 보내는 상대는 끊긴다 — 이쪽 `pong` 큐가 끝없이 자라지 않는다(고쳐야 1).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_peer_that_floods_pings_without_reading_is_dropped() {
+    let fx = fixture(Setup::default());
+    let mut framed = raw_desktop(&fx).await;
+    let ping = LinkFrame::control(Kind::Ping, Value::Null);
+    for _ in 0..300_000 {
+        if framed.write.write(&ping).await.is_err() {
+            break;
+        }
+        if !fx.serve_results.lock().unwrap().is_empty() {
+            break;
+        }
+    }
+    eventually("the relay kept a link whose peer does not read", || {
+        fx.serve_results
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| matches!(r, Ok(CloseReason::Protocol(why)) if why.contains("does not read")))
+    })
+    .await;
+}
+
+/// 나쁜 채널 열기(거절 답)를 몰아 보내도 같다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_peer_that_floods_refused_connects_without_reading_is_dropped() {
+    let fx = fixture(Setup::default());
+    let mut framed = raw_desktop(&fx).await;
+    let bad = LinkFrame::new(
+        1,
+        Kind::Connect,
+        json!({"role": "owner", "scope": {"kind": "file", "path": "/x"}}),
+    );
+    for _ in 0..100_000 {
+        if framed.write.write(&bad).await.is_err() || !fx.serve_results.lock().unwrap().is_empty() {
+            break;
+        }
+    }
+    eventually("the relay kept a link whose peer does not read", || {
+        fx.serve_results
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| matches!(r, Ok(CloseReason::Protocol(why)) if why.contains("does not read")))
+    })
+    .await;
+    assert_eq!(fx.relay_host.connects(), 0);
+}
+
+/// 답 전에 버려진 채널 열기(부른 쪽의 시한)는 채널을 닫는다 — 늦게 온 `accepted` 는 버리고 링크는 산다(고쳐야 2).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_open_abandoned_before_its_answer_closes_the_channel() {
+    let (transport, acceptor) = transport::memory(64 * 1024);
+    let relay_key = Arc::new(DeviceKey::generate().unwrap());
+    let remote = desktop_for(transport, &relay_key);
+    let key = Arc::clone(&relay_key);
+    let relay = tokio::spawn(async move {
+        let mut framed = raw_relay(&acceptor, &key, Role::Owner).await;
+        let mut seen = Vec::new();
+        loop {
+            let Some(frame) = raw_read(&mut framed).await else {
+                return seen;
+            };
+            match (frame.kind, frame.channel) {
+                (Kind::Connect, 1) => {
+                    // 늦은 답.
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    framed
+                        .write
+                        .write(&LinkFrame::new(1, Kind::Accepted, Value::Null))
+                        .await
+                        .unwrap();
+                }
+                (Kind::Connect, ch) => framed
+                    .write
+                    .write(&LinkFrame::new(ch, Kind::Accepted, Value::Null))
+                    .await
+                    .unwrap(),
+                (Kind::Ping | Kind::Pong, _) => {}
+                _ => seen.push(frame),
+            }
+        }
+    });
+    remote.attach().await.unwrap();
+    let late = tokio::time::timeout(
+        Duration::from_millis(100),
+        remote.connect(Caller::new(Role::Owner)),
+    )
+    .await;
+    assert!(late.is_err(), "the slow open finished");
+    let link = remote.link().unwrap();
+    eventually("the abandoned channel stayed open", || {
+        link.channel_count() == 0
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    // 늦은 답 뒤에도 링크는 살아 새 채널을 연다.
+    let _second = remote.connect(Caller::new(Role::Owner)).await.unwrap();
+    assert_eq!(link.channel_count(), 1);
+    assert!(matches!(
+        *remote.state().borrow(),
+        LinkState::Connected { .. }
+    ));
+    remote.detach();
+    let seen = relay.await.unwrap();
+    assert!(
+        seen.iter().any(|f| f.kind == Kind::Close && f.channel == 1),
+        "the relay was not told: {seen:?}"
+    );
+}
+
+/// Relay 의 서명을 손으로 망가뜨리는 꼴.
+#[derive(Clone, Copy, Debug)]
+enum RelaySignature {
+    Absent,
+    /// 기억한 키를 대지만 다른 키로 서명.
+    OtherKey,
+    /// 그 키로 서명했지만 다른 연결의 도전값에.
+    OtherChallenge,
+}
+
+/// 기억한 머신의 공개키를 대도 그 키로 이 연결의 도전값에 서명하지 못한 Relay 에는 Desktop 이 서명하지 않는다(고쳐야 3 — 머신 id
+/// 증명, 계획 리뷰 F1).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_desktop_requires_the_relay_signature_for_the_remembered_key() {
+    for mode in [
+        RelaySignature::Absent,
+        RelaySignature::OtherKey,
+        RelaySignature::OtherChallenge,
+    ] {
+        let (transport, acceptor) = transport::memory(64 * 1024);
+        let relay_key = Arc::new(DeviceKey::generate().unwrap());
+        let remote = desktop_for(transport, &relay_key);
+        let key = Arc::clone(&relay_key);
+        let relay = tokio::spawn(async move {
+            let mut framed = Framed::new(acceptor.accept().await.unwrap());
+            let theirs: Hello =
+                serde_json::from_value(raw_read(&mut framed).await.unwrap().body).unwrap();
+            let challenge = Challenge(random_challenge().unwrap());
+            let text = |desktop_challenge: &Challenge| {
+                transcript(
+                    Signer::Relay,
+                    PROTOCOL,
+                    desktop_challenge,
+                    &challenge,
+                    &theirs.key,
+                    &key.public(),
+                )
+            };
+            let signature = match mode {
+                RelaySignature::Absent => None,
+                RelaySignature::OtherKey => Some(
+                    DeviceKey::generate()
+                        .unwrap()
+                        .sign(&text(&theirs.challenge)),
+                ),
+                RelaySignature::OtherChallenge => Some(key.sign(&text(&Challenge([7; 32])))),
+            };
+            let hello = Hello {
+                versions: versions(),
+                device: key.id(),
+                key: key.public(),
+                challenge,
+                signature,
+            };
+            framed
+                .write
+                .write(&LinkFrame::control(Kind::Hello, json!(hello)))
+                .await
+                .unwrap();
+            read_until_closed(&mut framed).await
+        });
+        assert_eq!(
+            remote.attach().await.unwrap_err(),
+            DialError::BadRelaySignature,
+            "{mode:?}"
+        );
+        let seen = relay.await.unwrap();
+        assert!(
+            seen.iter().all(|f| f.kind != Kind::Auth),
+            "{mode:?}: the desktop signed"
+        );
+    }
+}
+
+/// 틀이 오가는 링크는 시한을 넘겨도 산다 — 받은 틀이 하트비트 시계를 되돌린다(고쳐야 4).
+#[tokio::test(start_paused = true)]
+async fn a_link_that_keeps_talking_outlives_the_deadline() {
+    let fx = fixture(Setup::default());
+    fx.attach().await;
+    let limits = LinkLimits::default();
+    tokio::time::sleep(limits.dead_after * 3).await;
+    assert!(
+        matches!(*fx.remote.state().borrow(), LinkState::Connected { .. }),
+        "{:?}",
+        *fx.remote.state().borrow()
+    );
+    let mut client = Client::open(&*fx.remote, Caller::new(Role::Owner)).await;
+    assert_eq!(
+        client
+            .call(1, "test.echo", json!({"text": "alive"}))
+            .await
+            .unwrap()["text"],
+        "alive"
+    );
+    assert!(fx.serve_results.lock().unwrap().is_empty());
+}
+
+/// role 을 읽은 뒤 링크가 서기 전에 온 해제도 놓치지 않는다(고쳐야 5). 전송 버퍼를 작게 해 Relay 가 role 을 읽고 `welcome` 을 쓰다
+/// 멈춘 사이에 해제한다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unpairing_between_the_role_check_and_the_link_still_drops_it() {
+    let fx = fixture(Setup {
+        buffer: 16,
+        ..Setup::default()
+    });
+    let mut framed = Framed::new(fx.transport_open().await);
+    let mine = raw_hello(&mut framed, &fx.desktop_key, versions()).await;
+    let theirs: Hello = serde_json::from_value(raw_read(&mut framed).await.unwrap().body).unwrap();
+    let auth = desktop_signature(&fx.desktop_key, &mine, &theirs, &theirs.key);
+    framed
+        .write
+        .write(&LinkFrame::control(Kind::Auth, json!(auth)))
+        .await
+        .unwrap();
+    // Relay 는 role 을 읽고 `welcome` 을 쓰다 전송 버퍼에서 멈춰 있다.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(fx.pairings.remove(&fx.desktop_key.public()));
+    assert_eq!(raw_read(&mut framed).await.unwrap().kind, Kind::Welcome);
+    eventually("the link outlived the unpairing", || {
+        fx.serve_results.lock().unwrap().first() == Some(&Ok(CloseReason::PairingChanged))
+    })
+    .await;
+    drop(framed);
+}
+
+/// 채널 하나를 열어 닫힐 때까지 받은 메시지 수. 열기가 돌아오기 전에 닫혔으면 0.
+async fn delivered_before_close(remote: &RemoteHost) -> usize {
+    let Ok(conn) = remote.connect(Caller::new(Role::Owner)).await else {
+        return 0;
+    };
+    let mut client = Client {
+        conn,
+        backlog: Vec::new(),
+    };
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let mut got = 0;
+    while client.next().await.is_some() {
+        got += 1;
+    }
+    got
 }
