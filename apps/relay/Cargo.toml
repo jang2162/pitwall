@@ -1,0 +1,37 @@
+[package]
+name = "pitwall-relay"
+description = "Pitwall relay: the daemon on a remote machine and the stdio proxy an SSH session runs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "pitwall-relay"
+path = "src/main.rs"
+
+[dependencies]
+pw-core = { path = "../../crates/pw-core" }
+pw-diag = { path = "../../crates/pw-diag" }
+pw-link = { path = "../../crates/pw-link" }
+pw-relay = { path = "../../crates/pw-relay" }
+# 끝날 때 터미널 · 실행의 프로세스 트리를 끝낸다(`pw_run::shutdown`).
+pw-run = { path = "../../crates/pw-run" }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "signal", "time"] }
+tokio-util = { workspace = true }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = [
+  "fmt",
+  "registry",
+  "std",
+] }
+
+[dev-dependencies]
+# 시험이 띄운 데몬을 끝낸다(SIGTERM).
+libc = "0.2.190"
+# 생성물(`TOPICS` · schema)이 Relay 바이너리가 링크한 선언을 덮는지 본다(M7-02 리뷰 권고 3).
+pw-rpc = { path = "../../crates/pw-rpc" }
+pw-host = { path = "../../crates/pw-host" }
+tempfile = "3.27.0"
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "net", "time"] }

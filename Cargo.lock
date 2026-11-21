@@ -5149,6 +5149,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "pitwall-relay"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "pw-core",
+ "pw-diag",
+ "pw-host",
+ "pw-link",
+ "pw-relay",
+ "pw-rpc",
+ "pw-run",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "pkg-config"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5943,6 +5963,34 @@ dependencies = [
  "serde",
  "serde_json",
  "url",
+]
+
+[[package]]
+name = "pw-relay"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "pw-core",
+ "pw-db",
+ "pw-db-types",
+ "pw-diag",
+ "pw-ext",
+ "pw-fs",
+ "pw-git",
+ "pw-host",
+ "pw-i18n",
+ "pw-link",
+ "pw-mcp",
+ "pw-open-with",
+ "pw-rpc",
+ "semver",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "toml_edit 0.25.17+spec-1.1.0",
+ "tracing",
 ]
 
 [[package]]

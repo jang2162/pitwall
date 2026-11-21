@@ -1,0 +1,57 @@
+[package]
+name = "pw-relay"
+description = "Pitwall relay daemon: the per-user socket on a remote machine, relay.toml, idle exit and the stdio proxy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# 소켓 자격(uid) · 잠금 파일(flock) · 새 세션(setsid).
+libc = "0.2.190"
+pw-core = { path = "../pw-core" }
+pw-db = { path = "../pw-db" }
+pw-db-types = { path = "../pw-db-types" }
+pw-diag = { path = "../pw-diag" }
+pw-ext = { path = "../pw-ext" }
+pw-fs = { path = "../pw-fs" }
+pw-git = { path = "../pw-git" }
+# Relay 의 Host 는 Desktop 과 같은 조립이다(18-m7-plan M7-01 · M7-04).
+pw-host = { path = "../pw-host" }
+pw-i18n = { path = "../pw-i18n" }
+pw-link = { path = "../pw-link" }
+# 소켓 규칙(폴더 0700 · 상대 uid)은 MCP 로컬 소켓과 같다(`pw_mcp::socket`).
+pw-mcp = { path = "../pw-mcp" }
+pw-open-with = { path = "../pw-open-with" }
+pw-rpc = { path = "../pw-rpc" }
+semver = "1.0.28"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = [
+  "rt",
+  "rt-multi-thread",
+  "sync",
+  "macros",
+  "time",
+  "io-util",
+  "io-std",
+  "net",
+  "signal",
+  "process",
+] }
+tokio-util = { workspace = true }
+toml_edit = "0.25.17"
+tracing = "0.1.44"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { workspace = true, features = [
+  "rt",
+  "rt-multi-thread",
+  "sync",
+  "macros",
+  "time",
+  "io-util",
+  "net",
+  "test-util",
+] }
