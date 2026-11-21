@@ -16,6 +16,9 @@ gix-index = { version = "0.58.0", features = ["sha1"] }
 # `gix-index` 와 같은 gitoxide 릴리스(pw-git 의 `gix` 가 요구하는 판)다 — 함께 올린다.
 gix-object = { version = "0.66.1", features = ["sha1"] }
 gix-odb = { version = "0.87.0", features = ["sha1"] }
+# 묶음의 「같은 저장소」 판정(`registry::bundle::history` — 18-m7-plan M7-10): 공용 git 폴더 · 루트 커밋 · 얕은 경계 · 커밋이
+# 있는가. pw-git 의 `gix` 와 같은 판이고 기능은 그 부분집합이다 — 새로 받는 크레이트가 없다. 함께 올린다.
+gix = { version = "0.90.0", default-features = false, features = ["sha1"] }
 notify = "8.2.0"
 pw-rpc = { path = "../pw-rpc" }
 # 프로젝트 레지스트리 `$DATA/state.db`. bundled: 시스템 SQLite 버전 차이(OS · 배포판)에 기대지 않는다.

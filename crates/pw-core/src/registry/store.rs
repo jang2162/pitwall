@@ -36,7 +36,7 @@ thread_local! {
 }
 
 /// 버전 `i` → `i + 1`. 길이가 곧 이 앱이 아는 최신 버전이다.
-pub const MIGRATIONS: &[Migration] = &[v0_to_v1, v1_to_v2, v2_to_v3, v3_to_v4];
+pub const MIGRATIONS: &[Migration] = &[v0_to_v1, v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5];
 
 /// 레지스트리가 읽는 질의. 읽기 전용으로 연 새 스키마 파일을 이 질의로 읽을 수 있는지 열 때 미리 본다(`prepare` 가 열 이름을 검사한다).
 pub const SELECT_PROJECTS: &str =
@@ -119,6 +119,37 @@ fn v3_to_v4(tx: &Transaction<'_>) -> rusqlite::Result<()> {
              seen_by    TEXT NOT NULL,
              seen_at    INTEGER NOT NULL,
              PRIMARY KEY (project_id, config_key)
+         );",
+    )
+}
+
+/// v5: 묶음(18-m7-plan M7-10 — 메인 판정 M7-P7, [`super::bundle`]). 행은 멤버가 둘 이상이거나 원격 멤버만 있는 묶음에만 있다 —
+/// 로컬 프로젝트 하나뿐인 묶음은 행이 없다(암묵 묶음, id = 그 프로젝트 id). 그래서 이 단계는 옛 행을 옮기지 않는다.
+/// - `bundles.tags` 는 JSON 배열 글이다(정렬 · 중복 없음). 묶음 id 는 `b-` 로 시작해 프로젝트 id(16자리 hex)와 겹치지 않는다.
+/// - `bundle_members` 의 `machine` 은 머신 id 글이다 — 이 머신이면 `local`, 다른 머신이면 M7-P6 이 정한 꼴(이 표는 꼴을 보지
+///   않는다). `project_id` 는 그 머신 레지스트리의 프로젝트 id 라 외래 키가 없다(로컬 멤버는 프로젝트를 지울 때 함께 지운다).
+///   `(bundle_id, machine)` 이 열쇠라 한 묶음에 한 머신의 멤버는 하나다(M7-P20), `(machine, project_id)` 가 유일해 멤버 프로젝트는
+///   묶음 하나에만 든다(08 「묶음」).
+/// - `last_target_*` 는 이 멤버를 원본으로 한 마지막 보내기 대상 체크아웃(머신, 워크트리 꼭대기 — 없으면 메인 체크아웃)이다.
+fn v4_to_v5(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    tx.execute_batch(
+        "CREATE TABLE bundles (
+             id         TEXT PRIMARY KEY,
+             name       TEXT NOT NULL,
+             favorite   INTEGER NOT NULL DEFAULT 0 CHECK (favorite IN (0, 1)),
+             tags       TEXT NOT NULL DEFAULT '[]',
+             created_at INTEGER NOT NULL,
+             opened_at  INTEGER
+         );
+         CREATE TABLE bundle_members (
+             bundle_id            TEXT NOT NULL REFERENCES bundles(id) ON DELETE CASCADE,
+             machine              TEXT NOT NULL,
+             project_id           TEXT NOT NULL,
+             position             INTEGER NOT NULL,
+             last_target_machine  TEXT,
+             last_target_worktree TEXT,
+             PRIMARY KEY (bundle_id, machine),
+             UNIQUE (machine, project_id)
          );",
     )
 }

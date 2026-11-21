@@ -5370,6 +5370,7 @@ name = "pw-core"
 version = "0.0.0"
 dependencies = [
  "etcetera",
+ "gix",
  "gix-index",
  "gix-object",
  "gix-odb",

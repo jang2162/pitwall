@@ -8,6 +8,7 @@
 //! - [`info`]: 프로젝트 요약(빌드 파일 · 언어 · 설정 파일 이름).
 //! - [`state`]: 프로젝트 창의 상태 파일(`$DATA/projects/<id>/state.json`).
 //! - [`trust`]: 프로젝트 신뢰(F1-7 최소판) — 런타임 제공자 게이트가 읽는다.
+//! - [`bundle`]: 묶음(M7-10) — 여러 머신의 체크아웃을 프로젝트 하나로 보이는 Desktop 의 기록.
 //! - [`methods`]: 레지스트리 RPC(`project.*`).
 //! - [`tool`]: `project_register` 툴 메서드(승인을 지나 등록한다 — 신뢰는 주지 않는다).
 //!
@@ -15,6 +16,7 @@
 //! 변경은 [`Scope::Host`] 의 [`TOPIC_CHANGED`] 이벤트로 나간다.
 
 pub mod agent;
+pub mod bundle;
 pub mod candidates;
 pub mod consoles;
 pub mod db_marks;
@@ -50,7 +52,9 @@ pub use trust::{ProjectTrust, TrustState};
 /// 레지스트리가 바뀌면 [`Scope::Host`] 로 나가는 이벤트. payload 는 [`ProjectChanged`].
 pub const TOPIC_CHANGED: &str = "project.changed";
 pw_rpc::rpc_event!(TOPIC_CHANGED, roles: [Owner, Mobile, Readonly]);
-/// 지금 레지스트리가 다루는 Host. 원격 프로젝트(F9)는 이 값이 relay 의 id 가 된다.
+/// 이 레지스트리를 가진 머신. 레지스트리의 프로젝트는 모두 그 머신의 것이라 `projects.host` 는 언제나 이 값이다 — 다른 머신의
+/// 프로젝트는 그 머신의 레지스트리에 있고(18-m7-plan 메인 판정 M7-P18), Desktop 은 그것을 묶음의 멤버 `(머신 id, 프로젝트 id)`
+/// 로만 안다([`bundle`]). 묶음 멤버의 머신 id 로는 [`bundle::LOCAL_MACHINE`] 이 같은 값이다.
 pub const LOCAL_HOST: &str = "local";
 
 /// Where the project settings live (design D9).
@@ -105,7 +109,7 @@ pub struct Project {
     /// Id also used in `$DATA/projects/<id>/` (16 hex digits).
     pub id: String,
     pub name: String,
-    /// The Host the project lives on. Always `local` for now.
+    /// The machine the project lives on: always `local` — a registry only holds its own machine's projects.
     pub host: String,
     /// The first one is the main root. There is only one for now; multi-root (F1-6) will allow several.
     pub roots: Vec<String>,
@@ -224,6 +228,9 @@ pub enum ChangeKind {
     Opened,
     /// 신뢰가 바뀌었다([`trust`]). `project_id` 는 신뢰를 가진 프로젝트다 — 그 신뢰를 따르는 워크트리 프로젝트의 것도 바뀌었다.
     Trust,
+    /// 묶음이 바뀌었다([`bundle`] — 멤버를 더하거나 빼거나 마지막 보내기 대상을 적었다). `project_id` 는 묶음 id 다(그 사이에
+    /// 행이 생기거나 사라졌으면 바뀐 쪽의 id — 목록을 다시 읽는다).
+    Bundle,
 }
 
 /// [`TOPIC_CHANGED`] 의 payload.
@@ -296,6 +303,8 @@ struct Inner {
     timings: Timings,
     bus: EventBus,
     db: Mutex<Option<store::Opened>>,
+    /// 묶음 판정이 다른 머신에 묻는 길([`bundle::add`]). 링크가 생기는 행이 넣는다 — 없으면 다른 머신은 닿지 않는다.
+    remote: std::sync::RwLock<Option<Arc<dyn bundle::add::RemoteMachines>>>,
     /// [`store::open`] 또는 읽기 전용 프로세스의 [`store::open_read_only`].
     open: fn(&Path, Duration) -> store::Opened,
 }
@@ -352,9 +361,27 @@ impl Registry {
                 timings,
                 bus,
                 db: Mutex::new(None),
+                remote: std::sync::RwLock::new(None),
                 open: store::open,
             }),
         }
+    }
+
+    /// 묶음 판정이 다른 머신에 묻는 길을 넣는다(복제본이 모두 같은 것을 본다).
+    pub fn set_remote_machines(&self, machines: Arc<dyn bundle::add::RemoteMachines>) {
+        *self
+            .inner
+            .remote
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(machines);
+    }
+
+    pub(crate) fn remote_machines(&self) -> Option<Arc<dyn bundle::add::RemoteMachines>> {
+        self.inner
+            .remote
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     pub fn file(&self) -> &Path {
@@ -509,7 +536,8 @@ impl Registry {
             if removed == 0 {
                 return Err(RegistryError::NotFound(id.to_owned()));
             }
-            Ok(())
+            // 묶음의 로컬 멤버였으면 묶음에서도 뺀다(멤버 행에는 외래 키가 없다 — 머신마다 레지스트리가 따로다).
+            bundle::forget_local_project(tx, id)
         })?;
         self.publish(ChangeKind::Deleted, id);
         Ok(())
@@ -677,7 +705,7 @@ fn absolute(path: &Path) -> Result<PathBuf, RegistryError> {
     })
 }
 
-fn existing_dir(path: &Path) -> Result<PathBuf, RegistryError> {
+pub(crate) fn existing_dir(path: &Path) -> Result<PathBuf, RegistryError> {
     let root = absolute(path)?;
     if !fs::metadata(&root).is_ok_and(|m| m.is_dir()) {
         return Err(RegistryError::InvalidPath {

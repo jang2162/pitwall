@@ -4,6 +4,27 @@
 /** 선언된 unary 메서드: 이름 → 입력 · result 타입. */
 export type UnaryMethods = {
 	/**
+	 * 「체크아웃 추가」: 머신과 그 머신의 경로를 묶음의 멤버로 더한다. 판정에서 멈추면 `rejected` · `largeDirectory` 를
+	 * 돌려준다(오류가 아니다). 그 머신에 닿지 못하면 not found 오류(`data.reason = "machineUnavailable"`).
+	 */
+	"bundle.addMember": { params: AddBundleMemberParams; result: AddMemberOutcome };
+	/**
+	 * 묶음 하나. 없으면 invalid params 오류.
+	 */
+	"bundle.get": { params: BundleIdParams; result: ProjectBundle };
+	/**
+	 * 묶음 전부(이름순): 행 있는 묶음과, 어느 묶음에도 들지 않은 로컬 프로젝트의 암묵 묶음(id = 프로젝트 id).
+	 */
+	"bundle.list": { params: null; result: ProjectBundle[] };
+	/**
+	 * 멤버를 묶음에서만 뺀다. 그 머신의 프로젝트 등록과 파일은 그대로 둔다.
+	 */
+	"bundle.removeMember": { params: RemoveBundleMemberParams; result: null };
+	/**
+	 * 원본 멤버마다 마지막 보내기 대상을 적는다(보내기 화면이 다음에 먼저 고른다).
+	 */
+	"bundle.setLastSendTarget": { params: SetLastSendTargetParams; result: ProjectBundle };
+	/**
 	 * 「Orca 에서 Pitwall 열기」 안내의 검사(04 F8-6): 설치 위치의 심링크가 이 앱을 가리키는가, 로그인 셸 PATH 로 찾은
 	 * `pitwall` 이 이 앱인가. 처음이면 로그인 셸을 기다린다(최대 5초 남짓).
 	 */
@@ -1516,6 +1537,11 @@ export type MethodName = keyof UnaryMethods | keyof StreamMethods;
 
 /** 메서드 메타데이터(권한 등급 · role · 문서). */
 export const METHODS: Record<MethodName, MethodMeta> = {
+	"bundle.addMember": {"name":"bundle.addMember","kind":"unary","tier":"write","roles":["owner"],"params":"AddBundleMemberParams","output":"AddMemberOutcome","doc":" 「체크아웃 추가」: 머신과 그 머신의 경로를 묶음의 멤버로 더한다. 판정에서 멈추면 `rejected` · `largeDirectory` 를\n 돌려준다(오류가 아니다). 그 머신에 닿지 못하면 not found 오류(`data.reason = \"machineUnavailable\"`).\n","mcp":null,"fileScope":false},
+	"bundle.get": {"name":"bundle.get","kind":"unary","tier":"read","roles":["owner"],"params":"BundleIdParams","output":"ProjectBundle","doc":" 묶음 하나. 없으면 invalid params 오류.\n","mcp":null,"fileScope":false},
+	"bundle.list": {"name":"bundle.list","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"Vec<ProjectBundle>","doc":" 묶음 전부(이름순): 행 있는 묶음과, 어느 묶음에도 들지 않은 로컬 프로젝트의 암묵 묶음(id = 프로젝트 id).\n","mcp":null,"fileScope":false},
+	"bundle.removeMember": {"name":"bundle.removeMember","kind":"unary","tier":"write","roles":["owner"],"params":"RemoveBundleMemberParams","output":"()","doc":" 멤버를 묶음에서만 뺀다. 그 머신의 프로젝트 등록과 파일은 그대로 둔다.\n","mcp":null,"fileScope":false},
+	"bundle.setLastSendTarget": {"name":"bundle.setLastSendTarget","kind":"unary","tier":"write","roles":["owner"],"params":"SetLastSendTargetParams","output":"ProjectBundle","doc":" 원본 멤버마다 마지막 보내기 대상을 적는다(보내기 화면이 다음에 먼저 고른다).\n","mcp":null,"fileScope":false},
 	"cli.status": {"name":"cli.status","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"CliStatus","doc":" 「Orca 에서 Pitwall 열기」 안내의 검사(04 F8-6): 설치 위치의 심링크가 이 앱을 가리키는가, 로그인 셸 PATH 로 찾은\n `pitwall` 이 이 앱인가. 처음이면 로그인 셸을 기다린다(최대 5초 남짓).\n","mcp":null,"fileScope":false},
 	"config.get": {"name":"config.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ConfigGetParams","output":"ConfigView","doc":" 병합된 설정 스냅숏. `projectId` 가 없으면 전역(`$CONFIG`), 있으면 그 프로젝트(설정을 붙여 연 프로젝트만).\n","mcp":null,"fileScope":true},
 	"config.paths": {"name":"config.paths","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ConfigPathsInfo","doc":" 해석된 `$CONFIG`/`$DATA`/`$STATE`/`$CACHE`. 설정 화면의 「설정 폴더 열기」 · 「경로 복사」 가 쓴다.\n","mcp":null,"fileScope":false},
@@ -1869,6 +1895,43 @@ export type ActiveWorktree = {
 	root: string,
 };
 
+export type AddBundleMemberParams = {
+	/**  더할 묶음(암묵 묶음이면 로컬 프로젝트 id). `null` 이면 원격만인 새 묶음을 만든다(원격 호스트 시트). */
+	bundleId?: string | null,
+	/**  머신 id(이 머신이면 `local`). */
+	machine: string,
+	/**  그 머신의 절대 경로. */
+	path: string,
+	/**  파일이 많은 원격 경로의 경고(`largeDirectory`)를 사람이 넘겼다. */
+	allowLarge?: boolean | null,
+};
+
+/**  「체크아웃 추가」 의 결과. */
+export type AddMemberOutcome = 
+/**  더했다. 묶음은 더한 뒤의 것(암묵 묶음이었으면 새 id). */
+{ kind: "added"; bundle: ProjectBundle } | 
+/**  더하지 않았다. */
+{ kind: "rejected"; reason: AddMemberRejection } | 
+/**  원격 경로의 파일이 많다(F9-10). 하위 폴더를 고르게 하고, 사람이 그대로 가겠다면 `allowLarge` 로 다시 부른다. */
+{ kind: "largeDirectory"; atLeast: number };
+
+/**  더하지 않은 까닭. 화면이 사람의 말로 옮긴다. */
+export type AddMemberRejection = 
+/**  그 경로가 git 저장소가 아니다. */
+{ kind: "notGitRepository" } | 
+/**  그 체크아웃에 아직 커밋이 없다 — 공통 커밋을 볼 수 없다. */
+{ kind: "noCommits" } | 
+/**  그 머신에 이 묶음의 멤버가 이미 있고, 그 경로는 따로 된 클론이다(한 머신의 멤버는 하나 — 워크트리로 만들어 쓴다). */
+{ kind: "secondClone"; memberProjectId: string } | 
+/**  그 경로는 그 머신 멤버의 체크아웃(워크트리)이다 — 이미 묶음에 나온다. */
+{ kind: "alreadyCheckout"; memberProjectId: string } | 
+/**  그 머신의 멤버와 공통 커밋이 없다. */
+{ kind: "noCommonCommit"; machine: string } | 
+/**  얕은 클론이라 깊이 안에서 공통 커밋을 찾지 못했다 — 같은 저장소인지 모른다. */
+{ kind: "shallowUnknown"; machine: string } | 
+/**  그 머신 프로젝트가 멤버 둘 이상인 다른 묶음에 있다. */
+{ kind: "inOtherBundle"; bundleId: string };
+
 /**  저장 이름의 끝으로 정한 형식. */
 export type ArchiveFormat = "tarGz" | "tarXz" | "tar" | "zip" | 
 /**  `.gz` 단일 파일. */
@@ -2041,6 +2104,10 @@ export type BreakpointState = {
 	message: string | null,
 };
 
+export type BundleIdParams = {
+	id: string,
+};
+
 export type CancelRequestParams = {
 	id: Id,
 };
@@ -2076,6 +2143,14 @@ export type Capabilities = {
 	multipleDatabases: boolean,
 	/**  이 드라이버가 받는 `sslmode` 값. 연결 편집 다이얼로그(M3-14)는 이 밖의 값을 고를 수 없게 한다. 파일 DB 는 빈 목록. */
 	sslModes: SslMode[],
+};
+
+/**  체크아웃 식별자: 머신과 그 머신의 워크트리. `worktree` 가 없으면 멤버 프로젝트의 메인 체크아웃이다. */
+export type CheckoutRef = {
+	/**  머신 id(이 머신이면 `local`). */
+	machine: string,
+	/**  워크트리 꼭대기의 절대 경로(그 머신의 경로). 없으면 메인 체크아웃. */
+	worktree?: string | null,
 };
 
 /**  설치 위치의 상태. */
@@ -8666,7 +8741,7 @@ export type Project = {
 	/**  Id also used in `$DATA/projects/<id>/` (16 hex digits). */
 	id: string,
 	name: string,
-	/**  The Host the project lives on. Always `local` for now. */
+	/**  The machine the project lives on: always `local` — a registry only holds its own machine's projects. */
 	host: string,
 	/**  The first one is the main root. There is only one for now; multi-root (F1-6) will allow several. */
 	roots: string[],
@@ -8680,6 +8755,32 @@ export type Project = {
 	createdAt: number,
 	/**  Last time the project was opened (Unix milliseconds). `null` if it was never opened. */
 	openedAt: number | null,
+};
+
+/**  묶음 하나. 사람에게는 「프로젝트」 한 줄이다. */
+export type ProjectBundle = {
+	/**  묶음 id. 암묵 묶음이면 그 로컬 프로젝트 id, 행 있는 묶음이면 `b-` 로 시작한다. 창 label 은 `project-<id>`. */
+	id: string,
+	name: string,
+	favorite: boolean,
+	/**  정렬 · 중복 없음. */
+	tags: string[],
+	/**  마지막으로 연 시각(Unix 밀리초). 연 적 없으면 `null`. */
+	openedAt: number | null,
+	/**  행 없는 암묵 묶음(로컬 프로젝트 하나)인가. */
+	implicit: boolean,
+	/**  더한 순서. 암묵 묶음은 로컬 멤버 하나. */
+	members: ProjectBundleMember[],
+};
+
+/**  묶음의 멤버: 한 머신의 프로젝트 하나. */
+export type ProjectBundleMember = {
+	/**  머신 id(이 머신이면 `local`). */
+	machine: string,
+	/**  그 머신 레지스트리의 프로젝트 id. 머신 사이에 유일하지 않다. */
+	projectId: string,
+	/**  이 멤버를 원본으로 한 마지막 보내기 대상. 없으면 `null`. */
+	lastTarget: CheckoutRef | null,
 };
 
 export type ProjectIdParams = {
@@ -8818,6 +8919,11 @@ export type Remember =
 { kind: "key"; key: string } | 
 /**  기억하지 않는다 — 셋째 버튼이 없다(`open_with_upsert`). */
 { kind: "never" };
+
+export type RemoveBundleMemberParams = {
+	bundleId: string,
+	machine: string,
+};
 
 export type RepoHead = 
 /**  On a branch. `name` is the short name (`main`, `feat/x`), `commit` the hash of its tip commit. */
@@ -10005,6 +10111,14 @@ export type ServerInfo = {
 export type SetLanguageParams = {
 	/**  `"system"` 또는 등록된 언어 태그. */
 	language: string,
+};
+
+export type SetLastSendTargetParams = {
+	bundleId: string,
+	/**  원본 멤버의 머신 id. */
+	source: string,
+	/**  `null` 이면 지운다. */
+	target?: CheckoutRef | null,
 };
 
 export type SetProjectStateParams = {
