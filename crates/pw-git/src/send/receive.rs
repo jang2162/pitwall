@@ -4,18 +4,24 @@
 //! 파일과 `uploadId` 를 만들고, `chunk` 가 offset 을 맞춰 잇고(빠지거나 겹친 청크는 거절 — 응답을 받아야 다음 청크를 보내므로 한
 //! 번에 청크 하나다), `finish` 가 받기를 쓰기 실행기로 돌린다. `uploadId` 는 연 연결(`SessionId`)과 부른 role 에 묶인다 — 다른
 //! 연결이 쓰면 없는 id 와 같은 오류다. 연결이 닫히면 그 받기를 버린다(임시 파일을 지운다).
+//!
+//! 상한(리뷰 F1 — 받는 쪽은 원본을 믿지 않는다): 연결 하나가 동시에 여는 받기는 [`MAX_UPLOADS_PER_CONNECTION`], Host 전체는
+//! [`MAX_UPLOADS`] 개이고, 열린 받기가 알린 크기의 합은 [`MAX_OPEN_BYTES`] 다 — 넘으면 `begin` 을 거절한다. 마지막 `begin` · `chunk`
+//! 뒤 [`IDLE_TIMEOUT`] 동안 아무것도 오지 않은 받기는 버린다(연결이 살아 있어도).
 
 use std::collections::HashMap;
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use base64::Engine as _;
 use gix::ObjectId;
 use gix::bstr::ByteSlice;
 use pw_core::registry::state::scope_may_write;
 use pw_rpc::{ConnectionScope, Role, RpcError, SessionId, code as rpc_code};
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use super::prepare::too_large;
@@ -24,6 +30,15 @@ use super::{
     incoming_ref, machine_id, own_prefix, ref_target, send_git, state_dir,
 };
 use crate::write::{Changes, GitWrite, WriteCtx, WriteError, WriteRequest};
+
+/// 연결 하나가 동시에 열 수 있는 받기 수.
+pub const MAX_UPLOADS_PER_CONNECTION: usize = 2;
+/// Host 전체에서 동시에 열린 받기 수.
+pub const MAX_UPLOADS: usize = 8;
+/// 열린 받기들이 알린 크기의 합(바이트, 2 GiB) — 끝나지 않은 받기가 잡을 수 있는 디스크의 상한.
+pub const MAX_OPEN_BYTES: u64 = 2 << 30;
+/// 마지막 `begin` · `chunk` 뒤 이만큼 아무것도 오지 않으면 받기를 버린다.
+pub const IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// 받기를 연 쪽: 연결과 role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -87,23 +102,50 @@ struct Upload {
     written: u64,
     path: PathBuf,
     file: Option<std::fs::File>,
+    /// 연 연결이 닫히면 취소된다.
+    closed: CancellationToken,
+    /// 받기가 끝나면(버려지면) 취소된다 — 감시 태스크가 함께 끝난다.
+    ended: CancellationToken,
+    /// 마지막 `begin` · `chunk`.
+    touched: Instant,
 }
 
 impl Drop for Upload {
     fn drop(&mut self) {
+        self.ended.cancel();
         self.file.take();
         let _ = std::fs::remove_file(&self.path);
     }
 }
 
 /// 열린 받기들.
-#[derive(Default)]
 pub struct Uploads {
     open: Mutex<HashMap<u64, Upload>>,
     next: AtomicU64,
+    idle: Duration,
+    /// 시험: `chunk` 가 바이트를 쓴 뒤 받기를 다시 넣기 직전에 부른다(블로킹 스레드).
+    #[cfg(all(test, unix))]
+    pub(crate) before_reinsert: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+}
+
+impl Default for Uploads {
+    fn default() -> Self {
+        Self::with_idle(IDLE_TIMEOUT)
+    }
 }
 
 impl Uploads {
+    /// 유휴 시간을 정해 만든다(시험).
+    pub fn with_idle(idle: Duration) -> Self {
+        Self {
+            open: Mutex::default(),
+            next: AtomicU64::new(0),
+            idle,
+            #[cfg(all(test, unix))]
+            before_reinsert: Mutex::new(None),
+        }
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<u64, Upload>> {
         self.open.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -163,30 +205,89 @@ impl Uploads {
             .then_some(())
             .ok_or(WriteError::NoRepository)?;
         }
+        self.room(owner, begin.size)?;
         let dir = state_dir(write.git())?;
         let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
-        let path = dir.join(format!("{}u{id}.bundle", own_prefix()));
+        // 파일 이름은 프로세스 안에서 유일하게 — 한 프로세스의 여러 Host(`Uploads` 여럿)가 같은 `$STATE` 를 쓸 수 있다.
+        static FILE: AtomicU64 = AtomicU64::new(0);
+        let n = FILE.fetch_add(1, Ordering::Relaxed) + 1;
+        let path = dir.join(format!("{}u{n}.bundle", own_prefix()));
         let file = create_private_file(&path)
             .map_err(|e| WriteError::Internal(format!("cannot create {}: {e}", path.display())))?;
-        self.lock().insert(
-            id,
-            Upload {
-                owner,
-                begin,
-                commit,
-                written: 0,
-                path,
-                file: Some(file),
-            },
-        );
+        let ended = CancellationToken::new();
+        let upload = Upload {
+            owner,
+            begin,
+            commit,
+            written: 0,
+            path,
+            file: Some(file),
+            closed: closed.clone(),
+            ended: ended.clone(),
+            touched: Instant::now(),
+        };
+        {
+            // 셈과 넣기를 한 잠금에서 — 나란히 온 `begin` 이 함께 상한을 넘지 않게. 넘으면 방금 만든 파일을 버린다.
+            let mut open = self.lock();
+            if let Err(e) = Self::fits(&open, owner, upload.begin.size) {
+                drop(open);
+                drop(upload);
+                return Err(e);
+            }
+            open.insert(id, upload);
+        }
         let uploads = Arc::clone(self);
-        tokio::spawn(async move {
-            closed.cancelled().await;
-            uploads
-                .lock()
-                .retain(|key, upload| !(*key == id && upload.owner == owner));
-        });
+        tokio::spawn(async move { uploads.watch(id, closed, ended).await });
         Ok(id)
+    }
+
+    /// 상한 안인가(잠금 없이 먼저 거르는 것 — 넣을 때 [`Self::fits`] 로 다시 본다).
+    fn room(&self, owner: UploadOwner, size: u64) -> Result<(), WriteError> {
+        Self::fits(&self.lock(), owner, size)
+    }
+
+    fn fits(open: &HashMap<u64, Upload>, owner: UploadOwner, size: u64) -> Result<(), WriteError> {
+        let mine = open.values().filter(|u| u.owner == owner).count();
+        let bytes: u64 = open.values().map(|u| u.begin.size).sum();
+        let reason = if mine >= MAX_UPLOADS_PER_CONNECTION {
+            format!("this connection already has {MAX_UPLOADS_PER_CONNECTION} uploads open")
+        } else if open.len() >= MAX_UPLOADS {
+            format!("{MAX_UPLOADS} uploads are already open")
+        } else if bytes + size > MAX_OPEN_BYTES {
+            format!("open uploads would exceed {MAX_OPEN_BYTES} bytes")
+        } else {
+            return Ok(());
+        };
+        Err(WriteError::Rpc(RpcError::new(rpc_code::CONFLICT, reason)))
+    }
+
+    /// 받기 하나를 지켜본다: 연결이 닫히면 버리고, 유휴 시간이 지나면 버리고, 받기가 끝나면 그친다. `chunk` 가 꺼내 쓰는 동안은
+    /// 맵에 없으므로 유휴로 버리지 않는다(다시 넣을 때 `chunk` 가 연결 닫힘을 본다).
+    async fn watch(&self, id: u64, closed: CancellationToken, ended: CancellationToken) {
+        let mut wait = self.idle;
+        loop {
+            tokio::select! {
+                () = ended.cancelled() => return,
+                () = closed.cancelled() => {
+                    let gone = self.lock().remove(&id);
+                    drop(gone);
+                    return;
+                }
+                () = tokio::time::sleep(wait) => {
+                    let mut open = self.lock();
+                    wait = match open.get(&id) {
+                        Some(upload) if upload.touched.elapsed() >= self.idle => {
+                            let gone = open.remove(&id);
+                            drop(open);
+                            drop(gone);
+                            return;
+                        }
+                        Some(upload) => self.idle.saturating_sub(upload.touched.elapsed()),
+                        None => self.idle,
+                    };
+                }
+            }
+        }
     }
 
     /// 청크 하나(`data` 는 base64). `offset` 은 지금까지 받은 바이트 수여야 한다. 받은 바이트 수를 돌려준다. 실패하면 그 받기를
@@ -222,16 +323,34 @@ impl Uploads {
                 upload.begin.size
             )));
         }
-        let upload = tokio::task::spawn_blocking(move || {
+        #[cfg(all(test, unix))]
+        let hook = self
+            .before_reinsert
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        let mut upload = tokio::task::spawn_blocking(move || {
             let file = upload.file.as_mut().expect("an open upload has its file");
             file.write_all(&bytes)
                 .map_err(|e| WriteError::Internal(format!("cannot write the bundle: {e}")))?;
             upload.written = end;
+            #[cfg(all(test, unix))]
+            if let Some(hook) = hook {
+                hook();
+            }
             Ok::<_, WriteError>(upload)
         })
         .await
         .map_err(|e| WriteError::Internal(e.to_string()))??;
-        self.lock().insert(id, upload);
+        upload.touched = Instant::now();
+        let mut open = self.lock();
+        // 꺼내 쓰는 사이 연결이 닫혔으면 감시 태스크가 이미 지나갔다 — 다시 넣으면 주인 없는 받기가 남는다(리뷰 F2).
+        if upload.closed.is_cancelled() {
+            drop(open);
+            drop(upload);
+            return Err(WriteError::Cancelled);
+        }
+        open.insert(id, upload);
         Ok(end)
     }
 
@@ -319,7 +438,10 @@ async fn fetch(
     };
     ctx.run(
         send_git(ctx.git())
+            // 받는 쪽은 원본을 믿지 않는다 — 받은 객체를 fsck 로 본다(`.git` 이름의 트리 항목 · 깨진 객체 등을 거절).
             .args([
+                "-c",
+                "transfer.fsckObjects=true",
                 "fetch",
                 "--no-recurse-submodules",
                 "--no-tags",

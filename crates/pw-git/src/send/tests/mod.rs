@@ -5,6 +5,7 @@
 mod bundle;
 mod flow;
 mod guard;
+mod hardening;
 mod receive;
 mod stop;
 mod wire;

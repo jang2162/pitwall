@@ -71,13 +71,20 @@ async fn only_the_named_commit_and_its_ancestors_go() {
 /// 대상이 이미 그 커밋을 가졌어도(다른 ref 로) 묶음은 비지 않는다 — 다시 보내도 된다.
 #[tokio::test]
 async fn a_commit_the_target_already_has_still_makes_a_bundle() {
-    let pair = Pair::new(true);
+    let src = TestRepo::with_commit();
+    src.commit_file("big.txt", &noise(400_000, 11), "big");
+    let dst = clone_of(&src);
+    let pair = Pair::of(src, dst, true);
+    let parent = pair.src.repo.head();
     let commit = pair.src.repo.commit_file("a.txt", "a\n", "a");
     pair.send("main", &commit).await;
 
     let prepared = pair.prepare("main", &commit).await;
 
+    // 그 커밋 하나만 든다 — 부모(대상이 가진 것)를 뺐다. 빼지 않으면 큰 파일이 든 전체 이력이 묶인다.
     assert!(prepared.size > 0);
+    assert!(prepared.size < 20_000, "{}", prepared.size);
+    assert_eq!(prepared.excluded, vec![parent]);
     pair.receive_file(&prepared.file, "main", &commit)
         .await
         .unwrap();

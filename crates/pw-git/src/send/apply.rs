@@ -10,6 +10,11 @@ use serde::{Deserialize, Serialize};
 use super::{branch_name, commit_id, contains, incoming_ref, machine_id, ref_target, send_git};
 use crate::write::{GitWrite, WriteCtx, WriteError, WriteRequest};
 
+/// 시험: 비체크아웃 갈래의 `update-ref` 바로 앞에 한 번 부른다(그 사이 바깥 git 이 브랜치를 움직이는 경쟁).
+#[cfg(all(test, unix))]
+pub(crate) static BEFORE_UPDATE_REF: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>> =
+    std::sync::Mutex::new(None);
+
 /// 맞추기가 받는 것.
 #[derive(Debug, Clone)]
 pub struct Apply {
@@ -217,6 +222,16 @@ async fn reconcile(
     }
     let moved = previous != Some(commit);
     if moved {
+        #[cfg(all(test, unix))]
+        {
+            let hook = BEFORE_UPDATE_REF
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
         let old = previous.unwrap_or(seen.null).to_string();
         let output = ctx
             .output(send_git(ctx.git()).args([

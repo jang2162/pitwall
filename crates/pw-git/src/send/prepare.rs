@@ -168,6 +168,12 @@ fn read_source(
         .map_err(WriteError::Rpc)?
         .ok_or(WriteError::NoRepository)?;
     let repo = &opened.repo;
+    if repo.object_hash() != gix::hash::Kind::Sha1 {
+        return Err(WriteError::Rpc(pw_rpc::RpcError::invalid_params(format!(
+            "sending commits from a {} repository is not supported (only sha1)",
+            repo.object_hash()
+        ))));
+    }
     let parents: Vec<ObjectId> = match repo
         .find_object(commit)
         .ok()

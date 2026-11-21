@@ -88,12 +88,19 @@ pub(crate) fn branch_name(value: &str) -> Result<(), WriteError> {
     crate::branch::branch_name("branch", value)
 }
 
-/// 커밋 id: 저장소의 해시 길이의 소문자 16진수(줄임 · 리비전 표기를 받지 않는다).
+/// 커밋 id: 소문자 16진수 40자(sha1 — 줄임 · 리비전 표기를 받지 않는다). 64자(sha256)는 지원하지 않는다고 거절한다 — 사본
+/// 저장소와 gix 가 sha1 만 다룬다(리뷰 권고 4).
 pub(crate) fn commit_id(what: &str, value: &str) -> Result<ObjectId, WriteError> {
-    let full = matches!(value.len(), 40 | 64)
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    let hex = |v: &str| {
+        v.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    };
+    if value.len() == 64 && hex(value) {
+        return Err(invalid(format!(
+            "{what} `{value}` is a sha256 id; sending commits between sha256 repositories is not supported (only sha1)"
+        )));
+    }
+    let full = value.len() == 40 && hex(value);
     if !full {
         return Err(invalid(format!(
             "{what} `{value}` must be a full lowercase commit id"
