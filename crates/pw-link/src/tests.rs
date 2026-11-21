@@ -1369,3 +1369,49 @@ async fn unpairing_or_changing_the_role_drops_the_link_and_its_subscriptions() {
         .await;
     }
 }
+
+/// 판이 다른데도 거절하지 않고 `hello` 로 답하는 Relay(옛 판 · 털린 Relay)에는 Desktop 이 서명하지 않고 끊는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_desktop_does_not_sign_for_a_relay_of_another_version() {
+    let (transport, acceptor) = transport::memory(64 * 1024);
+    let relay_key = Arc::new(DeviceKey::generate().unwrap());
+    let remote = desktop_for(transport, &relay_key);
+    let state = remote.state();
+    let key = Arc::clone(&relay_key);
+    let relay = tokio::spawn(async move {
+        let mut framed = Framed::new(acceptor.accept().await.unwrap());
+        let theirs: Hello =
+            serde_json::from_value(raw_read(&mut framed).await.unwrap().body).unwrap();
+        let challenge = Challenge(random_challenge().unwrap());
+        let text = transcript(
+            Signer::Relay,
+            PROTOCOL,
+            &theirs.challenge,
+            &challenge,
+            &theirs.key,
+            &key.public(),
+        );
+        let hello = Hello {
+            versions: Versions::new("9.9.9", "stable"),
+            device: key.id(),
+            key: key.public(),
+            challenge,
+            signature: Some(key.sign(&text)),
+        };
+        framed
+            .write
+            .write(&LinkFrame::control(Kind::Hello, json!(hello)))
+            .await
+            .unwrap();
+        read_until_closed(&mut framed).await
+    });
+    let err = remote.attach().await.unwrap_err();
+    assert!(matches!(err, DialError::VersionMismatch { .. }), "{err:?}");
+    assert!(matches!(*state.borrow(), LinkState::VersionMismatch { .. }));
+    remote.detach();
+    let seen = relay.await.unwrap();
+    assert!(
+        seen.iter().all(|f| f.kind != Kind::Auth),
+        "the desktop signed: {seen:?}"
+    );
+}
