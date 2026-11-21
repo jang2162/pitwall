@@ -7,6 +7,7 @@ mod flow;
 mod guard;
 mod receive;
 mod stop;
+mod wire;
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
