@@ -227,14 +227,15 @@ fn a_second_daemon_of_the_same_version_leaves_the_first_in_place() {
             .success()
             .then(|| serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap())
     };
-    let first = relay(root, &["daemon"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let first_pid = first.id() as i32;
-    let _first = Daemon(first_pid);
+    let first = Spawned(
+        relay(root, &["daemon"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let first_pid = first.0.id() as i32;
     let deadline = Instant::now() + Duration::from_secs(10);
     let answer = loop {
         if let Some(answer) = status() {
@@ -246,16 +247,17 @@ fn a_second_daemon_of_the_same_version_leaves_the_first_in_place() {
     assert_eq!(answer["pid"], serde_json::json!(first_pid));
     let inode = std::fs::metadata(&socket).unwrap().ino();
 
-    let mut second = relay(root, &["daemon"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let _second = Daemon(second.id() as i32);
+    let mut second = Spawned(
+        relay(root, &["daemon"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
     let deadline = Instant::now() + Duration::from_secs(10);
     let exit = loop {
-        if let Some(exit) = second.try_wait().unwrap() {
+        if let Some(exit) = second.0.try_wait().unwrap() {
             break exit;
         }
         assert!(Instant::now() < deadline, "the second daemon kept running");
@@ -268,4 +270,17 @@ fn a_second_daemon_of_the_same_version_leaves_the_first_in_place() {
         "the socket was replaced"
     );
     assert_eq!(status().unwrap()["pid"], serde_json::json!(first_pid));
+}
+
+/// 시험이 직접 띄운 데몬 — 버리면 끝내고(SIGTERM) 기다린다.
+struct Spawned(Child);
+
+impl Drop for Spawned {
+    fn drop(&mut self) {
+        if self.0.try_wait().ok().flatten().is_none() {
+            // SAFETY: 이 시험이 띄운 자식의 pid 다.
+            unsafe { libc::kill(self.0.id() as i32, libc::SIGTERM) };
+        }
+        let _ = self.0.wait();
+    }
 }

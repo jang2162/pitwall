@@ -278,8 +278,7 @@ mod tests {
         let _listener = UnixListener::bind(&path).unwrap();
         let err = connect(&path, uid)
             .await
-            .err()
-            .expect("connected through an open folder");
+            .expect_err("connected through an open folder");
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
 
         std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o700)).unwrap();
