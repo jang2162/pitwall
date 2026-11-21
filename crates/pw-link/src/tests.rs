@@ -1479,27 +1479,152 @@ async fn a_frame_larger_than_the_window_closes_the_channel() {
     );
 }
 
-/// 보내는 쪽도 창보다 큰 메시지는 내보내지 않고 그 채널을 닫는다(받는 쪽이 받지 않을 틀).
+fn budget_limits() -> LinkLimits {
+    // 채널 셋이면 예산이 찬다(기본 창 64 KiB × 3 = 192 KiB).
+    LinkLimits {
+        window: 64 * 1024,
+        receive_budget: 192 * 1024,
+        ..LinkLimits::default()
+    }
+}
+
+/// 링크 받기 예산: 채널을 여럿 열어 받는 쪽이 내줄 창의 합이 예산을 넘으려 하면 새 채널을 열지 않는다. 채널을 닫으면 그 창이
+/// 예산으로 돌아온다(메인 판정 — 털린 Relay 가 채널 수 × 창만큼 Desktop 메모리를 채우지 못하게).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_message_larger_than_the_window_is_not_sent() {
+async fn channels_cannot_open_past_the_link_receive_budget() {
     let fx = fixture(Setup {
-        limits: LinkLimits {
-            window: 16 * 1024,
-            ..LinkLimits::default()
-        },
+        limits: budget_limits(),
+        ..Setup::default()
+    });
+    fx.attach().await;
+    let first = Client::open(&*fx.remote, Caller::new(Role::Owner)).await;
+    let _second = Client::open(&*fx.remote, Caller::new(Role::Owner)).await;
+    let _third = Client::open(&*fx.remote, Caller::new(Role::Owner)).await;
+    let refused = fx.remote.connect(Caller::new(Role::Owner)).await;
+    assert!(
+        matches!(&refused, Err(HostError::Refused(why)) if why.contains("budget")),
+        "{:?}",
+        refused.err()
+    );
+    drop(first);
+    let link = fx.remote.link().unwrap();
+    eventually("the closed channel kept its window", || {
+        link.channel_count() == 2
+    })
+    .await;
+    let mut opened = None;
+    for _ in 0..100 {
+        if let Ok(conn) = fx.remote.connect(Caller::new(Role::Owner)).await {
+            opened = Some(conn);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        opened.is_some(),
+        "the freed window did not return to the budget"
+    );
+}
+
+/// 기본 창보다 큰 메시지는 예산에서 창을 빌려 보낸다. 다 꺼내면 빌린 창은 예산으로 돌아가 다른 채널을 열 수 있다. 예산에 남지 않은
+/// 만큼 큰 메시지는 그 채널만 닫는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_message_larger_than_the_window_borrows_from_the_link_budget() {
+    let fx = fixture(Setup {
+        limits: budget_limits(),
         ..Setup::default()
     });
     fx.attach().await;
     let mut big = Client::open(&*fx.remote, Caller::new(Role::Owner)).await;
     let mut other = Client::open(&*fx.remote, Caller::new(Role::Owner)).await;
-    big.request(1, "test.big", json!({"bytes": 64 * 1024}));
+    // 64 KiB 남은 예산 안에서 빌린다(기본 창 64 KiB + 빌린 것 < 128 KiB).
+    let reply = big
+        .call(1, "test.big", json!({"bytes": 100 * 1024}))
+        .await
+        .unwrap();
+    assert_eq!(reply.as_str().unwrap().len(), 100 * 1024);
+    // 빌린 창이 예산으로 돌아왔다 — 셋째 채널이 열린다.
+    let mut third = None;
+    for _ in 0..100 {
+        if let Ok(conn) = fx.remote.connect(Caller::new(Role::Owner)).await {
+            third = Some(conn);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let third = third.expect("the lent window did not return to the budget");
+    drop(third);
+    // 예산이 모자란 메시지는 그 채널만 닫는다.
+    big.request(2, "test.big", json!({"bytes": 200 * 1024}));
     assert_eq!(big.next().await, None);
     assert_eq!(
         other
-            .call(2, "test.echo", json!({"text": "ok"}))
+            .call(3, "test.echo", json!({"text": "ok"}))
             .await
             .unwrap()["text"],
         "ok"
+    );
+}
+
+/// 털린 상대가 `want` 를 몰아 보내도 빌려 주는 창의 합은 예산을 넘지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wants_cannot_lend_past_the_link_receive_budget() {
+    let (transport, acceptor) = transport::memory(1024 * 1024);
+    let relay_key = Arc::new(DeviceKey::generate().unwrap());
+    let remote = desktop_with(transport, &relay_key, budget_limits());
+    let key = Arc::clone(&relay_key);
+    let relay = tokio::spawn(async move {
+        let mut framed = raw_relay(&acceptor, &key, Role::Owner).await;
+        let mut credited = 0u64;
+        let mut seen = Vec::new();
+        let mut opened = Vec::new();
+        loop {
+            let Some(frame) = raw_read(&mut framed).await else {
+                return (credited, seen);
+            };
+            match frame.kind {
+                Kind::Connect => {
+                    framed
+                        .write
+                        .write(&LinkFrame::new(frame.channel, Kind::Accepted, Value::Null))
+                        .await
+                        .unwrap();
+                    opened.push(frame.channel);
+                    if opened.len() < 2 {
+                        continue;
+                    }
+                    // 두 채널 모두 기본 창보다 큰 틀(100 KiB)을 청한다 — 하나에 36 KiB 를 빌려 주면 둘째는 예산을 넘는다.
+                    for &ch in &opened {
+                        let want = json!({"bytes": 100 * 1024});
+                        framed
+                            .write
+                            .write(&LinkFrame::new(ch, Kind::Want, want))
+                            .await
+                            .unwrap();
+                    }
+                }
+                Kind::Credit => credited += frame.body["bytes"].as_u64().unwrap(),
+                Kind::Ping | Kind::Pong => {}
+                _ => seen.push(frame),
+            }
+        }
+    });
+    remote.attach().await.unwrap();
+    let _a = remote.connect(Caller::new(Role::Owner)).await;
+    let _b = remote.connect(Caller::new(Role::Owner)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    remote.detach();
+    let (credited, seen) = relay.await.unwrap();
+    // 기본 창 둘(128 KiB)에 빌려 준 것을 더해도 예산(192 KiB) 안이다 — 첫 청만 받고 둘째는 그 채널을 닫는다.
+    assert!(credited > 0, "nothing was lent");
+    assert!(
+        credited <= 192 * 1024 - 2 * 64 * 1024,
+        "lent {credited} bytes past the budget"
+    );
+    assert!(
+        seen.iter()
+            .any(|f| f.kind == Kind::Close && f.body["reason"] == "receive budget exhausted"),
+        "{seen:?}"
     );
 }
 

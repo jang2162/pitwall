@@ -44,6 +44,9 @@ pub enum Kind {
     Close,
     /// 받는 쪽이 보내는 쪽에 더 보내도 되는 바이트를 준다(흐름 제어).
     Credit,
+    /// 보내는 쪽이 채널 창보다 큰 틀 하나를 보내려고 창을 더 청한다(본문은 그 틀의 바이트). 받는 쪽은 링크 받기 예산에서 빌려 주거나
+    /// 그 채널을 닫는다.
+    Want,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -21,7 +21,7 @@ use crate::frame::{CONTROL, Framed, Kind, LinkFrame};
 use crate::handshake::{
     Auth, Challenge, Hello, PROTOCOL, Reject, RejectReason, Signer, Versions, Welcome, transcript,
 };
-use crate::mux::{CloseReason, LinkLimits, Mux};
+use crate::mux::{AddError, CloseReason, LinkLimits, Mux};
 use crate::pairing::PairingTable;
 use crate::transport::LinkStream;
 
@@ -174,8 +174,13 @@ fn connect(mux: &Mux, frame: LinkFrame, proven: &Proven, host: &Arc<dyn Host>) {
             return;
         }
     };
-    let Some((mut rx, cancel)) = mux.add_channel(channel) else {
-        return;
+    let (mut rx, cancel) = match mux.add_channel(channel) {
+        Ok(opened) => opened,
+        Err(AddError::Budget) => {
+            refuse(mux, channel, "the link's receive budget is exhausted");
+            return;
+        }
+        Err(AddError::Closed | AddError::Exists) => return,
     };
     let (mux, host) = (mux.clone(), Arc::clone(host));
     tokio::spawn(async move {

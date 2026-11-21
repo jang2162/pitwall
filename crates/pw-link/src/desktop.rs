@@ -17,7 +17,7 @@ use crate::frame::{CONTROL, Framed, Kind, LinkFrame};
 use crate::handshake::{
     Auth, Challenge, Hello, PROTOCOL, Reject, RejectReason, Signer, Versions, Welcome, transcript,
 };
-use crate::mux::{ChannelRx, CloseReason, LinkLimits, Mux};
+use crate::mux::{AddError, ChannelRx, CloseReason, LinkLimits, Mux};
 use crate::transport::{LinkStream, Transport};
 
 /// 이 Desktop 의 기기 키와 판.
@@ -385,7 +385,13 @@ impl DesktopLink {
                 "no more channel ids on this link".to_owned(),
             ));
         }
-        let (rx, cancel) = self.mux.add_channel(channel).ok_or_else(disconnected)?;
+        let (rx, cancel) = self.mux.add_channel(channel).map_err(|e| match e {
+            AddError::Closed => disconnected(),
+            AddError::Exists => HostError::Refused("channel id in use".to_owned()),
+            AddError::Budget => {
+                HostError::Refused("the link's receive budget is exhausted".to_owned())
+            }
+        })?;
         let (tx, answer) = oneshot::channel();
         self.pending
             .lock()
