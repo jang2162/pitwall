@@ -696,6 +696,61 @@ async fn the_frame_limit_stays_small_until_the_desktop_is_proven() {
     }
 }
 
+/// Desktop 도 Relay 를 증명하기 전에는 작은 틀만 받는다 — 서명까지 맞는 `hello` 라도 `HANDSHAKE_MAX_FRAME` 을 넘으면 붙지 않는다
+/// (M7-04 리뷰 권고 2 — E5).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_desktop_reads_the_relay_hello_under_the_handshake_limit() {
+    let (transport, acceptor) = transport::memory(1024 * 1024);
+    let relay_key = Arc::new(DeviceKey::generate().unwrap());
+    let remote = desktop_for(transport, &relay_key);
+    let key = Arc::clone(&relay_key);
+    let relay = tokio::spawn(async move {
+        let mut framed = Framed::new(acceptor.accept().await.unwrap());
+        let theirs: Hello =
+            serde_json::from_value(raw_read(&mut framed).await.unwrap().body).unwrap();
+        let challenge = Challenge(random_challenge().unwrap());
+        let text = transcript(
+            Signer::Relay,
+            PROTOCOL,
+            &theirs.challenge,
+            &challenge,
+            &theirs.key,
+            &key.public(),
+        );
+        let mut hello = json!(Hello {
+            versions: versions(),
+            device: key.id(),
+            key: key.public(),
+            challenge,
+            signature: Some(key.sign(&text)),
+        });
+        hello["pad"] = json!("a".repeat(crate::HANDSHAKE_MAX_FRAME));
+        let _ = framed
+            .write
+            .write(&LinkFrame::control(Kind::Hello, hello))
+            .await;
+        // 붙었다면 auth 가 온다 — 그러면 welcome 으로 답해 붙게 둔다.
+        if let Some(frame) = raw_read(&mut framed).await
+            && frame.kind == Kind::Auth
+        {
+            let _ = framed
+                .write
+                .write(&LinkFrame::control(
+                    Kind::Welcome,
+                    json!(Welcome { role: Role::Owner }),
+                ))
+                .await;
+        }
+        read_until_closed(&mut framed).await;
+    });
+    match remote.attach().await {
+        Err(DialError::Protocol(why)) => assert!(why.contains("larger than"), "{why}"),
+        other => panic!("attached through an oversized relay hello: {other:?}"),
+    }
+    remote.detach();
+    relay.await.unwrap();
+}
+
 /// 손으로 짠 Relay 와 붙을 Desktop(그 Relay 키를 기대한다).
 fn desktop_for(transport: transport::MemoryTransport, relay_key: &DeviceKey) -> RemoteHost {
     desktop_with(transport, relay_key, LinkLimits::default())
