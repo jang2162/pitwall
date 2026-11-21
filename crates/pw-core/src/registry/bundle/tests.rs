@@ -785,7 +785,11 @@ async fn renaming_a_machine_moves_its_members_and_send_targets() {
         )
         .await,
     );
-    assert!(f.desktop.rename_bundle_machine(MINI, PC).is_err());
+    // 표의 열쇠도 막지만(DB 오류) 사람이 읽을 까닭으로 거절한다.
+    assert!(matches!(
+        f.desktop.rename_bundle_machine(MINI, PC),
+        Err(RegistryError::InvalidPath { .. })
+    ));
     assert_eq!(f.desktop.bundle(&bundle.id).unwrap(), with_pc);
     assert!(
         f.desktop
@@ -801,7 +805,7 @@ async fn renaming_a_machine_moves_its_members_and_send_targets() {
     const NEW: &str = "SHA256:mini-new";
     assert_eq!(
         f.desktop.rename_bundle_machine(MINI, NEW).unwrap(),
-        [bundle.id.clone()]
+        std::slice::from_ref(&bundle.id)
     );
     let moved = f.desktop.bundle(&bundle.id).unwrap();
     assert_eq!(moved.member(NEW).unwrap().project_id, remote);
