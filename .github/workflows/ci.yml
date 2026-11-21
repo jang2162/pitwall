@@ -283,6 +283,48 @@ jobs:
         if: ${{ !cancelled() }}
         run: mise run test-db -- --ci ssh_tunnel
 
+  # relay-live(18-m7-plan M7-05 ③ ④): Relay 를 Linux x86_64 musl 정적으로 `relay` 프로필 빌드하고(scripts/relay-build.mjs — `file` 이
+  # 정적 링크 · 아키텍처를 보이는지, 크기가 상한(M7-P13 — `pw_release::relay::MAX_BINARY_BYTES`)을 넘지 않는지, 크기는 매 빌드 로그에
+  # 남는다), sshd 를 띄운 alpine 컨테이너에 실제 `ssh` 로 올려 붙는 시험(apps/relay/tests/live.rs — 설치 · RPC 왕복 · 다시 붙기 · 끊김
+  # · 페어링 안 된 기기 · 커밋 보내기)을 돌린다(scripts/relay-live.mjs). 필터가 0개를 고르거나 준비 확인을 뺀 수가 하한
+  # (scripts/relay-live.toml) 아래면 실패한다. 「0개면 실패」 · 하한 · 크기 상한을 지우는 변경은 리뷰에서 거절한다. 병합을 막으려면
+  # 저장소 설정에서 필수 검사로 둔다(사람이 한다).
+  relay-live:
+    name: relay-live
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      MISE_TASK_RUN_AUTO_INSTALL: "false"
+      NEXTEST_PROFILE: ci
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: node rust aqua:nextest-rs/nextest/cargo-nextest
+
+      # rust-toolchain.toml 의 musl 타깃을 깐다(까닭은 check 잡의 같은 단계).
+      - name: Rust toolchain
+        run: env -u RUSTUP_TOOLCHAIN rustup toolchain install --no-self-update
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # C 코드(tree-sitter 문법 · sqlite · ring)를 musl 로 컴파일한다.
+      - name: musl tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools file
+
+      - name: relay build (x86_64 musl)
+        run: mise run relay-build -- --target x86_64-unknown-linux-musl
+
+      - name: relay-live
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "pitwall-relay") | .version')
+          mise run test-relay -- --ci --bin "target/relay-dist/pitwall-relay-$version-linux-x86_64"
+
   # 실 언어 서버 시험(15-m4-plan.md M4-01 틀 · M4-18 이 기본 번들 서버 전부로 넓혔다). 서버마다 단계 하나 — scripts/lsp-live.mjs 가 서버를
   # Pitwall 의 설치기(`cargo run -p pw-tools --example tools_install` — crates/pw-tools/registry.toml 의 고정 판 · 고정 해시)로 받아
   # (`--install`) 그 서버의 live 시험(`live_lsp_<서버>_`)만 돌리고, 필터가 0개를 고르거나 실행 개수가 하한(scripts/lsp-live.toml 의

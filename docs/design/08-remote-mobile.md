@@ -59,7 +59,7 @@
 2. 원격 OS/아키텍처 감지 (`uname -sm`)
 3. `~/.local/share/pitwall/relay/pitwall-relay-{channel}-{version}` 존재 여부 확인 (원격의 `$XDG_DATA_HOME` 존중) — **Desktop 버전과 정확히 일치**해야 함
 4. 없으면 설치:
-   - 기본: Desktop 이 받아(서명 매니페스트로 검증, `$CACHE/relay-dist/`) SSH 로 올린다. 개발 빌드(debug)는 그 빌드 결과를 올린다(18-m7-plan 결정 M7-D5 · 06 D77)
+   - 기본: Desktop 이 받아(서명 매니페스트로 검증, `$CACHE/relay-dist/`) SSH 로 올린다. 개발 빌드(debug)는 그 빌드 결과를 올린다(18-m7-plan 결정 M7-D5 · 06 D77). 릴리스 자산은 `pitwall-relay-<판>-<플랫폼>`(`linux-x86_64` · `linux-aarch64` musl 정적, `macos-universal`)과 `relay-manifest.json`(이름 · sha256 · 크기를 (OS, 아키텍처)마다) · 그 `.sig`(updater 운영 키, 서명에 판이 실린다)다. Desktop 은 앱의 updater 공개키로 서명 · 판을 본 뒤 그 (OS, 아키텍처)의 해시와 같은 바이너리만 올린다(`pw_release::relay` — 18-m7-plan M7-05). 개발 빌드 갈래(`mise run relay-build` 의 `target/relay-dist/`)는 debug 빌드에만 있다
    - 수동: 릴리스 바이너리를 위 경로 · 이름 규칙으로 직접 배치
 5. 상주 서비스 등록(systemd user / launchd) 또는 SSH 세션 기반 데몬으로 기동
 6. 오래된 버전 바이너리 정리 (최근 2개 유지)

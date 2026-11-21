@@ -178,3 +178,70 @@ fn publish_resumes_a_draft_and_refuses_a_published_release() {
     assert!(!published.contains("gh release upload"), "{published}");
     assert!(branch("none)").contains("--draft"));
 }
+
+/// Relay 바이너리(18-m7-plan M7-05)는 공개하는 실행만 아티팩트로 올린다 — dry-run 은 항목 · `file` 결과 · 체크섬(글)만.
+#[test]
+fn relay_binaries_are_uploaded_only_by_publishing_runs() {
+    let body = job("relay");
+    let uploads: Vec<usize> = body
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.contains("actions/upload-artifact"))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(uploads.len(), 2, "{}", text(&body));
+    let mut binary_uploads = 0;
+    for start in uploads {
+        let step = text(&body[start..(start + 6).min(body.len())]);
+        if step.contains("pitwall-relay-") {
+            binary_uploads += 1;
+            assert!(
+                step.contains("if: needs.plan.outputs.binaries == 'true'"),
+                "{step}"
+            );
+            assert!(step.contains("name: release-relay-"), "{step}");
+        } else {
+            assert!(step.contains("name: report-relay-"), "{step}");
+        }
+    }
+    assert_eq!(binary_uploads, 1);
+    // 빌드는 저장소 스크립트(정적 링크 · 크기 상한 판정)를 지나고, 채널을 plan 에서 받아 박는다.
+    let all = text(&body);
+    assert!(all.contains("node scripts/relay-build.mjs"), "{all}");
+    assert!(
+        all.contains("PITWALL_RELEASE_CHANNEL: ${{ needs.plan.outputs.channel }}"),
+        "{all}"
+    );
+    for target in [
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-musl",
+        "universal-apple-darwin",
+    ] {
+        assert!(all.contains(&format!("target: {target}")), "{target}");
+    }
+}
+
+/// Relay 매니페스트는 세 플랫폼이 다 있어야 만들고, 공개 실행은 올릴 바이너리를 다시 해시해 견준다. 서명은 sign-updater 가 같은 운영
+/// 키 · 판 묶기로 하고, publish 가 매니페스트를 Release 에 붙인다.
+#[test]
+fn the_relay_manifest_is_complete_checked_signed_and_published() {
+    let manifest = text(&job("relay-manifest"));
+    assert!(manifest.contains("--complete true"), "{manifest}");
+    assert!(manifest.contains("--check binaries"), "{manifest}");
+    assert!(!manifest.contains("secrets."), "{manifest}");
+    let sign = text(&job("sign-updater"));
+    assert!(
+        sign.contains("needs: [plan, build, relay-manifest]"),
+        "{sign}"
+    );
+    assert!(
+        sign.contains("signer sign --app-version \"$VERSION\" relay/relay-manifest.json"),
+        "{sign}"
+    );
+    assert!(
+        sign.contains("mv relay/relay-manifest.json.sig signatures/"),
+        "{sign}"
+    );
+    let publish = text(&job("publish"));
+    assert!(publish.contains("name: relay-manifest"), "{publish}");
+}

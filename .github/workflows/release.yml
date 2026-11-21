@@ -9,6 +9,12 @@
 #   sign-updater 잡이 산출물을 운영 키로 다시 서명한다. **운영 updater 키 Secret 을 참조하는 잡은 sign-updater 하나뿐이고,
 #   그 잡은 저장소 코드를 checkout 하지도 빌드하지도 않는다** — PR 코드가 도는 runner 에 그 Secret 이 내려가지 않게.
 #   잡 순서: 공개 build → sign-updater → manifest → publish, dry-run build → manifest.
+# - Relay(18-m7-plan M7-05 ①): relay 잡이 Linux x86_64 · aarch64 musl 정적과 macOS 유니버설 바이너리를 `relay` 프로필로 만들고
+#   (scripts/relay-build.mjs — `file` 로 정적 링크 · 아키텍처를 보고, 크기 상한(M7-P13)을 넘으면 실패), relay-manifest 잡이 그
+#   항목(이름 · sha256 · 크기)으로 `relay-manifest.json` 을 만든다. 공개 실행에서는 sign-updater 가 그 매니페스트도 운영 updater 키로
+#   서명하고(`--app-version` — 서명에 판이 실린다) publish 가 바이너리 · 매니페스트 · `.sig` 를 같은 Release 에 붙인다. Desktop 은
+#   그 서명을 앱의 updater 공개키로 검증한 뒤에만 원격에 올린다(`pw_release::relay::verify`). dry-run 은 Relay 바이너리를 올리지
+#   않는다 — 항목 · `file` 결과 · 체크섬과 서명 없는 매니페스트(글)만 남긴다.
 # - preview 는 Linux 에 AppImage 만 낸다(plan 의 linux_bundles — deb · rpm 은 패키지 관리자가 preview 를 stable 보다 높게 본다).
 #
 # dry-run 이 Release · 태그 · 매니페스트를 건드리지 않는 것은 구조로 보장한다:
@@ -33,6 +39,8 @@ on:
       - apps/desktop/src-tauri/tauri.conf.json
       - apps/desktop/src-tauri/src/update.rs
       - crates/pw-release/**
+      - scripts/relay-build.mjs
+      - rust-toolchain.toml
       - Cargo.toml
       - Cargo.lock
   # dry-run: 아무 브랜치(예: 버전을 올린 PR 의 브랜치)로. 이 파일이 main 에 들어간 뒤부터 쓸 수 있다.
@@ -305,13 +313,142 @@ jobs:
           security delete-keychain "$RUNNER_TEMP/pitwall-signing.keychain-db" 2> /dev/null || true
           rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP"/AuthKey_*.p8
 
+  # Relay 바이너리 넷(Linux 둘 · macOS 유니버설 하나가 두 아키텍처). musl 은 같은 아키텍처 runner 에서 musl-gcc 로 C 코드를 컴파일한다.
+  # 서명 · 공증은 하지 않는다 — 원격 macOS 에는 SSH 로 올라가 격리 속성(quarantine)이 붙지 않는다(링커의 ad-hoc 서명만 있다).
+  # 채널은 바이너리에 박힌다(`PITWALL_RELEASE_CHANNEL` — 링크 핸드셰이크가 Desktop 의 채널과 견준다).
+  relay:
+    name: relay (${{ matrix.platform }})
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - platform: linux-aarch64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - platform: macos-universal
+            os: macos-latest
+            target: universal-apple-darwin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: node rust
+
+      - name: Rust toolchain
+        run: |
+          env -u RUSTUP_TOOLCHAIN rustup toolchain install --no-self-update
+          if [ "${{ matrix.platform }}" = macos-universal ]; then
+            rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          fi
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: relay-${{ matrix.platform }}
+
+      - name: musl tools (Linux)
+        if: startsWith(matrix.platform, 'linux-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools file
+
+      - name: Build
+        env:
+          PITWALL_RELEASE_CHANNEL: ${{ needs.plan.outputs.channel }}
+        run: node scripts/relay-build.mjs --target "${{ matrix.target }}" --out dist/relay
+
+      # 항목(매니페스트 잡이 모은다) · `file` 결과 · 체크섬은 글이라 dry-run 도 남긴다.
+      - name: Collect the report
+        run: |
+          mkdir -p report
+          cp dist/relay/entries/*.json report/
+          if command -v sha256sum > /dev/null; then sum=(sha256sum); else sum=(shasum -a 256); fi
+          (cd dist/relay && "${sum[@]}" -- pitwall-relay-*) > "report/relay-SHA256SUMS-${{ matrix.platform }}"
+          (cd dist/relay && file -- pitwall-relay-*) > "report/relay-file-${{ matrix.platform }}.txt"
+          cat report/*
+
+      # 바이너리는 공개하는 실행만 올린다(plan 의 binaries).
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: needs.plan.outputs.binaries == 'true'
+        with:
+          name: release-relay-${{ matrix.platform }}
+          path: dist/relay/pitwall-relay-*
+          if-no-files-found: error
+          retention-days: 3
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: report-relay-${{ matrix.platform }}
+          path: report
+          if-no-files-found: error
+          retention-days: 3
+
+  # Relay 매니페스트(서명 전). 세 플랫폼의 항목이 다 있어야 만든다. 공개 실행은 올릴 바이너리를 다시 해시해 항목과 견준다 — 서명하는
+  # 바이트가 Release 에 붙는 바이트의 해시다. 서명은 sign-updater 가 한다(이 잡에는 키가 없다).
+  relay-manifest:
+    name: relay manifest
+    needs: [plan, relay]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: rust
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-plan
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: report-relay-*
+          path: reports
+          merge-multiple: true
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.plan.outputs.binaries == 'true'
+        with:
+          pattern: release-relay-*
+          path: binaries
+          merge-multiple: true
+
+      - name: Assemble
+        env:
+          BINARIES: ${{ needs.plan.outputs.binaries }}
+        run: |
+          mkdir -p entries
+          cp reports/*.json entries/
+          args=(--entries entries --out relay-manifest.json --complete true)
+          if [ "$BINARIES" = true ]; then
+            args+=(--check binaries)
+          fi
+          cargo run -q -p pw-release -- relay-manifest "${args[@]}"
+          cat relay-manifest.json
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: relay-manifest
+          path: relay-manifest.json
+          if-no-files-found: error
+          retention-days: 3
+
   # 운영 updater 키를 참조하는 유일한 잡. 공개 실행에서만 돌고, 저장소를 checkout 하지 않는다 — 서명 도구(lockfile 과 같은
   # 버전의 Tauri CLI)를 받아 build 잡의 updater 산출물을 서명하는 일만 한다. `--app-version` 이 서명의 trusted comment 에 버전을
   # 넣는다(빌드가 넣는 것과 같은 형식, 앱의 requireSignedVersion 이 읽는다). 내보내는 것은 새 .sig 뿐이다.
   # 도구 버전(node · pnpm · @tauri-apps/cli)은 mise.toml · pnpm-lock.yaml 과 같아야 한다(crates/pw-release 시험이 지킨다).
   sign-updater:
     name: sign updater artifacts
-    needs: [plan, build]
+    needs: [plan, build, relay-manifest]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.plan.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -326,6 +463,11 @@ jobs:
           pattern: release-*
           path: artifacts
           merge-multiple: true
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: relay-manifest
+          path: relay
 
       - name: Sign with the production updater key
         env:
@@ -347,6 +489,11 @@ jobs:
             echo "::error::expected 3 updater artifacts (.app.tar.gz, .msi, .AppImage), signed $count"
             exit 1
           fi
+          # Relay 매니페스트(18-m7-plan M7-05). 같은 키 · 같은 판 묶기 — Desktop 이 서명의 판을 자기 판과 견준다.
+          rm -f relay/relay-manifest.json.sig
+          mise exec node@24.21.0 npm:pnpm@10.33.0 -- \
+            pnpm dlx @tauri-apps/cli@2.12.2 signer sign --app-version "$VERSION" relay/relay-manifest.json > /dev/null
+          mv relay/relay-manifest.json.sig signatures/
           ls -l signatures
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -429,19 +576,25 @@ jobs:
   # plan 의 출력과 아티팩트만 쓴다 — 쓰기 토큰이 있는 runner 에서 저장소 코드가 돌지 않게.
   publish:
     name: publish
-    needs: [plan, manifest]
+    needs: [plan, manifest, relay-manifest]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.plan.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
     steps:
-      # release-<플랫폼>(설치 파일) · release-signatures(운영 키 .sig) · release-manifest(latest.json).
+      # release-<플랫폼>(설치 파일) · release-relay-<플랫폼>(Relay 바이너리) · release-signatures(운영 키 .sig — Relay 매니페스트의
+      # 것 포함) · release-manifest(latest.json).
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: release-*
           path: assets
           merge-multiple: true
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: relay-manifest
+          path: assets
 
       # draft 로 만들어 자산을 다 올린 뒤 공개한다 — 올리는 중에 releases/latest 가 매니페스트 없는 Release 를 가리키지 않게.
       # 같은 태그의 Release 가 있으면(재실행):
