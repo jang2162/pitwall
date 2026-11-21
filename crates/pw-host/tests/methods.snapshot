@@ -132,6 +132,12 @@ git.repo Unary Read {Owner}
 git.reset Unary Write {Owner}
 git.resetPreview Unary Read {Owner}
 git.revert Unary Write {Owner}
+git.send.apply Unary Write {Owner}
+git.send.prepare Stream Read {Owner}
+git.send.receive.begin Unary Write {Owner}
+git.send.receive.chunk Unary Write {Owner}
+git.send.receive.finish Unary Write {Owner}
+git.send.theirs Unary Read {Owner}
 git.show Unary Read {Owner}
 git.stage Unary Write {Owner}
 git.stageLines Unary Write {Owner}
