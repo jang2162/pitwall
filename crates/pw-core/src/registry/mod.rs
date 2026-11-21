@@ -403,6 +403,11 @@ impl Registry {
         &self.inner.file
     }
 
+    /// 이 레지스트리를 연 앱 경로(`$STATE` 의 임시 파일 등 — 원격 머신의 Relay 는 `relay/` 뿌리다).
+    pub fn paths(&self) -> &AppPaths {
+        &self.inner.paths
+    }
+
     /// 저장소 상태. 아직 열지 않았으면 연다.
     pub fn status(&self) -> StorageStatus {
         let mut guard = self.lock();
