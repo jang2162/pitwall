@@ -1930,7 +1930,9 @@ export type AddMemberRejection =
 /**  얕은 클론이라 깊이 안에서 공통 커밋을 찾지 못했다 — 같은 저장소인지 모른다. */
 { kind: "shallowUnknown"; machine: string } | 
 /**  그 머신 프로젝트가 멤버 둘 이상인 다른 묶음에 있다. */
-{ kind: "inOtherBundle"; bundleId: string };
+{ kind: "inOtherBundle"; bundleId: string } | 
+/**  판정하는 사이 묶음이 바뀌었다(다른 더하기가 먼저 끝났다). 묶음을 다시 읽고 다시 더한다. `bundleId` 는 지금 그 묶음. */
+{ kind: "bundleChanged"; bundleId: string };
 
 /**  저장 이름의 끝으로 정한 형식. */
 export type ArchiveFormat = "tarGz" | "tarXz" | "tar" | "zip" | 

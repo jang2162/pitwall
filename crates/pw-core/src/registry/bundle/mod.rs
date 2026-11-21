@@ -225,6 +225,21 @@ pub(crate) enum Attached {
     InOtherBundle {
         bundle_id: String,
     },
+    /// 판정한 뒤 그 묶음의 멤버가 바뀌었다(다른 더하기가 먼저 붙었다 · 빠졌다). `bundle_id` 는 지금 그 묶음(암묵 묶음이 행 있는
+    /// 묶음이 됐으면 새 id).
+    BundleChanged {
+        bundle_id: String,
+    },
+}
+
+/// 판정한 멤버 목록과 지금 목록이 같은가(머신 · 프로젝트 id, 순서 무관).
+fn same_members(judged: &[ProjectBundleMember], now: &[ProjectBundleMember]) -> bool {
+    let key = |m: &ProjectBundleMember| (m.machine.clone(), m.project_id.clone());
+    let mut a: Vec<_> = judged.iter().map(key).collect();
+    let mut b: Vec<_> = now.iter().map(key).collect();
+    a.sort();
+    b.sort();
+    a == b
 }
 
 impl Registry {
@@ -268,6 +283,67 @@ impl Registry {
             },
             None => Ok(None),
         })
+    }
+
+    /// 더하기를 시작할 때의 묶음([`add`]). 암묵 묶음이던 로컬 프로젝트가 그사이 행 있는 묶음의 멤버가 됐으면 `Err(그 묶음 id)`.
+    pub(crate) fn bundle_for_add(
+        &self,
+        id: &str,
+    ) -> Result<Result<ProjectBundle, String>, RegistryError> {
+        self.read(|conn| bundle_for_add(conn, id))
+    }
+
+    /// 묶음 멤버의 머신 id 를 `old` 에서 `new` 로 옮긴다 — 멤버와 마지막 보내기 대상 둘 다, 한 트랜잭션으로. 메인 판정 M7-P6 의
+    /// 「이 머신을 새로 믿기」(그 호스트의 머신 id 가 바뀜) 때 M7-08 이 부른다. `local` 은 옮기지도 옮겨 오지도 않는다. 한 묶음에
+    /// 두 id 의 멤버가 함께 있으면(같은 머신이 두 멤버가 된다 — M7-P20) 아무것도 바꾸지 않고 거절한다. 바뀐 묶음 id 들을 돌려준다.
+    pub fn rename_bundle_machine(
+        &self,
+        old: &str,
+        new: &str,
+    ) -> Result<Vec<String>, RegistryError> {
+        self.ensure_writable()?;
+        if old == LOCAL_MACHINE || new == LOCAL_MACHINE || old == new || new.is_empty() {
+            return Err(RegistryError::InvalidPath {
+                path: new.into(),
+                reason: format!("cannot move bundle members from machine `{old}` to `{new}`"),
+            });
+        }
+        let changed = self.write(|tx| {
+            let both: Option<String> = tx
+                .query_row(
+                    "SELECT a.bundle_id FROM bundle_members a JOIN bundle_members b
+                       ON a.bundle_id = b.bundle_id WHERE a.machine = ?1 AND b.machine = ?2",
+                    params![old, new],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(bundle_id) = both {
+                return Err(RegistryError::InvalidPath {
+                    path: bundle_id.into(),
+                    reason: format!("the bundle already has a member on machine `{new}`"),
+                });
+            }
+            let ids: Vec<String> = tx
+                .prepare(
+                    "SELECT DISTINCT bundle_id FROM bundle_members
+                     WHERE machine = ?1 OR last_target_machine = ?1 ORDER BY bundle_id",
+                )?
+                .query_map([old], |row| row.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            tx.execute(
+                "UPDATE bundle_members SET machine = ?2 WHERE machine = ?1",
+                params![old, new],
+            )?;
+            tx.execute(
+                "UPDATE bundle_members SET last_target_machine = ?2 WHERE last_target_machine = ?1",
+                params![old, new],
+            )?;
+            Ok(ids)
+        })?;
+        for id in &changed {
+            self.publish(ChangeKind::Bundle, id);
+        }
+        Ok(changed)
     }
 
     /// 멤버를 묶음에서 뺀다. 그 머신의 프로젝트 등록과 파일은 건드리지 않는다(08 「묶음」). 행 있는 묶음이 로컬 멤버 하나로
@@ -347,9 +423,13 @@ impl Registry {
     /// 본다. 암묵 묶음(로컬 프로젝트 id)이면 행을 만들어 그 로컬 프로젝트를 첫 멤버로 둔다. `bundle_id` 가 `None` 이면 새 묶음
     /// (원격만)을 만든다. 넣으려는 멤버가 멤버 하나뿐인 다른 묶음에 있으면 옮겨 오고(그 묶음은 사라진다), 둘 이상인 묶음에 있으면
     /// [`Attached::InOtherBundle`].
+    ///
+    /// `judged` 는 판정 때 본 멤버 목록이다. 지금 목록이 그와 다르면(그사이 다른 더하기가 붙었거나 멤버가 빠졌다) 붙이지 않고
+    /// [`Attached::BundleChanged`] — 새 멤버는 지금 멤버들과의 같은 저장소 판정을 지나지 않았다.
     pub(crate) fn attach_bundle_member(
         &self,
         bundle_id: Option<&str>,
+        judged: &[ProjectBundleMember],
         machine: &str,
         project_id: &str,
         name: &str,
@@ -357,7 +437,10 @@ impl Registry {
         self.ensure_writable()?;
         let attached = self.write(|tx| {
             let current = match bundle_id {
-                Some(id) => Some(load_bundle(tx, id)?),
+                Some(id) => match changed_since(tx, id, judged)? {
+                    Ok(b) => Some(b),
+                    Err(now) => return Ok(Attached::BundleChanged { bundle_id: now }),
+                },
                 None => None,
             };
             if let Some(b) = &current
@@ -409,6 +492,34 @@ impl Registry {
             self.publish(ChangeKind::Bundle, &b.id);
         }
         Ok(attached)
+    }
+}
+
+/// 더하기를 시작할 때의 묶음. 암묵 묶음이던 로컬 프로젝트가 그사이 행 있는 묶음의 멤버가 됐으면 `Err(그 묶음 id)`.
+fn bundle_for_add(
+    conn: &Connection,
+    id: &str,
+) -> Result<Result<ProjectBundle, String>, RegistryError> {
+    if !is_bundle_row_id(id)
+        && let Some(row) = row_of(conn, LOCAL_MACHINE, id)?
+    {
+        return Ok(Err(row));
+    }
+    Ok(Ok(load_bundle(conn, id)?))
+}
+
+/// 붙이기 직전의 묶음. 판정 때와 멤버가 다르거나 묶음이 사라졌으면 `Err(지금 묶음 id)`.
+fn changed_since(
+    conn: &Connection,
+    id: &str,
+    judged: &[ProjectBundleMember],
+) -> Result<Result<ProjectBundle, String>, RegistryError> {
+    match bundle_for_add(conn, id) {
+        Ok(Ok(b)) if same_members(judged, &b.members) => Ok(Ok(b)),
+        Ok(Ok(b)) => Ok(Err(b.id)),
+        Ok(Err(row)) => Ok(Err(row)),
+        Err(RegistryError::NotFound(_)) => Ok(Err(id.to_owned())),
+        Err(e) => Err(e),
     }
 }
 

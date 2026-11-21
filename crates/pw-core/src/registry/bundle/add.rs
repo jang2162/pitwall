@@ -15,6 +15,11 @@
 //! 6. 그 머신의 레지스트리에 그 경로의 프로젝트가 있으면 그것을, 없으면 만들어 멤버로 넣는다.
 //!
 //! 판정이 모두 끝난 뒤에야 머신의 레지스트리에 쓴다 — 거절된 더하기는 어느 머신에도 흔적을 남기지 않는다.
+//!
+//! **동시 더하기**: 한 `Registry` 안에서는 묶음마다 더하기가 차례로 돈다(묶음 id 의 잠금) — 둘째는 첫째가 붙인 멤버를 보고
+//! 판정하고, 암묵 묶음이 그사이 행 있는 묶음이 됐으면 판정 전에 `bundleChanged` 로 거절된다. 잠금을 나누지 않는 다른 프로세스
+//! (같은 `state.db` 를 연 다른 Desktop)와 겹치면 붙이기 트랜잭션이 멤버 목록이 판정 때와 같은지 다시 보고, 다르면 붙이지 않고
+//! 6 에서 새로 만든 등록을 지운다([`BundleMachine::unregister`]).
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -62,6 +67,8 @@ pub trait BundleMachine: Send + Sync {
     fn reaches_files<'a>(&'a self, path: &'a str, limit: u64) -> MachineFuture<'a, bool>;
     /// 그 머신의 레지스트리에 `path` 를 루트로 한 프로젝트를 만들고 id 를 돌려준다.
     fn register<'a>(&'a self, path: &'a str) -> MachineFuture<'a, String>;
+    /// [`Self::register`] 로 만든 프로젝트를 지운다 — 붙이기가 거절돼 그 등록을 되돌릴 때만 부른다(폴더는 건드리지 않는다).
+    fn unregister<'a>(&'a self, project_id: &'a str) -> MachineFuture<'a, ()>;
 }
 
 /// 다른 머신들. 링크가 생기는 행이 구현해 [`Registry::set_remote_machines`] 로 넣는다.
@@ -120,6 +127,8 @@ pub enum AddMemberRejection {
     ShallowUnknown { machine: String },
     /// 그 머신 프로젝트가 멤버 둘 이상인 다른 묶음에 있다.
     InOtherBundle { bundle_id: String },
+    /// 판정하는 사이 묶음이 바뀌었다(다른 더하기가 먼저 끝났다). 묶음을 다시 읽고 다시 더한다. `bundleId` 는 지금 그 묶음.
+    BundleChanged { bundle_id: String },
 }
 
 /// 「체크아웃 추가」 의 결과.
@@ -178,14 +187,23 @@ pub async fn add_member(
     path: &str,
     allow_large: bool,
 ) -> Result<AddMemberOutcome, AddMemberError> {
+    // 묶음마다 더하기를 하나씩 — 같은 묶음에 동시에 더한 둘째는 첫째가 붙인 멤버를 보고 판정한다.
+    let _turn = match to {
+        AddTo::Bundle(id) => Some(registry.bundle_add_lock(id).lock_owned().await),
+        AddTo::NewRemote => None,
+    };
     let bundle = match to {
-        AddTo::Bundle(id) => Some(
-            blocking(registry, {
-                let id = id.to_owned();
-                move |r| r.bundle(&id)
-            })
-            .await?,
-        ),
+        AddTo::Bundle(id) => match blocking(registry, {
+            let id = id.to_owned();
+            move |r| r.bundle_for_add(&id)
+        })
+        .await?
+        {
+            Ok(bundle) => Some(bundle),
+            Err(bundle_id) => {
+                return Ok(rejected(AddMemberRejection::BundleChanged { bundle_id }));
+            }
+        },
         AddTo::NewRemote if machine == LOCAL_MACHINE => {
             return Err(AddMemberError::Registry(RegistryError::InvalidPath {
                 path: PathBuf::from(path),
@@ -277,6 +295,7 @@ pub async fn add_member(
             }));
         }
     }
+    let registered = facts.project.is_none();
     let project_id = match facts.project.clone() {
         Some(id) => id,
         None => target.register(&facts.path).await?,
@@ -287,16 +306,27 @@ pub async fn add_member(
         .unwrap_or_else(|| facts.path.clone());
     let attached = blocking(registry, {
         let bundle_id = bundle.as_ref().map(|b| b.id.clone());
+        let judged = members.to_vec();
         let (machine, project_id) = (machine.to_owned(), project_id.clone());
-        move |r| r.attach_bundle_member(bundle_id.as_deref(), &machine, &project_id, &name)
+        move |r| r.attach_bundle_member(bundle_id.as_deref(), &judged, &machine, &project_id, &name)
     })
-    .await?;
-    Ok(match attached {
-        Attached::Bundle(bundle) => AddMemberOutcome::Added { bundle },
-        Attached::InOtherBundle { bundle_id } => {
-            rejected(AddMemberRejection::InOtherBundle { bundle_id })
+    .await;
+    let outcome = match attached {
+        Ok(Attached::Bundle(bundle)) => return Ok(AddMemberOutcome::Added { bundle }),
+        Ok(Attached::InOtherBundle { bundle_id }) => {
+            Ok(rejected(AddMemberRejection::InOtherBundle { bundle_id }))
         }
-    })
+        Ok(Attached::BundleChanged { bundle_id }) => {
+            Ok(rejected(AddMemberRejection::BundleChanged { bundle_id }))
+        }
+        Err(e) => Err(e),
+    };
+    // 거절된 더하기는 흔적을 남기지 않는다 — 판정 뒤 이 더하기가 만든 등록을 되돌린다. 되돌리기가 실패하면 그 오류를 낸다(등록이
+    // 남았다는 것을 숨기지 않는다).
+    if registered {
+        target.unregister(&project_id).await?;
+    }
+    outcome
 }
 
 async fn blocking<T: Send + 'static>(
@@ -389,6 +419,11 @@ impl BundleMachine for LocalMachine {
     fn reaches_files<'a>(&'a self, path: &'a str, limit: u64) -> MachineFuture<'a, bool> {
         let path = PathBuf::from(path);
         self.run(move |_| Ok(count_files(&path, limit) >= limit))
+    }
+
+    fn unregister<'a>(&'a self, project_id: &'a str) -> MachineFuture<'a, ()> {
+        let id = project_id.to_owned();
+        self.run(move |registry| Ok(registry.delete(&id)?))
     }
 
     fn register<'a>(&'a self, path: &'a str) -> MachineFuture<'a, String> {

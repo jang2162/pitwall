@@ -153,6 +153,23 @@
                   "bundleId"
                 ],
                 "type": "object"
+              },
+              {
+                "description": "판정하는 사이 묶음이 바뀌었다(다른 더하기가 먼저 끝났다). 묶음을 다시 읽고 다시 더한다. `bundleId` 는 지금 그 묶음.",
+                "properties": {
+                  "bundleId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "bundleChanged",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "bundleId"
+                ],
+                "type": "object"
               }
             ]
           },

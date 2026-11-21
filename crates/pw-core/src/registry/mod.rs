@@ -305,6 +305,8 @@ struct Inner {
     db: Mutex<Option<store::Opened>>,
     /// 묶음 판정이 다른 머신에 묻는 길([`bundle::add`]). 링크가 생기는 행이 넣는다 — 없으면 다른 머신은 닿지 않는다.
     remote: std::sync::RwLock<Option<Arc<dyn bundle::add::RemoteMachines>>>,
+    /// 묶음마다 더하기를 하나씩 돌리는 잠금([`bundle::add::add_member`]). 열쇠는 더하기를 시작한 묶음 id.
+    bundle_adds: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// [`store::open`] 또는 읽기 전용 프로세스의 [`store::open_read_only`].
     open: fn(&Path, Duration) -> store::Opened,
 }
@@ -362,6 +364,7 @@ impl Registry {
                 bus,
                 db: Mutex::new(None),
                 remote: std::sync::RwLock::new(None),
+                bundle_adds: Mutex::new(HashMap::new()),
                 open: store::open,
             }),
         }
@@ -374,6 +377,18 @@ impl Registry {
             .remote
             .write()
             .unwrap_or_else(PoisonError::into_inner) = Some(machines);
+    }
+
+    /// 그 묶음의 더하기 잠금.
+    pub(crate) fn bundle_add_lock(&self, bundle_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self
+            .inner
+            .bundle_adds
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        // 아무도 쥐지 않은 잠금은 치운다(묶음 id 가 쌓이지 않게).
+        locks.retain(|_, lock| Arc::strong_count(lock) > 1);
+        locks.entry(bundle_id.to_owned()).or_default().clone()
     }
 
     pub(crate) fn remote_machines(&self) -> Option<Arc<dyn bundle::add::RemoteMachines>> {
