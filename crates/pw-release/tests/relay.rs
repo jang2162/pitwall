@@ -288,7 +288,7 @@ fn a_binary_over_the_size_limit_fails_the_build() {
     assert!(relay::describe(&file, "x", size).is_ok());
     let e = relay::describe(&file, "x", size - 1).unwrap_err();
     assert!(e.to_string().contains("over the relay binary limit"), "{e}");
-    assert_eq!(MAX_BINARY_BYTES, 40 * 1024 * 1024, "18-m7-plan M7-P13");
+    assert_eq!(MAX_BINARY_BYTES, 56 * 1024 * 1024, "18-m7-plan M7-P13");
 }
 
 /// 앱의 updater 공개키(운영 키의 공개 쪽)가 Relay 매니페스트를 검증할 수 있는 꼴이고, 시험 키와 다르다.

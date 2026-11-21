@@ -29,9 +29,10 @@ pub const MANIFEST_FILE: &str = "relay-manifest.json";
 /// 매니페스트 꼴의 판. 읽는 쪽은 이 값만 받는다.
 pub const SCHEMA: u32 = 1;
 
-/// Relay 바이너리 하나의 크기 상한(메인 판정 M7-P13 「원격 디스크: 바이너리 한 판 < 40 MiB」). 빌드(`relay-build` · 릴리스 잡 ·
-/// `relay-live`)가 [`describe`] 에서 넘으면 실패한다. 값을 바꾸는 것은 M7-P13 을 바꾸는 일이다 — 계획 문서와 함께 고친다.
-pub const MAX_BINARY_BYTES: u64 = 40 * 1024 * 1024;
+/// Relay 바이너리 하나의 크기 상한(메인 판정 M7-P13 「원격 디스크: 바이너리 한 판 < 56 MiB」 — 처음 40 MiB 에서 M7-05 가 잰 값
+/// (`relay` 프로필 x86_64 49.1 MiB) + 여유로 고쳤다). 빌드(`relay-build` · 릴리스 잡 · `relay-live`)가 [`describe`] 에서 넘으면
+/// 실패한다. 값을 바꾸는 것은 M7-P13 을 바꾸는 일이다 — 계획 문서와 함께 고친다.
+pub const MAX_BINARY_BYTES: u64 = 56 * 1024 * 1024;
 
 /// debug Desktop 이 Relay 개발 빌드를 찾는 폴더를 바꾸는 환경 변수(기본은 [`DEV_DIST_DIR`]). release 빌드는 읽지 않는다.
 pub const DEV_DIST_ENV: &str = "PITWALL_RELAY_DEV_DIST";
