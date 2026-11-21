@@ -375,7 +375,7 @@ GUI 앱은 터미널과 환경이 달라 프로젝트가 고정한 런타임 버
 ## 6. 원격 연결 구조
 
 상세는 [08-remote-mobile.md](08-remote-mobile.md).
-- 원격 머신에 `pitwall-relay`를 설치(서비스 상주)하고 QR/코드로 페어링
+- 원격 머신에 `pitwall-relay`를 SSH 로 설치하고 SSH 채널로 자동 페어링(상주는 사람이 고를 때 · 코드 페어링은 수동 배치 — 18-m7-plan 결정 M7-D2 · D13)
 - 연결: 직접(QUIC, LAN/Tailscale) → SSH stdio 순으로 시도, 모두 Noise로 인증 · 암호화. 중계 서버(Hub)는 두지 않음
 - Relay는 상주 데몬이므로 연결이 끊겨도 실행 중 프로세스 · 로그 · 디버그 세션 유지
 - 포트 포워딩: 원격 웹 서버 · 디버그 포트를 로컬로 포워딩 (DAP attach용)
@@ -385,7 +385,7 @@ GUI 앱은 터미널과 환경이 달라 프로젝트가 고정한 런타임 버
 ## 7. 보안
 
 
-- MCP HTTP 서버는 `127.0.0.1`에만 바인드 + 기동 시 생성되는 Bearer 토큰 필수 — Streamable HTTP 는 M7 에 온다(06-roadmap.md 결정 D59). 그때까지 MCP 는 네트워크 포트를 열지 않는다(stdio 와 로컬 소켓)
+- MCP HTTP 서버는 `127.0.0.1`에만 바인드 + 켤 때 만들어 `$STATE/mcp/http-token`(0600)에 두는 Bearer 토큰 필수(「토큰 새로 만들기」 로 바꾼다), `Origin` · `Host` 는 루프백 주소만. 기본 꺼짐(18-m7-plan 결정 M7-D11) — Streamable HTTP 는 M7 에 온다(06-roadmap.md 결정 D59). 그때까지 MCP 는 네트워크 포트를 열지 않는다(stdio 와 로컬 소켓)
 - 위험 작업(DB 쓰기, 실행 구성의 임의 커맨드 실행)은 MCP · CLI(`pitwall tool` — 같은 세션 경로) 경유 시 UI 승인 필요 (→ 05-mcp.md). git 쓰기 작업은 MCP 툴로 내놓지 않는다(05-mcp.md 「Git」 표)
 - 에이전트(MCP · CLI)의 DB 툴은 사람이 그 프로젝트 창에서 이번 앱 실행 중에 같은 대상으로 연 연결만 쓴다 — 「연결은 사람이 누를 때만」(06-roadmap.md 결정 D48)의 에이전트 쪽이다. 연 적 없는 연결은 승인(`db_connection_test` 의 「이 연결 열기」)을 지나야 하고, 프로덕션 태그 연결은 기본으로 막는다(05-mcp.md 「DB」 표 아래 「에이전트의 DB 연결」 — 06-roadmap.md 결정 D60)
 - `write` 이상의 툴 호출은 감사 행을 먼저 쓰고 못 쓰면 실행하지 않는다(05-mcp.md 「감사 로그」 — 06-roadmap.md 결정 D62)

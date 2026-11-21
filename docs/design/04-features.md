@@ -266,8 +266,8 @@ Orca는 작업마다 별도 `git worktree` 디렉터리를 만들기 때문에, 
 
 | ID | 기능 | 우선 |
 |---|---|---|
-| F9-1 | `pitwall-relay` 설치 (한 줄 설치 스크립트, Homebrew/apt, 서비스 등록) | P1 |
-| F9-2 | Desktop에서 "SSH로 Relay 설치" — **버전 정확히 일치** 확인 후 자동 설치. 기본은 원격이 직접 다운로드, 인터넷 제한 환경은 로컬에서 받아 SSH로 업로드(`upload_binary_over_ssh`) | P1 |
+| F9-1 | `pitwall-relay` 설치 (한 줄 설치 스크립트, Homebrew/apt, 서비스 등록 — 설치 스크립트 · Homebrew · apt 는 v1.0 전, 상주는 사람이 고를 때. 18-m7-plan 결정 M7-D2) | P1 |
+| F9-2 | Desktop에서 "SSH로 Relay 설치" — **버전 정확히 일치** 확인 후 자동 설치. Desktop 이 받아 서명을 검증한 뒤 SSH 로 올린다(18-m7-plan 결정 M7-D5) | P1 |
 | F9-3 | QR/코드 페어링, 기기 목록 · 권한(role) · 해제 | P1 |
 | F9-4 | 연결: 직접(LAN/Tailscale, QUIC) → SSH 대체. Tailscale 기기 자동 검색 | P1 |
 | F9-5 | 원격 체크아웃: 파일 트리 · 에디터 · git · LSP · 실행 · 터미널 · DB | P1 |

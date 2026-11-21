@@ -2,7 +2,7 @@
 
 ## 1. 개요
 
-- **원격**: 원격 머신에 **Pitwall Relay**를 설치해서 연결한다. 연결은 **직접 연결(LAN · Tailscale)**만 사용하고, SSH는 Relay 설치 보조와 대체 연결 수단으로 쓴다
+- **원격**: 원격 머신에 **Pitwall Relay**를 설치해서 연결한다. 연결은 **직접 연결(LAN · Tailscale)**만 사용하고, SSH는 Relay 설치 보조와 대체 연결 수단으로 쓴다 — 만드는 순서는 SSH 연결이 먼저다(18-m7-plan 결정 M7-D1 · 06-roadmap.md D73). 둘 다 있으면 직접 연결을 먼저 시도한다
 - **모바일**: **보류 (D13)** — 6절은 향후 검토용 초안. 연결 계층(`pw-link`)과 role 구조만 모바일을 고려해 유지
 - 원격 설치 · 재연결 방식은 **Zed 원격 개발 구조**를 참고 (UI 로컬 / 헤드리스 서버 원격, 버전 일치 서버 자동 설치, 데몬 재사용)
 - **중계 서버(Relay Hub)는 만들지 않는다.** NAT · 방화벽 문제는 Tailscale에 맡긴다. 단, 전송 계층을 추상화해 두어 필요해지면 Hub를 나중에 추가할 수 있게 한다
@@ -13,7 +13,7 @@
 | 구성 요소 | 설치 위치 | 역할 |
 |---|---|---|
 | **Pitwall Desktop** | 개발자 PC | 메인 UI. 내부에 Local Host + 내장 Relay 엔드포인트(모바일 접속용) |
-| **Pitwall Relay** (`pitwall-relay`) | 원격 서버 / 개발 VM / 집 PC | Host 코어(fs/git/lsp/dap/run/db)를 데몬으로 실행 + 암호화된 연결 엔드포인트. 서비스로 상주(launchd/systemd/Windows Service) |
+| **Pitwall Relay** (`pitwall-relay`) | 원격 서버 / 개발 VM / 집 PC | Host 코어(fs/git/lsp/dap/run/db)를 데몬으로 실행 + 암호화된 연결 엔드포인트. 사람이 「상주시키기」 를 고르면 launchd · systemd user 로 상주, 아니면 SSH 로 띄운 데몬이 유휴 규칙까지 산다(18-m7-plan 결정 M7-D2 · 06 D74). Windows 원격은 이후 |
 | **Pitwall Mobile** | Android (이후 iOS) | 컴패니언 앱 |
 
 ```
@@ -52,15 +52,14 @@
 
 ### Relay 설치
 
-**방법 A. 원격에서 직접 설치** — `curl -fsSL https://.../install.sh | sh` (또는 Homebrew/apt/단일 바이너리) → 서비스 등록
+**방법 A. 원격에서 직접 설치** — `curl -fsSL https://.../install.sh | sh` (또는 Homebrew/apt/단일 바이너리) → 서비스 등록(v1.0 전 — 18-m7-plan 「3」. M7 에서는 릴리스 바이너리를 아래 경로 · 이름 규칙으로 직접 배치하고 `pitwall-relay pair` 코드로 페어링한다)
 
 **방법 B. Desktop에서 SSH로 설치 (Zed 방식)**
 1. 시스템 `ssh` 바이너리 사용 (사용자의 `~/.ssh/config`, 에이전트, ProxyJump, ControlMaster를 그대로 존중). 비밀번호는 설정에 저장하지 않고 키 인증 권장, 프롬프트는 GUI askpass로 처리
 2. 원격 OS/아키텍처 감지 (`uname -sm`)
 3. `~/.local/share/pitwall/relay/pitwall-relay-{channel}-{version}` 존재 여부 확인 (원격의 `$XDG_DATA_HOME` 존중) — **Desktop 버전과 정확히 일치**해야 함
 4. 없으면 설치:
-   - 기본: 원격이 릴리스 서버에서 직접 다운로드 + 해시 검증
-   - `upload_binary_over_ssh = true`: Desktop이 로컬로 받아 SSH로 업로드 (원격 인터넷 제한 환경)
+   - 기본: Desktop 이 받아(서명 매니페스트로 검증, `$CACHE/relay-dist/`) SSH 로 올린다. 개발 빌드(debug)는 그 빌드 결과를 올린다(18-m7-plan 결정 M7-D5 · 06 D77)
    - 수동: 릴리스 바이너리를 위 경로 · 이름 규칙으로 직접 배치
 5. 상주 서비스 등록(systemd user / launchd) 또는 SSH 세션 기반 데몬으로 기동
 6. 오래된 버전 바이너리 정리 (최근 2개 유지)
@@ -75,6 +74,7 @@
 2. Desktop에서 코드 입력 → 페어링 완료
 
 ### 보안 모델
+- **SSH 로 붙은 링크도 Desktop 기기 키를 증명한다** — 원격 머신의 같은 사용자 프로세스가 데몬 소켓으로 Desktop 행세를 하지 못하게(18-m7-plan M7-02 · 결정 M7-D13). Desktop 도 Relay 의 기기 키로 머신 id 를 확인한다(M7-P6). 같은 uid 로 Relay 의 데이터 폴더에 쓸 수 있는 프로세스는 이 증명으로 막지 못한다
 - 기기마다 Ed25519 키쌍 생성, 페어링 시 공개키 교환 (TOFU + 짧은 코드로 확인)
 - 세션 암호화/인증: **Noise 프로토콜(XX 패턴)**
 - Relay는 페어링된 기기 목록과 **기기별 권한 범위(role)**를 보유
@@ -94,7 +94,6 @@ host = "build.tail1234.ts.net"     # Tailscale MagicDNS 또는 ~/.ssh/config 호
 username = "dev"                   # 기본: 로컬 사용자명
 port = 22
 ssh_args = ["-o", "ServerAliveInterval=30"]
-upload_binary_over_ssh = false
 
 [[remote_hosts.port_forwards]]
 local_port = 8080
@@ -104,7 +103,7 @@ remote_port = 8080
 local_port = 5005                  # 원격 JVM 디버그 포트
 remote_port = 5005
 remote_host = "localhost"          # 다른 호스트(Docker 등)로 바꿀 수 있음
-local_host = "127.0.0.1"           # "0.0.0.0"이면 모든 로컬 인터페이스에서 수신
+local_host = "127.0.0.1"           # 루프백(127.0.0.1 · ::1)만 받는다 — 다른 값은 그 포워딩을 열지 않고 경고(18-m7-plan 결정 M7-D12)
 ```
 
 원격 호스트 설정에는 프로젝트 경로를 적지 않는다. 그 머신의 어느 폴더가 어느 프로젝트의 체크아웃인지는 묶음이 기억한다(「프로젝트와 체크아웃 (D57)」 절).
@@ -136,7 +135,7 @@ stop_lsp_after = "30m"
 | MCP | 원격 머신의 에이전트도 Relay의 로컬 MCP 엔드포인트 사용 → 승인 요청은 연결된 Desktop으로 전달. 그 세션은 그 머신의 체크아웃만 다룬다(05-mcp.md 「체크아웃」) |
 | 커밋 보내기 · 가져오기 | 한 머신의 체크아웃에 있는 브랜치를 다른 머신의 체크아웃으로 origin 을 거치지 않고 옮긴다(「프로젝트와 체크아웃 (D57)」 의 「커밋 보내기 · 가져오기」) |
 | 세션 유지 | Relay가 상주하므로 연결이 끊겨도 실행 중 프로세스 · 로그 유지, 재접속 시 이어보기. 사람이 탭 · 창을 닫을 때는 원격의 것에 [끝내기] · [두고 닫기] 를 묻는다 |
-| 미저장 편집 | **Desktop 로컬에 보관** (연결 끊김에도 유실 없음), 재접속 시 복원 · 원격 파일이 그사이 바뀌었으면 diff로 충돌 해결 |
+| 미저장 편집 | **Desktop 웹뷰에 창이 사는 동안 보관** (연결 끊김에도 유실 없음 — 앱 종료는 지금처럼 미저장 확인, 18-m7-plan 결정 M7-D8), 재접속 시 복원 · 원격 파일이 그사이 바뀌었으면 diff로 충돌 해결 |
 | 원격 터미널에서 `pitwall <file>` | 원격 Relay가 연결된 Desktop에 "파일 열기" 이벤트 전달 (Zed가 지원하지 못하는 부분 — 에이전트가 원격에서 작업할 때 유용). 그 프로젝트의 창에서 활성 체크아웃을 바꾸지 않고 그 체크아웃의 탭으로 연다 |
 
 ### 로컬 / 원격 역할 분담 (Zed와 동일 원칙)
