@@ -113,7 +113,7 @@ impl DriverRegistry {
     }
 }
 
-/// `db.driver.list` 를 붙인다. 데스크톱이 앱의 등록부를 넘긴다(`apps/desktop/src-tauri/src/main.rs`).
+/// `db.driver.list` 를 붙인다. Host 조립(`crates/pw-host` 의 `assemble`)이 부품의 등록부를 넘긴다.
 pub fn register(router: &mut Router, drivers: DriverRegistry) {
     let entries = drivers.entries();
     router.unary(DbDriverListMethod, move |_ctx, (): ()| {

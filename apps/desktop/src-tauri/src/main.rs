@@ -151,12 +151,17 @@ fn local_host_parts(
             app: std::env::current_exe().map_err(|e| e.to_string()),
             source: shell_command::source_check(),
         },
-        settings_window: Arc::new(|label: &str| {
-            windows::WindowKind::of_label(label) == Some(windows::WindowKind::Settings)
-        }),
+        settings_window: settings_window(),
         tokio: tauri::async_runtime::handle().inner().clone(),
     });
     (assembled.host, assembled.db_sessions)
+}
+
+/// 창 라벨이 설정 창인가(`pw_host::HostParts::settings_window`) — 도구 설치(`tools.install` 등)는 설정 창 · 그 프로젝트 창만 한다.
+fn settings_window() -> Arc<dyn Fn(&str) -> bool + Send + Sync> {
+    Arc::new(|label: &str| {
+        windows::WindowKind::of_label(label) == Some(windows::WindowKind::Settings)
+    })
 }
 
 /// 내장 확장과 `$DATA/extensions/` 의 사용자 확장. 진단은 로그에 남는다(로깅을 켠 뒤에 부른다).
@@ -646,6 +651,52 @@ mod tests {
         assert_eq!(
             generated, routed,
             "`mise run gen` 을 돌리고, 메서드를 선언한 크레이트를 pw-rpc-gen 에 링크했는지 본다"
+        );
+    }
+
+    /// 앱이 Host 에 넣는 설정 창 판정: 설정 창만 「설정 창」 이다 — 다른 창(웰컴 · 프로젝트 · 단일 파일 · 모르는 라벨)이 설정 창으로
+    /// 읽히면 그 창에서 도구 설치가 열린다.
+    #[test]
+    fn only_the_settings_window_counts_as_the_settings_window() {
+        let is_settings = settings_window();
+        assert!(is_settings(windows::SETTINGS_LABEL));
+        for label in [
+            windows::WELCOME_LABEL.to_owned(),
+            windows::project_label("abc"),
+            "file-1".to_owned(),
+            "settings-2".to_owned(),
+            String::new(),
+        ] {
+            assert!(!is_settings(&label), "{label}");
+        }
+    }
+
+    /// 생성물(`packages/rpc-client`)의 토픽 목록(`TOPICS`) ⊆ 앱이 링크한 토픽 선언(`pw_rpc::events()`).
+    ///
+    /// 토픽 선언(`rpc_event!`)도 메서드처럼 링크된 크레이트의 것만 보인다. 생성기는 선언한 크레이트를 링크하지만 앱이 그 크레이트를
+    /// 링크하지 않으면 그 토픽은 앱에서 선언이 없는 것이 되어 `events.subscribe` 가 오류 없이 구독 전체를 거절한다(18-m7-plan
+    /// M7-02). [`generated_rpc_covers_the_router`] 와 같은 까닭으로 앱 자리에서 본다.
+    #[test]
+    fn generated_topics_are_declared_in_the_app() {
+        let generated = include_str!("../../../../packages/rpc-client/src/generated/rpc.ts");
+        let block = generated
+            .split_once("export const TOPICS")
+            .expect("rpc.ts 의 TOPICS")
+            .1
+            .split_once("\n};")
+            .expect("TOPICS 의 끝")
+            .0;
+        let topics: BTreeSet<&str> = block
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix('"')?.split_once('"'))
+            .map(|(name, _)| name)
+            .collect();
+        assert!(topics.len() > 10, "{topics:?}");
+        let declared: BTreeSet<&str> = pw_rpc::events().into_iter().map(|e| e.name).collect();
+        let missing: Vec<_> = topics.difference(&declared).collect();
+        assert!(
+            missing.is_empty(),
+            "앱에 선언이 링크되지 않은 토픽 {missing:?} — 선언한 크레이트를 앱(pw-host)이 링크하는지 본다"
         );
     }
 

@@ -4,37 +4,12 @@
 mod common;
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use pw_core::registry::NewProject;
 use pw_core::{HostRouter, Target};
 use pw_db::secret::{DbSecretKey, MemorySecretStore, account};
 use pw_rpc::{Caller, Role};
-use serde_json::{Value, json};
-
-/// 응답 하나를 기다린다(사이의 알림은 건너뛴다). 성공이면 `Ok(result)`, 오류면 `Err(error)`.
-async fn call(
-    connection: &mut pw_core::Connection,
-    id: i64,
-    method: &str,
-    params: Value,
-) -> Result<Value, Value> {
-    connection
-        .sink
-        .send(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
-    loop {
-        let frame = tokio::time::timeout(Duration::from_secs(20), connection.source.recv())
-            .await
-            .unwrap_or_else(|_| panic!("{method}: no reply"))
-            .expect("connection closed");
-        if frame["id"] == json!(id) {
-            return match frame.get("error") {
-                Some(error) => Err(error.clone()),
-                None => Ok(frame["result"].clone()),
-            };
-        }
-    }
-}
+use serde_json::json;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_db_connection_reads_its_password_from_the_secret_store_in_the_parts() {
@@ -75,7 +50,7 @@ async fn a_db_connection_reads_its_password_from_the_secret_store_in_the_parts()
     let test = json!({"projectId": id, "connectionId": "local"});
 
     // 비밀이 없다: 가짜 저장소에서 찾지 못해 「비밀 필요」.
-    let missing = call(&mut window, 1, "db.connection.test", test.clone())
+    let missing = common::call(&mut window, 1, "db.connection.test", test.clone())
         .await
         .unwrap_err();
     assert_eq!(
@@ -94,12 +69,14 @@ async fn a_db_connection_reads_its_password_from_the_secret_store_in_the_parts()
         "target": missing["data"]["target"],
         "value": "s3cret",
     });
-    call(&mut window, 2, "db.secret.set", set).await.unwrap();
+    common::call(&mut window, 2, "db.secret.set", set)
+        .await
+        .unwrap();
     assert_eq!(store.accounts(), std::slice::from_ref(&password));
 
     // 다시 테스트하면 비밀을 가짜에서 읽어 드라이버까지 간다(받는 곳이 없어 드라이버 오류로 끝난다).
     let reads = store.reads().len();
-    let failed = call(&mut window, 3, "db.connection.test", test)
+    let failed = common::call(&mut window, 3, "db.connection.test", test)
         .await
         .unwrap_err();
     assert_ne!(

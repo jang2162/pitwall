@@ -4,9 +4,11 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use pw_core::config::AppPaths;
 use pw_host::{Assembled, CliParts, HostParts, SecretStore};
+use serde_json::{Value, json};
 
 /// `dir` 아래 앱 폴더로, 주어진 비밀 저장소와 런타임 핸들로 조립한다.
 pub fn assemble(
@@ -34,4 +36,28 @@ pub fn assemble(
         settings_window: Arc::new(|_: &str| false),
         tokio,
     })
+}
+
+/// 응답 하나를 기다린다(사이의 알림은 건너뛴다). 성공이면 `Ok(result)`, 오류면 `Err(error)`.
+pub async fn call(
+    connection: &mut pw_core::Connection,
+    id: i64,
+    method: &str,
+    params: Value,
+) -> Result<Value, Value> {
+    connection
+        .sink
+        .send(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(20), connection.source.recv())
+            .await
+            .unwrap_or_else(|_| panic!("{method}: no reply"))
+            .expect("connection closed");
+        if frame["id"] == json!(id) {
+            return match frame.get("error") {
+                Some(error) => Err(error.clone()),
+                None => Ok(frame["result"].clone()),
+            };
+        }
+    }
 }
