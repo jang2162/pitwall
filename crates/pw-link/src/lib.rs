@@ -25,10 +25,11 @@ pub use desktop::{DesktopIdentity, DesktopLink, DialError, Expect, LinkState, Re
 pub use device::{
     DeviceId, DeviceKey, DeviceKeyStore, KeychainKeyStore, MachineId, PublicKey, RelayKeyFile,
 };
+pub use frame::HANDSHAKE_MAX_FRAME;
 pub use handshake::{PROTOCOL, RejectReason, Versions};
 pub use mux::{CloseReason, LinkLimits};
 pub use pairing::{Pairing, PairingTable};
-pub use relay::{RelayIdentity, RelayParts, ServeError, serve, serve_framed};
+pub use relay::{Proven, RelayIdentity, RelayParts, ServeError, serve, serve_framed, serve_proven};
 pub use transport::{LinkStream, Transport};
 
 #[cfg(test)]

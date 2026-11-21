@@ -169,11 +169,13 @@ pub async fn dial(
     expect: &Expect,
     limits: LinkLimits,
 ) -> Result<DesktopLink, DialError> {
-    let mut framed = Framed::new(stream);
+    // Relay 를 증명하기 전에는 작은 틀만 받는다(Relay 쪽과 같은 규칙 — `HANDSHAKE_MAX_FRAME`).
+    let mut framed = Framed::handshake(stream);
     let (role, relay_key) =
         tokio::time::timeout(limits.dead_after, handshake(&mut framed, me, expect))
             .await
             .map_err(|_| DialError::Timeout)??;
+    framed.read.set_max_body(pw_wire::MAX_BODY_BYTES);
     let (mux, mut inbox) = Mux::start(framed, limits);
     let pending: Pending = Arc::default();
     {

@@ -18,6 +18,10 @@ use crate::transport::{BoxRead, BoxWrite, LinkStream};
 /// 링크 자체의 채널.
 pub const CONTROL: u32 = 0;
 
+/// 증명 전(첫 틀 · 핸드셰이크) 틀 본문의 상한(18-m7-plan M7-04 — 출발값). 상대를 아직 모르는 동안 64 MiB 본문 하나로 메모리를
+/// 잡지 못하게 한다. 증명 뒤에는 링크 틀 상한(`pw_wire::MAX_BODY_BYTES`)으로 올린다. 핸드셰이크 틀은 1 KiB 안팎이다.
+pub const HANDSHAKE_MAX_FRAME: usize = 64 * 1024;
+
 /// 틀의 종류.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -113,6 +117,26 @@ impl FramedRead {
         Ok(Some((frame, body.len())))
     }
 
+    /// 다음 틀을 JSON 값으로(링크 틀의 꼴을 보지 않는다). 데몬은 첫 틀의 `kind` 로 링크와 좁은 명령을 가른다(M7-04) — 좁은 명령의
+    /// 종류는 [`Kind`] 에 없다. JSON 이 아니면 [`FrameError::Malformed`].
+    pub async fn read_value(&mut self) -> Result<Option<(Value, usize)>, FrameError> {
+        let Some(body) = self.inner.read_frame().await.map_err(FrameError::Wire)? else {
+            return Ok(None);
+        };
+        let value = serde_json::from_slice::<Value>(&body)
+            .map_err(|e| FrameError::Malformed(e.to_string()))?;
+        Ok(Some((value, body.len())))
+    }
+
+    /// 다음 틀부터의 본문 상한(`pw_wire::MAX_BODY_BYTES` 위로는 못 올린다).
+    pub fn set_max_body(&mut self, max_body: usize) {
+        self.inner.set_max_body(max_body);
+    }
+
+    pub fn max_body(&self) -> usize {
+        self.inner.max_body()
+    }
+
     /// [`Self::read`] 와 같되 본문을 풀지 않는다(원시 JSON 그대로 — 꼴만 확인한다).
     pub(crate) async fn read_raw(&mut self) -> Result<Option<(RawFrame, usize)>, FrameError> {
         let Some(body) = self.inner.read_frame().await.map_err(FrameError::Wire)? else {
@@ -169,10 +193,20 @@ pub struct Framed {
 }
 
 impl Framed {
+    /// 틀 상한이 링크 틀 상한(`pw_wire::MAX_BODY_BYTES`)인 스트림 — 이미 증명된 상대와의 것.
     pub fn new(stream: LinkStream) -> Self {
+        Self::with_max_body(stream, pw_wire::MAX_BODY_BYTES)
+    }
+
+    /// 아직 증명하지 않은 상대의 스트림 — 틀 상한 [`HANDSHAKE_MAX_FRAME`]. 증명 뒤에 링크가 올린다.
+    pub fn handshake(stream: LinkStream) -> Self {
+        Self::with_max_body(stream, HANDSHAKE_MAX_FRAME)
+    }
+
+    fn with_max_body(stream: LinkStream, max_body: usize) -> Self {
         Self {
             read: FramedRead {
-                inner: FrameReader::new(stream.read),
+                inner: FrameReader::with_max_body(stream.read, max_body),
             },
             write: FramedWrite {
                 inner: stream.write,

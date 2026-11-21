@@ -33,7 +33,7 @@ const SHRINK_ABOVE: usize = 1024 * 1024;
 pub enum FrameError {
     /// 머리가 [`MAX_HEADER_BYTES`] 를 넘었다.
     HeaderTooLarge,
-    /// `Content-Length` 가 [`MAX_BODY_BYTES`] 를 넘었다(값).
+    /// `Content-Length` 가 읽는 쪽의 본문 상한(기본 [`MAX_BODY_BYTES`])을 넘었다(값).
     BodyTooLarge(u64),
     /// `Content-Length` 가 없다.
     MissingContentLength,
@@ -48,9 +48,7 @@ impl fmt::Display for FrameError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::HeaderTooLarge => write!(f, "header is larger than {MAX_HEADER_BYTES} bytes"),
-            Self::BodyTooLarge(n) => {
-                write!(f, "body of {n} bytes is larger than {MAX_BODY_BYTES} bytes")
-            }
+            Self::BodyTooLarge(n) => write!(f, "body of {n} bytes is larger than the frame limit"),
             Self::MissingContentLength => f.write_str("no Content-Length header"),
             Self::BadHeader(detail) => write!(f, "bad header: {detail}"),
             Self::Truncated => f.write_str("the stream ended inside a message"),
@@ -65,14 +63,32 @@ impl std::error::Error for FrameError {}
 pub struct FrameReader<R> {
     inner: R,
     buf: Vec<u8>,
+    max_body: usize,
 }
 
 impl<R: AsyncRead + Unpin> FrameReader<R> {
+    /// 본문 상한 [`MAX_BODY_BYTES`].
     pub fn new(inner: R) -> Self {
+        Self::with_max_body(inner, MAX_BODY_BYTES)
+    }
+
+    /// 본문 상한을 정해 만든다([`MAX_BODY_BYTES`] 보다 크게는 못 잡는다). 상대를 아직 믿지 않는 동안(링크의 핸드셰이크 — 18-m7-plan
+    /// M7-04) 작게 두고 [`Self::set_max_body`] 로 올린다.
+    pub fn with_max_body(inner: R, max_body: usize) -> Self {
         Self {
             inner,
             buf: Vec::new(),
+            max_body: max_body.min(MAX_BODY_BYTES),
         }
+    }
+
+    /// 다음 틀부터의 본문 상한([`MAX_BODY_BYTES`] 보다 크게는 못 잡는다).
+    pub fn set_max_body(&mut self, max_body: usize) {
+        self.max_body = max_body.min(MAX_BODY_BYTES);
+    }
+
+    pub fn max_body(&self) -> usize {
+        self.max_body
     }
 
     /// 다음 틀의 본문. 틀 사이에서 스트림이 끝나면 `None`.
@@ -93,7 +109,7 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
                 };
             }
         };
-        let length = content_length(&self.buf[..header_end - TERMINATOR.len()])?;
+        let length = content_length(&self.buf[..header_end - TERMINATOR.len()], self.max_body)?;
         let total = header_end + length;
         while self.buf.len() < total {
             if self.fill(total - self.buf.len()).await? == 0 {
@@ -120,7 +136,7 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
 }
 
 /// 머리 줄들(마지막 빈 줄 없이)에서 본문 길이.
-fn content_length(header: &[u8]) -> Result<usize, FrameError> {
+fn content_length(header: &[u8], max_body: usize) -> Result<usize, FrameError> {
     let text = std::str::from_utf8(header)
         .map_err(|_| FrameError::BadHeader("header is not ASCII".to_owned()))?;
     let mut length: Option<u64> = None;
@@ -148,7 +164,7 @@ fn content_length(header: &[u8]) -> Result<usize, FrameError> {
         }
     }
     let n = length.ok_or(FrameError::MissingContentLength)?;
-    if n > MAX_BODY_BYTES as u64 {
+    if n > max_body as u64 {
         return Err(FrameError::BodyTooLarge(n));
     }
     usize::try_from(n).map_err(|_| FrameError::BodyTooLarge(n))
@@ -296,6 +312,24 @@ mod tests {
             read_all(vec![at.into_bytes()]).await,
             Err(FrameError::Truncated)
         ));
+    }
+
+    /// 읽는 쪽이 낮춘 상한은 다음 틀부터 그 값이고, 올리면 다시 받는다. [`MAX_BODY_BYTES`] 위로는 올라가지 않는다.
+    #[tokio::test]
+    async fn a_lowered_limit_refuses_bigger_bodies_until_raised() {
+        let mut both = frame(&"a".repeat(10));
+        both.extend(frame(&"b".repeat(100)));
+        let mut reader = FrameReader::with_max_body(Chunks::new(vec![both.clone()]), 64);
+        assert_eq!(reader.read_frame().await.unwrap().unwrap().len(), 10);
+        assert!(matches!(
+            reader.read_frame().await,
+            Err(FrameError::BodyTooLarge(100))
+        ));
+        let mut reader = FrameReader::with_max_body(Chunks::new(vec![both]), 64);
+        assert_eq!(reader.read_frame().await.unwrap().unwrap().len(), 10);
+        reader.set_max_body(usize::MAX);
+        assert_eq!(reader.max_body(), MAX_BODY_BYTES);
+        assert_eq!(reader.read_frame().await.unwrap().unwrap().len(), 100);
     }
 
     #[tokio::test]

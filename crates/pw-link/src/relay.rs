@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 
 use crate::claim::{CallerClaim, admit};
 use crate::device::{DeviceId, DeviceKey, PublicKey, random_challenge};
-use crate::frame::{CONTROL, Framed, Kind, LinkFrame};
+use crate::frame::{CONTROL, Framed, HANDSHAKE_MAX_FRAME, Kind, LinkFrame};
 use crate::handshake::{
     Auth, Challenge, Hello, PROTOCOL, Reject, RejectReason, Signer, Versions, Welcome, transcript,
 };
@@ -76,7 +76,7 @@ pub struct Proven {
 
 /// 전송 하나를 받아 링크가 닫힐 때까지 돈다.
 pub async fn serve(stream: LinkStream, parts: &RelayParts) -> Result<CloseReason, ServeError> {
-    let mut framed = Framed::new(stream);
+    let mut framed = Framed::handshake(stream);
     let first = tokio::time::timeout(parts.limits.dead_after, framed.read.read())
         .await
         .map_err(|_| ServeError::Timeout)?;
@@ -90,10 +90,25 @@ pub async fn serve(stream: LinkStream, parts: &RelayParts) -> Result<CloseReason
 
 /// 데몬이 첫 틀을 이미 읽은 전송. 첫 틀이 `hello` 가 아니면 거절한다.
 pub async fn serve_framed(
-    mut framed: Framed,
+    framed: Framed,
     first: LinkFrame,
     parts: &RelayParts,
 ) -> Result<CloseReason, ServeError> {
+    serve_proven(framed, first, parts, |_| {}).await
+}
+
+/// [`serve_framed`] 와 같되 증명을 마친 순간 `on_proven` 을 부른다(링크가 닫힐 때까지 돌기 전에). 데몬(M7-04)은 여기서 그 연결을
+/// 「증명 전 연결」 수에서 빼고 붙은 링크(owner 인가)를 센다.
+///
+/// 핸드셰이크 동안은 틀 상한이 [`HANDSHAKE_MAX_FRAME`] 이고(부른 쪽이 `Framed::new` 로 만들었어도 여기서 낮춘다), 증명 뒤에만 링크 틀
+/// 상한으로 올린다.
+pub async fn serve_proven(
+    mut framed: Framed,
+    first: LinkFrame,
+    parts: &RelayParts,
+    on_proven: impl FnOnce(&Proven) + Send,
+) -> Result<CloseReason, ServeError> {
+    framed.read.set_max_body(HANDSHAKE_MAX_FRAME);
     // 표를 핸드셰이크 **전에** 구독한다 — role 을 읽은 뒤에 구독하면 그 사이의 해제 · role 변경을 「이미 본 값」 으로 놓친다.
     let mut table = parts.pairings.watch();
     let proven = tokio::time::timeout(
@@ -103,6 +118,8 @@ pub async fn serve_framed(
     .await
     .map_err(|_| ServeError::Timeout)??;
     tracing::info!(target: "pw_link", device = %proven.device, role = ?proven.role, "link proven");
+    framed.read.set_max_body(pw_wire::MAX_BODY_BYTES);
+    on_proven(&proven);
     let (mux, mut inbox) = Mux::start(framed, parts.limits);
     let closed = mux.closed();
 

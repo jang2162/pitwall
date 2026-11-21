@@ -650,6 +650,52 @@ async fn a_frame_over_the_body_limit_breaks_the_link() {
     relay.await.unwrap();
 }
 
+/// 증명 전(첫 틀 · 핸드셰이크)에는 [`crate::HANDSHAKE_MAX_FRAME`] 을 넘는 틀이 링크를 끊고, 증명 뒤에는 그보다 큰 채널 메시지도
+/// 지난다(18-m7-plan M7-04 — M7-03 리뷰 권고 1).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_frame_limit_stays_small_until_the_desktop_is_proven() {
+    let fx = fixture(Setup::default());
+    // 첫 틀이 상한을 한 바이트 넘는다 — 본문을 다 보내도 Relay 는 머리만 보고 끊는다.
+    let mut framed = Framed::new(fx.transport_open().await);
+    let pad = "a".repeat(crate::HANDSHAKE_MAX_FRAME);
+    let _ = framed
+        .write
+        .write(&LinkFrame::control(Kind::Hello, json!({ "pad": pad })))
+        .await;
+    assert!(read_until_closed(&mut framed).await.is_empty());
+    eventually("the relay read an oversized first frame", || {
+        fx.serve_results
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| matches!(r, Err(ServeError::Io(why)) if why.contains("larger than")))
+    })
+    .await;
+
+    // 증명 뒤에는 그보다 큰 메시지(200 KiB)가 Host 에 닿고 답이 온다.
+    let mut framed = raw_desktop(&fx).await;
+    framed.write.write(&connect_frame(1)).await.unwrap();
+    while raw_read(&mut framed).await.unwrap().kind != Kind::Accepted {}
+    let big = "x".repeat(200 * 1024);
+    framed
+        .write
+        .write(&LinkFrame::new(
+            1,
+            Kind::Msg,
+            json!({"jsonrpc": "2.0", "id": 7, "method": "test.write", "params": {"text": big}}),
+        ))
+        .await
+        .unwrap();
+    loop {
+        let frame = raw_read(&mut framed)
+            .await
+            .expect("the link closed on a big proven frame");
+        if frame.kind == Kind::Msg && frame.channel == 1 && frame.body["id"] == json!(7) {
+            break;
+        }
+    }
+}
+
 /// 손으로 짠 Relay 와 붙을 Desktop(그 Relay 키를 기대한다).
 fn desktop_for(transport: transport::MemoryTransport, relay_key: &DeviceKey) -> RemoteHost {
     desktop_with(transport, relay_key, LinkLimits::default())
