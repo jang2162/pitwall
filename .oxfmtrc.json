@@ -23,6 +23,7 @@
     "/crates/pw-syntax/tests/fixtures/",
     "/crates/pw-tools/snapshot/",
     "/crates/pw-index/tests/fixtures/",
-    "/crates/pw-lsp/tests/fixtures/"
+    "/crates/pw-lsp/tests/fixtures/",
+    "/crates/pw-release/tests/fixtures/"
   ]
 }

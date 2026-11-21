@@ -1,15 +1,22 @@
 [package]
 name = "pw-release"
-description = "Release pipeline helpers: tag/version check and the updater manifest"
+description = "Release pipeline helpers: tag/version check, the updater manifest and the signed relay manifest"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# Relay 매니페스트 서명(minisign 서명 · 공개키 파일의 base64 — updater 와 같은 꼴, src/relay.rs).
+base64 = "0.22.1"
+# Relay 매니페스트의 서명 검증. updater(`tauri-plugin-updater`)가 쓰는 것과 같은 크레이트 · 같은 판이다.
+minisign-verify = "0.3.0"
 # 태그의 버전을 읽고 채널(stable · preview)을 가른다.
 semver = "1.0.28"
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+# Relay 바이너리의 해시(매니페스트 · 원격 확인).
+sha2 = "0.10.9"
 
 [dev-dependencies]
 tempfile = "3.27.0"

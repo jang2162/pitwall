@@ -5,12 +5,15 @@
 //!   **버전의 원천은 소스다**(워크스페이스 `Cargo.toml` 의 `version`, 데스크톱 크레이트가 그것을 쓴다). 공개는 tag push
 //!   이벤트에서만이고, 그때 태그가 소스 버전과 같고 태그 커밋이 `origin/main` 의 조상이어야 하며, 아니면 실패한다.
 //! - [`manifest`]: 빌드 산출물에서 updater 매니페스트(`latest.json`)를 만든다.
+//! - [`relay`]: Relay 배포물의 자산 이름 · 해시 · 서명 매니페스트(`relay-manifest.json`) · 개발 빌드 갈래(18-m7-plan M7-05).
 
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 use semver::Version;
 use serde_json::{Map, Value, json};
+
+pub mod relay;
 
 /// 소스의 버전. 이 크레이트도 데스크톱 앱처럼 `version.workspace = true` 다(시험이 지킨다).
 pub const SOURCE_VERSION: &str = env!("CARGO_PKG_VERSION");
