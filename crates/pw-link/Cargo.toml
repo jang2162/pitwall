@@ -20,7 +20,8 @@ pw-rpc = { path = "../pw-rpc" }
 # 링크 틀은 LSP · DAP 와 같은 `Content-Length` 틀이다(메인 판정 M7-P2).
 pw-wire = { path = "../pw-wire" }
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
+# raw_value: 받아 둔 채널 메시지는 원시 바이트로 두고 꺼낼 때 푼다(받기 예산이 실제 메모리 상한이 되게).
+serde_json = { workspace = true, features = ["raw_value"] }
 # 머신 id = Relay 기기 공개키의 SHA-256 지문(메인 판정 M7-P6). ed25519-dalek 이 쓰는 판과 같다.
 sha2 = "0.11.1"
 tokio = { workspace = true, features = ["rt", "sync", "macros", "time", "io-util", "fs"] }

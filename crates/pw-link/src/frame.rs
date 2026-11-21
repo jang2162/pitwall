@@ -11,6 +11,7 @@ use std::io;
 use pw_wire::{FrameReader, write_frame};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use serde_json::value::RawValue;
 
 use crate::transport::{BoxRead, BoxWrite, LinkStream};
 
@@ -110,6 +111,38 @@ impl FramedRead {
         let frame = serde_json::from_slice::<LinkFrame>(&body)
             .map_err(|e| FrameError::Malformed(e.to_string()))?;
         Ok(Some((frame, body.len())))
+    }
+
+    /// [`Self::read`] 와 같되 본문을 풀지 않는다(원시 JSON 그대로 — 꼴만 확인한다).
+    pub(crate) async fn read_raw(&mut self) -> Result<Option<(RawFrame, usize)>, FrameError> {
+        let Some(body) = self.inner.read_frame().await.map_err(FrameError::Wire)? else {
+            return Ok(None);
+        };
+        let frame = serde_json::from_slice::<RawFrame>(&body)
+            .map_err(|e| FrameError::Malformed(e.to_string()))?;
+        Ok(Some((frame, body.len())))
+    }
+}
+
+/// 본문을 풀지 않은 틀. 채널 메시지는 받는 쪽이 꺼낼 때까지 이 꼴로 둔다 — 푼 `serde_json::Value` 는 와이어 바이트보다 몇 배 커서
+/// (원소 하나에 수십 바이트) 받기 예산이 메모리 상한이 되지 못한다.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawFrame {
+    #[serde(rename = "ch")]
+    pub channel: u32,
+    pub kind: Kind,
+    #[serde(default)]
+    pub body: Option<Box<RawValue>>,
+}
+
+impl RawFrame {
+    /// 본문을 푼 틀(링크 틀 — 작다).
+    pub(crate) fn into_frame(self) -> Result<LinkFrame, String> {
+        let body = match self.body {
+            Some(raw) => serde_json::from_str(raw.get()).map_err(|e| e.to_string())?,
+            None => Value::Null,
+        };
+        Ok(LinkFrame::new(self.channel, self.kind, body))
     }
 }
 

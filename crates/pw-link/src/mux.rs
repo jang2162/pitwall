@@ -30,20 +30,27 @@ use tokio::sync::{Notify, mpsc};
 use tokio::time::{Instant, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 
-use crate::frame::{CONTROL, Framed, FramedRead, FramedWrite, Kind, LinkFrame};
+use serde_json::value::RawValue;
+
+use crate::frame::{CONTROL, Framed, FramedRead, FramedWrite, Kind, LinkFrame, RawFrame};
 
 /// 링크의 상한 · 시한. 값은 출발값이다(18-m7-plan M7-03 ④).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LinkLimits {
     /// 링크 하나의 채널 수 상한.
     pub max_channels: usize,
-    /// 채널마다 받는 쪽이 기본으로 내주는 창(바이트). 이보다 큰 틀은 `want` 로 링크 받기 예산에서 빌린다.
+    /// 채널마다 받는 쪽이 기본으로 내주는 창(바이트). 이보다 큰 틀은 `want` 로 링크 받기 예산에서 빌린다. 보내는 쪽은 상대의
+    /// 기본 창을 **자기 값으로 가정한다**(`want` 를 낼지 판정) — 양쪽은 핸드셰이크에서 앱 판이 정확히 같아야 붙고 이 값은 설정이
+    /// 아니라 빌드에 박힌 기본값이라 같다. 이 값을 설정으로 열거나 판마다 바꾸면 창을 채널 열기(`connect` · `accepted`)에 실어야 한다.
     pub window: usize,
     /// 링크 하나에서 받는 쪽이 내준 창의 합의 상한(바이트). 기본은 채널 상한 × 기본 창(64 MiB)에 큰 틀 셋(64 MiB 씩)을 빌려 줄
     /// 자리를 더한 것이다.
     pub receive_budget: usize,
     /// 채널마다 창이 없어 쌓인 보낼 바이트의 상한. 넘으면 그 채널을 닫는다.
     pub send_buffer: usize,
+    /// 링크 하나에서 창이 없어 못 보내고 쌓인 채널 메시지의 합의 상한(바이트). 넘으면 그 메시지의 채널을 닫는다 — `want` 에
+    /// 답하지도 채널을 닫지도 않는 상대에게 채널마다 큰 틀이 쌓이지 않게.
+    pub send_budget: usize,
     /// 이쪽이 내는 링크 틀(`pong` · `credit` · 채널 응답 · 닫기)이 못 나가고 쌓일 수 있는 바이트. 넘으면 링크를 끊는다.
     pub control_buffer: usize,
     /// 하트비트 간격.
@@ -59,6 +66,7 @@ impl Default for LinkLimits {
             window: 256 * 1024,
             receive_budget: 256 * 1024 * 1024,
             send_buffer: 16 * 1024 * 1024,
+            send_budget: 256 * 1024 * 1024,
             control_buffer: 256 * 1024,
             ping_every: Duration::from_secs(10),
             dead_after: Duration::from_secs(30),
@@ -111,6 +119,10 @@ struct Out {
     windowed: bool,
 }
 
+/// 받아 두고 아직 꺼내지 않은 채널 메시지: 원시 JSON 과 그 와이어 바이트 수. 꺼낼 때([`ChannelRx::recv`]) 푼다 — 받기 예산은 이
+/// 원시 바이트를 센다.
+type Held = (Box<RawValue>, usize);
+
 struct Chan {
     out: VecDeque<Out>,
     out_bytes: usize,
@@ -118,7 +130,7 @@ struct Chan {
     /// `ready` 줄에 들어 있는가.
     queued: bool,
     /// 받은 메시지를 꺼내 쓰는 쪽. 채널을 닫으면 버려져 받는 쪽이 끝을 본다.
-    inbound: mpsc::UnboundedSender<(Value, usize)>,
+    inbound: mpsc::UnboundedSender<Held>,
     /// 상대가 창을 넘지 않고 더 보낼 수 있는 바이트.
     recv_remaining: i64,
     /// 꺼내 썼지만 아직 `credit` 으로 돌려주지 않은 바이트.
@@ -149,6 +161,8 @@ struct State {
     ready: VecDeque<u32>,
     /// 열린 채널의 `grant` 합.
     budget_used: usize,
+    /// 열린 채널의 `out_bytes` 합(보내기 예산).
+    send_used: usize,
     shut: bool,
 }
 
@@ -157,6 +171,7 @@ impl State {
     fn remove_channel(&mut self, channel: u32) -> Option<Chan> {
         let chan = self.channels.remove(&channel)?;
         self.budget_used -= chan.grant;
+        self.send_used -= chan.out_bytes;
         Some(chan)
     }
 }
@@ -182,7 +197,7 @@ pub(crate) struct Mux {
 
 /// 채널의 받는 쪽. 꺼낼 때마다 상대에게 창을 돌려준다.
 pub(crate) struct ChannelRx {
-    rx: mpsc::UnboundedReceiver<(Value, usize)>,
+    rx: mpsc::UnboundedReceiver<Held>,
     mux: Mux,
     channel: u32,
 }
@@ -190,9 +205,17 @@ pub(crate) struct ChannelRx {
 impl ChannelRx {
     /// 다음 메시지. 채널이 닫히고 남은 것을 다 꺼냈으면 `None`.
     pub(crate) async fn recv(&mut self) -> Option<Value> {
-        let (value, len) = self.rx.recv().await?;
-        self.mux.consumed(self.channel, len, self.rx.is_empty());
-        Some(value)
+        loop {
+            let (raw, len) = self.rx.recv().await?;
+            self.mux.consumed(self.channel, len, self.rx.is_empty());
+            // 원시 JSON 은 받을 때 꼴을 확인했다 — 풀리지 않는 것(깊이 상한 등)은 버린다.
+            match serde_json::from_str::<Value>(raw.get()) {
+                Ok(value) => return Some(value),
+                Err(e) => {
+                    tracing::debug!(target: "pw_link", channel = self.channel, error = %e, "dropped an undecodable message");
+                }
+            }
+        }
     }
 }
 
@@ -247,6 +270,7 @@ impl Mux {
             state.control_bytes = 0;
             state.ready.clear();
             state.budget_used = 0;
+            state.send_used = 0;
             std::mem::take(&mut state.channels)
         };
         for chan in channels.into_values() {
@@ -337,8 +361,12 @@ impl Mux {
         let bytes = LinkFrame::new(channel, Kind::Msg, body).encode();
         let mut state = lock(&self.shared.state);
         let limit = self.shared.limits.send_buffer;
+        let send_budget = self.shared.limits.send_budget;
         let State {
-            channels, ready, ..
+            channels,
+            ready,
+            send_used,
+            ..
         } = &mut *state;
         let Some(chan) = channels.get_mut(&channel) else {
             return false;
@@ -355,6 +383,13 @@ impl Mux {
             self.close_channel(channel, "send buffer full");
             return false;
         }
+        if *send_used + bytes.len() > send_budget {
+            drop(state);
+            tracing::debug!(target: "pw_link", channel, "link send budget exhausted; closing the channel");
+            self.close_channel(channel, "link send budget exhausted");
+            return false;
+        }
+        *send_used += bytes.len();
         chan.out_bytes += bytes.len();
         chan.out.push_back(Out {
             bytes,
@@ -460,6 +495,7 @@ impl Mux {
             channels,
             ready,
             budget_used,
+            send_used,
             control,
             control_bytes,
             ..
@@ -499,11 +535,13 @@ impl Mux {
             chan.wanted = false;
             if out.windowed {
                 chan.out_bytes -= out.bytes.len();
+                *send_used -= out.bytes.len();
                 chan.send_window -= i64::try_from(out.bytes.len()).unwrap_or(i64::MAX);
             } else {
                 // 순서대로 닫는 틀 — 다 보냈으니 채널을 걷는다.
                 if let Some(chan) = channels.remove(&channel) {
                     *budget_used -= chan.grant;
+                    *send_used -= chan.out_bytes;
                     chan.cancel.cancel();
                 }
                 return Some(out.bytes);
@@ -548,7 +586,7 @@ impl Mux {
             let result = tokio::select! {
                 biased;
                 () = closed.cancelled() => return,
-                result = read.read() => result,
+                result = read.read_raw() => result,
             };
             match result {
                 Ok(Some((frame, len))) => {
@@ -572,19 +610,28 @@ impl Mux {
 
     fn dispatch(
         &self,
-        frame: LinkFrame,
+        raw: RawFrame,
         len: usize,
         inbox: &mpsc::UnboundedSender<LinkFrame>,
     ) -> Result<(), String> {
+        // 채널 메시지는 풀지 않고 받아 둔다.
+        if raw.kind == Kind::Msg && raw.channel != CONTROL {
+            let body = match raw.body {
+                Some(body) => body,
+                None => RawValue::from_string("null".to_owned()).map_err(|e| e.to_string())?,
+            };
+            self.on_msg(raw.channel, body, len);
+            return Ok(());
+        }
+        let frame = raw.into_frame()?;
         match frame.kind {
             Kind::Ping => {
                 self.send_control(&LinkFrame::control(Kind::Pong, Value::Null));
             }
             Kind::Pong => {}
-            Kind::Msg if frame.channel == CONTROL => {
+            Kind::Msg => {
                 return Err("a message on the link channel".to_owned());
             }
-            Kind::Msg => self.on_msg(frame.channel, frame.body, len),
             Kind::Credit => {
                 let credit = serde_json::from_value::<CreditBody>(frame.body)
                     .map_err(|e| format!("bad credit: {e}"))?;
@@ -608,7 +655,7 @@ impl Mux {
         Ok(())
     }
 
-    fn on_msg(&self, channel: u32, body: Value, len: usize) {
+    fn on_msg(&self, channel: u32, body: Box<RawValue>, len: usize) {
         let mut state = lock(&self.shared.state);
         let Some(chan) = state.channels.get_mut(&channel) else {
             // 이미 닫은 채널에 오던 것.
@@ -735,4 +782,145 @@ fn enqueue(chan: &mut Chan, ready: &mut VecDeque<u32>, channel: u32, base: usize
     chan.queued = true;
     ready.push_back(channel);
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use serde_json::value::RawValue;
+    use serde_json::{Value, json};
+    use tokio::sync::mpsc;
+
+    use super::{Chan, LinkLimits, Mux};
+    use crate::frame::{Framed, Kind, LinkFrame};
+    use crate::transport::LinkStream;
+
+    fn framed_pair() -> (Framed, Framed) {
+        let (a, b) = tokio::io::duplex(1 << 20);
+        (
+            Framed::new(LinkStream::split(a)),
+            Framed::new(LinkStream::split(b)),
+        )
+    }
+
+    async fn until(what: &str, mut check: impl FnMut() -> bool) {
+        for _ in 0..500 {
+            if check() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("{what}");
+    }
+
+    /// 받아 둔 메시지는 원시 JSON 바이트로 남는다 — 받기 예산(와이어 바이트)이 실제 메모리 상한이 되게(델타 리뷰 권고 1). 큐의 원소
+    /// 타입을 푼 `Value` 로 되돌리면 이 시험이 컴파일되지 않는다.
+    #[tokio::test]
+    async fn held_messages_stay_as_raw_bytes() {
+        fn held(chan: &Chan) -> &mpsc::UnboundedSender<(Box<RawValue>, usize)> {
+            &chan.inbound
+        }
+        let (a, b) = framed_pair();
+        let (a, _) = Mux::start(a, LinkLimits::default());
+        let (b, _) = Mux::start(b, LinkLimits::default());
+        let (mut rx, _) = a.add_channel(1).unwrap();
+        b.add_channel(1).unwrap();
+        // 원소마다 2 바이트인 배열 — 풀면 원소마다 수십 바이트가 된다.
+        let zeros = Value::Array(vec![json!(0); 10_000]);
+        let wire = serde_json::to_string(&zeros).unwrap();
+        assert!(b.send_msg(1, zeros.clone()));
+        let (raw, len) = rx.rx.recv().await.unwrap();
+        assert_eq!(raw.get(), wire);
+        assert!(len >= wire.len() && len < wire.len() + 64, "{len}");
+        assert!(
+            lock(&a)
+                .channels
+                .get(&1)
+                .is_some_and(|c| !held(c).is_closed())
+        );
+    }
+
+    fn lock(mux: &Mux) -> std::sync::MutexGuard<'_, super::State> {
+        super::lock(&mux.shared.state)
+    }
+
+    /// 순서대로 닫은 채널(Host 연결이 끝나 마지막 응답 뒤 `close`)도 그 창을 예산으로 돌린다 — 새면 요청 몇 번 뒤 그 링크의 채널
+    /// 열기가 모두 거절된다(델타 리뷰 권고 2).
+    #[tokio::test]
+    async fn finished_channels_return_their_window_to_the_budget() {
+        let limits = LinkLimits {
+            window: 64 * 1024,
+            receive_budget: 192 * 1024,
+            ..LinkLimits::default()
+        };
+        let (a, b) = framed_pair();
+        let (a, _) = Mux::start(a, limits);
+        let (b, _) = Mux::start(b, limits);
+        for channel in 1..=10 {
+            let _rx = a
+                .add_channel(channel)
+                .unwrap_or_else(|e| panic!("channel {channel}: {e:?}"));
+            let _peer = b.add_channel(channel).unwrap();
+            assert!(a.send_msg(channel, json!({"last": channel})));
+            a.finish_channel(channel);
+            until("the finished channel stayed open", || {
+                a.channel_count() == 0
+            })
+            .await;
+            until("the peer kept the channel", || b.channel_count() == 0).await;
+        }
+        assert_eq!(lock(&a).budget_used, 0);
+        assert_eq!(lock(&a).send_used, 0);
+    }
+
+    /// 틀 상한을 넘는 `want` 는 예산이 남아도 빌려 주지 않고 그 채널을 닫는다.
+    #[tokio::test]
+    async fn a_want_past_the_frame_limit_closes_the_channel() {
+        let (a, mut peer) = framed_pair();
+        let (a, _) = Mux::start(a, LinkLimits::default());
+        let _rx = a.add_channel(1).unwrap();
+        let want = json!({"bytes": pw_wire::MAX_BODY_BYTES + 1});
+        peer.write
+            .write(&LinkFrame::new(1, Kind::Want, want))
+            .await
+            .unwrap();
+        loop {
+            let (frame, _) = peer.read.read().await.unwrap().expect("link closed");
+            if frame.kind == Kind::Credit {
+                panic!("lent a window for a frame past the limit");
+            }
+            if frame.kind == Kind::Close {
+                assert_eq!(frame.channel, 1);
+                break;
+            }
+        }
+        assert_eq!(a.channel_count(), 0);
+    }
+
+    /// 창이 없어 못 보낸 메시지의 합은 링크 보내기 예산을 넘지 않는다 — `want` 에 답하지 않는 상대에게 채널마다 큰 틀이 쌓이지
+    /// 않게(델타 리뷰 권고 4). 넘긴 메시지의 채널만 닫힌다.
+    #[tokio::test]
+    async fn queued_messages_stay_within_the_link_send_budget() {
+        let limits = LinkLimits {
+            window: 16 * 1024,
+            send_budget: 100 * 1024,
+            ..LinkLimits::default()
+        };
+        // 상대는 읽기만 하고 창을 돌려주지도 `want` 에 답하지도 않는다.
+        let (a, mut peer) = framed_pair();
+        let (a, _) = Mux::start(a, limits);
+        tokio::spawn(async move { while let Ok(Some(_)) = peer.read.read().await {} });
+        let _one = a.add_channel(1).unwrap();
+        let _two = a.add_channel(2).unwrap();
+        let big = json!("x".repeat(60 * 1024));
+        assert!(a.send_msg(1, big.clone()));
+        assert!(
+            !a.send_msg(2, big),
+            "the link held more than its send budget"
+        );
+        assert!(a.has_channel(1));
+        assert!(!a.has_channel(2));
+        assert!(lock(&a).send_used <= limits.send_budget);
+    }
 }
