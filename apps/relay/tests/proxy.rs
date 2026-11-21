@@ -11,6 +11,13 @@ use std::time::{Duration, Instant};
 const BIN: &str = env!("CARGO_BIN_EXE_pitwall-relay");
 
 fn relay(root: &Path, args: &[&str]) -> Command {
+    // 시험이 모르는 데몬(동시에 뜬 proxy 가 늦게 띄워 시험이 끈 데몬 뒤에 자리를 쥔 것 등)이 시험 뒤에 30분 남지 않게 유휴 시한을
+    // 짧게 둔다. 시험이 relay.toml 을 따로 쓰면 그것을 쓴다.
+    let config = root.join("config/relay/relay.toml");
+    if !config.exists() {
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(&config, "schema = 1\n[idle]\nexit_after = \"10s\"\n").unwrap();
+    }
     let mut command = Command::new(BIN);
     command.args(args);
     for (var, leaf) in [
