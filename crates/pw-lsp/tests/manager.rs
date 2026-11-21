@@ -1586,6 +1586,27 @@ async fn servers_found_in_the_installed_tools_stop_before_the_tool_is_removed() 
     assert_eq!(env.state_of("ruff"), Some(LspInstanceState::Ready));
 }
 
+/// `stop_all` 은 떠 있는 서버를 모두 끝내고 인스턴스를 지운다 — 다음 문서 열기가 다시 띄운다(Relay 데몬이 링크 없이
+/// `[idle] stop_lsp_after` 가 지나면 부른다 — 18-m7-plan M7-04 ④).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stop_all_ends_every_server_and_the_next_open_starts_again() {
+    let env = Env::new(EnvOptions::default());
+    env.fake("ruff", incremental());
+    let mut win = env.window();
+    win.open(&env, &env.file("app.py", ""), "Python", "").await;
+    env.wait_state("ruff", LspInstanceState::Ready).await;
+    let pids = env.manager.pids(&env.id);
+    assert_eq!(pids.len(), 1);
+    assert_eq!(env.manager.stop_all().await, 1);
+    assert!(env.manager.pids(&env.id).is_empty());
+    assert!(pids.iter().all(|p| !alive(*p)));
+    assert_eq!(env.manager.stop_all().await, 0);
+    win.open(&env, &env.file("other.py", ""), "Python", "")
+        .await;
+    env.wait_state("ruff", LspInstanceState::Ready).await;
+    assert_eq!(env.manager.pids(&env.id).len(), 1);
+}
+
 // ---- 리뷰 H1: 기동 중(`initialize` 를 기다리는) 서버 -------------------------------------------------------------------------
 
 /// `initialize` 에 `ms` 늦게 답하고, 그동안 다른 것에는 답하지 않는 가짜 서버(기동에 묶인 서버 — `shutdown` 에 답하지 않고 `exit`

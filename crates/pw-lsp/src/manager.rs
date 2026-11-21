@@ -1847,6 +1847,40 @@ impl LspManager {
         }
     }
 
+    /// 떠 있는 언어 서버를 모두 끝낸다(끝날 때까지 기다린다). 인스턴스는 지운다 — 다음 문서 열기가 다시 띄운다. 끝낸 서버 수.
+    ///
+    /// Relay 데몬이 링크 없이 `[idle] stop_lsp_after` 만큼 지나면 부른다(18-m7-plan M7-04 ④ — 가벼움 D56). 창 연결이 닫히면 그
+    /// 연결의 서버는 이미 끝나므로(연결 닫힘 — `session_closed`), 이것이 끝내는 것은 링크 없이 남은 연결(MCP 세션 등)의 서버다.
+    pub async fn stop_all(&self) -> usize {
+        let (servers, projects) = {
+            let mut state = lock(&self.inner.state);
+            let mut servers = Vec::new();
+            let mut projects = BTreeSet::new();
+            let keys: Vec<InstanceKey> = state.instances.keys().cloned().collect();
+            for key in keys {
+                if let Some(mut instance) = state.instances.remove(&key) {
+                    if let Some((_, idle)) = instance.idle.take() {
+                        idle.cancel();
+                    }
+                    if let Some(server) = instance.take_server(LspInstanceState::Stopped) {
+                        projects.insert(key.project_id.clone());
+                        servers.push(server);
+                    }
+                }
+            }
+            (servers, projects)
+        };
+        for project in projects {
+            self.publish(&project);
+        }
+        let count = servers.len();
+        for taken in servers {
+            tracing::info!(target: "pw_lsp", server = taken.server.server_id(), "stopping an idle language server");
+            taken.end().await;
+        }
+        count
+    }
+
     fn control_key(&self, params: &LspServerControlParams) -> InstanceKey {
         InstanceKey {
             project_id: params.project_id.clone(),

@@ -105,3 +105,61 @@ async fn db_driver_list_returns_the_drivers_in_the_parts() {
         .collect();
     assert_eq!(kinds, ["mysql", "postgres", "redis", "sqlite"]);
 }
+
+/// Host 의 남은 일(`Assembled::activity`)이 열린 터미널을 센다 — Relay 데몬의 유휴 판정(18-m7-plan M7-04 ④)이 이것을 본다. 창의
+/// 연결이 닫혀 셸이 끝나면 0 으로 돌아온다.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_activity_counts_a_terminal_while_it_runs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = pw_core::registry::path::simplify(std::fs::canonicalize(tmp.path()).unwrap());
+    let assembled = common::assemble(
+        &base.join("app"),
+        Arc::new(MemorySecretStore::new()),
+        tokio::runtime::Handle::current(),
+    );
+    let activity = assembled.activity.clone();
+    let host = Arc::new(assembled.host);
+    let root = base.join("repo");
+    std::fs::create_dir_all(&root).unwrap();
+    let id = host
+        .registry()
+        .unwrap()
+        .create(NewProject {
+            root,
+            ..Default::default()
+        })
+        .unwrap()
+        .id;
+    let router = HostRouter::new();
+    router
+        .add_host(Arc::clone(&host) as Arc<dyn pw_core::Host>)
+        .unwrap();
+    router.bind_project(id.clone(), "local").unwrap();
+    let mut window = router
+        .connect(&Target::ProjectId(id.clone()), Caller::new(Role::Owner))
+        .await
+        .unwrap();
+    assert_eq!((activity.terminals(), activity.runs()), (0, 0));
+    common::call(
+        &mut window,
+        1,
+        "terminal.create",
+        json!({"projectId": id, "cols": 80, "rows": 24}),
+    )
+    .await
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while activity.terminals() != 1 {
+        assert!(Instant::now() < deadline, "the terminal is not counted");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    drop(window);
+    while activity.terminals() != 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the closed terminal is still counted"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}

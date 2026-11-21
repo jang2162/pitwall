@@ -424,6 +424,14 @@ impl Router {
         self
     }
 
+    /// 이름이 `prefix` 로 시작하는 메서드를 걷어 낸다(걷은 개수). 조립이 끝난 뒤 그 Host 에 없어야 할 갈래를 빼는 데 쓴다 — Relay 는
+    /// 묶음(`bundle.`)을 받지 않는다(18-m7-plan M7-04, M7-10 리뷰 권고 6).
+    pub fn remove_prefix(&mut self, prefix: &str) -> usize {
+        let before = self.entries.len();
+        self.entries.retain(|name, _| !name.starts_with(prefix));
+        before - self.entries.len()
+    }
+
     /// 등록된 메서드의 메타데이터를 이름순으로.
     pub fn methods(&self) -> Vec<&MethodMeta> {
         let mut metas: Vec<_> = self.entries.values().map(|e| &e.meta).collect();

@@ -1198,6 +1198,43 @@ async fn closing_a_project_stops_only_its_runs() {
     );
 }
 
+/// 끝나지 않은 실행의 수(`Runs::live_count`)는 모든 프로젝트를 세고 끝난 실행은 세지 않는다 — Relay 데몬의 유휴 판정(18-m7-plan
+/// M7-04 ④)이 본다.
+#[tokio::test(flavor = "multi_thread")]
+async fn live_runs_are_counted_across_projects() {
+    let f = Fixture::fake(RunLimits::default());
+    f.shell_config("job", "true");
+    let (other, other_root) = f.project("other", true);
+    f.config(
+        &other_root,
+        "job",
+        "name = \"job\"\ntype = \"shell\"\ncommand = \"true\"",
+    );
+    assert_eq!(f.runs.live_count(), 0);
+    let _mine = [f.start("job"), f.start("job")];
+    let grant = exec_grant(
+        &ConnectionScope::Project(other.clone()),
+        &other,
+        &Launch::Process,
+    )
+    .unwrap();
+    f.runs
+        .start(
+            &grant,
+            None,
+            None,
+            &RunStartParams {
+                project_id: other.clone(),
+                config_id: "job".into(),
+                ..RunStartParams::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(f.runs.live_count(), 3);
+    f.runs.stop_project(&f.project);
+    assert_eq!(f.runs.live_count(), 1);
+}
+
 /// compose 는 SIGINT 를 먼저(M6-01), 나머지는 SIGTERM 이다.
 #[test]
 fn compose_is_interrupted_first() {

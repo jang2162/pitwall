@@ -1161,6 +1161,16 @@ impl Runs {
             .ok_or_else(|| no_such_run(run_id))
     }
 
+    /// 끝나지 않은 실행(실행 중 · 중지 중)의 수 — 모든 프로젝트. Relay 데몬의 유휴 판정이 본다(18-m7-plan M7-04 ④ — 실행이 남은
+    /// 동안은 끝나지 않는다).
+    pub fn live_count(&self) -> usize {
+        lock(&self.inner.table)
+            .runs
+            .values()
+            .filter(|run| run.state() != RunState::Exited)
+            .count()
+    }
+
     /// 그 프로젝트의 실행들(실행 중 · 남은 끝난 실행, 시작 순).
     pub fn list(&self, project_id: &str) -> Vec<RunInfo> {
         let runs: Vec<Arc<Run>> = lock(&self.inner.table)

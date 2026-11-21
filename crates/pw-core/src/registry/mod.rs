@@ -309,7 +309,13 @@ struct Inner {
     bundle_adds: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// [`store::open`] 또는 읽기 전용 프로세스의 [`store::open_read_only`].
     open: fn(&Path, Duration) -> store::Opened,
+    /// 등록할 수 있는 루트의 판정([`Registry::set_root_policy`]). 없으면 어디든 받는다(Desktop).
+    root_policy: std::sync::RwLock<Option<RootPolicy>>,
 }
+
+/// 등록할 루트(정규화한 실제 경로)를 받는가. 받지 않으면 그 까닭(사람이 읽는 영어 한 줄). Relay 는 `relay.toml` 의 `roots` 안만
+/// 받는다(18-m7-plan M7-04 ③ — 원격 머신의 경계는 그 머신의 사람이 정한다, 메인 판정 M7-P5).
+pub type RootPolicy = Arc<dyn Fn(&Path) -> Result<(), String> + Send + Sync>;
 
 /// 잠긴 파일을 다루는 시간. 기본값은 [`store`] 의 상수다. 시험은 짧게 준다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -366,6 +372,7 @@ impl Registry {
                 remote: std::sync::RwLock::new(None),
                 bundle_adds: Mutex::new(HashMap::new()),
                 open: store::open,
+                root_policy: std::sync::RwLock::new(None),
             }),
         }
     }
@@ -377,6 +384,16 @@ impl Registry {
             .remote
             .write()
             .unwrap_or_else(PoisonError::into_inner) = Some(machines);
+    }
+
+    /// 등록할 수 있는 루트를 좁힌다(복제본이 모두 같은 것을 본다). 모든 등록(`project.create` · 에이전트의 `project_register` ·
+    /// 묶음 멤버 더하기 등)이 지나는 [`Self::create`] 가 심링크 · `..` 를 푼 실제 경로로 묻는다. 이미 등록된 프로젝트는 건드리지 않는다.
+    pub fn set_root_policy(&self, policy: RootPolicy) {
+        *self
+            .inner
+            .root_policy
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(policy);
     }
 
     /// 그 묶음의 더하기 잠금.
@@ -453,6 +470,18 @@ impl Registry {
 
     pub fn create(&self, new: NewProject) -> Result<Project, RegistryError> {
         let root = existing_dir(&new.root)?;
+        let policy = self
+            .inner
+            .root_policy
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(policy) = policy {
+            policy(&root).map_err(|reason| RegistryError::InvalidPath {
+                path: new.root.clone(),
+                reason,
+            })?;
+        }
         let root_text = utf8(&root)?.to_owned();
         let name = match new.name.as_deref().map(str::trim) {
             Some(name) if !name.is_empty() => name.to_owned(),

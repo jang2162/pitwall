@@ -144,6 +144,11 @@ impl Terminals {
         }
     }
 
+    /// 열린 터미널의 수. Relay 데몬의 유휴 판정이 본다(18-m7-plan M7-04 ④).
+    pub fn count(&self) -> usize {
+        lock(&self.sessions).len()
+    }
+
     /// 열린 터미널의 PTY(시험용).
     #[doc(hidden)]
     pub fn pty(&self, id: TerminalId) -> Option<Arc<Pty>> {

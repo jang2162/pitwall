@@ -70,10 +70,57 @@ pub struct HostParts {
 pub struct Assembled {
     pub host: LocalHost,
     pub db_sessions: Arc<pw_db::DbSessions>,
+    /// Host 에 남은 일(실행 · 터미널)과 언어 서버. Relay 데몬의 유휴 판정이 본다(18-m7-plan M7-04 ④).
+    pub activity: Activity,
 }
+
+/// Host 에 남은 일. 복제하면 같은 것을 본다.
+#[derive(Clone)]
+pub struct Activity {
+    terminals: Arc<pw_run::Terminals>,
+    runs: pw_run::runs::Runs,
+    lsp: pw_lsp::LspManager,
+}
+
+impl Activity {
+    /// 끝나지 않은 실행(디버그 세션 포함 — 실행 하나다)의 수.
+    pub fn runs(&self) -> usize {
+        self.runs.live_count()
+    }
+
+    /// 열린 터미널의 수.
+    pub fn terminals(&self) -> usize {
+        self.terminals.count()
+    }
+
+    /// 떠 있는 언어 서버를 모두 끝낸다(끝낸 수).
+    pub async fn stop_language_servers(&self) -> usize {
+        self.lsp.stop_all().await
+    }
+}
+
+/// 어느 앱의 Host 인가. 메서드 목록이 갈리는 곳은 여기 하나다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Flavor {
+    Desktop,
+    Relay,
+}
+
+/// Relay 의 Host 에서 걷어 내는 메서드 갈래. 묶음(`bundle.*`)은 Desktop 의 것이다 — 묶음 저장은 사람의 Desktop 레지스트리에 있고,
+/// 원격 머신의 레지스트리에 묶음을 만들 까닭이 없다(M7-10 리뷰 권고 6).
+pub const RELAY_EXCLUDED_PREFIXES: &[&str] = &["bundle."];
 
 /// 부품으로 Host 를 조립한다. 메서드를 모두 등록하고, Host 의 설정 · 레지스트리가 있으면 그것을 기능들에 붙인다.
 pub fn assemble(parts: HostParts) -> Assembled {
+    assemble_as(parts, Flavor::Desktop)
+}
+
+/// Relay 데몬(`pitwall-relay` — 18-m7-plan M7-04)의 Host. [`assemble`] 과 같은 조립에서 [`RELAY_EXCLUDED_PREFIXES`] 만 뺀다.
+pub fn assemble_relay(parts: HostParts) -> Assembled {
+    assemble_as(parts, Flavor::Relay)
+}
+
+fn assemble_as(parts: HostParts, flavor: Flavor) -> Assembled {
     let HostParts {
         id,
         paths,
@@ -118,6 +165,7 @@ pub fn assemble(parts: HostParts) -> Assembled {
         pw_lsp::ManagerOptions::default(),
     );
     let lsp_methods = lsp.clone();
+    let lsp_activity = lsp.clone();
     // 도구 registry(`tools.registry.*`, M4-03): 내장 스냅숏으로 시작하고, 처음 불릴 때 캐시를 읽고 가져오기를 뒤에서 한다.
     let tools_registry = Arc::new(pw_tools::ToolsRegistry::new());
     let tools_registry_methods = Arc::clone(&tools_registry);
@@ -148,6 +196,7 @@ pub fn assemble(parts: HostParts) -> Assembled {
     // 내장 터미널(M1-08). 창이 닫히면 그 연결의 터미널 스트림이 버려져 셸의 프로세스 트리가 끝난다.
     let terminals = Arc::new(pw_run::Terminals::new(Arc::clone(&runtime)));
     let terminal_methods = Arc::clone(&terminals);
+    let terminals_activity = Arc::clone(&terminals);
     // 실행 구성(`run.config.*`, M6-01). `.pitwall/run/*.toml` 을 읽고 쓴다.
     let run_configs = Arc::new(pw_run::config::methods::RunConfigs::new());
     let run_config_methods = Arc::clone(&run_configs);
@@ -155,6 +204,7 @@ pub fn assemble(parts: HostParts) -> Assembled {
     // 프로젝트 창이 사라지면 그 프로젝트의 실행을 끝내고(ipc.rs), 앱이 끝날 때는 `pw_run::shutdown` 이 함께 끝낸다.
     let runs = pw_run::runs::Runs::new(Arc::clone(&runtime));
     let run_methods = runs.clone();
+    let runs_activity = runs.clone();
     // 디버그 세션 · 브레이크포인트(`debug.*`, M6-17). 디버그 세션은 실행 하나다(실행 관리자의 종류 `debug`) — 어댑터 정의 · 해석은
     // 언어 서버와 같은 곳(`LspServers`, M6-16)을 쓴다. 끝내기는 실행의 끝내기를 따른다(창 닫기 · 앱 끝).
     let debugger = pw_debug::Debugger::new(
@@ -260,6 +310,13 @@ pub fn assemble(parts: HostParts) -> Assembled {
             pw_tools::install::methods::register(router, tools_installer_methods)
         })
         .methods(move |router| pw_mcp::methods::register(router, mcp_status_methods))
+        .methods(move |router| {
+            if flavor == Flavor::Relay {
+                for prefix in RELAY_EXCLUDED_PREFIXES {
+                    router.remove_prefix(prefix);
+                }
+            }
+        })
         .build();
     // 파일 감시(`fs.watch`)는 바뀐 경로를 버스로 낸다.
     fs_watch.attach(host.bus().clone());
@@ -429,6 +486,11 @@ pub fn assemble(parts: HostParts) -> Assembled {
     Assembled {
         host,
         db_sessions: db_sessions_out,
+        activity: Activity {
+            terminals: terminals_activity,
+            runs: runs_activity,
+            lsp: lsp_activity,
+        },
     }
 }
 
