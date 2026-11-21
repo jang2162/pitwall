@@ -11,6 +11,8 @@ publish.workspace = true
 test-support = ["dep:tempfile"]
 
 [dependencies]
+# 커밋 보내기의 묶음 청크(`src/send` — RPC 에 바이트를 base64 로 싣는다). 버전은 pw-run 과 같게 둔다.
+base64 = "0.23.1"
 # 로그 커밋의 `encoding` 헤더를 UTF-8 로(`log::commit`). 버전은 pw-fs 와 같게 둔다.
 encoding_rs = "0.8.35"
 # 읽기(결정 M2-D1). 기본 기능을 끄고 쓰는 것만 켠다 — 네트워크 · credentials 는 켜지 않는다(fetch · push 는 CLI).
@@ -75,6 +77,8 @@ windows-sys = { version = "0.61.2", features = [
 # 레인 배치 스냅숏(`log::tests::graph`). 버전은 pw-syntax 와 같게 둔다.
 insta = "1.49.0"
 tempfile = "3.27.0"
+# 커밋 보내기 시험이 로그에 묶음 바이트가 없는지 본다(`send::tests`). 버전은 pw-debug 와 같게 둔다.
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }
 # test-util: 질문 시간 제한을 멈춘 시계로 본다(`start_paused`).
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "test-util"] }
 

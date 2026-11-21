@@ -5635,6 +5635,7 @@ dependencies = [
 name = "pw-git"
 version = "0.0.0"
 dependencies = [
+ "base64 0.23.1",
  "encoding_rs",
  "gix",
  "insta",
@@ -5654,6 +5655,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "tracing-subscriber",
  "windows-sys 0.61.2",
 ]
 

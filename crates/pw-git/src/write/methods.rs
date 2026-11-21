@@ -133,6 +133,7 @@ rpc_method! {
 
 /// 핸들러를 붙인다.
 pub fn register(router: &mut Router, write: Arc<GitWrite>) {
+    crate::send::register(router, Arc::clone(&write));
     let w = Arc::clone(&write);
     router.unary(
         GitOperationMethod,

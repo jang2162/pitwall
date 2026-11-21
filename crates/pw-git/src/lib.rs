@@ -20,6 +20,7 @@
 //! - [`worktree`]: 워크트리 목록 · 체크아웃의 브랜치 — `git.worktrees` · `git.projectBranches`(M2-13).
 //! - [`executable`]: 설정 창 「Git」 의 실행 파일 · 버전 · 쓰기 꺼짐 이유 — `git.executable`(M2-20).
 //! - [`outgoing`]: 푸시 다이얼로그의 보낼 커밋 — `git.push.commits`(M2-20).
+//! - [`send`]: 커밋 보내기 · 가져오기 — `git.send.*`(18-m7-plan M7-16).
 //! - [`tools`]: MCP 조회 툴 메서드 — `git_status` · `git_log` · `git_diff` · `git_blame` · `git_branch_list`(16-m5-plan M5-05).
 //! - `testing`(시험 · `test-support` 기능): 시험 저장소 도우미.
 //!
@@ -40,6 +41,7 @@ pub mod methods;
 pub mod outgoing;
 pub mod remote;
 pub mod repo;
+pub mod send;
 pub mod stage;
 pub mod status;
 #[cfg(any(test, feature = "test-support"))]

@@ -699,6 +699,27 @@ export type UnaryMethods = {
 	 */
 	"git.revert": { params: GitCommitsParams; result: GitHistoryResult };
 	/**
+	 * 대상 맞추기: 받은 커밋으로 그 브랜치를 fast-forward(없으면 만들기)하고 체크아웃을 그 브랜치로 바꾼다. 갈라짐 · git 의 거절 ·
+	 * 다른 워크트리가 쓰는 브랜치 · `expected` 와 다른 브랜치면 아무것도 바꾸지 않고 `stopped`.
+	 */
+	"git.send.apply": { params: GitSendApplyParams; result: GitSendApplyResult };
+	/**
+	 * 커밋 보내기의 대상 쪽 받기를 연다. 그 프로젝트 창의 연결만(쓰기). 연결이 닫히면 받기를 버린다.
+	 */
+	"git.send.receive.begin": { params: GitSendReceiveBeginParams; result: GitSendUpload };
+	/**
+	 * 받기에 청크 하나를 잇는다. 빠지거나 겹치거나 크기를 넘는 청크는 거절하고 그 받기를 버린다.
+	 */
+	"git.send.receive.chunk": { params: GitSendReceiveChunkParams; result: GitSendReceived };
+	/**
+	 * 다 받은 묶음을 확인하고(`git bundle verify`) 그 브랜치만 전용 ref 로 가져온다. 다 쓴 전용 ref 를 먼저 치운다.
+	 */
+	"git.send.receive.finish": { params: GitSendUpload; result: GitSendReceiveFinishResult };
+	/**
+	 * 커밋 보내기의 대상 쪽 읽기: 이 저장소가 가진 커밋(로컬 브랜치 · 전용 ref 끝)과 그 브랜치의 지금 끝.
+	 */
+	"git.send.theirs": { params: GitSendTheirsParams; result: GitSendTheirs };
+	/**
 	 * 커밋 하나의 상세: 메시지 · 작성자 · 커미터 · 부모 · 그 커밋을 가리키는 ref. 담은 브랜치는 `git.containedIn`(비싸다).
 	 */
 	"git.show": { params: GitRevParams; result: GitShow };
@@ -1496,6 +1517,11 @@ export type StreamMethods = {
 	 */
 	"git.prompts": { params: GitPromptsParams; item: GitPromptEvent };
 	/**
+	 * 커밋 보내기의 원본 쪽: `commit` 과 그 조상 가운데 `theirs` 에 없는 것의 `git bundle`(ref 는 `refs/heads/<branch>` 하나)을
+	 * 흘린다. 원본 저장소에 쓰지 않는다. 1 GiB 를 넘으면 실패한다.
+	 */
+	"git.send.prepare": { params: GitSendPrepareParams; item: GitSendPrepareItem };
+	/**
 	 * 프로젝트(활성 워크트리)의 저장소를 감시한다. 스트림이 열려 있는 동안 바뀜이 프로젝트 범위 이벤트 `git.statusChanged` ·
 	 * `git.refsChanged` 로 나가고, 닫으면 놓는다. 첫 항목이 오면 그 뒤의 바뀜은 놓치지 않는다. 작업 트리의 바뀜은 같은 창의
 	 * `fs.watch` 가 열려 있어야 온다.
@@ -1671,6 +1697,12 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.reset": {"name":"git.reset","kind":"unary","tier":"write","roles":["owner"],"params":"GitResetParams","output":"GitResetResult","doc":" HEAD 를 커밋으로 옮긴다(`git reset --soft|--mixed|--hard|--keep`, 서브모듈 작업 트리는 그대로). hard 와 잃을 것이 있는 keep · mixed 는\n 확인 뒤에 미리보기의 지문과 함께 부른다(결정 M2-D6 ① — 잃을 변경은 `git.resetPreview`). 결과의 `moved` 로 [되돌리기].\n","mcp":null,"fileScope":false},
 	"git.resetPreview": {"name":"git.resetPreview","kind":"unary","tier":"read","roles":["owner"],"params":"GitResetPreviewParams","output":"GitResetPreview","doc":" reset hard · keep · mixed 가 잃을 변경: 커밋하지 않은 추적 파일의 변경과 덮어써질 추적하지 않는 것(mixed 는 index 에만 있는\n 스테이징 내용). gix 로 읽는다(git 을 띄우지 않는다).\n","mcp":null,"fileScope":false},
 	"git.revert": {"name":"git.revert","kind":"unary","tier":"write","roles":["owner"],"params":"GitCommitsParams","output":"GitHistoryResult","doc":" 커밋들을 차례로 되돌리는 역 커밋을 만든다(`git revert --no-edit`). 충돌이면 `outcome: stopped`.\n","mcp":null,"fileScope":false},
+	"git.send.apply": {"name":"git.send.apply","kind":"unary","tier":"write","roles":["owner"],"params":"GitSendApplyParams","output":"GitSendApplyResult","doc":" 대상 맞추기: 받은 커밋으로 그 브랜치를 fast-forward(없으면 만들기)하고 체크아웃을 그 브랜치로 바꾼다. 갈라짐 · git 의 거절 ·\n 다른 워크트리가 쓰는 브랜치 · `expected` 와 다른 브랜치면 아무것도 바꾸지 않고 `stopped`.\n","mcp":null,"fileScope":false},
+	"git.send.prepare": {"name":"git.send.prepare","kind":"stream","tier":"read","roles":["owner"],"params":"GitSendPrepareParams","output":"GitSendPrepareItem","doc":" 커밋 보내기의 원본 쪽: `commit` 과 그 조상 가운데 `theirs` 에 없는 것의 `git bundle`(ref 는 `refs/heads/<branch>` 하나)을\n 흘린다. 원본 저장소에 쓰지 않는다. 1 GiB 를 넘으면 실패한다.\n","mcp":null,"fileScope":false},
+	"git.send.receive.begin": {"name":"git.send.receive.begin","kind":"unary","tier":"write","roles":["owner"],"params":"GitSendReceiveBeginParams","output":"GitSendUpload","doc":" 커밋 보내기의 대상 쪽 받기를 연다. 그 프로젝트 창의 연결만(쓰기). 연결이 닫히면 받기를 버린다.\n","mcp":null,"fileScope":false},
+	"git.send.receive.chunk": {"name":"git.send.receive.chunk","kind":"unary","tier":"write","roles":["owner"],"params":"GitSendReceiveChunkParams","output":"GitSendReceived","doc":" 받기에 청크 하나를 잇는다. 빠지거나 겹치거나 크기를 넘는 청크는 거절하고 그 받기를 버린다.\n","mcp":null,"fileScope":false},
+	"git.send.receive.finish": {"name":"git.send.receive.finish","kind":"unary","tier":"write","roles":["owner"],"params":"GitSendUpload","output":"GitSendReceiveFinishResult","doc":" 다 받은 묶음을 확인하고(`git bundle verify`) 그 브랜치만 전용 ref 로 가져온다. 다 쓴 전용 ref 를 먼저 치운다.\n","mcp":null,"fileScope":false},
+	"git.send.theirs": {"name":"git.send.theirs","kind":"unary","tier":"read","roles":["owner"],"params":"GitSendTheirsParams","output":"GitSendTheirs","doc":" 커밋 보내기의 대상 쪽 읽기: 이 저장소가 가진 커밋(로컬 브랜치 · 전용 ref 끝)과 그 브랜치의 지금 끝.\n","mcp":null,"fileScope":false},
 	"git.show": {"name":"git.show","kind":"unary","tier":"read","roles":["owner"],"params":"GitRevParams","output":"GitShow","doc":" 커밋 하나의 상세: 메시지 · 작성자 · 커미터 · 부모 · 그 커밋을 가리키는 ref. 담은 브랜치는 `git.containedIn`(비싸다).\n","mcp":null,"fileScope":false},
 	"git.stage": {"name":"git.stage","kind":"unary","tier":"write","roles":["owner"],"params":"GitPathsParams","output":"GitWorkTree","doc":" 경로를 스테이징한다(`git add --all`): 바뀐 파일 · untracked(무시된 파일은 git 이 거절) · 지운 파일(지움을 담는다). 충돌\n 중인 경로(폴더면 그 아래)가 있으면 아무것도 하지 않는다(invalid params, `data.conflicted` — 해결은 `git.conflict.resolve`).\n","mcp":null,"fileScope":false},
 	"git.stageLines": {"name":"git.stageLines","kind":"unary","tier":"write","roles":["owner"],"params":"GitLinesParams","output":"GitWorkTree","doc":" 작업 트리 diff(index ↔ 작업 트리)의 hunk · 줄을 골라 스테이징한다(고른 줄로 만든 패치를 `git apply --cached`). 바이너리 ·\n 심링크 · 충돌 중 · index 에 없는 파일은 줄 단위로 할 수 없다(invalid params — 파일 단위로). 고른 hunk 가 지금 diff 에 없으면\n conflict.\n","mcp":null,"fileScope":false},
@@ -6322,6 +6354,134 @@ export type GitRevParams = {
 	worktree?: string | null,
 	/**  리비전(해시 · 브랜치 · 태그 · `HEAD~1` 처럼 git 의 리비전 문법). 커밋이 아니면(트리 · blob) invalid params. */
 	rev: string,
+};
+
+export type GitSendApplyParams = {
+	projectId: string,
+	worktree?: string | null,
+	sourceMachine: string,
+	branch: string,
+	/**  받은 커밋(`receive.finish` 의 `commit`). */
+	commit: string,
+	/**  그 브랜치의 끝이어야 하는 것(`git.send.theirs` 의 `branchTip`). `null` 은 「없어야 한다」(만든다). */
+	expected: string | null,
+};
+
+export type GitSendApplyResult = {
+	workTree: string,
+	/**  받은 커밋이 있는 전용 ref(멈췄으면 사람이 거기서 병합한다). */
+	incomingRef: string,
+	outcome: GitSendOutcome,
+};
+
+/**  맞추기의 끝. */
+export type GitSendOutcome = 
+/**  대상 체크아웃이 그 브랜치 · 그 커밋이 됐다. */
+{ kind: "applied"; 
+/**  브랜치의 이전 끝(되돌리기용, D42). 만들었으면 `null`. */
+previous: string | null; current: string; 
+/**  브랜치를 새로 만들었다. */
+created: boolean; 
+/**  체크아웃을 그 브랜치로 바꿨다(이미 그 브랜치였으면 `false`). */
+switched: boolean; 
+/**  바뀐 파일 가운데 LFS 포인터로 남은 수 — 그 머신에서 `git lfs pull` 이 필요하다. */
+lfsPointers: number } | 
+/**  아무것도 바꾸지 않았다. */
+{ kind: "stopped"; reason: GitSendStop; 
+/**  git 의 거절 원문(있으면). */
+message: string | null };
+
+/**  `git.send.prepare` 의 항목: `info` 하나 → `data` …(offset 순서). */
+export type GitSendPrepareItem = { kind: "info"; 
+/**  묶음 전체 바이트 수(`receive.begin` 의 `size`). */
+size: number; 
+/**  원본에 커밋 안 한 변경이 있다 — 그 변경은 가지 않는다(막지 않는다). */
+uncommitted: boolean; 
+/**  묶음에서 뺀 커밋(대상이 가졌다고 본 것). */
+excluded: string[] } | { kind: "data"; offset: number; 
+/**  base64. 디코드하면 512 KiB 이하. */
+data: string };
+
+export type GitSendPrepareParams = {
+	projectId: string,
+	worktree?: string | null,
+	/**  묶음 안의 ref 이름(`refs/heads/<branch>`) — 대상은 이 이름으로만 가져온다. */
+	branch: string,
+	/**  보낼 커밋(전체 id). 그 커밋과 조상만 묶음에 든다 — 그사이 브랜치에 더한 커밋은 가지 않는다. */
+	commit: string,
+	/**  대상이 가진 커밋(`git.send.theirs`). 원본에 없는 것은 무시한다. */
+	theirs?: string[],
+};
+
+export type GitSendReceiveBeginParams = {
+	projectId: string,
+	worktree?: string | null,
+	/**  원본 머신 id(`[A-Za-z0-9._-]`, 128자 이하) — 전용 ref 의 한 마디. */
+	sourceMachine: string,
+	branch: string,
+	/**  묶음이 실은 `refs/heads/<branch>` 의 커밋이어야 한다. */
+	commit: string,
+	/**  보낼 바이트 수(1 GiB 이하). 이것을 넘는 바이트는 받지 않는다. */
+	size: number,
+};
+
+export type GitSendReceiveChunkParams = {
+	uploadId: number,
+	/**  이 청크의 시작 — 지금까지 받은 바이트 수와 같아야 한다. */
+	offset: number,
+	/**  base64. 디코드하면 1 MiB 이하. */
+	data: string,
+};
+
+export type GitSendReceiveFinishResult = {
+	workTree: string,
+	/**  받은 커밋을 둔 전용 ref(`refs/pitwall/incoming/<원본 머신>/<브랜치>`). */
+	incomingRef: string,
+	commit: string,
+	/**  받기 전 그 전용 ref 의 커밋. */
+	previous: string | null,
+	/**  이번에 치운 전용 ref(커밋이 같은 이름의 브랜치에 든 것). */
+	pruned: string[],
+};
+
+export type GitSendReceived = {
+	/**  지금까지 받은 바이트 수. */
+	received: number,
+};
+
+/**  멈춘 까닭. 어느 것이든 대상 브랜치 ref · HEAD · 작업 트리는 그대로다(전용 ref 만 남는다). */
+export type GitSendStop = 
+/**  대상 브랜치에 받은 커밋에 없는 커밋이 있다(fast-forward 가 아니다). */
+"diverged" | 
+/**  대상 브랜치가 `expected` 가 아니다(그사이 움직였다). */
+"branchMoved" | 
+/**  전용 ref 가 받은 커밋이 아니다(다른 보내기가 덮었거나 받지 않았다). */
+"incomingMoved" | 
+/**  git 이 전환 · 병합을 거절했다(작업 트리의 변경 등 — `message` 가 git 의 원문). */
+"blocked" | 
+/**  그 브랜치를 이 머신의 다른 워크트리가 쓴다(체크아웃 · rebase 중). */
+"inOtherWorktree";
+
+export type GitSendTheirs = {
+	/**
+	 *  이 저장소가 가진 커밋: 로컬 브랜치 · 전용 ref(`refs/pitwall/incoming/…`)의 끝(겹치지 않게, 정렬). 원본 `prepare` 의
+	 *  `theirs` 로 넘긴다.
+	 */
+	theirs: string[],
+	/**  그 브랜치의 지금 끝. 없으면 `null`. `apply` 의 `expected` 로 넘긴다. */
+	branchTip: string | null,
+};
+
+export type GitSendTheirsParams = {
+	projectId: string,
+	worktree?: string | null,
+	/**  보낼 브랜치(짧은 이름). 그 끝이 결과의 `branchTip` 이다. */
+	branch: string,
+};
+
+export type GitSendUpload = {
+	/**  이 연결 안에서만 유효하다. */
+	uploadId: number,
 };
 
 export type GitShow = {

@@ -28685,6 +28685,512 @@
       ],
       "tier": "write"
     },
+    "git.send.apply": {
+      "description": "대상 맞추기: 받은 커밋으로 그 브랜치를 fast-forward(없으면 만들기)하고 체크아웃을 그 브랜치로 바꾼다. 갈라짐 · git 의 거절 ·\n다른 워크트리가 쓰는 브랜치 · `expected` 와 다른 브랜치면 아무것도 바꾸지 않고 `stopped`.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "branch": {
+            "type": "string"
+          },
+          "commit": {
+            "description": "받은 커밋(`receive.finish` 의 `commit`).",
+            "type": "string"
+          },
+          "expected": {
+            "description": "그 브랜치의 끝이어야 하는 것(`git.send.theirs` 의 `branchTip`). `null` 은 「없어야 한다」(만든다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "sourceMachine": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "sourceMachine",
+          "branch",
+          "commit"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "GitSendOutcome": {
+            "description": "맞추기의 끝.",
+            "oneOf": [
+              {
+                "description": "대상 체크아웃이 그 브랜치 · 그 커밋이 됐다.",
+                "properties": {
+                  "created": {
+                    "description": "브랜치를 새로 만들었다.",
+                    "type": "boolean"
+                  },
+                  "current": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "applied",
+                    "type": "string"
+                  },
+                  "lfsPointers": {
+                    "description": "바뀐 파일 가운데 LFS 포인터로 남은 수 — 그 머신에서 `git lfs pull` 이 필요하다.",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "previous": {
+                    "description": "브랜치의 이전 끝(되돌리기용, D42). 만들었으면 `null`.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "switched": {
+                    "description": "체크아웃을 그 브랜치로 바꿨다(이미 그 브랜치였으면 `false`).",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "previous",
+                  "current",
+                  "created",
+                  "switched",
+                  "lfsPointers"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "아무것도 바꾸지 않았다.",
+                "properties": {
+                  "kind": {
+                    "const": "stopped",
+                    "type": "string"
+                  },
+                  "message": {
+                    "description": "git 의 거절 원문(있으면).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "reason": {
+                    "$ref": "#/$defs/GitSendStop"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "reason",
+                  "message"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "GitSendStop": {
+            "description": "멈춘 까닭. 어느 것이든 대상 브랜치 ref · HEAD · 작업 트리는 그대로다(전용 ref 만 남는다).",
+            "oneOf": [
+              {
+                "const": "diverged",
+                "description": "대상 브랜치에 받은 커밋에 없는 커밋이 있다(fast-forward 가 아니다).",
+                "type": "string"
+              },
+              {
+                "const": "branchMoved",
+                "description": "대상 브랜치가 `expected` 가 아니다(그사이 움직였다).",
+                "type": "string"
+              },
+              {
+                "const": "incomingMoved",
+                "description": "전용 ref 가 받은 커밋이 아니다(다른 보내기가 덮었거나 받지 않았다).",
+                "type": "string"
+              },
+              {
+                "const": "blocked",
+                "description": "git 이 전환 · 병합을 거절했다(작업 트리의 변경 등 — `message` 가 git 의 원문).",
+                "type": "string"
+              },
+              {
+                "const": "inOtherWorktree",
+                "description": "그 브랜치를 이 머신의 다른 워크트리가 쓴다(체크아웃 · rebase 중).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "incomingRef": {
+            "description": "받은 커밋이 있는 전용 ref(멈췄으면 사람이 거기서 병합한다).",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/$defs/GitSendOutcome"
+          },
+          "workTree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workTree",
+          "incomingRef",
+          "outcome"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "git.send.prepare": {
+      "description": "커밋 보내기의 원본 쪽: `commit` 과 그 조상 가운데 `theirs` 에 없는 것의 `git bundle`(ref 는 `refs/heads/<branch>` 하나)을\n흘린다. 원본 저장소에 쓰지 않는다. 1 GiB 를 넘으면 실패한다.",
+      "item": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`git.send.prepare` 의 항목: `info` 하나 → `data` …(offset 순서).",
+        "oneOf": [
+          {
+            "properties": {
+              "excluded": {
+                "description": "묶음에서 뺀 커밋(대상이 가졌다고 본 것).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "info",
+                "type": "string"
+              },
+              "size": {
+                "description": "묶음 전체 바이트 수(`receive.begin` 의 `size`).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "uncommitted": {
+                "description": "원본에 커밋 안 한 변경이 있다 — 그 변경은 가지 않는다(막지 않는다).",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "kind",
+              "size",
+              "uncommitted",
+              "excluded"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "data": {
+                "description": "base64. 디코드하면 512 KiB 이하.",
+                "type": "string"
+              },
+              "kind": {
+                "const": "data",
+                "type": "string"
+              },
+              "offset": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "offset",
+              "data"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "kind": "stream",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "branch": {
+            "description": "묶음 안의 ref 이름(`refs/heads/<branch>`) — 대상은 이 이름으로만 가져온다.",
+            "type": "string"
+          },
+          "commit": {
+            "description": "보낼 커밋(전체 id). 그 커밋과 조상만 묶음에 든다 — 그사이 브랜치에 더한 커밋은 가지 않는다.",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "theirs": {
+            "default": [],
+            "description": "대상이 가진 커밋(`git.send.theirs`). 원본에 없는 것은 무시한다.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "branch",
+          "commit"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "git.send.receive.begin": {
+      "description": "커밋 보내기의 대상 쪽 받기를 연다. 그 프로젝트 창의 연결만(쓰기). 연결이 닫히면 받기를 버린다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "branch": {
+            "type": "string"
+          },
+          "commit": {
+            "description": "묶음이 실은 `refs/heads/<branch>` 의 커밋이어야 한다.",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "size": {
+            "description": "보낼 바이트 수(1 GiB 이하). 이것을 넘는 바이트는 받지 않는다.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sourceMachine": {
+            "description": "원본 머신 id(`[A-Za-z0-9._-]`, 128자 이하) — 전용 ref 의 한 마디.",
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "sourceMachine",
+          "branch",
+          "commit",
+          "size"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "uploadId": {
+            "description": "이 연결 안에서만 유효하다.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "uploadId"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "git.send.receive.chunk": {
+      "description": "받기에 청크 하나를 잇는다. 빠지거나 겹치거나 크기를 넘는 청크는 거절하고 그 받기를 버린다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "data": {
+            "description": "base64. 디코드하면 1 MiB 이하.",
+            "type": "string"
+          },
+          "offset": {
+            "description": "이 청크의 시작 — 지금까지 받은 바이트 수와 같아야 한다.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "uploadId": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "uploadId",
+          "offset",
+          "data"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "received": {
+            "description": "지금까지 받은 바이트 수.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "received"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "git.send.receive.finish": {
+      "description": "다 받은 묶음을 확인하고(`git bundle verify`) 그 브랜치만 전용 ref 로 가져온다. 다 쓴 전용 ref 를 먼저 치운다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "uploadId": {
+            "description": "이 연결 안에서만 유효하다.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "uploadId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "commit": {
+            "type": "string"
+          },
+          "incomingRef": {
+            "description": "받은 커밋을 둔 전용 ref(`refs/pitwall/incoming/<원본 머신>/<브랜치>`).",
+            "type": "string"
+          },
+          "previous": {
+            "description": "받기 전 그 전용 ref 의 커밋.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pruned": {
+            "description": "이번에 치운 전용 ref(커밋이 같은 이름의 브랜치에 든 것).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "workTree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workTree",
+          "incomingRef",
+          "commit",
+          "previous",
+          "pruned"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "git.send.theirs": {
+      "description": "커밋 보내기의 대상 쪽 읽기: 이 저장소가 가진 커밋(로컬 브랜치 · 전용 ref 끝)과 그 브랜치의 지금 끝.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "branch": {
+            "description": "보낼 브랜치(짧은 이름). 그 끝이 결과의 `branchTip` 이다.",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "branch"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "branchTip": {
+            "description": "그 브랜치의 지금 끝. 없으면 `null`. `apply` 의 `expected` 로 넘긴다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "theirs": {
+            "description": "이 저장소가 가진 커밋: 로컬 브랜치 · 전용 ref(`refs/pitwall/incoming/…`)의 끝(겹치지 않게, 정렬). 원본 `prepare` 의\n`theirs` 로 넘긴다.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "theirs",
+          "branchTip"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "git.show": {
       "description": "커밋 하나의 상세: 메시지 · 작성자 · 커미터 · 부모 · 그 커밋을 가리키는 ref. 담은 브랜치는 `git.containedIn`(비싸다).",
       "kind": "unary",

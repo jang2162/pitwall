@@ -100,20 +100,20 @@ fn commit_of(repo: &gix::Repository, rev: &str) -> Option<ObjectId> {
     Some(id.object().ok()?.peel_to_commit().ok()?.id)
 }
 
-fn head_id(repo: &gix::Repository) -> Option<ObjectId> {
+pub(crate) fn head_id(repo: &gix::Repository) -> Option<ObjectId> {
     repo.head_id().ok().map(gix::Id::detach)
 }
 
 /// 체크아웃 계획: 잠금 전에 본 HEAD · 대상 커밋과, 미저장 확인에 실을 바뀔 경로.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Plan {
-    head: Option<ObjectId>,
-    target: Option<ObjectId>,
-    changes: Changes,
+pub(crate) struct Plan {
+    pub(crate) head: Option<ObjectId>,
+    pub(crate) target: Option<ObjectId>,
+    pub(crate) changes: Changes,
 }
 
 /// `rev` 로 가는 체크아웃의 계획. 대상을 찾지 못하거나 트리를 읽지 못하면 작업 트리 전체로 묻는다(git 이 그 까닭으로 실패한다).
-fn plan(repo: &gix::Repository, rev: &str) -> Plan {
+pub(crate) fn plan(repo: &gix::Repository, rev: &str) -> Plan {
     let head = head_id(repo);
     let target = commit_of(repo, rev);
     let changes = match target.map(|target| changed_paths(repo, head, target)) {
@@ -133,7 +133,7 @@ fn plan(repo: &gix::Repository, rev: &str) -> Plan {
 
 /// HEAD 의 트리와 `target` 의 트리가 다른 경로(내용 · 모드가 다르거나 한쪽에만 있다). HEAD 가 없으면(태어나지 않은 브랜치)
 /// `target` 의 경로 전부.
-fn changed_paths(
+pub(crate) fn changed_paths(
     repo: &gix::Repository,
     head: Option<ObjectId>,
     target: ObjectId,
@@ -266,7 +266,7 @@ async fn switch(
 }
 
 /// 잠금을 기다리는 사이 HEAD 나 대상이 움직였다 — 확인한 경로가 맞지 않아 아무것도 하지 않았다.
-fn moved(head: Option<ObjectId>) -> WriteError {
+pub(crate) fn moved(head: Option<ObjectId>) -> WriteError {
     WriteError::Rpc(
         RpcError::new(
             rpc_code::CONFLICT,
