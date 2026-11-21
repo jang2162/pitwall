@@ -1,3 +1,8 @@
+bundle.addMember Unary Write {Owner}
+bundle.get Unary Read {Owner}
+bundle.list Unary Read {Owner}
+bundle.removeMember Unary Write {Owner}
+bundle.setLastSendTarget Unary Write {Owner}
 cli.status Unary Read {Owner}
 config.get Unary Read {Owner, Mobile, Readonly}
 config.paths Unary Read {Owner, Mobile, Readonly}
