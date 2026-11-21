@@ -1,5 +1,7 @@
 //! Relay 의 Host(18-m7-plan M7-04): Desktop 과 같은 조립에서 묶음만 빠지고, 등록은 `relay.toml` 의 `roots` 안만 받는다.
 
+#![cfg(unix)]
+
 use std::path::Path;
 use std::time::Duration;
 

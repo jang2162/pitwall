@@ -1,6 +1,8 @@
 //! 바이너리 시험: `pitwall-relay proxy` 가 데몬을 띄우고 붙는다(18-m7-plan M7-04 ②). 실제 SSH 는 쓰지 않는다 — 임시
 //! `PITWALL_*_DIR` 로 이 기기에서 띄운다.
 
+#![cfg(unix)]
+
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};

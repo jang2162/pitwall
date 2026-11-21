@@ -9,6 +9,8 @@
 //! 데몬을 임시 `PITWALL_*_DIR` 로 띄워(이 기기 — SSH 없이) 기동 → 첫 응답(`status`), 유휴 RSS(프로젝트 없음), 링크를 붙여 프로젝트
 //! 하나를 등록하고 그 창이 파일 목록 · git 상태를 읽은 뒤의 RSS(언어 서버 없이)를 잰다.
 
+#![cfg(unix)]
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;

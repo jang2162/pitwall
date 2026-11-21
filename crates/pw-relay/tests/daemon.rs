@@ -2,6 +2,8 @@
 //! 소켓 대신 메모리 전송으로 [`Daemon::accept`] 에 넘긴다 — 소켓 자체(폴더 · uid · 한 판에 하나)는 `pw_relay::socket` 과 바이너리
 //! 시험(`apps/relay/tests`)이 본다.
 
+#![cfg(unix)]
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;

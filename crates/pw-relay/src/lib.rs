@@ -13,6 +13,9 @@
 //! - [`host`]: Relay 부품으로 조립한 Host(`pw_host::assemble_relay`)와 `roots` 판정.
 //! - [`proxy`]: stdio ↔ 데몬 소켓. 데몬이 없으면 띄운다(`setsid`).
 
+// Relay 는 macOS · Linux 만이다(18-m7-plan 결정 M7-D4) — Windows 에서는 빈 크레이트다(워크스페이스 빌드만 지난다).
+#![cfg(unix)]
+
 pub mod command;
 pub mod config;
 pub mod daemon;
