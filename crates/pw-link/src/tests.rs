@@ -573,8 +573,10 @@ async fn a_version_mismatch_lets_no_rpc_through() {
         // 판이 다른 hello 뒤에 채널 열기 · 메시지를 몰아 보내도 Host 에 닿지 않는다.
         let mut framed = Framed::new(fx.transport_open().await);
         raw_hello(&mut framed, &fx.desktop_key, other).await;
-        framed.write.write(&connect_frame(1)).await.unwrap();
-        framed.write.write(&msg_frame(1)).await.unwrap();
+        // 거절 뒤에는 상대가 전송을 닫아 쓰기가 실패할 수 있다 — 닿지 않는 것만 본다.
+        let _ = framed.write.write(&connect_frame(1)).await;
+        // 거절 뒤에는 상대가 전송을 닫아 쓰기가 실패할 수 있다 — 닿지 않는 것만 본다.
+        let _ = framed.write.write(&msg_frame(1)).await;
         let seen = read_until_closed(&mut framed).await;
         assert_eq!(seen.len(), 1, "{seen:?}");
         assert_eq!(seen[0].kind, Kind::Reject);
@@ -899,8 +901,10 @@ async fn an_unpaired_desktop_gets_no_role_and_no_rpc() {
         .write(&LinkFrame::control(Kind::Auth, json!(auth)))
         .await
         .unwrap();
-    framed.write.write(&connect_frame(1)).await.unwrap();
-    framed.write.write(&msg_frame(1)).await.unwrap();
+    // 거절 뒤에는 상대가 전송을 닫아 쓰기가 실패할 수 있다 — 닿지 않는 것만 본다.
+    let _ = framed.write.write(&connect_frame(1)).await;
+    // 거절 뒤에는 상대가 전송을 닫아 쓰기가 실패할 수 있다 — 닿지 않는 것만 본다.
+    let _ = framed.write.write(&msg_frame(1)).await;
     let seen = read_until_closed(&mut framed).await;
     assert_eq!(seen.len(), 1, "{seen:?}");
     assert_eq!(
@@ -937,8 +941,10 @@ async fn a_bad_signature_or_a_false_device_id_gets_no_rpc() {
         .write(&LinkFrame::control(Kind::Auth, json!(auth)))
         .await
         .unwrap();
-    framed.write.write(&connect_frame(1)).await.unwrap();
-    framed.write.write(&msg_frame(1)).await.unwrap();
+    // 거절 뒤에는 상대가 전송을 닫아 쓰기가 실패할 수 있다 — 닿지 않는 것만 본다.
+    let _ = framed.write.write(&connect_frame(1)).await;
+    // 거절 뒤에는 상대가 전송을 닫아 쓰기가 실패할 수 있다 — 닿지 않는 것만 본다.
+    let _ = framed.write.write(&msg_frame(1)).await;
     let seen = read_until_closed(&mut framed).await;
     assert_eq!(seen.len(), 1, "{seen:?}");
     assert_eq!(
@@ -972,8 +978,10 @@ async fn a_bad_signature_or_a_false_device_id_gets_no_rpc() {
 
     // 첫 틀이 hello 가 아니다(채널 열기부터).
     let mut framed = Framed::new(fx.transport_open().await);
-    framed.write.write(&connect_frame(1)).await.unwrap();
-    framed.write.write(&msg_frame(1)).await.unwrap();
+    // 거절 뒤에는 상대가 전송을 닫아 쓰기가 실패할 수 있다 — 닿지 않는 것만 본다.
+    let _ = framed.write.write(&connect_frame(1)).await;
+    // 거절 뒤에는 상대가 전송을 닫아 쓰기가 실패할 수 있다 — 닿지 않는 것만 본다.
+    let _ = framed.write.write(&msg_frame(1)).await;
     let seen = read_until_closed(&mut framed).await;
     assert_eq!(seen.len(), 1);
     assert_eq!(fx.relay_host.connects(), 0);
@@ -1015,7 +1023,8 @@ async fn a_replayed_signature_is_refused() {
         .write(&LinkFrame::control(Kind::Auth, json!(seen_auth)))
         .await
         .unwrap();
-    replay.write.write(&connect_frame(1)).await.unwrap();
+    // 거절 뒤에는 상대가 전송을 닫아 쓰기가 실패할 수 있다 — 닿지 않는 것만 본다.
+    let _ = replay.write.write(&connect_frame(1)).await;
     let seen = read_until_closed(&mut replay).await;
     assert_eq!(
         serde_json::from_value::<Reject>(seen[0].body.clone())
@@ -1133,8 +1142,10 @@ async fn a_signature_made_for_another_relay_is_refused() {
             .write(&LinkFrame::control(Kind::Auth, json!(auth)))
             .await
             .unwrap();
-        to_b.write.write(&connect_frame(1)).await.unwrap();
-        to_b.write.write(&msg_frame(1)).await.unwrap();
+        // 거절 뒤에는 상대가 전송을 닫아 쓰기가 실패할 수 있다 — 닿지 않는 것만 본다.
+        let _ = to_b.write.write(&connect_frame(1)).await;
+        // 거절 뒤에는 상대가 전송을 닫아 쓰기가 실패할 수 있다 — 닿지 않는 것만 본다.
+        let _ = to_b.write.write(&msg_frame(1)).await;
         let seen = read_until_closed(&mut to_b).await;
         assert_eq!(seen.len(), 1, "{seen:?}");
         assert_eq!(
