@@ -24,6 +24,12 @@ pub trait Host: Send + Sync + 'static {
 
     /// `caller` 의 role 로 연결 하나를 연다. 원격 Host 는 여기서 연결 · 인증을 기다린다.
     fn connect(&self, caller: Caller) -> BoxFuture<'_, Result<Connection, HostError>>;
+
+    /// 다른 머신의 Host(`pw_link::RemoteHost`)인가. [`HostRouter`](crate::HostRouter) 는 [`Target::ProjectId`] 를 이것이 거짓인
+    /// Host(이 머신)의 프로젝트로만 읽는다 — 프로젝트 id 는 머신마다 따로 만들어 머신 사이에 유일하지 않다(18-m7-plan M7-03 ⑥).
+    fn is_remote(&self) -> bool {
+        false
+    }
 }
 
 /// Host 로 메시지를 보내는 쪽.
@@ -53,7 +59,14 @@ pub struct Connection {
 #[serde(rename_all = "camelCase")]
 pub enum Target {
     HostId(HostId),
+    /// 이 머신(원격이 아닌 Host)의 프로젝트.
     ProjectId(ProjectId),
+    /// 어느 Host 의 프로젝트 — 원격 프로젝트는 이것으로 고른다. 프로젝트 id 는 그 Host 의 레지스트리가 만든 것이라 다른 머신의 id 와
+    /// 같을 수 있다(18-m7-plan M7-03 ⑥).
+    Member {
+        host: HostId,
+        project: ProjectId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +80,10 @@ pub enum HostError {
     DuplicateHost(HostId),
     /// 이미 열린 프로젝트를 다시 열었다.
     ProjectAlreadyOpen(ProjectId),
+    /// 원격 Host 의 링크가 없다(끊김 · 아직 붙지 않음). 값은 Host id.
+    Disconnected(HostId),
+    /// 원격 Host 가 연결을 받지 않았다(채널 상한 · 받지 않는 범위 등). 값은 사람이 읽는 까닭.
+    Refused(String),
 }
 
 impl fmt::Display for HostError {
@@ -76,6 +93,8 @@ impl fmt::Display for HostError {
             HostError::UnknownHost(id) => write!(f, "unknown host `{id}`"),
             HostError::DuplicateHost(id) => write!(f, "host `{id}` is already registered"),
             HostError::ProjectAlreadyOpen(id) => write!(f, "project `{id}` is already open"),
+            HostError::Disconnected(id) => write!(f, "host `{id}` is not connected"),
+            HostError::Refused(why) => write!(f, "the host refused the connection: {why}"),
         }
     }
 }
@@ -100,6 +119,14 @@ mod tests {
         );
         assert!(
             serde_json::from_value::<Target>(json!({"hostId": "a", "projectId": "b"})).is_err()
+        );
+        assert_eq!(
+            serde_json::from_value::<Target>(json!({"member": {"host": "m", "project": "p1"}}))
+                .unwrap(),
+            Target::Member {
+                host: "m".into(),
+                project: "p1".into()
+            }
         );
     }
 

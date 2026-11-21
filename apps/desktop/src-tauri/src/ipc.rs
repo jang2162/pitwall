@@ -321,6 +321,11 @@ fn caller_for<R: Runtime>(webview: &Webview<R>, target: &Target) -> Result<Calle
     let label = webview.label();
     let kind = WindowKind::of_label(label);
     if kind != Some(WindowKind::File) {
+        // 원격 프로젝트(`Target::Member`)는 아직 창이 고르지 않는다 — 창의 체크아웃별 연결(18-m7-plan M7-11)이 열 때까지 받지
+        // 않는다.
+        if matches!(target, Target::Member { .. }) {
+            return Err(IpcError::ProjectScope);
+        }
         if let Target::ProjectId(id) = target
             && windows::project_of_label(label) != Some(id.as_str())
         {
