@@ -1,0 +1,51 @@
+[package]
+name = "pw-host"
+description = "Pitwall host assembly: wires every feature crate's methods into one LocalHost from parts the caller makes (Desktop and Relay)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# 이 크레이트는 tauri 에 의존하지 않는다(18-m7-plan M7-01 ②) — Relay 가 창 없이 같은 Host 를 띄운다. tests/deps.rs 가 지킨다.
+[dependencies]
+pw-core = { path = "../pw-core" }
+# DB 연결 설정 · 비밀 · 세션 · 드라이버 등록부(`db.*`).
+pw-db = { path = "../pw-db" }
+# SSH 터널의 askpass 붙임 · 터널 기록(M3-11).
+pw-db-driver = { path = "../pw-db-driver" }
+pw-db-driver-mysql = { path = "../pw-db-driver-mysql" }
+pw-db-driver-pg = { path = "../pw-db-driver-pg" }
+pw-db-driver-redis = { path = "../pw-db-driver-redis" }
+pw-db-driver-sqlite = { path = "../pw-db-driver-sqlite" }
+# 문장 나누기 · 현재 문장 RPC(`db.sql.split` · `db.sql.statementAt`, M3-04).
+pw-db-sql = { path = "../pw-db-sql" }
+# 디버그 세션 · 브레이크포인트(`debug.*`, 17-m6-plan M6-17).
+pw-debug = { path = "../pw-debug" }
+pw-diag = { path = "../pw-diag" }
+pw-ext = { path = "../pw-ext" }
+pw-fs = { path = "../pw-fs" }
+pw-git = { path = "../pw-git" }
+pw-i18n = { path = "../pw-i18n" }
+# 심볼 인덱스(`index.*`, M4-15).
+pw-index = { path = "../pw-index" }
+pw-lang = { path = "../pw-lang" }
+# 언어 서버 관리자 · 문서 동기화(`lsp.document.*` · `lsp.status.*` · `lsp.server.*`, M4-05).
+pw-lsp = { path = "../pw-lsp" }
+pw-lsp-servers = { path = "../pw-lsp-servers" }
+pw-mcp = { path = "../pw-mcp" }
+pw-open-with = { path = "../pw-open-with" }
+pw-run = { path = "../pw-run" }
+pw-runtime = { path = "../pw-runtime" }
+pw-syntax = { path = "../pw-syntax" }
+# 도구 registry · 설치기(`tools.*`, 15-m4-plan.md M4-03 · M4-04).
+pw-tools = { path = "../pw-tools" }
+serde_json = { workspace = true }
+# 뒤에서 도는 일(색인 붙이기 · 파일 따라가기 · 감사 정리)은 부르는 쪽이 준 런타임 핸들에 띄운다 — tauri 런타임에 묶지 않는다.
+tokio = { workspace = true, features = ["rt"] }
+tokio-util = { workspace = true }
+tracing = "0.1.44"
+
+[dev-dependencies]
+pw-rpc = { path = "../pw-rpc" }
+tempfile = "3.27.0"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

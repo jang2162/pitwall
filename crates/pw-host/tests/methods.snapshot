@@ -1,0 +1,279 @@
+cli.status Unary Read {Owner}
+config.get Unary Read {Owner, Mobile, Readonly}
+config.paths Unary Read {Owner, Mobile, Readonly}
+config.tool.get Unary Read {Owner}
+db.connection.approve Unary Write {Owner}
+db.connection.delete Unary Write {Owner}
+db.connection.forgetMarks Unary Write {Owner}
+db.connection.get Unary Read {Owner}
+db.connection.list Unary Read {Owner}
+db.connection.marks Unary Read {Owner}
+db.connection.test Unary Exec {Owner}
+db.connection.upsert Unary Write {Owner}
+db.driver.list Unary Read {Owner}
+db.edit.apply Unary Exec {Owner}
+db.edit.preview Unary Exec {Owner}
+db.edit.rowKey Unary Exec {Owner}
+db.kv.command Unary Exec {Owner}
+db.kv.delete Unary Write {Owner}
+db.kv.get Unary Read {Owner}
+db.kv.parseCommand Unary Read {Owner, Mobile, Readonly}
+db.kv.persist Unary Write {Owner}
+db.kv.rename Unary Write {Owner}
+db.kv.scan Stream Read {Owner}
+db.kv.setTtl Unary Write {Owner}
+db.query.cancel Unary Write {Owner}
+db.query.execute Stream Exec {Owner}
+db.query.explain Unary Exec {Owner}
+db.query.page Unary Exec {Owner}
+db.schema.cached Unary Read {Owner}
+db.schema.columns Unary Exec {Owner}
+db.schema.databases Unary Exec {Owner}
+db.schema.ddl Unary Exec {Owner}
+db.schema.disconnect Unary Read {Owner}
+db.schema.foreignKeys Unary Exec {Owner}
+db.schema.indexes Unary Exec {Owner}
+db.schema.objects Unary Exec {Owner}
+db.schema.refresh Unary Read {Owner}
+db.schema.schemas Unary Exec {Owner}
+db.secret.clear Unary Write {Owner}
+db.secret.set Unary Write {Owner}
+db.session.close Unary Write {Owner}
+db.session.commit Unary Write {Owner}
+db.session.open Unary Exec {Owner}
+db.session.resume Unary Write {Owner}
+db.session.rollback Unary Write {Owner}
+db.session.setMode Unary Write {Owner}
+db.session.unattendedRollbacks Unary Read {Owner}
+db.settings.get Unary Read {Owner}
+db.settings.set Unary Write {Owner}
+db.sql.classify Unary Read {Owner}
+db.sql.insertText Unary Read {Owner, Mobile, Readonly}
+db.sql.split Unary Read {Owner, Mobile, Readonly}
+db.sql.statementAt Unary Read {Owner, Mobile, Readonly}
+db.ssh.hosts Unary Read {Owner}
+db.tool.connectionList Unary Read {Owner}
+db.tool.connectionTest Unary Write {Owner}
+db.tool.connectionUpsert Unary Write {Owner}
+db.tool.execute Unary Dangerous {Owner}
+db.tool.kvGet Unary Read {Owner}
+db.tool.kvScan Unary Read {Owner}
+db.tool.query Unary Read {Owner}
+db.tool.schema Unary Read {Owner}
+debug.breakpoints.list Unary Read {Owner}
+debug.breakpoints.remove Unary Write {Owner}
+debug.breakpoints.set Unary Write {Owner}
+debug.control Unary Exec {Owner}
+debug.evaluate Unary Exec {Owner}
+debug.exceptions.set Unary Write {Owner}
+debug.scopes Unary Read {Owner}
+debug.source Unary Read {Owner}
+debug.stack Unary Read {Owner}
+debug.start Unary Exec {Owner}
+debug.threads Unary Read {Owner}
+debug.tool.breakpointList Unary Read {Owner}
+debug.tool.breakpointSet Unary Write {Owner}
+debug.tool.breakpointSetExpr Unary Exec {Owner}
+debug.tool.state Unary Read {Owner}
+debug.variables Unary Read {Owner}
+diag.collect Unary Read {Owner}
+ext.list Unary Read {Owner, Mobile, Readonly}
+fs.copy Unary Write {Owner}
+fs.create Unary Write {Owner}
+fs.list Unary Read {Owner, Mobile, Readonly}
+fs.read Unary Read {Owner, Mobile, Readonly}
+fs.readBytes Unary Read {Owner, Mobile, Readonly}
+fs.rename Unary Write {Owner}
+fs.stat Unary Read {Owner, Mobile, Readonly}
+fs.trash Unary Write {Owner}
+fs.watch Stream Read {Owner, Mobile, Readonly}
+fs.write Unary Write {Owner}
+git.blame Stream Read {Owner}
+git.blob Unary Read {Owner}
+git.branch.create Unary Write {Owner}
+git.branch.delete Unary Write {Owner}
+git.branch.rename Unary Write {Owner}
+git.checkout Unary Write {Owner}
+git.cherryPick Unary Write {Owner}
+git.commit Unary Write {Owner}
+git.commit.template Unary Read {Owner}
+git.conflict.get Unary Read {Owner}
+git.conflict.resolve Unary Write {Owner}
+git.conflicts Unary Read {Owner}
+git.containedIn Unary Read {Owner}
+git.diff Unary Read {Owner}
+git.discard Unary Write {Owner}
+git.discardLines Unary Write {Owner}
+git.executable Unary Read {Owner}
+git.fetch Unary Write {Owner}
+git.fileHistory Stream Read {Owner}
+git.log Stream Read {Owner}
+git.logPage Unary Read {Owner}
+git.merge Unary Write {Owner}
+git.operation Unary Read {Owner}
+git.operation.abort Unary Write {Owner}
+git.operation.continue Unary Write {Owner}
+git.operation.skip Unary Write {Owner}
+git.projectBranches Unary Read {Owner}
+git.prompt.answer Unary Write {Owner}
+git.prompts Stream Read {Owner}
+git.pull Unary Write {Owner}
+git.push Unary Write {Owner}
+git.push.commits Unary Read {Owner}
+git.push.plan Unary Read {Owner}
+git.rebase Unary Write {Owner}
+git.refs Unary Read {Owner}
+git.repo Unary Read {Owner}
+git.reset Unary Write {Owner}
+git.resetPreview Unary Read {Owner}
+git.revert Unary Write {Owner}
+git.show Unary Read {Owner}
+git.stage Unary Write {Owner}
+git.stageLines Unary Write {Owner}
+git.stash.apply Unary Write {Owner}
+git.stash.drop Unary Write {Owner}
+git.stash.list Unary Read {Owner}
+git.stash.pop Unary Write {Owner}
+git.stash.push Unary Write {Owner}
+git.status Unary Read {Owner}
+git.tag.create Unary Write {Owner}
+git.tool.blame Unary Read {Owner}
+git.tool.branchList Unary Read {Owner}
+git.tool.diff Unary Read {Owner}
+git.tool.log Unary Read {Owner}
+git.tool.status Unary Read {Owner}
+git.unstage Unary Write {Owner}
+git.unstageLines Unary Write {Owner}
+git.watch Stream Read {Owner}
+git.worktrees Unary Read {Owner}
+host.demoTask Stream Read {Owner, Mobile, Readonly}
+host.info Unary Read {Owner, Mobile, Readonly}
+host.ping Unary Read {Owner, Mobile, Readonly}
+i18n.get Unary Read {Owner, Mobile, Readonly}
+i18n.setLanguage Unary Write {Owner}
+index.file.symbols Unary Read {Owner, Mobile, Readonly}
+index.status Unary Read {Owner, Mobile, Readonly}
+index.symbols.search Unary Read {Owner, Mobile, Readonly}
+index.tool.symbolSearch Unary Read {Owner}
+keymap.get Unary Read {Owner, Mobile, Readonly}
+keymap.list Unary Read {Owner, Mobile, Readonly}
+lang.detect Unary Read {Owner, Mobile, Readonly}
+lang.list Unary Read {Owner, Mobile, Readonly}
+log.write Unary Write {Owner}
+lsp.applyEdit.answer Unary Write {Owner}
+lsp.codeAction.list Unary Read {Owner}
+lsp.codeAction.resolve Unary Read {Owner}
+lsp.command.execute Unary Write {Owner}
+lsp.completion Unary Read {Owner}
+lsp.completion.execute Unary Write {Owner}
+lsp.completion.resolve Unary Read {Owner}
+lsp.declaration Unary Read {Owner}
+lsp.definition Unary Read {Owner}
+lsp.diagnostics.counts Unary Read {Owner}
+lsp.diagnostics.list Unary Read {Owner}
+lsp.document.capabilities Unary Read {Owner}
+lsp.document.change Unary Read {Owner}
+lsp.document.close Unary Read {Owner}
+lsp.document.open Unary Exec {Owner}
+lsp.document.read Unary Read {Owner}
+lsp.document.save Unary Read {Owner}
+lsp.format Unary Read {Owner}
+lsp.hover Unary Read {Owner}
+lsp.implementation Unary Read {Owner}
+lsp.references Unary Read {Owner}
+lsp.rename Unary Read {Owner}
+lsp.rename.prepare Unary Read {Owner}
+lsp.server.log Unary Read {Owner}
+lsp.server.restart Unary Exec {Owner}
+lsp.server.setLocal Unary Write {Owner}
+lsp.server.stop Unary Exec {Owner}
+lsp.servers.list Unary Read {Owner}
+lsp.servers.packages Unary Read {Owner}
+lsp.signatureHelp Unary Read {Owner}
+lsp.status.document Unary Read {Owner}
+lsp.status.get Unary Read {Owner}
+lsp.symbols.document Unary Read {Owner}
+lsp.tool.diagnostics Unary Read {Owner}
+lsp.typeDefinition Unary Read {Owner}
+lsp.workspaceSymbol Unary Read {Owner}
+mcp.approval.answer Unary Write {Owner}
+mcp.approvals Stream Read {Owner}
+mcp.audit.clear Unary Write {Owner}
+mcp.audit.list Unary Read {Owner}
+mcp.sessions Unary Read {Owner}
+mcp.settings.get Unary Read {Owner}
+mcp.settings.set Unary Write {Owner}
+mcp.tools.list Unary Read {Owner}
+openWith.list Unary Read {Owner}
+openWith.run Unary Exec {Owner}
+openWith.tool.upsert Unary Write {Owner}
+project.candidates Unary Read {Owner}
+project.claimTrustPrompt Unary Write {Owner}
+project.console.delete Unary Write {Owner}
+project.console.list Unary Read {Owner}
+project.console.read Unary Read {Owner}
+project.console.write Unary Write {Owner}
+project.create Unary Write {Owner}
+project.delete Unary Write {Owner}
+project.get Unary Read {Owner, Mobile, Readonly}
+project.info Unary Read {Owner, Mobile, Readonly}
+project.list Unary Read {Owner, Mobile, Readonly}
+project.markOpened Unary Write {Owner}
+project.recent Unary Read {Owner, Mobile, Readonly}
+project.resolve Unary Read {Owner}
+project.setTrust Unary Write {Owner}
+project.state.get Unary Read {Owner}
+project.state.set Unary Write {Owner}
+project.storage Unary Read {Owner, Mobile, Readonly}
+project.tool.open Unary Read {Owner}
+project.tool.register Unary Write {Owner}
+project.trust Unary Read {Owner, Mobile, Readonly}
+project.update Unary Write {Owner}
+run.attach Stream Read {Owner}
+run.config.delete Unary Write {Owner}
+run.config.list Unary Read {Owner}
+run.config.preview Unary Read {Owner}
+run.config.save Unary Write {Owner}
+run.input Unary Exec {Owner}
+run.list Unary Read {Owner}
+run.resize Unary Write {Owner}
+run.restart Unary Exec {Owner}
+run.sql.start Unary Exec {Owner}
+run.start Unary Exec {Owner}
+run.stop Unary Exec {Owner}
+run.tasks.refresh Unary Exec {Owner}
+run.tool.configDelete Unary Write {Owner}
+run.tool.configList Unary Read {Owner}
+run.tool.configUpsert Unary Write {Owner}
+run.tool.logs Unary Read {Owner}
+run.tool.restart Unary Dangerous {Owner}
+run.tool.start Unary Dangerous {Owner}
+run.tool.status Unary Read {Owner}
+run.tool.stop Unary Exec {Owner}
+runtime.get Unary Read {Owner}
+runtime.reload Unary Write {Owner}
+search.files Unary Read {Owner, Mobile, Readonly}
+search.text Stream Read {Owner, Mobile, Readonly}
+syntax.close Unary Read {Owner, Mobile, Readonly}
+syntax.edit Unary Read {Owner, Mobile, Readonly}
+syntax.highlights Unary Read {Owner, Mobile, Readonly}
+syntax.open Unary Read {Owner, Mobile, Readonly}
+task.cancel Unary Write {Owner}
+task.list Unary Read {Owner, Mobile, Readonly}
+terminal.close Unary Exec {Owner}
+terminal.create Stream Exec {Owner}
+terminal.input Unary Exec {Owner}
+terminal.resize Unary Write {Owner}
+theme.get Unary Read {Owner, Mobile, Readonly}
+theme.list Unary Read {Owner, Mobile, Readonly}
+tools.install Unary Exec {Owner}
+tools.list Unary Read {Owner, Mobile, Readonly}
+tools.log Unary Read {Owner, Mobile, Readonly}
+tools.registry.get Unary Read {Owner, Mobile, Readonly}
+tools.registry.search Unary Read {Owner, Mobile, Readonly}
+tools.registry.setMode Unary Write {Owner}
+tools.registry.status Unary Read {Owner, Mobile, Readonly}
+tools.rollback Unary Exec {Owner}
+tools.uninstall Unary Exec {Owner}
+tools.update Unary Exec {Owner}
+tools.updates Unary Read {Owner, Mobile, Readonly}

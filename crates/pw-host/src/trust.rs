@@ -51,7 +51,7 @@ pub async fn follow(mut events: Subscription, registry: Registry, runtime: Arc<R
                 // 레지스트리를 읽고 워크트리 판정으로 디스크(`.git`)를 본다.
                 let registry = registry.clone();
                 let runtime = Arc::clone(&runtime);
-                let done = tauri::async_runtime::spawn_blocking(move || {
+                let done = tokio::task::spawn_blocking(move || {
                     match registry.trust_followers(&project_id) {
                         Ok(projects) => runtime.trust_changed(&projects),
                         Err(e) => {

@@ -20,39 +20,24 @@ tauri-build = { version = "2.7.2", features = [] }
 
 [dependencies]
 pw-core = { path = "../../../crates/pw-core" }
-# DB 드라이버 등록부(src/db.rs). 드라이버 크레이트(pw-db-driver-*)는 각 드라이버 행이 여기 더한다.
+# 비밀 저장소(OS 키체인 — `pw_db::secret::KeyringStore`) · DB 세션 타입. 드라이버 목록은 pw-host 에 있다(src/db.rs).
 pw-db = { path = "../../../crates/pw-db" }
-# SSH 터널의 askpass 붙임 · 앱 종료 때 남은 ssh 정리(src/db.rs · main.rs, M3-11).
+# 앱 종료 때 남은 ssh 정리(main.rs, M3-11) · 측정 번들의 가짜 드라이버(src/perf_fake_db.rs).
 pw-db-driver = { path = "../../../crates/pw-db-driver" }
-pw-db-driver-mysql = { path = "../../../crates/pw-db-driver-mysql" }
-pw-db-driver-pg = { path = "../../../crates/pw-db-driver-pg" }
-pw-db-driver-redis = { path = "../../../crates/pw-db-driver-redis" }
-pw-db-driver-sqlite = { path = "../../../crates/pw-db-driver-sqlite" }
-# 문장 나누기 · 현재 문장 RPC(`db.sql.split` · `db.sql.statementAt`, M3-04).
-pw-db-sql = { path = "../../../crates/pw-db-sql" }
 # 가짜 드라이버의 객체 · 열 정의(`perf-fake-db` 에서만).
 pw-db-types = { path = "../../../crates/pw-db-types", optional = true }
-# 디버그 세션 · 브레이크포인트(`debug.*`, 17-m6-plan M6-17).
-pw-debug = { path = "../../../crates/pw-debug" }
 pw-diag = { path = "../../../crates/pw-diag" }
 pw-ext = { path = "../../../crates/pw-ext" }
 pw-fs = { path = "../../../crates/pw-fs" }
 pw-git = { path = "../../../crates/pw-git" }
+# Host 조립(18-m7-plan M7-01): 기능 크레이트의 메서드 등록은 pw-host 가 한다 — 앱은 부품만 넣는다(src/main.rs 의 `local_host_parts`).
+pw-host = { path = "../../../crates/pw-host" }
 pw-i18n = { path = "../../../crates/pw-i18n" }
-# 심볼 인덱스(`index.*`, M4-15).
-pw-index = { path = "../../../crates/pw-index" }
-pw-lang = { path = "../../../crates/pw-lang" }
 pw-mcp = { path = "../../../crates/pw-mcp" }
-# 언어 서버 관리자 · 문서 동기화(`lsp.document.*` · `lsp.status.*` · `lsp.server.*`, M4-05).
-pw-lsp = { path = "../../../crates/pw-lsp" }
-pw-lsp-servers = { path = "../../../crates/pw-lsp-servers" }
 pw-open-with = { path = "../../../crates/pw-open-with" }
 pw-run = { path = "../../../crates/pw-run" }
 pw-runtime = { path = "../../../crates/pw-runtime" }
 pw-rpc = { path = "../../../crates/pw-rpc" }
-pw-syntax = { path = "../../../crates/pw-syntax" }
-# 도구 registry(`tools.registry.*`, 15-m4-plan.md M4-03).
-pw-tools = { path = "../../../crates/pw-tools" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tauri = { version = "2.12.3", features = [] }
@@ -115,6 +100,9 @@ schemars = { workspace = true }
 specta = { workspace = true, features = ["derive"] }
 # 진짜 `pitwall askpass` 를 거치는 git 인증 시험(tests/askpass.rs)이 시험 저장소 · 쓰기 실행기 픽스처를 쓴다.
 pw-git = { path = "../../../crates/pw-git", features = ["test-support"] }
+# MCP 툴 시험(src/mcp_tests)이 응답 예산 · 언어 서버 관문을 직접 본다.
+pw-index = { path = "../../../crates/pw-index" }
+pw-lsp = { path = "../../../crates/pw-lsp" }
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.190"

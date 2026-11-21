@@ -9,8 +9,6 @@ use pw_diag::Diagnostics;
 use pw_ext::{LoadOptions, Registry};
 use pw_fs::Fs;
 use pw_i18n::I18n;
-use pw_open_with::{HostParts, OpenWith};
-use pw_runtime::{LoginShell, Runtime, RuntimeHost};
 use tauri::Manager as _;
 
 mod agent_open;
@@ -37,7 +35,6 @@ mod perf;
 mod perf_fake_db;
 mod shell_command;
 mod tool_cli;
-mod trust;
 mod update;
 mod windows;
 
@@ -122,7 +119,9 @@ fn local_host_with(
     .0
 }
 
-/// [`local_host_with`] 의 몸통. DB 세션은 시험([`local_host_and_db`])이 받는다.
+/// [`local_host_with`] 의 몸통 — 앱의 부품으로 공용 조립(`pw_host::assemble`)을 부른다. DB 세션은 시험([`local_host_and_db`])이
+/// 받는다. 앱만의 부품: 비밀은 OS 키체인, `cli.status` 의 「Shell 명령 설치」 대상(shell_command.rs), 설정 창 판정(windows.rs),
+/// 뒤에서 도는 일은 Tauri 의 tokio 런타임.
 #[allow(clippy::too_many_arguments)] // local_host_with 와 같다.
 fn local_host_parts(
     paths: AppPaths,
@@ -134,358 +133,30 @@ fn local_host_parts(
     open_requests: pw_core::open::OpenRequests,
     mcp_sessions: pw_mcp::sessions::Sessions,
 ) -> (LocalHost, Arc<pw_db::DbSessions>) {
-    let methods = Arc::clone(&i18n);
-    // 앱이 띄우는 프로세스의 환경. 로그인 셸은 처음 쓸 때 돈다 — 시작을 늦추지 않는다.
-    // 미신뢰 프로젝트에서는 프로젝트 코드를 돌리는 제공자를 고르지 않는다(M1-05). 레지스트리는 Host 를 만든 뒤 붙인다.
-    let trust = trust::TrustGate::default();
-    // 신뢰한 프로젝트의 mise 설정이 고정한 도구 버전을 로그인 셸 환경 위에 덮는다(M1-16).
-    let runtime = Arc::new(
-        Runtime::new(LoginShell::for_this_user())
-            .with_provider(Arc::new(pw_runtime::Mise::default()))
-            .with_trust(trust.check()),
-    );
-    let runtime_methods = Arc::clone(&runtime);
-    let lang = Arc::new(pw_lang::methods::Lang::new(&extensions));
-    let lang_methods = Arc::clone(&lang);
-    let open_with = Arc::new(OpenWith::new(Arc::clone(&extensions), Arc::clone(&runtime)));
-    let open_with_methods = Arc::clone(&open_with);
-    // 언어 서버 정의 · 해석 · 설정(`lsp.servers.list`, M4-02). 설치본 찾기는 설치기(M4-04)가 붙인다.
-    let lsp_servers = Arc::new(pw_lsp_servers::LspServers::new(
-        Arc::clone(&extensions),
-        Arc::clone(&runtime),
-    ));
-    let lsp_servers_methods = Arc::clone(&lsp_servers);
-    // 언어 서버 관리자(M4-05): 그 언어의 문서를 처음 열 때 서버를 띄우고, 창이 닫히면 그 창이 띄운 서버를 끝낸다.
-    let lsp = pw_lsp::LspManager::new(
-        Arc::clone(&lsp_servers),
-        Arc::clone(&extensions),
-        pw_lsp::ManagerOptions::default(),
-    );
-    let lsp_methods = lsp.clone();
-    // 도구 registry(`tools.registry.*`, M4-03): 내장 스냅숏으로 시작하고, 처음 불릴 때 캐시를 읽고 가져오기를 뒤에서 한다.
-    let tools_registry = Arc::new(pw_tools::ToolsRegistry::new());
-    let tools_registry_methods = Arc::clone(&tools_registry);
-    // 도구 설치기(`tools.install` · `update` · `rollback` · `uninstall` · `list` · `updates` · `log`, M4-04). `$DATA/tools` 에 설치하고
-    // 설치본 찾기(`ToolLocator`)를 언어 서버 해석에 붙인다. 설치는 설정 창 · 그 프로젝트 창만 한다.
-    let tools_installer = Arc::new(pw_tools::ToolsInstaller::new(Arc::clone(&tools_registry)));
-    let tools_installer_methods = Arc::clone(&tools_installer);
-    let fs_methods = Arc::clone(&fs);
-    let fs_watch = pw_fs::watch::Watch::new(Arc::clone(&fs));
-    let fs_watch_methods = fs_watch.clone();
-    // 파일 목록 인덱스(`search.files`)는 감시하는 루트마다 목록을 둔다.
-    let fs_index = pw_fs::index::FileIndex::new(Arc::clone(&fs));
-    let fs_index_methods = fs_index.clone();
-    // 언어 서버의 파일 감시 전달(M4-05b)이 다시 만든 목록을 받는다.
-    let fs_index_lsp = fs_index.clone();
-    fs_watch.attach_index(fs_index.clone());
-    // 심볼 인덱스(`index.*`, M4-15)는 파일 목록 인덱스의 목록을 따라간다(같은 수명 — 감시하는 루트마다).
-    let symbol_index = pw_index::SymbolIndex::new(Arc::clone(&fs), Arc::clone(&extensions));
-    fs_index.observe(symbol_index.observer());
-    let symbol_index_methods = symbol_index.clone();
-    // 「Orca 에서 Pitwall 열기」 안내의 검사(`cli.status`): 「Shell 명령 설치」 의 대상과 이 바이너리.
-    let cli_check = Arc::new(pw_open_with::cli::CliCheck::new(
-        Arc::clone(&runtime),
-        shell_command::target_path().map_err(|e| e.to_string()),
-        std::env::current_exe().map_err(|e| e.to_string()),
-        shell_command::source_check(),
-    ));
-    // 내장 터미널(M1-08). 창이 닫히면 그 연결의 터미널 스트림이 버려져 셸의 프로세스 트리가 끝난다.
-    let terminals = Arc::new(pw_run::Terminals::new(Arc::clone(&runtime)));
-    let terminal_methods = Arc::clone(&terminals);
-    // 실행 구성(`run.config.*`, M6-01). `.pitwall/run/*.toml` 을 읽고 쓴다.
-    let run_configs = Arc::new(pw_run::config::methods::RunConfigs::new());
-    let run_config_methods = Arc::clone(&run_configs);
-    // 실행 관리자(`run.*`, M6-02). 실행은 연결이 아니라 Host 의 것이다 — 창을 다시 불러와도 · 에이전트가 띄웠어도 같은 실행을 본다.
-    // 프로젝트 창이 사라지면 그 프로젝트의 실행을 끝내고(ipc.rs), 앱이 끝날 때는 `pw_run::shutdown` 이 함께 끝낸다.
-    let runs = pw_run::runs::Runs::new(Arc::clone(&runtime));
-    let run_methods = runs.clone();
-    // 디버그 세션 · 브레이크포인트(`debug.*`, M6-17). 디버그 세션은 실행 하나다(실행 관리자의 종류 `debug`) — 어댑터 정의 · 해석은
-    // 언어 서버와 같은 곳(`LspServers`, M6-16)을 쓴다. 끝내기는 실행의 끝내기를 따른다(창 닫기 · 앱 끝).
-    let debugger = pw_debug::Debugger::new(
-        runs.clone(),
-        Arc::clone(&runtime),
-        Arc::clone(&lsp_servers) as Arc<dyn pw_debug::Adapters>,
-    );
-    // 언어 서버가 여는 어댑터(java-debug — jdtls 의 `vscode.java.startDebugSession`, M6-19)는 서버 관리자에 명령을 보낸다. 관리자는
-    // 그 세션의 프로젝트 · 루트에 떠 있는 인스턴스에만 보낸다.
-    debugger.attach_language_servers(Arc::new(lsp.clone()) as Arc<dyn pw_lsp_servers::LspCommands>);
-    let debugger_methods = debugger.clone();
-    // 구문 강조(`syntax.*`). 문법 엔진은 처음 문서를 열 때 만든다.
-    let syntax = Arc::new(pw_syntax::Syntax::new(Arc::clone(&extensions)));
-    // git(`git.*`, M2). 읽기는 gix, 쓰기는 런타임 환경으로 띄우는 git CLI 다.
-    let git = Arc::new(pw_git::Git::new(Arc::clone(&runtime)));
-    let git_methods = Arc::clone(&git);
-    // git 쓰기 실행기 · 진행 중 작업 · 창 질의(`git.operation*` · `git.prompts`, M2-06). 쓰기는 Host 의 Task 로 돈다.
-    let git_write = Arc::new(pw_git::write::GitWrite::new(
-        Arc::clone(&git),
+    let assembled = pw_host::assemble(pw_host::HostParts {
+        id: LOCAL_HOST_ID.into(),
+        paths,
+        diagnostics,
+        extensions,
+        i18n,
+        fs,
         askpass,
-        Arc::clone(&fs),
-    ));
-    let git_write_methods = Arc::clone(&git_write);
-    // 충돌 데이터 · 해결(`git.conflicts` · `git.conflict.*`, M2-11). 해결은 쓰기 실행기로 돈다.
-    let git_conflict_methods = Arc::clone(&git_write);
-    // merge · cherry-pick · revert · rebase · reset(`git.merge` 등, M2-10). 쓰기 실행기로 돈다.
-    let git_history_methods = Arc::clone(&git_write);
-    // 커밋(`git.commit`, M2-08). 쓰기 실행기로 돈다.
-    let git_commit_methods = Arc::clone(&git_write);
-    // 체크아웃 · 브랜치 · 태그 · fetch · pull · push(`git.checkout` · `git.branch.*` · `git.tag.create` · `git.fetch` · `git.pull` ·
-    // `git.push`, M2-09). 쓰기 실행기로 돈다.
-    let git_branch_methods = Arc::clone(&git_write);
-    let git_remote_methods = Arc::clone(&git_write);
-    // 스테이징 · 되돌리기 · stash(`git.stage*` · `git.stash.*`, M2-07). 쓰기 실행기로 돈다.
-    let git_stage_methods = Arc::clone(&git_write);
-    // 작업 트리 상태 · ref(`git.status` · `git.refs`)와 저장소 감시(`git.watch`, M2-02).
-    let git_status = Arc::new(pw_git::status::Status::new(Arc::clone(&git)));
-    let git_status_methods = Arc::clone(&git_status);
-    let git_watch = pw_git::watch::GitWatch::new(Arc::clone(&git));
-    // DB 연결 설정 · 비밀 · 신뢰 게이트(`db.connection.*` · `db.secret.*`, M3-02). 비밀은 OS 키체인, env 참조는 런타임 환경.
-    let db_connections = db::connections(&runtime);
-    let db_connection_methods = Arc::clone(&db_connections);
-    let db_ssh_host_methods = Arc::clone(&db_connections);
-    // DB 세션 · 실행 파이프라인(`db.session.*` · `db.query.*` · `db.sql.classify` · `db.connection.test`, M3-05).
-    let db_sessions = db::sessions(&db_connections);
-    // SSH 터널(M3-11) — git 쓰기와 같은 askpass · 창 질의를 쓴다.
-    db::attach_tunnels(
-        &db_sessions,
-        &runtime,
-        git_write.askpass(),
-        git_write.prompts(),
-        paths.state.join("db-ssh-tunnels"),
-    );
-    let db_session_methods = Arc::clone(&db_sessions);
-    // 실행 구성의 `sql` 종류(`run.sql.start`, M6-09): 프로세스 없이 DB 실행 경로로, 실행 관리자의 실행 하나로 돈다.
-    let sql_run_sessions = Arc::clone(&db_sessions);
-    let sql_runs = runs.clone();
-    let db_sessions_out = Arc::clone(&db_sessions);
-    // MCP 상태(`mcp.sessions` · `mcp.tools.list` · `mcp.audit.list`, M5-10). 카탈로그 · 감사 로그는 Host 를 만든 뒤 붙인다.
-    let mcp_status = Arc::new(pw_mcp::methods::Mcp::new(mcp_sessions));
-    let mcp_status_methods = Arc::clone(&mcp_status);
-    let host = LocalHost::builder(LOCAL_HOST_ID)
-        .config(paths)
-        .open_requests(open_requests)
-        .methods(move |router| pw_diag::methods::register(router, diagnostics))
-        .methods(move |router| pw_ext::methods::register(router, extensions))
-        .methods(move |router| pw_i18n::methods::register(router, methods))
-        .methods(move |router| pw_lang::methods::register(router, lang_methods))
-        .methods(move |router| pw_open_with::methods::register(router, open_with_methods))
-        .methods(move |router| pw_lsp_servers::methods::register(router, lsp_servers_methods))
-        .methods(move |router| pw_lsp::register(router, &lsp_methods))
-        .methods(move |router| pw_runtime::methods::register(router, runtime_methods))
-        .methods(move |router| pw_fs::methods::register(router, fs_methods))
-        .methods(move |router| pw_fs::watch::register(router, fs_watch_methods))
-        .methods(move |router| pw_fs::index::register(router, fs_index_methods))
-        .methods(move |router| pw_index::register(router, symbol_index_methods))
-        .methods(move |router| pw_open_with::cli::register(router, cli_check))
-        .methods(move |router| pw_run::methods::register(router, terminal_methods))
-        .methods(move |router| pw_run::config::methods::register(router, run_config_methods))
-        .methods(move |router| pw_run::runs::methods::register(router, run_methods))
-        .methods(move |router| pw_debug::methods::register(router, debugger_methods))
-        .methods(move |router| pw_syntax::methods::register(router, syntax))
-        .methods(move |router| pw_git::methods::register(router, git_methods))
-        .methods(move |router| pw_git::write::register(router, git_write_methods))
-        .methods(move |router| pw_git::conflict::methods::register(router, git_conflict_methods))
-        .methods(move |router| pw_git::history::register(router, git_history_methods))
-        .methods(move |router| pw_git::commit::register(router, git_commit_methods))
-        .methods(move |router| pw_git::branch::register(router, git_branch_methods))
-        .methods(move |router| pw_git::remote::register(router, git_remote_methods))
-        .methods(move |router| pw_git::stage::register(router, git_stage_methods))
-        .methods(move |router| pw_git::status::register(router, git_status_methods))
-        .methods(move |router| pw_git::watch::register(router, git_watch))
-        .methods(pw_db_sql::split::register)
-        .methods(pw_db_sql::literal::register)
-        .methods(pw_db_sql::kv_command::register)
-        .methods(move |router| pw_db::config::register(router, db_connection_methods))
-        .methods(move |router| pw_db::register(router, db_session_methods))
-        .methods(move |router| pw_db::run_sql::register(router, sql_run_sessions, sql_runs))
-        .methods(|router| pw_db::registry::register(router, db::drivers()))
-        .methods(move |router| pw_db::ssh_hosts::register(router, db_ssh_host_methods))
-        .methods(move |router| pw_tools::methods::register(router, tools_registry_methods))
-        .methods(move |router| {
-            pw_tools::install::methods::register(router, tools_installer_methods)
-        })
-        .methods(move |router| pw_mcp::methods::register(router, mcp_status_methods))
-        .build();
-    // 파일 감시(`fs.watch`)는 바뀐 경로를 버스로 낸다.
-    fs_watch.attach(host.bus().clone());
-    git_write.attach(host.tasks().clone());
-    // 인덱스는 버스의 `fs.changed` 로 목록을 갱신하고, 목록을 만드는 동안을 작업으로 보인다.
-    tauri::async_runtime::spawn(fs_index.attach(host.bus(), host.tasks().clone()));
-    // 심볼 색인을 처음 만드는 동안을 작업으로 보인다. 런타임 안에서 붙인다 — 목록은 런타임 밖 스레드에서도 오므로 그 런타임을
-    // 붙잡아 둔다.
-    let symbol_tasks = host.tasks().clone();
-    tauri::async_runtime::spawn(async move { symbol_index.attach(symbol_tasks) });
-    // 큰 저장소의 전체 status 는 작업으로 보인다.
-    git_status.attach(host.tasks().clone());
-    if let Some(config) = host.config() {
-        i18n.attach_config(config.global.clone());
-        // registry 캐시(`$CACHE/registry/`)와 설정 `[tools] registry`.
-        tools_registry.attach(config.paths.cache.clone(), config.global.clone());
-        // 외부 도구 실행(⌥F1 · ⌘⌥E)이 전역 설정 · 프로젝트 레지스트리를 쓴다.
-        if let Some(projects) = host.registry() {
-            // MCP 상태: 세션 이벤트는 Host 버스로, 툴 목록은 세션과 같은 카탈로그(이 Host 가 처리하는 툴)로.
-            mcp_status.sessions().attach(host.bus().clone());
-            let mcp_audit = Arc::new(pw_mcp::audit::AuditLog::under_state(&config.paths.state));
-            mcp_status.attach(pw_mcp::methods::HostParts {
-                paths: config.paths.clone(),
-                global: config.global.clone(),
-                projects: projects.clone(),
-                catalog: Arc::new(pw_mcp::Catalog::linked().routed_by(host.router())),
-                audit: Arc::clone(&mcp_audit),
-            });
-            // 감사 로그의 보관 정리(16-m5-plan M5-11 — 결정 M5-D10): 지금 한 번, 그 뒤 하루에 한 번. 보관 일수는 전역 설정의
-            // `[mcp.audit] retention_days` 만 읽는다. 앱이 끝나면 함께 끝난다.
-            tauri::async_runtime::spawn(pw_mcp::audit::keep_pruned(
-                mcp_audit,
-                config.global.clone(),
-                tokio_util::sync::CancellationToken::new(),
-            ));
-            // 파일 RPC(`fs.*`)는 요청의 프로젝트 루트를 레지스트리에서 찾는다.
-            fs.attach(projects.clone());
-            // 터미널은 전역 설정(`[terminal] shell`)과 레지스트리(프로젝트 · cwd)를 쓴다.
-            terminals.attach(pw_run::HostParts {
-                global: config.global.clone(),
-                projects: projects.clone(),
-            });
-            // 실행 구성은 설정 경로(개인 전용 프로젝트의 폴더)와 레지스트리를 쓴다.
-            run_configs.attach(pw_run::config::methods::HostParts {
-                paths: config.paths.clone(),
-                projects: projects.clone(),
-            });
-            // 프로세스를 띄우는 태스크 감지(mise · gradle · maven — M6-05)는 신뢰한 프로젝트에서 그 런타임 환경으로 돌고, 「태스크
-            // 읽기」 는 Host 작업(진행 · 취소)이다.
-            run_configs.attach_detect(pw_run::config::methods::DetectHost::new(
-                Arc::clone(&runtime),
-                host.tasks().clone(),
-            ));
-            // 감지 출처(`package.json` · `Makefile` …)가 바뀌면 그 프로젝트의 감지만 다시 하고 달라졌으면 `config.changed` 를 낸다.
-            tauri::async_runtime::spawn(pw_run::detect::follow_files(
-                pw_run::detect::subscribe_files(host.bus()),
-                run_configs.seen(),
-                host.bus().clone(),
-            ));
-            // 실행은 구성을 읽고(설정 경로 · 레지스트리) `run.started` · `run.exited` 를 버스로 낸다.
-            runs.attach(pw_run::runs::HostParts {
-                paths: config.paths.clone(),
-                projects: projects.clone(),
-                bus: host.bus().clone(),
-            });
-            // 화면에서 저장한 실행 구성은 창의 실행과 같은 풀기로 「사람이 본 구성」 이 된다(M6-07 ④).
-            run_configs.attach_runs(runs.clone());
-            // 디버그는 실행 구성 · 레지스트리 · 앱 데이터(`breakpoints.json`)와 이벤트 버스를 쓴다.
-            debugger.attach(pw_debug::HostParts {
-                paths: config.paths.clone(),
-                projects: projects.clone(),
-                bus: host.bus().clone(),
-            });
-            // git 은 전역 설정(`[git] path`) · 레지스트리를 쓰고, 쓰기를 끈 알림을 버스로 낸다.
-            git.attach(pw_git::HostParts {
-                global: config.global.clone(),
-                projects: projects.clone(),
-                bus: host.bus().clone(),
-            });
-            open_with.attach(HostParts {
-                paths: config.paths.clone(),
-                global: config.global.clone(),
-                projects: projects.clone(),
-            });
-            lsp_servers.attach(pw_lsp_servers::HostParts {
-                paths: config.paths.clone(),
-                global: config.global.clone(),
-                projects: projects.clone(),
-            });
-            tools_installer.attach(pw_tools::install::InstallerHost {
-                tools_dir: config.paths.data.join("tools"),
-                state_dir: config.paths.state.clone(),
-                tasks: host.tasks().clone(),
-                toolchains: Arc::new(pw_tools::install::RuntimeToolchains {
-                    runtime: Arc::clone(&runtime),
-                    projects: projects.clone(),
-                }),
-                settings_window: Arc::new(|label: &str| {
-                    windows::WindowKind::of_label(label) == Some(windows::WindowKind::Settings)
-                }),
-            });
-            if let Some(locator) = tools_installer.locator() {
-                lsp_servers.set_tools(Arc::new(locator));
-            }
-            // 서버 관리자: 진행은 작업으로, 상태 · 신뢰 해제 · 런타임 · 설정 변경은 버스로. 시작할 때 지난 Host 가 강제로 끝나며
-            // 남긴 서버 그룹을 거둔다(기록부 판정 — `pw_lsp::ledger`).
-            lsp.attach(pw_lsp::HostParts {
-                projects: projects.clone(),
-                bus: host.bus().clone(),
-                tasks: host.tasks().clone(),
-                global: config.global.clone(),
-                state_dir: config.paths.state.clone(),
-                files: Some(fs_index_lsp.clone()),
-            });
-            tauri::async_runtime::spawn(
-                lsp.clone()
-                    .follow(pw_lsp::LspManager::subscribe(host.bus())),
-            );
-            // 도구를 지우기 전에 그 설치본으로 뜬 언어 서버를 멈춘다(M4-04 의 `ToolUsers`).
-            tools_installer.set_users(Arc::new(LspToolUsers(lsp.clone())));
-            let reaper = lsp.clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                let reaped = reaper.reap_orphans();
-                if reaped > 0 {
-                    tracing::info!(reaped, "ended language servers left by an earlier run");
-                }
-            });
-            runtime.attach(RuntimeHost {
-                projects: projects.clone(),
-                bus: host.bus().clone(),
-                paths: config.paths.clone(),
-            });
-            // 버전 파일(`mise.toml` 등)이 바뀌면 그 프로젝트의 런타임 환경을 다시 계산한다(파일 감시 `fs.changed`).
-            tauri::async_runtime::spawn(pw_runtime::follow_files(
-                pw_runtime::subscribe_files(host.bus()),
-                Arc::clone(&runtime),
-            ));
-            // 언어 판별(`lang.detect`)이 설정 매핑 · 프로젝트 레지스트리를 쓴다.
-            lang.attach(pw_lang::methods::HostParts {
-                paths: config.paths.clone(),
-                global: config.global.clone(),
-                projects: projects.clone(),
-            });
-            // DB 연결 설정은 레지스트리(프로젝트 루트 · 신뢰)를 쓰고, `.pitwall/` 이 바뀌면(파일 감시) `config.changed` 를 낸다.
-            db_connections.attach(pw_db::config::HostParts {
-                paths: config.paths.clone(),
-                projects: projects.clone(),
-                bus: host.bus().clone(),
-            });
-            tauri::async_runtime::spawn(pw_db::config::follow_files(
-                pw_db::config::subscribe_files(host.bus()),
-                db_connections,
-            ));
-            // 세션은 전역 설정의 `[db]` 항목(그리드 보유 행 · 바이트 상한, 셀 상한, 타임아웃 등 — `pw_db::settings`)을 읽고, 연결
-            // 설정이 바뀌면(`config.changed`) 그 세션을 「설정 바뀜」 으로 둔다.
-            db_sessions.attach_settings(config.global.clone());
-            tauri::async_runtime::spawn(pw_db::session::follow_config(
-                pw_db::session::subscribe_config(host.bus()),
-                db_sessions,
-            ));
-            trust.attach(projects.clone());
-            tauri::async_runtime::spawn(trust::follow(
-                trust::subscribe(host.bus()),
-                projects.clone(),
-                runtime,
-            ));
-        }
-    }
-    (host, db_sessions_out)
-}
-
-/// 도구 제거(`tools.uninstall`) 전에 그 패키지의 설치본으로 뜬 언어 서버를 끝낸다(`pw_tools::install::ToolUsers` — M4-05).
-struct LspToolUsers(pw_lsp::LspManager);
-
-impl pw_tools::install::ToolUsers for LspToolUsers {
-    fn stop(
-        &self,
-        package: &str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
-        let package = package.to_owned();
-        Box::pin(async move { self.0.stop_installed(&package).await })
-    }
+        open_requests,
+        mcp_sessions,
+        // 비밀은 OS 키체인(서비스 `dev.pitwall.db`, M3-02).
+        secrets: Arc::new(pw_db::secret::KeyringStore::new()),
+        db_drivers: db::drivers(),
+        cli: pw_host::CliParts {
+            target: shell_command::target_path().map_err(|e| e.to_string()),
+            app: std::env::current_exe().map_err(|e| e.to_string()),
+            source: shell_command::source_check(),
+        },
+        settings_window: Arc::new(|label: &str| {
+            windows::WindowKind::of_label(label) == Some(windows::WindowKind::Settings)
+        }),
+        tokio: tauri::async_runtime::handle().inner().clone(),
+    });
+    (assembled.host, assembled.db_sessions)
 }
 
 /// 내장 확장과 `$DATA/extensions/` 의 사용자 확장. 진단은 로그에 남는다(로깅을 켠 뒤에 부른다).

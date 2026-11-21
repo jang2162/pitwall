@@ -256,7 +256,7 @@ async fn an_untrusted_projects_new_window_does_not_start_providers_or_servers() 
         !registry.is_trusted(&id),
         "창을 만들어도 신뢰는 바뀌지 않는다"
     );
-    let gate = crate::trust::TrustGate::default();
+    let gate = pw_host::trust::TrustGate::default();
     gate.attach(registry.clone());
     assert!(!(gate.check())(&id), "런타임 제공자(mise)를 고르지 않는다");
     let Err(refused) = pw_lsp::lsp_grant(

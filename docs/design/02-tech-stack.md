@@ -152,6 +152,7 @@ pitwall/
 │  └─ (mobile/)          # 보류
 ├─ crates/
 │  ├─ pw-core/           # 프로젝트/워크스페이스, 이벤트 버스, 설정
+│  ├─ pw-host/           # Host 조립: 기능 크레이트의 메서드 등록 · 부품(비밀 저장소 · askpass · 열기 요청) — Desktop 과 Relay 가 같이 쓴다(18-m7-plan M7-01)
 │  ├─ pw-rpc/            # RPC 타입/프로토콜, transport(IPC/stdio/ws)
 │  ├─ pw-rpc-gen/        # RPC 선언 → TS 타입 · JSON Schema 생성기 (`mise run gen`, 출력은 packages/rpc-client)
 │  ├─ pw-diag/           # 로그(tracing, 구성요소별 회전 파일) · 진단 정보 · 패닉 훅 (03 「로그 · 진단 (D22)」)

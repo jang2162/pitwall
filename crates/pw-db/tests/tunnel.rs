@@ -821,7 +821,7 @@ mod live {
 
     use super::*;
 
-    /// 데스크톱(`apps/desktop/src-tauri/src/db.rs`)과 같은 붙임: `pw_git` 의 askpass 세션을 ssh 에 준다.
+    /// Host 조립(`crates/pw-host/src/db.rs`)과 같은 붙임: `pw_git` 의 askpass 세션을 ssh 에 준다.
     struct GitAskpass {
         askpass: Askpass,
         prompts: Prompts,

@@ -1,6 +1,6 @@
 //! 드라이버 등록부. 코어는 이것으로만 드라이버를 고른다 — 드라이버 크레이트를 모르고 `DbDriver` trait 객체만 안다.
 //!
-//! 데스크톱 크레이트가 앱을 만들 때 드라이버를 한 줄씩 넣는다(`apps/desktop/src-tauri/src/db.rs`, M3-06 ~ M3-09).
+//! Host 조립(`crates/pw-host/src/db.rs`)이 드라이버를 한 줄씩 넣는다(M3-06 ~ M3-09).
 
 use std::collections::BTreeMap;
 use std::fmt;

@@ -1,7 +1,7 @@
 //! PostgreSQL 드라이버(14-m3-plan.md M3-06): `tokio-postgres` + `deadpool-postgres`, TLS 는 `tokio-postgres-rustls` +
 //! `rustls-platform-verifier`(결정 M3-D1 · M3-D10).
 //!
-//! - [`PgDriver`]: `pw_db_driver::DbDriver`. 데스크톱 크레이트의 등록부(`apps/desktop/src-tauri/src/db.rs`)가 넣는다.
+//! - [`PgDriver`]: `pw_db_driver::DbDriver`. Host 조립의 등록부(`crates/pw-host/src/db.rs`)가 넣는다.
 //! - 연결: `sslmode` 는 libpq 뜻 그대로(`tls`), 터널이면 TCP 는 `connect_to`(`hostaddr`)로, TLS 이름은 설정의 DB `host` 로.
 //!   연결 결과의 TLS 상태는 서버의 `pg_stat_ssl` 로 확인한다(`allow` · `prefer` 는 어느 쪽이든 될 수 있다).
 //! - 연결 하나 = 그 연결을 쥔 태스크 하나(`session`): 포털 행 스트림 · 자동 커밋 / 수동 트랜잭션 · 커서 버리기.
