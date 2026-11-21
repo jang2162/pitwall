@@ -35,7 +35,7 @@ pub struct UploadOwner {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum OwnerKey {
     Session(SessionId),
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     Test(u64),
 }
 
@@ -47,7 +47,7 @@ impl UploadOwner {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn test(connection: u64, role: Role) -> Self {
         Self {
             key: OwnerKey::Test(connection),
