@@ -110,6 +110,12 @@ export function appStrings(t: Translate) {
       recentBadge: t("search-recent-badge"),
       currentProject: t("search-current-project"),
     },
+    machines: {
+      /** 이 앱이 도는 머신(묶음 멤버의 머신 id `local`). */
+      thisMachine: t("machine-this"),
+      /** 머신 표지 목록의 접근성 이름. */
+      label: t("machine-marks-label"),
+    },
     theme: {
       label: t("theme-switcher-label"),
       system: t("theme-system"),

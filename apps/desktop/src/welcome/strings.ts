@@ -35,7 +35,6 @@ export function welcomeStrings(t: Translate) {
       empty: t("welcome-list-empty"),
       noMatch: t("welcome-list-no-match"),
       favorite: t("welcome-list-favorite"),
-      remote: t("welcome-list-remote"),
       branch: (name: string) => t("welcome-list-branch", { name }),
     },
     buttons: {

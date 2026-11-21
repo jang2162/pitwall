@@ -12,6 +12,7 @@ import type {
   OpenWithOutcome,
   OpenWithRunParams,
   Project,
+  ProjectBundle,
   Resolution,
   RootCandidate,
   StorageStatus,
@@ -34,6 +35,8 @@ declare global {
 
 const host = vi.hoisted(() => ({
   projects: [] as Project[],
+  /** `bundle.list` 의 답 — 다른 머신과 묶인 묶음만 두면 된다(암묵 묶음은 표지가 없다). */
+  bundles: [] as ProjectBundle[],
   /** `git.projectBranches` 의 답(프로젝트 id → 브랜치, 분리된 HEAD 면 null). */
   branches: {} as Record<string, string | null>,
   /** reftable 저장소인 프로젝트 — `git.projectBranches` 가 브랜치 대신 `unsupported` 로 답한다. */
@@ -112,6 +115,8 @@ vi.mock("../tauri-transport", async () => {
             return reply(null);
           case "project.list":
             return reply([...host.projects].sort((a, b) => a.name.localeCompare(b.name)));
+          case "bundle.list":
+            return reply(host.bundles);
           case "git.projectBranches":
             return reply({
               projects: host.projects.map((p) => ({
@@ -229,6 +234,7 @@ beforeEach(() => {
     project("b", "billing-api", "/w/billing-api", { favorite: true, openedAt: 10, tags: ["work"] }),
     project("c", "infra", "/w/infra"),
   ];
+  host.bundles = [];
   host.branches = {};
   host.reftable = [];
   host.storage = { kind: "ok", path: "/d/state.db" };
@@ -384,6 +390,33 @@ it("shows each project's branch and nothing for a detached HEAD, read again when
   host.reftable = ["a"];
   await act(async () => host.emitHostEvent("project.changed"));
   await vi.waitFor(() => expect(branchOf("web-console")).toBeNull());
+});
+
+it("marks a project bundled with another machine's checkout with each machine as text", async () => {
+  host.bundles = [
+    {
+      id: "b-0011223344556677",
+      name: "web-console",
+      favorite: false,
+      tags: [],
+      openedAt: 20,
+      implicit: false,
+      members: [
+        { machine: "local", projectId: "a", lastTarget: null },
+        { machine: "SHA256:mini", projectId: "f00d", lastTarget: null },
+      ],
+    },
+  ];
+  await mount();
+  const marksOf = (name: string) =>
+    [
+      ...(rows()
+        .find((r) => r.textContent?.includes(name))
+        ?.querySelectorAll('[role="list"][aria-label="머신"] [role="listitem"]') ?? []),
+    ].map((m) => m.textContent);
+  await vi.waitFor(() => expect(marksOf("web-console")).toEqual(["이 컴퓨터", "SHA256:mini"]));
+  // 이 머신에만 있는 프로젝트는 표지가 없다.
+  expect(marksOf("billing-api")).toEqual([]);
 });
 
 it("closes the welcome window on ⌘W", async () => {

@@ -22,11 +22,6 @@ export function sortProjects(projects: readonly Project[]): Project[] {
   );
 }
 
-/** 레지스트리의 Host 가 이 기기가 아니면 원격이다(지금은 언제나 `local`). */
-export function isRemote(project: Project): boolean {
-  return project.host !== "local";
-}
-
 /** 마지막 경로 조각. `/` 와 `\` 를 모두 구분자로 본다(Windows 경로). */
 export function baseName(path: string): string {
   const trimmed = path.replace(/[/\\]+$/, "");

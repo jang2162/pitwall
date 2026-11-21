@@ -12,6 +12,7 @@ import type {
   KeymapFile,
   LangDetectResult,
   Project,
+  ProjectBundle,
   ProjectTrust,
   Resolution,
   SearchFiles,
@@ -147,6 +148,21 @@ vi.mock("../tauri-transport", async () => {
             return reply(project);
           case "project.list":
             return reply([other, project]);
+          case "bundle.list":
+            return reply([
+              {
+                id: "b-0011223344556677",
+                name: "billing",
+                favorite: false,
+                tags: [],
+                openedAt: 5,
+                implicit: false,
+                members: [
+                  { machine: "local", projectId: "p2", lastTarget: null },
+                  { machine: "SHA256:mini", projectId: "f00d", lastTarget: null },
+                ],
+              },
+            ] satisfies ProjectBundle[]);
           case "project.resolve":
             return reply({
               project,
@@ -535,6 +551,13 @@ it("switches to another project's window with ⌘⇧P, and only closes the popup
   expect(popup()?.getAttribute("data-search-everywhere")).toBe("projects");
   await vi.waitFor(() => expect(values()).toEqual(["project:p2", "project:p1"]));
   expect(items()[1]!.textContent).toContain("이 창");
+  // 스위처의 머신 표지(10-ui.md 2.9): 다른 머신과 묶인 프로젝트에만, 글로.
+  const marks = (i: number) =>
+    [...items()[i]!.querySelectorAll('[aria-label="머신"] [role="listitem"]')].map(
+      (m) => m.textContent,
+    );
+  await vi.waitFor(() => expect(marks(0)).toEqual(["이 컴퓨터", "SHA256:mini"]));
+  expect(marks(1)).toEqual([]);
   await press({ code: "ArrowDown", key: "ArrowDown" });
   await press({ code: "Enter", key: "Enter" });
   expect(popup()).toBeNull();

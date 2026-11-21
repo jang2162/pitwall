@@ -36,6 +36,8 @@ export function hostInvalidations(host: string): readonly InvalidationRule[] {
     rpcQueryKey(host, "project.get"),
     rpcQueryKey(host, "project.resolve"),
     rpcQueryKey(host, "project.trust"),
+    // 묶음(M7-10)도 `project.changed`(`kind: bundle`)로 바뀐다 — 웰컴 · 스위처의 머신 표지.
+    rpcQueryKey(host, "bundle.list"),
     // 웰컴 창 행의 브랜치(M2-13) — 새 프로젝트의 브랜치도 보이게. 브랜치만 바뀐 것은 창이 앞으로 올 때 다시 읽는다(쿼리 기본값).
     rpcQueryKey(host, "git.projectBranches"),
   ];

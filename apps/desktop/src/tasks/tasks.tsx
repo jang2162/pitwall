@@ -145,8 +145,9 @@ export function useTasks<T>(selector: (state: TaskState) => T): T {
 }
 
 /**
- * 연결 하나의 작업 표. 연결(`client`)이 바뀌면 새 표다 — 작업 id 는 Host 마다 1부터라, 프로젝트가 다른 Host 로 다시 묶이면
- * 옛 Host 의 작업이 남아 새 Host 의 id 와 겹친다(03-architecture §3).
+ * 연결 하나의 작업 표. 연결(`client`)이 바뀌면 새 표다 — 작업 id 는 Host 마다 1부터라, 묶음 창의 연결이 다른 머신의 Host 로
+ * 바뀌면(활성 체크아웃을 다른 머신으로 — 08-remote-mobile.md 「창과 활성 체크아웃」) 옛 Host 의 작업이 남아 새 Host 의 id 와
+ * 겹친다(03-architecture §3).
  */
 export function useTaskStoreFor(client: RpcClient | undefined): TaskStore {
   const [owned, setOwned] = useState(() => ({ client, store: createTaskStore() }));

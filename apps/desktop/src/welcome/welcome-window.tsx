@@ -23,6 +23,7 @@ import {
 } from "react";
 
 import { useAppStrings } from "../i18n/app-strings";
+import { MachineMarks, useProjectMachines } from "./machines";
 import { useKeymap, useKeymapPopup, useRegisterActions } from "../keymap/keymap-provider";
 import { McpConnections } from "../mcp/mcp-status";
 import { useOpenWith } from "../open-with/open-with";
@@ -38,7 +39,6 @@ import {
   existingProjectFor,
   isStorageUnavailable,
   openArgsFor,
-  isRemote,
   parentDir,
   sortProjects,
   storageBanner,
@@ -90,6 +90,8 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
     () => new Map((branches.data?.projects ?? []).map((p) => [p.projectId, p.branch])),
     [branches.data],
   );
+  // 다른 머신의 체크아웃과 묶인 프로젝트의 머신 표지(10-ui.md 2.9, M7-10).
+  const machinesOf = useProjectMachines();
   const storage = useRpcQuery("project.storage", null);
   const banner = storageBanner(storage.data, S);
   const readOnly = banner?.readOnly === true;
@@ -381,20 +383,16 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
                         aria-hidden={!project.favorite}
                         className={`size-3 flex-none ${project.favorite ? "fill-current text-ui-accent" : "invisible"}`}
                       />
-                      <span className="w-[180px] flex-none truncate">
-                        {project.name}
-                        {isRemote(project) && (
-                          <span className="ml-1 text-ui-muted-foreground">({T.list.remote})</span>
-                        )}
-                      </span>
+                      <span className="w-[180px] flex-none truncate">{project.name}</span>
                       {/* 경로는 앞에서 자른다 — 프로젝트를 가르는 것은 끝 조각이다. rtl 로 말줄임을 앞에 두고 글자 순서는 LRM 으로 지킨다. */}
                       <span
                         dir="rtl"
                         className="min-w-0 flex-1 truncate text-left text-ui-muted-foreground"
                         title={project.roots[0]}
                       >
-                        {`\u200e${isRemote(project) ? `${project.host}:` : ""}${project.roots[0]}\u200e`}
+                        {`\u200e${project.roots[0]}\u200e`}
                       </span>
+                      <MachineMarks machines={machinesOf.get(project.id)} />
                       <BranchTag
                         name={branchOf.get(project.id) ?? undefined}
                         label={T.list.branch}

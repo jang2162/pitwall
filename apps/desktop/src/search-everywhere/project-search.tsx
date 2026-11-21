@@ -33,6 +33,7 @@ import { useKeymap, useRegisterActions, useSearchSource } from "../keymap/keymap
 import { useHost, useRpcQuery } from "../rpc/host";
 import { MATCH_CLASS } from "../search/match-text";
 import { SEARCH_ITEM_CLASS, searchFilter } from "../ui/search-popup";
+import { MachineMarks, useProjectMachines } from "../welcome/machines";
 import { sortProjects } from "../welcome/projects";
 import { matchRecent, parseFileQuery } from "./file-query";
 import { FILE_LIMIT, FileSearch, type Scope } from "./file-search";
@@ -362,6 +363,7 @@ function makeProjectResults(deps: Deps) {
   return function ProjectResults({ query, limit, heading, onMore, choose }: SearchResultsProps) {
     const T = useAppStrings().search;
     const projects = useRpcQuery("project.list", null);
+    const machinesOf = useProjectMachines();
     const scored = sortProjects(projects.data ?? [])
       .map((p) => ({ p, score: searchFilter(p.name, query, p.roots.slice(0, 1)) }))
       .filter((x) => x.score > 0)
@@ -394,6 +396,7 @@ function makeProjectResults(deps: Deps) {
                 {p.roots[0]}
               </span>
             </span>
+            <MachineMarks machines={machinesOf.get(p.id)} />
             {p.id === deps.projectId && (
               <span className="flex-none text-[11px] text-ui-muted-foreground">
                 {T.currentProject}

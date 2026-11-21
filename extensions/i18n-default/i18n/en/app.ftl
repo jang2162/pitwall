@@ -70,6 +70,8 @@ search-files-truncated = { $shown } of { $matched }
 search-files-at-line = line { $line }
 search-recent-badge = recent
 search-current-project = this window
+machine-this = This computer
+machine-marks-label = Machines
 search-db-table = table
 search-db-view = view
 # $key: ⌘↩ or Ctrl+Enter
