@@ -11,7 +11,6 @@ mod common;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
 
 use pw_core::registry::NewProject;
 use pw_core::{Connection, Host, HostError};
@@ -266,7 +265,7 @@ async fn closing_the_channel_ends_the_terminal_shell_on_the_host() {
         json!({"jsonrpc": "2.0", "method": "stream.credit", "params": {"streamId": stream, "credit": 1000}}),
     );
     let pid = loop {
-        let frame = tokio::time::timeout(Duration::from_secs(20), window.source.recv())
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(20), window.source.recv())
             .await
             .expect("no terminal output")
             .expect("connection closed");
@@ -279,13 +278,13 @@ async fn closing_the_channel_ends_the_terminal_shell_on_the_host() {
     assert!(alive(pid), "the shell is not running");
 
     drop(window);
-    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while alive(pid) {
         assert!(
             std::time::Instant::now() < deadline,
             "the shell outlived the closed channel"
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 }
 
