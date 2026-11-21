@@ -22,7 +22,7 @@ fn state_dir(f: &WriteFixture) -> PathBuf {
     f.projects.paths().state.join(super::super::STATE_DIR)
 }
 
-/// ④ 묶음이 다른 ref(`refs/heads/main` · 태그)를 실어도 전용 ref 하나만 생긴다.
+/// ④ 묶음이 다른 ref(`refs/heads/main` · 받는 커밋을 가리키는 것을 포함한 태그)를 실어도 전용 ref 하나만 생긴다.
 #[tokio::test]
 async fn only_the_incoming_ref_is_written_whatever_the_bundle_carries() {
     let pair = Pair::new(true);
@@ -32,6 +32,8 @@ async fn only_the_incoming_ref_is_written_whatever_the_bundle_carries() {
     src.git(&["tag", "v1"]);
     src.git(&["switch", "--quiet", "-c", "feat"]);
     let feat = src.commit_file("feat.txt", "feat\n", "feat");
+    // 받는 커밋을 가리키는 태그 — git 의 태그 따라오기가 켜져 있으면 받힌다.
+    src.git(&["tag", "-a", "-m", "on feat", "v2"]);
     let file = src.base().join("evil.bundle");
     src.git(&[
         "bundle",
@@ -41,6 +43,7 @@ async fn only_the_incoming_ref_is_written_whatever_the_bundle_carries() {
         "refs/heads/main",
         "refs/heads/feat",
         "refs/tags/v1",
+        "refs/tags/v2",
         "--not",
         &base,
     ]);
