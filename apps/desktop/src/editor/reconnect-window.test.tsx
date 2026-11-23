@@ -702,7 +702,7 @@ it("refuses to send a remote save too large for the link and keeps the edit", as
   expect(writes("local")).toHaveLength(0);
   expect(document.body.textContent).toContain("보내지 않았다");
   expect(member().closed).toBe(false);
-}, 60_000);
+});
 
 it("reads a remote tab's image on that machine and none on this one", async () => {
   await mount();
