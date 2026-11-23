@@ -41,6 +41,7 @@ import {
   type UnaryMethods,
 } from "@pitwall/rpc-client";
 
+import { checkoutOfKey, LOCAL_MACHINE, machineOf, unqualify } from "../checkout/checkout";
 import { DocSync, DocSyncPool, errorCode } from "../editor/doc-sync";
 import type { DocumentState, DocumentStore } from "../editor/documents";
 import { PLAIN_TEXT } from "../editor/language";
@@ -110,12 +111,18 @@ export interface LspAt {
   readonly path: string;
 }
 
-/** LSP 기능이 보는 문서(`EditorFeatureContext.lsp`). 탭이 잡고 있는 동안 산다. */
+/**
+ * LSP 기능이 보는 문서(`EditorFeatureContext.lsp`). 탭이 잡고 있는 동안 산다. `projectId` · `worktree` · `path` 는 **그 문서의
+ * 언어 서버가 도는 머신(`machine`)의 것**이다(접두 없음 — 다른 머신의 탭이면 그 머신의 프로젝트 · 경로, 18-m7-plan M7-21 ⑥). 그래서
+ * 기능 행이 싣는 RPC 인자와 Host 가 돌려준 위치 · 진단의 경로가 같은 꼴이다. 위치를 열 때는 `machine` 을 싣는다.
+ */
 export interface LspDocument {
   readonly projectId: string;
   /** 탭의 워크트리 꼭대기. 메인 체크아웃이면 없다. */
   readonly worktree?: string;
   readonly path: string;
+  /** 언어 서버가 도는 머신(이 머신이면 `local`). 없으면 이 머신. */
+  readonly machine?: string;
   /** Linguist 언어 이름. */
   readonly language: string;
   /** 지금 버전(서버에 보냈거나 보낼 마지막 편집). 조합 중에 쥔 바뀜은 아직 들지 않는다. */
@@ -169,11 +176,23 @@ export interface LspSessions {
   statusChanged(): void;
 }
 
+/** 한 머신의 언어 서버 길: 그 머신의 프로젝트 id 와 그 머신 연결로 가는 문서 RPC · 기능 RPC · 이벤트. */
+export interface LspRoute {
+  projectId: string;
+  source: LspSource;
+  services: LspServices;
+}
+
 export interface LspSessionsDeps {
   source: LspSource;
   documents: Pick<DocumentStore, "onChange" | "store">;
   projectId: string;
   services: LspServices;
+  /**
+   * 다른 머신 문서의 길(18-m7-plan M7-21 ⑥ — 그 머신의 언어 서버). 창의 이 머신 연결로 다른 머신의 경로를 열지 않는다. 없거나
+   * `undefined`(묶음 멤버가 아닌 머신)면 그 문서는 열지 않는다(`off`).
+   */
+  machine?(machine: string): LspRoute | undefined;
 }
 
 /** 코드 조각을 강조하는 `LspServices.highlight`: 구문 분석 서비스에 조각 하나를 열어 전체를 묻고 닫는다. */
@@ -233,8 +252,23 @@ export function lspEligible(
 }
 
 export function createLspSessions(deps: LspSessionsDeps): LspSessions {
-  const { source, documents, projectId } = deps;
+  const { documents, projectId } = deps;
   const { services } = deps;
+  const local: LspRoute = { projectId, source: deps.source, services };
+
+  /** 창 안의 문서(경로 · 워크트리 열쇠)가 언어 서버에 갈 길과 그 머신의 꼴. 길이 없으면 `undefined`. */
+  function routeOf(path: string, worktree: string | undefined) {
+    const machine = machineOf(path, worktree);
+    if (machine === LOCAL_MACHINE) return { machine, route: local, path, worktree };
+    const route = deps.machine?.(machine);
+    const tree = checkoutOfKey(worktree);
+    return {
+      machine,
+      route,
+      path: unqualify(path).path,
+      worktree: tree.machine === machine ? tree.worktree : undefined,
+    };
+  }
 
   class Session {
     readonly sync: DocSync;
@@ -247,11 +281,24 @@ export function createLspSessions(deps: LspSessionsDeps): LspSessions {
     /** 묻기가 끝나기를 기다리는 것(`settled`). */
     private settledWaiters: (() => void)[] = [];
 
+    /** 그 머신의 꼴(Host 에 싣는 것). */
+    readonly machine: string;
+    readonly route: LspRoute | undefined;
+    readonly hostPath: string;
+    readonly worktree: string | undefined;
+
     constructor(
+      /** 창 안의 경로(문서 모델의 열쇠 — 다른 머신이면 접두가 붙는다). */
       readonly path: string,
       readonly language: string,
-      readonly worktree: string | undefined,
+      windowWorktree: string | undefined,
     ) {
+      const at = routeOf(path, windowWorktree);
+      this.machine = at.machine;
+      this.route = at.route;
+      this.hostPath = at.path;
+      this.worktree = at.worktree;
+      const { route, hostPath, worktree } = this;
       this.sync = new DocSync(
         path,
         documents,
@@ -259,11 +306,13 @@ export function createLspSessions(deps: LspSessionsDeps): LspSessions {
           name: "lsp.document",
           skip: (text: Text) => overHighlightLimit(text) !== null,
           open: async (text) => {
+            // 길이 없는 머신(묶음 멤버가 아님)의 문서는 열지 않는다 — 이 머신 연결로 보내지 않는다.
+            if (!route) return { docId: "", off: true };
             try {
-              const opened = await source.open({
-                projectId,
+              const opened = await route.source.open({
+                projectId: route.projectId,
                 ...(worktree !== undefined && { worktree }),
-                path,
+                path: hostPath,
                 language,
                 version: 0,
                 text: text.toString(),
@@ -274,8 +323,8 @@ export function createLspSessions(deps: LspSessionsDeps): LspSessions {
               throw e;
             }
           },
-          change: async (edit) => ({ off: (await source.change(edit)).off !== null }),
-          close: (docId) => void source.close({ docId }).catch(() => {}),
+          change: async (edit) => ({ off: (await route!.source.change(edit)).off !== null }),
+          close: (docId) => void route?.source.close({ docId }).catch(() => {}),
         },
         {
           opening: () => this.setCapabilities({}),
@@ -310,8 +359,9 @@ export function createLspSessions(deps: LspSessionsDeps): LspSessions {
       }
       const docId = this.sync.docId;
       if (docId === undefined) return;
+      if (!this.route) return;
       this.asking = true;
-      source
+      this.route.source
         .capabilities({ docId })
         .then(
           (answer) => {
@@ -339,7 +389,8 @@ export function createLspSessions(deps: LspSessionsDeps): LspSessions {
     /** 저장했다. */
     saved() {
       const docId = this.sync.docId;
-      if (docId !== undefined && !this.sync.holding) void source.save({ docId }).catch(() => {});
+      if (docId !== undefined && !this.sync.holding)
+        void this.route?.source.save({ docId }).catch(() => {});
     }
 
     async request<T>(
@@ -373,9 +424,9 @@ export function createLspSessions(deps: LspSessionsDeps): LspSessions {
         const at: LspAt = {
           docId: settled.docId,
           version,
-          projectId,
+          projectId: this.route?.projectId ?? projectId,
           ...(this.worktree !== undefined && { worktree: this.worktree }),
-          path: this.path,
+          path: this.hostPath,
         };
         let answer: T;
         try {
@@ -426,10 +477,15 @@ export function createLspSessions(deps: LspSessionsDeps): LspSessions {
     services,
     acquire(path, language, worktree) {
       const { entry, release } = pool.acquire(`${language}\u0000${worktree ?? ""}\u0000${path}`);
+      // 그 문서의 머신의 길 — 다른 머신이면 그 머신의 프로젝트 · 경로 · 연결(기능 행의 RPC · 이벤트가 그리로 간다).
+      // 길이 없는 머신의 문서는 열지 않았다 — 기능 행이 이 머신 연결로 묻지 않게 그 문서의 창 안 경로(접두)를 그대로 둔다.
+      const route = entry.route ?? local;
+      const docServices = route.services;
       const document: LspDocument = {
-        projectId,
-        ...(worktree !== undefined && { worktree }),
-        path,
+        projectId: route.projectId,
+        ...(entry.route && entry.worktree !== undefined && { worktree: entry.worktree }),
+        path: entry.route ? entry.hostPath : entry.path,
+        machine: entry.machine,
         language,
         get version() {
           return entry.sync.version;
@@ -441,9 +497,9 @@ export function createLspSessions(deps: LspSessionsDeps): LspSessions {
         capabilitiesSettled: () => entry.settled(),
         request: (kind, call) => entry.request(kind, call),
         call: (kind, method, params) =>
-          entry.request(kind, (at, signal) => services.call(method, params(at), { signal })),
+          entry.request(kind, (at, signal) => docServices.call(method, params(at), { signal })),
         hold: () => entry.sync.hold(),
-        services,
+        services: docServices,
       };
       return {
         document,

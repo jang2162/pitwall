@@ -570,6 +570,21 @@ describe("EditApplier", () => {
     expect(insideGit("/r/.gitignore")).toBe(false);
   });
 
+  // M7-13 리뷰 R-d · M7-21 ⑥: 링크가 끊긴 머신의 문서(`offline` — 탭은 읽기 전용)는 언어 서버의 여러 파일 편집이 고치지 않는다 —
+  // 그 편집을 문서에 넣으면 저장할 곳이 없는 미저장이 되고, 다시 붙으면 디스크와 갈린다. 디스크에도 쓰지 않는다.
+  it("refuses an edit to a document whose machine is offline and writes nothing", async () => {
+    const env = await setup(FILES, ["/r/clean.ts"]);
+    const before = env.live("/r/clean.ts").text.toString();
+    env.documents.disconnect("mini", (path) => path === "/r/clean.ts");
+    const outcome = await env.applier.begin().apply({
+      changes: [text("/r/clean.ts", [edit(0, 0, 0, 0, "// edited\n")])],
+    });
+    expect(outcome.kind).toBe("refused");
+    expect(outcome.message).toMatch(/read-only/);
+    expect(env.live("/r/clean.ts").text.toString()).toBe(before);
+    expect(env.disk.calls).toEqual([]);
+  });
+
   it("puts an edit into a document once when the edit also renames it by another path (L2)", async () => {
     const alias: Record<string, string> = { "/r/link.ts": "/r/clean.ts" };
     const env = await setup(FILES, ["/r/clean.ts"], {

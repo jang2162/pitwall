@@ -64,6 +64,8 @@ export interface NavSource {
   /** 이 문서의 자리(「선언 위」 판정 · 위치를 열 때의 워크트리). */
   readonly path: string;
   readonly worktree?: string;
+  /** 언어 서버가 도는 머신 — 돌려준 위치는 그 머신의 파일이다(18-m7-plan M7-21 ⑥). 없으면 이 머신. */
+  readonly machine?: string;
   readonly token?: string;
   /** 그 기능을 맡을 서버가 있나(없으면 묻지 않는다). */
   offers(feature: "hover" | "definition" | "implementation" | "references"): boolean;
@@ -92,7 +94,7 @@ export interface NavigationStrings {
 export interface UsageFile {
   readonly path: string;
   readonly worktree?: string;
-  /** 그 파일의 머신 — 언어 서버의 위치라 늘 이 머신이다(M7-11). */
+  /** 그 파일의 머신 — 그 위치를 돌려준 언어 서버의 머신(M7-21 ⑥). */
   readonly machine?: string;
   readonly token?: string;
   readonly lines: readonly {
@@ -151,6 +153,7 @@ export function documentSource(doc: LspDocument): NavSource {
     services: doc.services,
     path: doc.path,
     ...(doc.worktree !== undefined && { worktree: doc.worktree }),
+    ...(doc.machine !== undefined && { machine: doc.machine }),
     offers: (feature) => caps()[feature] !== undefined,
     hover: (offset) => doc.call("hover", "lsp.hover", position(offset)),
     locations: (method, offset, includeDeclaration = false) =>
@@ -216,10 +219,10 @@ export function tokenSource(spec: {
 
 /** 위치를 위치로 가기의 목적지로. 루트 안이면 그 문서의 워크트리, 루트 밖이면 토큰. */
 export function targetOf(loc: LspLocation, source: NavSource): NavTarget {
-  // 언어 서버는 창의 이 머신 연결로 돈다 — 그 위치는 이 머신의 파일이다(M7-11 델타 리뷰 B3).
+  // 그 위치는 그 문서의 언어 서버가 도는 머신의 파일이다 — 머신을 실어 연다(M7-11 델타 리뷰 B3 · M7-21 ⑥).
   return {
     path: loc.path,
-    machine: LOCAL_MACHINE,
+    machine: source.machine ?? LOCAL_MACHINE,
     line: loc.line,
     column: loc.column,
     ...(loc.token
@@ -358,7 +361,7 @@ export function usageFiles(locations: readonly LspLocation[], source: NavSource)
     if (!file) {
       file = {
         path: loc.path,
-        machine: LOCAL_MACHINE,
+        machine: source.machine ?? LOCAL_MACHINE,
         ...(loc.token
           ? { token: loc.token }
           : source.worktree !== undefined && { worktree: source.worktree }),

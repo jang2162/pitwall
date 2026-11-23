@@ -48,6 +48,7 @@ import { readInChunks, writeInChunks } from "../editor/link-chunks";
 import { requestBytes } from "../editor/link-limits";
 import { CHUNK_WIRE_MAX, UPLOAD_MAX } from "../editor/limits";
 import { startMachineDocumentSync } from "../editor/machine-documents";
+import { machineLspRoutes } from "../lsp/machine-routes";
 import { formatMiB } from "../editor/viewers";
 import { editorActions } from "../editor/editor-actions";
 import { useEditorOperations } from "../editor/editor-operations";
@@ -610,6 +611,16 @@ function useWindowEditor(
       hosts: latest.current.hosts,
       projectId,
     }));
+    // 언어 서버 팝업이 머신과 상관없이 쓰는 것 — 조각 강조는 이 머신 Host 가 한다(08 「로컬 / 원격 역할 분담」).
+    const lspShared = {
+      openExternal: (url: string) => void openUrl(url).catch(() => {}),
+      popupActionsLabel: () => latest.current.strings.lspPopupActions,
+      highlight: snippetHighlighter({
+        open: (params) => host().call("syntax.open", params),
+        highlights: (params) => host().call("syntax.highlights", params),
+        close: (params) => host().call("syntax.close", params),
+      }),
+    };
     const stat = async (path: string, worktree: string | undefined) => {
       const r = await route(path, worktree);
       return back(r.machine, await r.client.call("fs.stat", { ...r.base, path: r.path }));
@@ -727,14 +738,10 @@ function useWindowEditor(
           services: {
             call: (method, params, options) => host().call(method, params, options),
             subscribe: (topics, listener) => subscriptions!.subscribe(topics, listener),
-            openExternal: (url) => void openUrl(url).catch(() => {}),
-            popupActionsLabel: () => latest.current.strings.lspPopupActions,
-            highlight: snippetHighlighter({
-              open: (params) => host().call("syntax.open", params),
-              highlights: (params) => host().call("syntax.highlights", params),
-              close: (params) => host().call("syntax.close", params),
-            }),
+            ...lspShared,
           },
+          // 다른 머신의 탭은 그 머신의 언어 서버로(18-m7-plan M7-21 ⑥ — lsp/machine-routes.ts).
+          machine: machineLspRoutes(() => latest.current.hosts, lspShared),
         },
       }),
       outside,

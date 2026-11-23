@@ -134,7 +134,7 @@ export function pinFindResults(api: Parameters<typeof showPanel>[0] | undefined)
 }
 
 /** 언어 서버의 사용처를 툴 윈도우에 고정한다(위치 팝업의 `⌘↩`, M4-08). 앞에 고정한 찾기는 멈춘다. */
-/** 사용처는 언어 서버의 위치라 이 머신의 파일이다(`UsageFile.machine`, M7-11). */
+/** 사용처는 그 위치를 돌려준 언어 서버의 머신의 파일이다(`UsageFile.machine`, M7-11 · M7-21). */
 export function pinUsages(
   api: Parameters<typeof showPanel>[0] | undefined,
   title: string,
