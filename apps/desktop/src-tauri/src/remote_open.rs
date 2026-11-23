@@ -9,7 +9,7 @@
 //!   프로젝트 · 경로가 그 체크아웃 밖이면 거절한다(메인 판정 M7-P19 — Desktop 은 Relay 를 믿지 않는다). 다른 머신 체크아웃의 탭을
 //!   그리는 것은 M7-11b 다.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Component, Path};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -150,10 +150,7 @@ pub async fn listen(
     let Ok(connection) = host.connect(Caller::new(Role::Owner)).await else {
         return;
     };
-    let mut rpc = Rpc {
-        connection,
-        next: 0,
-    };
+    let mut rpc = Rpc::new(connection);
     if !rpc.listen().await {
         tracing::info!(%machine, "the remote host does not take open requests");
         return;
@@ -193,31 +190,68 @@ pub async fn listen(
                 let (registry, windows, from) =
                     (registry.clone(), Arc::clone(&windows), machine.clone());
                 let answer = tokio::task::spawn_blocking(move || {
-                    plan(&registry, &from, &request, root.as_deref())
-                        .and_then(|planned| windows.open(&planned))
+                    let planned = plan(&registry, &from, &request, root.as_deref())?;
+                    let opened_in = windows.open(&planned)?;
+                    Ok((planned, opened_in))
                 })
                 .await
                 .unwrap_or_else(|e| Err(e.to_string()));
-                let answer = match answer {
-                    Ok(opened_in) => OpenAnswer::Opened { opened_in },
-                    Err(message) => {
-                        tracing::info!(%machine, %message, "refused a remote open request");
-                        OpenAnswer::Failed { message }
-                    }
-                };
+                let answer = answer_for(answer);
+                if let OpenAnswer::Failed { message } = &answer {
+                    tracing::info!(%machine, %message, "a remote open request was not shown");
+                }
                 rpc.answer(&token, request_id, answer);
             }
         }
     }
 }
 
-/// 원격 Host 연결 위의 작은 JSON-RPC 손님.
+/// 다른 머신 체크아웃의 파일을 창이 탭으로 보일 수 있는가. 그 탭은 M7-11b 가 웹뷰에 넣는다 — 그때 `true` 로 바꾼다. 그 전에는
+/// 창만 열고(앞으로 가져오지 않는다) 원격에 「창은 열었지만 파일은 아직 보일 수 없다」 를 실패로 답한다(원격의 `pitwall` 이 사람에게
+/// 거짓 성공을 보이지 않게 — M7-15 리뷰 F2).
+pub const REMOTE_TABS_SHOWN: bool = false;
+
+/// 원격에 보낼 답: 실제로 한 일을 그대로. 파일을 보일 수 없으면 창을 열었어도 실패다(그 까닭에 창을 연 것을 적는다).
+pub fn answer_for(done: Result<(Planned, OpenedIn), String>) -> OpenAnswer {
+    match done {
+        Ok((planned, opened_in)) if planned.open.file.is_none() || REMOTE_TABS_SHOWN => {
+            OpenAnswer::Opened { opened_in }
+        }
+        Ok((_, opened_in)) => OpenAnswer::Failed {
+            message: match opened_in {
+                OpenedIn::NewWindow => "Pitwall opened the project window on the desktop (in the background), but it cannot show files of this machine there yet",
+                OpenedIn::ExistingWindow => "the project window is open on the desktop, but Pitwall cannot show files of this machine there yet",
+            }
+            .to_owned(),
+        },
+        Err(message) => OpenAnswer::Failed { message },
+    }
+}
+
+/// 원격 Host 연결 위의 작은 JSON-RPC 손님. 응답을 기다리는 동안 온 다른 틀(듣기 스트림의 청크)은 `backlog` 에 쌓아 두고 다음
+/// [`Rpc::chunk`] 가 먼저 꺼낸다 — Relay 의 열기 요청은 동시에 올 수 있다(좁은 명령 동시 8 · 에이전트의 `project_open`).
 struct Rpc {
     connection: Connection,
     next: i64,
+    backlog: VecDeque<Value>,
 }
 
 impl Rpc {
+    fn new(connection: Connection) -> Self {
+        Self {
+            connection,
+            next: 0,
+            backlog: VecDeque::new(),
+        }
+    }
+
+    async fn frame(&mut self) -> Option<Value> {
+        match self.backlog.pop_front() {
+            Some(frame) => Some(frame),
+            None => self.connection.source.recv().await,
+        }
+    }
+
     fn send(&mut self, method: &str, params: Value) -> i64 {
         self.next += 1;
         self.connection
@@ -246,7 +280,7 @@ impl Rpc {
 
     async fn chunk(&mut self) -> Option<Value> {
         loop {
-            let frame = self.connection.source.recv().await?;
+            let frame = self.frame().await?;
             match frame["method"].as_str() {
                 Some("stream.chunk") => return Some(frame["params"]["data"].clone()),
                 Some("stream.end") => return None,
@@ -262,8 +296,7 @@ impl Rpc {
         );
     }
 
-    /// 그 머신 프로젝트의 루트(`machine.projectRoot`). 그사이 온 열기 청크는 버리지 않도록 다른 연결로 묻지 않고, 답만 기다린다 —
-    /// Relay 는 한 요청씩 묻고 답을 기다리므로 그사이 다른 청크는 오지 않는다.
+    /// 그 머신 프로젝트의 루트(`machine.projectRoot`). 기다리는 동안 온 다른 틀은 버리지 않고 `backlog` 에 쌓는다.
     async fn project_root(&mut self, project_id: &str) -> Option<String> {
         let id = self.send("machine.projectRoot", json!({ "projectId": project_id }));
         loop {
@@ -273,6 +306,7 @@ impl Rpc {
             if frame["id"] == json!(id) {
                 return frame["result"]["root"].as_str().map(str::to_owned);
             }
+            self.backlog.push_back(frame);
         }
     }
 }
@@ -457,6 +491,105 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// 파일을 보일 수 없으면(다른 머신 체크아웃의 탭 — M7-11b 전) 창을 열었어도 원격에 실패로 답하고 창을 연 것을 적는다. 프로젝트만
+    /// 연 요청은 성공이다(리뷰 F2 — 원격 `pitwall` 이 거짓 성공을 보이지 않게).
+    #[test]
+    fn the_answer_says_what_the_desktop_really_did() {
+        let planned = |path: Option<&str>| {
+            plan_in(
+                Some(bundle()),
+                "mini-id",
+                &request(path, None),
+                Some("/home/me/pitwall"),
+            )
+            .unwrap()
+        };
+        match answer_for(Ok((
+            planned(Some("/home/me/pitwall/a.rs")),
+            OpenedIn::NewWindow,
+        ))) {
+            OpenAnswer::Failed { message } => {
+                assert!(message.contains("opened the project window"), "{message}");
+                assert!(message.contains("cannot show files"), "{message}");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            answer_for(Ok((
+                planned(Some("/home/me/pitwall/a.rs")),
+                OpenedIn::ExistingWindow
+            ))),
+            OpenAnswer::Failed { .. }
+        ));
+        assert_eq!(
+            answer_for(Ok((planned(None), OpenedIn::ExistingWindow))),
+            OpenAnswer::Opened {
+                opened_in: OpenedIn::ExistingWindow
+            }
+        );
+        assert_eq!(
+            answer_for(Err("nope".into())),
+            OpenAnswer::Failed {
+                message: "nope".into()
+            }
+        );
+    }
+
+    /// 프레임을 받은 대로 내주는 연결.
+    fn scripted(frames: Vec<Value>) -> (Connection, Arc<Mutex<Vec<Value>>>) {
+        struct Sink(Arc<Mutex<Vec<Value>>>);
+        impl pw_core::FrameSink for Sink {
+            fn send(&self, frame: Value) {
+                self.0.lock().unwrap().push(frame);
+            }
+        }
+        struct Source(VecDeque<Value>);
+        impl pw_core::FrameSource for Source {
+            fn recv(&mut self) -> pw_core::BoxFuture<'_, Option<Value>> {
+                let next = self.0.pop_front();
+                Box::pin(async move { next })
+            }
+        }
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        (
+            Connection {
+                sink: Box::new(Sink(Arc::clone(&sent))),
+                source: Box::new(Source(frames.into())),
+            },
+            sent,
+        )
+    }
+
+    fn chunk(data: Value) -> Value {
+        json!({"jsonrpc": "2.0", "method": "stream.chunk", "params": {"streamId": 1, "data": data}})
+    }
+
+    /// 루트를 묻는 동안 온 다른 요청의 청크(질문 · 열기)를 버리지 않는다 — 다음 [`Rpc::chunk`] 가 온 순서대로 낸다(리뷰 F4).
+    #[tokio::test]
+    async fn chunks_that_arrive_while_asking_the_root_are_kept() {
+        let query = json!({"kind": "query", "requestId": 7});
+        let open = json!({"kind": "open", "requestId": 8, "projectId": "rp1", "worktree": null, "path": null, "line": null, "column": null});
+        let (connection, sent) = scripted(vec![
+            chunk(query.clone()),
+            chunk(open.clone()),
+            json!({"jsonrpc": "2.0", "id": 1, "result": {"root": "/home/me/pitwall"}}),
+            chunk(json!({"kind": "query", "requestId": 9})),
+        ]);
+        let mut rpc = Rpc::new(connection);
+        assert_eq!(
+            rpc.project_root("rp1").await.as_deref(),
+            Some("/home/me/pitwall")
+        );
+        assert_eq!(sent.lock().unwrap()[0]["method"], "machine.projectRoot");
+        assert_eq!(rpc.chunk().await, Some(query));
+        assert_eq!(rpc.chunk().await, Some(open));
+        assert_eq!(
+            rpc.chunk().await,
+            Some(json!({"kind": "query", "requestId": 9}))
+        );
+        assert_eq!(rpc.chunk().await, None);
     }
 
     #[test]

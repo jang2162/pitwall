@@ -132,6 +132,31 @@ export function isHostKeyQuestion(text: string): boolean {
   return /^The authenticity of host '[^\n]*' can't be established\./.test(text);
 }
 
+/** 창에 보일 askpass 질문 글의 최대 글자 수(`pw_git::write::MAX_PROMPT_CHARS` 와 같다). */
+export const MAX_PROMPT_CHARS = 512;
+
+/**
+ * askpass 질문 글을 보일 꼴로: 줄바꿈만 남기고 제어 문자(C0 · DEL · C1 — 탭은 빈칸)와 양방향 제어 문자(방향 표식 · 덮어쓰기 ·
+ * 고립)를 빼고, `MAX_PROMPT_CHARS` 글자(코드 포인트)에서 잘라 `…` 를 붙인다. Host 가 이미 같은 규칙(`pw_git::write::askpass_text`)
+ * 으로 다듬어 보내지만 원격 Host(Relay)의 글은 Desktop 이 다시 걷는다 — Desktop 은 Relay 를 믿지 않는다(18-m7-plan 메인 판정
+ * M7-P19, M7-15 리뷰 F5). 같은 규칙이라 두 번 걸러도 같다.
+ */
+export function askpassText(raw: string): string {
+  let out = "";
+  let count = 0;
+  for (const c of raw) {
+    let kept: string | undefined = c;
+    if (c === "\t") kept = " ";
+    else if (c !== "\n" && /[\p{Cc}\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u.test(c))
+      kept = undefined;
+    if (kept === undefined) continue;
+    if (count === MAX_PROMPT_CHARS) return `${out}…`;
+    out += kept;
+    count += 1;
+  }
+  return out;
+}
+
 /**
  * askpass 질문의 다이얼로그(git · 원격 호스트의 ssh 가 같이 쓴다). `machine` 은 질문을 낸 다른 머신의 이름(Desktop 의 별명 — Relay 가
  * 댄 이름이 아니다, 18-m7-plan 메인 판정 M7-P19)이다. 있으면 제목 위에 「<머신> 의 git · ssh 가 묻는다」 를 글로 보인다 — 사람이
@@ -153,7 +178,8 @@ export function AskpassDialog({
     e.preventDefault();
     onAnswer({ kind: "askpass", value });
   };
-  const hostKey = prompt.hint === "secret" && isHostKeyQuestion(prompt.text);
+  const text = askpassText(prompt.text);
+  const hostKey = prompt.hint === "secret" && isHostKeyQuestion(text);
   const title = hostKey
     ? T.hostKeyTitle
     : { secret: T.title, confirm: T.confirmTitle, notice: T.noticeTitle }[prompt.hint];
@@ -172,7 +198,7 @@ export function AskpassDialog({
           )}
           <Dialog.Title className="text-sm font-semibold">{title}</Dialog.Title>
           <Dialog.Description className="break-all whitespace-pre-line text-ui-muted-foreground">
-            {prompt.text}
+            {text}
           </Dialog.Description>
           {hostKey && (
             <div className="flex justify-end gap-2">

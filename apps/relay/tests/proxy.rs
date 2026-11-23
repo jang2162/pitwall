@@ -181,6 +181,11 @@ fn a_daemon_that_does_not_come_up_ends_the_proxy_with_a_diagnostic() {
         "root = [\"/x\"]\n",
     )
     .unwrap();
+    // nextest 가 띄운 시험 프로세스에서는 이 바이너리(디버그 빌드 ~300 MB)의 **첫 exec 만** 2.5초 남짓 걸린다(둘째부터 10 ms —
+    // 2026-11-23 M7-15 리뷰 반영에서 잼, main 도 같다. 시험 바이너리를 직접 돌리면 첫 exec 도 10 ms). 재는 것은 「띄운 데몬을 2초
+    // 기다리고 끝난다」 이므로 한 번 실행해 둔 뒤 잰다(CONTRIBUTING 「남은 흔들림」 의 「써 둔 뒤 한 번 실행해 둔다」 와 같은 까닭).
+    let warm = Command::new(BIN).arg("--version").output().unwrap();
+    assert!(warm.status.success());
     let started = Instant::now();
     let output = relay(dir.path(), &["proxy"])
         .stdin(Stdio::piped())
