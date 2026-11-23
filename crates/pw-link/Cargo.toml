@@ -9,7 +9,7 @@ publish.workspace = true
 [features]
 # Desktop 쪽 SSH 부트스트랩(18-m7-plan M7-06): 시스템 `ssh` 실행(`ssh`) · Relay 설치 · SSH 자동 페어링(`install`). Relay 바이너리는
 # 켜지 않는다 — 받기(reqwest) · 매니페스트 검증(pw-release)이 원격 바이너리에 들지 않게(크기 — 메인 판정 M7-P13).
-bootstrap = ["dep:pw-release", "dep:reqwest", "dep:rustls", "dep:semver", "tokio/process"]
+bootstrap = ["dep:pw-release", "dep:reqwest", "dep:semver", "tokio/process"]
 # 시험용 가짜 `ssh`(`fake_ssh` — apps/relay 의 설치 시험이 쓴다).
 test-support = ["bootstrap"]
 
@@ -32,7 +32,13 @@ reqwest = { version = "0.13.5", default-features = false, features = [
   "rustls-no-provider",
   "system-proxy",
 ], optional = true }
-rustls = { version = "0.23", default-features = false, features = ["ring"], optional = true }
+# TLS 제공자 ring — 받기(reqwest)와 직접 연결(QUIC — M7-24)이 함께 쓴다. QUIC 의 TLS 는 신뢰 근거가 아니다(인증서는 무엇이든 받고 Noise
+# 가 상대를 판정한다 — `quic` 머리 주석).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+# 직접 연결 전송(18-m7-plan M7-24 ① · 메인 판정 M7-P14). 런타임 tokio · TLS rustls(ring)만 — 플랫폼 검증기 · aws-lc · 로그 갈래는 끈다.
+quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+# QUIC 받는 쪽의 자체 서명 인증서(뜰 때마다 새로 만든다 — 이름은 고정값, 머신 이름을 싣지 않는다). ring 갈래만.
+rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "ring"] }
 # 원격 Relay 바이너리의 판 차례(최근 두 판만 남기기 — 18-m7-plan M7-07 ③). 워크스페이스가 이미 쓰는 판이다.
 semver = { version = "1.0.28", optional = true }
 # 코드 페어링의 키 확인 MAC(18-m7-plan M7-23 ②). sha2 0.11 과 같은 digest 판.

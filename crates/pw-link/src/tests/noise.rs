@@ -13,14 +13,14 @@ use crate::transport::{LinkStream, Transport};
 use crate::{SecuredTransport, dial, serve_noise};
 
 /// 시험용 대기 코드 하나. 시도는 [`crate::pair::MAX_ATTEMPTS`] 까지.
-struct Book {
+pub(super) struct Book {
     pending: Mutex<Option<(PairingCode, Role)>>,
     attempts: AtomicU32,
     pairings: PairingTable,
 }
 
 impl Book {
-    fn new(code: &str, role: Role, pairings: PairingTable) -> Arc<Self> {
+    pub(super) fn new(code: &str, role: Role, pairings: PairingTable) -> Arc<Self> {
         Arc::new(Self {
             pending: Mutex::new(Some((PairingCode::parse(code).unwrap(), role))),
             attempts: AtomicU32::new(0),
@@ -28,7 +28,7 @@ impl Book {
         })
     }
 
-    fn attempts(&self) -> u32 {
+    pub(super) fn attempts(&self) -> u32 {
         self.attempts.load(Ordering::SeqCst)
     }
 }
@@ -136,14 +136,14 @@ impl NoiseRelay {
     }
 }
 
-fn identity(key: &Arc<DeviceKey>) -> DesktopIdentity {
+pub(super) fn identity(key: &Arc<DeviceKey>) -> DesktopIdentity {
     DesktopIdentity {
         key: Arc::clone(key),
         versions: versions(),
     }
 }
 
-fn paired(key: &DeviceKey, role: Role) -> Pairing {
+pub(super) fn paired(key: &DeviceKey, role: Role) -> Pairing {
     Pairing {
         key: key.public(),
         role,

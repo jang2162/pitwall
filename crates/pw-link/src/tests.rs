@@ -2078,4 +2078,5 @@ async fn another_key_without_its_signature_is_not_a_machine_change() {
 
 mod forward;
 mod noise;
+mod quic;
 mod resume;
