@@ -64,10 +64,10 @@ const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 /// - 둘째 판: 결과에 `started`(선기록 — 실행 전에 쓴 행), 승인 방식 · 계획 해시 칸, 시각 색인(보관 정리). id 는
 ///   `AUTOINCREMENT` — 지운 가장 큰 id 를 다시 쓰지 않는다. SQLite 는 열의 `CHECK` · `AUTOINCREMENT` 를 고치지 못하므로 표를 새로
 ///   만들어 행을 옮긴다(id 그대로 — `sqlite_sequence` 가 가장 큰 id 에서 이어진다).
-/// - 넷째 판: 전송 칸 `transport`(18-m7-plan M7-25 ⑥ — 메인 판정 2026-11-24). `ALTER TABLE ... ADD COLUMN` 한 줄이라 행 · id 를
-///   옮기지 않는다. 판 올림은 다른 판과 같이 한 트랜잭션이다(실패하면 셋째 판 그대로).
 /// - 셋째 판: 승인 방식 `policy`(정책 자동 — 17-m6-plan M6-10 ③). `CHECK` 를 고치려고 표를 새로 만들어 행을 옮긴다. 옮기기 전
 ///   표의 `sqlite_sequence` 값(지운 가장 큰 id 까지 센 값)을 새 표로 넘긴다 — 옮긴 행의 가장 큰 id 로 되돌아가지 않는다.
+/// - 넷째 판: 전송 칸 `transport`(18-m7-plan M7-25 ⑥ — 메인 판정 2026-11-24). `ALTER TABLE ... ADD COLUMN` 한 줄이라 행 · id 를
+///   옮기지 않는다. 판 올림은 다른 판과 같이 한 트랜잭션이다(실패하면 셋째 판 그대로).
 const MIGRATIONS: &[&str] = &[
     "CREATE TABLE calls (
          id          INTEGER PRIMARY KEY,
