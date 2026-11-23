@@ -539,6 +539,8 @@ it("shows the old relay versions only while the host is connected", async () => 
   await push({ state: "connected", machine: "SHA256:abc" });
   await vi.waitFor(() =>
     expect(document.querySelector("[data-testid=remote-relays]")).not.toBeNull(),
+  );
+});
 
 // 18-m7-plan M7-14 리뷰 F2: 링크가 이어 붙는 동안(`resuming`)에도 [끊기] 가 있다 — 이 행 전에는 그 동안 상태가 `connected` 였다.
 it("keeps Disconnect while the link resumes", async () => {
