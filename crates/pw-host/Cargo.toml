@@ -54,6 +54,8 @@ tracing = "0.1.44"
 [dev-dependencies]
 # Relay 터미널의 출력(base64)을 읽는 시험(tests/link.rs — 18-m7-plan M7-09). pw-run 과 같은 판.
 base64 = "0.23.1"
+# 의존 시험(tests/deps.rs)이 Relay 의 타깃 넷을 자산 표(`relay::PLATFORMS`)에서 읽는다. pw-remote 를 거쳐 이미 그래프에 있다.
+pw-release = { path = "../pw-release" }
 pw-rpc = { path = "../pw-rpc" }
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

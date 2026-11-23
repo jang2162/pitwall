@@ -77,6 +77,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: mise run lint
+      # pw-host 의 의존 시험(crates/pw-host/tests/deps.rs)은 Relay 의 타깃 넷(pw-release relay.rs `PLATFORMS`)마다 `cargo metadata
+      # --offline --filter-platform` 을 돌린다 — 러너 자신의 타깃이 아닌 패키지를 미리 받는다.
+      - name: fetch the relay targets' packages
+        run: cargo fetch --locked --target x86_64-unknown-linux-musl --target aarch64-unknown-linux-musl --target aarch64-apple-darwin --target x86_64-apple-darwin
       # nextest 의 ci 프로필(.config/nextest.toml)은 첫 실패에서 멈추지 않는다 — 실패한 시험을 한 번에 다 본다.
       - run: mise run test
         env:

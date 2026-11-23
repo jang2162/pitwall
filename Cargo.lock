@@ -6028,6 +6028,7 @@ dependencies = [
  "pw-lsp-servers",
  "pw-mcp",
  "pw-open-with",
+ "pw-release",
  "pw-remote",
  "pw-rpc",
  "pw-run",

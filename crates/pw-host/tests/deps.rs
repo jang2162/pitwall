@@ -1,5 +1,6 @@
 //! 18-m7-plan M7-01 완료 기준 ②: pw-host 의 의존 그래프(`cargo tree -p pw-host` 와 같은 범위 — 일반 · 빌드 의존, 그리고 pw-host
-//! 자신의 dev 의존)에 tauri 가 없다. Relay 는 창 없이 같은 Host 를 띄운다 — tauri 를 들이는 의존이 생기면 실패한다.
+//! 자신의 dev 의존)에 tauri 가 없다 — Relay 의 타깃 넷과 이 기기의 타깃마다. Relay 는 창 없이 같은 Host 를 띄운다 — 어느
+//! 타깃에서든 tauri 를 들이는 의존이 생기면 실패한다.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -18,19 +19,19 @@ fn host_triple() -> String {
         .to_owned()
 }
 
-#[test]
-fn pw_host_does_not_depend_on_tauri() {
-    // `--filter-platform` 이 없으면 `cargo metadata` 는 모든 타깃의 패키지를 읽어야 해, 이 타깃만 받은 CI 캐시에서 `--offline` 이
-    // 실패한다(macOS arm64 에 없는 `curve25519-dalek-derive`). `cargo tree` 처럼 이 기기의 타깃만 본다 — CI 의 세 OS 가 저마다 본다.
+/// 그 타깃에서 pw-host 가 닿는 패키지 이름(일반 · 빌드 의존, 그리고 pw-host 자신의 dev 의존 — `cargo tree` 와 같다).
+/// `--filter-platform` 이 그 타깃의 `cfg` 로 의존을 가른다 — 필터 없이 모든 타깃의 합집합을 보면 오프라인에서 모든 타깃의
+/// 패키지가 있어야 해, 자기 타깃만 받은 캐시(macOS arm64 CI 에 x86_64 전용 `curve25519-dalek-derive` 가 없었다)에서 실패한다.
+fn reached_on(target: &str) -> BTreeSet<String> {
     let output = std::process::Command::new(env!("CARGO"))
         .args(["metadata", "--format-version", "1", "--offline"])
-        .args(["--filter-platform", &host_triple(), "--manifest-path"])
+        .args(["--filter-platform", target, "--manifest-path"])
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
         .output()
         .unwrap();
     assert!(
         output.status.success(),
-        "{}",
+        "{target}: {} (CI 는 시험 전에 이 타깃의 패키지를 `cargo fetch --target` 으로 받는다)",
         String::from_utf8_lossy(&output.stderr)
     );
     let metadata: Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -67,16 +68,36 @@ fn pw_host_does_not_depend_on_tauri() {
             }
         }
     }
-    let reached: BTreeSet<&str> = seen.iter().map(|id| names[id]).collect();
-    // 그래프를 실제로 따라갔는지: 조립이 잇는 기능 크레이트가 보여야 한다.
-    for expected in ["pw-db", "pw-git", "pw-mcp", "tokio"] {
-        assert!(reached.contains(expected), "{expected} not in {reached:?}");
-    }
-    let tauri: Vec<_> = reached
+    seen.iter().map(|id| names[id].to_owned()).collect()
+}
+
+/// Relay 가 나가는 타깃 넷(`pw_release::relay::PLATFORMS` — 자산 표와 같은 출처)과 이 기기의 타깃마다 따로 본다. 하나라도
+/// tauri 가 끼면 실패한다 — CI 러너(macOS arm64 · Linux gnu · Windows)에 없는 musl · macOS x86_64 전용 의존도 여기서 잡힌다.
+#[test]
+fn pw_host_does_not_depend_on_tauri() {
+    let mut targets: Vec<String> = pw_release::relay::PLATFORMS
         .iter()
-        .filter(|name| **name == "tauri" || name.starts_with("tauri-"))
+        .map(|p| p.rust_target.to_owned())
         .collect();
-    assert!(tauri.is_empty(), "pw-host reaches {tauri:?}");
+    let host = host_triple();
+    if !targets.contains(&host) {
+        targets.push(host);
+    }
+    for target in &targets {
+        let reached = reached_on(target);
+        // 그래프를 실제로 따라갔는지: 조립이 잇는 기능 크레이트가 보여야 한다.
+        for expected in ["pw-db", "pw-git", "pw-mcp", "tokio"] {
+            assert!(
+                reached.contains(expected),
+                "{target}: {expected} not in {reached:?}"
+            );
+        }
+        let tauri: Vec<_> = reached
+            .iter()
+            .filter(|name| *name == "tauri" || name.starts_with("tauri-"))
+            .collect();
+        assert!(tauri.is_empty(), "{target}: pw-host reaches {tauri:?}");
+    }
 }
 
 /// `cargo tree -p <패키지> -i pw-link` 의 첫 줄(pw-link 와 그 패키지에서 켜진 기능).
