@@ -66,6 +66,7 @@ import {
   trackRecentTabs,
 } from "./editor-tabs";
 import { qualifyOpen } from "../open-with/active-worktree";
+import { machineOf } from "../checkout/checkout";
 
 /** `ancestor` 가 `path` 이거나 그 위 폴더다(Host 경로 — Windows 는 `\`). */
 function covers(ancestor: string, path: string): boolean {
@@ -314,9 +315,11 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
     if (!api) return undefined;
     // 폴더는 탭으로 열지 않는다. 열기 요청(CLI)은 Rust 가 이미 거르고, 파일 트리는 폴더를 펼친다.
     if (stat.kind === "dir" || stat.target === "dir") return undefined;
+    // 입구에서 정한 머신을 그대로 넘긴다 — `openTab` 이 활성 머신으로 다시 붙이지 않게(M7-11 델타 리뷰 B3).
     const { panel, created } = openTab(api, {
       path: stat.path,
       worktree: request.worktree,
+      machine: machineOf(stat.path, request.worktree),
       preview: request.preview,
       recent: recentOrder(),
     });
@@ -390,6 +393,8 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
       return {
         path: now.file,
         ...(now.worktree !== undefined && { worktree: now.worktree }),
+        // 기록은 탭의 머신을 싣는다 — 다른 머신이 활성일 때 뒤로 가도 그 탭의 파일이다.
+        machine: machineOf(now.file, now.worktree),
         line: now.cursor?.line ?? 1,
         column: now.cursor?.column ?? 1,
       };

@@ -184,6 +184,7 @@ export function createWorktreeSession(deps: WorktreeSessionDeps) {
           const { panel } = openTab(api, {
             path: tab.path,
             worktree,
+            machine: checkoutOfKey(key).machine,
             db: tab.db,
             title: tab.title,
             preview: tab.preview,
@@ -198,9 +199,11 @@ export function createWorktreeSession(deps: WorktreeSessionDeps) {
           opened.push(undefined);
           continue;
         }
+        // 저장본은 그 체크아웃 머신의 탭이다(접두 없는 경로면 그 머신 — 이 머신 묶음이면 `local`).
         const panel = await workspace.open({
           path: tab.path,
           worktree,
+          machine: checkoutOfKey(key).machine,
           preview: tab.preview,
           line: tab.cursor?.line,
           column: tab.cursor?.column,
@@ -252,9 +255,11 @@ export function createWorktreeSession(deps: WorktreeSessionDeps) {
       }
     } else if (!shown) await restore(deps.activeWorktree());
     if (!open.file) return;
+    // 창의 열기 요청은 요청의 체크아웃 머신의 파일이다(CLI · OS 요청은 이 머신 — 워크트리 열쇠가 접두 없음).
     const panel = await workspace.open({
       path: open.file,
       worktree: open.worktree,
+      machine: checkoutOfKey(open.worktree).machine,
       line: open.line,
       column: open.col,
     });

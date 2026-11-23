@@ -4,6 +4,7 @@ import type { EditorWorkspace } from "../editor/editor-workspace";
 import type { Outline, OutlineKind, OutlineSymbol } from "./outline";
 import { cursorAt, type OutlineState } from "./outline-service";
 import type { StructureStrings } from "./strings";
+import { machineOf } from "../checkout/checkout";
 
 /** 종류 표지(글자 — 색만으로 가르지 않는다, 10-ui §6). 줄의 접근성 이름에는 종류 이름이 든다. */
 const BADGES: Readonly<Record<OutlineKind, string>> = {
@@ -95,6 +96,8 @@ export function goToSymbol(
     {
       path: state.path,
       ...(state.worktree !== undefined && { worktree: state.worktree }),
+      // 구조는 그 탭의 문서다 — 탭의 머신으로 연다.
+      machine: machineOf(state.path, state.worktree),
       ...at,
     },
     { record: true },

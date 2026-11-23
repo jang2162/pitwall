@@ -115,7 +115,7 @@ function PinnedResults({ session, query }: { session: FindSession; query: string
           </button>
         )
       }
-      open={(file, line) => openFindRow(workspace, { file, line }, worktree)}
+      open={(file, line) => openFindRow(workspace, { file, line }, worktree, snapshot.machine)}
     />
   );
 }
@@ -132,6 +132,7 @@ function PinnedUsages({ title, files }: { title: string; files: readonly UsageFi
         void workspace.navigateTo(
           {
             path: file.path,
+            ...(file.machine !== undefined && { machine: file.machine }),
             ...(file.token !== undefined
               ? { token: file.token }
               : file.worktree !== undefined && { worktree: file.worktree }),

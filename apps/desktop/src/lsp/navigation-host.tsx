@@ -30,6 +30,7 @@ import {
 } from "./navigation";
 import type { OutsideSourcesRuntime } from "./outside-sources";
 import { bringForward, windowLabel } from "./window-focus";
+import { LOCAL_MACHINE } from "../checkout/checkout";
 
 /** 서버가 루트 안 문서를 열라고 했다(crates/pw-lsp/src/navigation.rs 의 `TOPIC_SHOW_DOCUMENT`). */
 export const LSP_SHOW_DOCUMENT_TOPIC = "lsp.showDocument";
@@ -144,6 +145,8 @@ async function showDocument(workspace: EditorWorkspace, show: LspShowDocument) {
   const opened = await workspace.navigateTo(
     {
       path: show.path,
+      // 언어 서버는 창의 이 머신 연결로 돈다(M7-11).
+      machine: LOCAL_MACHINE,
       ...(show.worktree !== null && { worktree: show.worktree }),
       ...(show.line !== null && { line: show.line, column: show.column ?? 1 }),
     },

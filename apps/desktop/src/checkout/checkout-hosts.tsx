@@ -302,7 +302,8 @@ const HOST_SCOPE: HostTarget = { hostId: LOCAL_MACHINE };
 
 /**
  * 이 머신 Host 의 **Host 범위** 연결을 창이 사는 동안 연다(M7-11 리뷰 B1 — `remote.*` 는 Host 범위만 받는다, M7-08). 닫히면 없앤다.
- * StrictMode 의 붙였다 떼기는 열기 · 닫기의 짝이다.
+ * StrictMode 의 붙였다 떼기는 열기 · 닫기의 짝이다. **닫힌 뒤 다시 열지 않는다** — 이 머신 Host 와의 IPC 연결이 닫히는 것은 창 ·
+ * 페이지가 사라질 때뿐이라(src-tauri/src/ipc.rs) 다시 열 자리가 없다. 다른 길로 닫히면 다른 머신은 창을 다시 열 때까지 붙지 않는다.
  */
 function useHostScopeConnection(
   connect: (target: HostTarget) => Promise<TauriConnection>,

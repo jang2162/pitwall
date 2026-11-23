@@ -15,6 +15,7 @@ import {
 } from "@pitwall/rpc-client";
 
 import { isWithin, joinPath, separatorOf } from "../file-tree/tree-model";
+import { activeCheckout } from "../open-with/active-worktree";
 
 /** 찾기 칸의 옵션(팝업 · 툴 윈도우가 같이 쓴다). */
 export interface FindOptions {
@@ -117,6 +118,11 @@ export interface FindSnapshot {
   readonly status: FindStatus;
   /** 지금 결과를 낸 검색의 인자. 결과에서 파일을 열 때 워크트리를 함께 싣는다. */
   readonly params: SearchTextParams | undefined;
+  /**
+   * 그 검색을 돌린 머신(검색을 시작할 때의 활성 체크아웃 — 검색은 그 연결로 돈다, M7-11). 결과는 접두 없는 그 머신의 경로라, 열 때
+   * 이것을 싣는다 — 고정한 결과를 체크아웃을 바꾼 뒤 눌러도 찾은 머신의 파일이다(델타 리뷰 F3).
+   */
+  readonly machine: string | undefined;
   readonly files: readonly SearchFile[];
   /** 파일 순서대로 펼친 줄. */
   readonly rows: readonly FindRow[];
@@ -135,6 +141,7 @@ export type SearchRunner = (
 const IDLE: FindSnapshot = {
   status: "idle",
   params: undefined,
+  machine: undefined,
   files: [],
   rows: [],
   truncated: false,
@@ -178,6 +185,7 @@ export class FindSession {
     this.set({
       status: "searching",
       params,
+      machine: activeCheckout().machine,
       files,
       rows,
       truncated: false,

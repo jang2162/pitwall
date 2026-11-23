@@ -204,7 +204,7 @@ function FindPopupContent({ workspace }: { workspace: EditorWorkspace }) {
     const target = rows[index];
     if (!target) return;
     closeFindInFiles();
-    openFindRow(workspace, target, params?.worktree ?? undefined);
+    openFindRow(workspace, target, params?.worktree ?? undefined, snapshot.machine);
   };
 
   const onKeyDown = (e: KeyboardEvent) => {

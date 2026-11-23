@@ -40,6 +40,7 @@ import {
   SEVERITIES,
 } from "./diagnostics-model";
 import { gotoDiagnostic } from "./diagnostics";
+import { LOCAL_MACHINE } from "../checkout/checkout";
 
 const ROW_HEIGHT = 22;
 /** 툴 윈도우가 한 번에 읽는 쪽의 크기(Host 의 `LIST_LIMIT`). */
@@ -441,6 +442,8 @@ function ProblemsView({
     void workspace.navigateTo(
       {
         path: row.path,
+        // 진단은 창의 이 머신 연결의 언어 서버 것이다(M7-11).
+        machine: LOCAL_MACHINE,
         ...(connection.worktree !== undefined && { worktree: connection.worktree }),
         line: start.line + 1,
         column: start.character + 1,

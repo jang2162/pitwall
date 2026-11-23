@@ -20,13 +20,14 @@ it("opens a result row through navigateTo with record, at the first match", () =
       more: false,
     },
   };
-  openFindRow(workspace, row, "/work/wt");
+  // 검색을 돌린 머신을 싣는다(M7-11 — 고정한 결과를 체크아웃을 바꾼 뒤 눌러도 그 머신의 파일).
+  openFindRow(workspace, row, "/work/wt", "local");
   expect(navigateTo).toHaveBeenCalledWith(
-    { path: "/work/demo/src/lib.rs", worktree: "/work/wt", line: 42, column: 9 },
+    { path: "/work/demo/src/lib.rs", worktree: "/work/wt", machine: "local", line: 42, column: 9 },
     { record: true },
   );
   // 메인 체크아웃이면 워크트리 칸이 없다.
-  openFindRow(workspace, row, undefined);
+  openFindRow(workspace, row, undefined, undefined);
   expect(navigateTo).toHaveBeenLastCalledWith(
     { path: "/work/demo/src/lib.rs", line: 42, column: 9 },
     { record: true },

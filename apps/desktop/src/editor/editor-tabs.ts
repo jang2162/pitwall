@@ -153,6 +153,7 @@ export function openTab(
     git,
     db,
     title,
+    machine,
   }: {
     path: string;
     worktree?: string;
@@ -164,10 +165,14 @@ export function openTab(
     db?: DbDocumentSpec;
     /** 탭 이름. 없으면 경로의 마지막 조각. */
     title?: string;
+    /** 접두 없는 경로의 머신(`qualifyOpen`). 머신을 아는 쪽은 반드시 싣는다(`local` 포함) — 없으면 활성 체크아웃의 머신이다. */
+    machine?: string;
   },
 ): { panel: IDockviewPanel; created: boolean } {
-  // 파일 탭의 접두 없는 경로는 활성 체크아웃 머신의 것(M7-11 리뷰 B2 — `qualifyOpen`). git · DB 문서는 경로가 아니라 문서 키다.
-  if (git === undefined && db === undefined) ({ path, worktree } = qualifyOpen(path, worktree));
+  // 파일 탭의 접두 없는 경로는 `machine`(없으면 활성 체크아웃 머신)의 것(M7-11 리뷰 B2 · B3 — `qualifyOpen`). git · DB 문서는 경로가
+  // 아니라 문서 키다.
+  if (git === undefined && db === undefined)
+    ({ path, worktree } = qualifyOpen(path, worktree, machine));
   const group = targetGroup(api, recent);
   const existing = findTab(api, path, { group, recent });
   if (existing) {

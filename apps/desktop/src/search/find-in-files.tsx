@@ -133,6 +133,7 @@ export function pinFindResults(api: Parameters<typeof showPanel>[0] | undefined)
 }
 
 /** 언어 서버의 사용처를 툴 윈도우에 고정한다(위치 팝업의 `⌘↩`, M4-08). 앞에 고정한 찾기는 멈춘다. */
+/** 사용처는 언어 서버의 위치라 이 머신의 파일이다(`UsageFile.machine`, M7-11). */
 export function pinUsages(
   api: Parameters<typeof showPanel>[0] | undefined,
   title: string,
@@ -152,11 +153,14 @@ export function openFindRow(
   workspace: EditorWorkspace,
   row: FindRow,
   worktree: string | undefined,
+  /** 검색을 돌린 머신(`FindSnapshot.machine`). */
+  machine: string | undefined,
 ) {
   void workspace.navigateTo(
     {
       path: row.file.path,
       ...(worktree !== undefined && { worktree }),
+      ...(machine !== undefined && { machine }),
       line: row.line.line,
       column: (row.line.ranges[0]?.start ?? 0) + 1,
     },

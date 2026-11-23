@@ -41,6 +41,7 @@ import { tooltipHostOf } from "../editor/tooltip-layer";
 import type { LspEditorFeature } from "./features";
 import type { LspDocument, LspServices } from "./lsp-sessions";
 import { closePopup, currentPopup, openPopup, type PopupSpec } from "./popup";
+import { LOCAL_MACHINE } from "../checkout/checkout";
 
 /** 호버가 팝업을 띄우기까지(10-ui §5.1). */
 export const HOVER_DELAY_MS = 500;
@@ -91,6 +92,8 @@ export interface NavigationStrings {
 export interface UsageFile {
   readonly path: string;
   readonly worktree?: string;
+  /** 그 파일의 머신 — 언어 서버의 위치라 늘 이 머신이다(M7-11). */
+  readonly machine?: string;
   readonly token?: string;
   readonly lines: readonly {
     line: number;
@@ -213,8 +216,10 @@ export function tokenSource(spec: {
 
 /** 위치를 위치로 가기의 목적지로. 루트 안이면 그 문서의 워크트리, 루트 밖이면 토큰. */
 export function targetOf(loc: LspLocation, source: NavSource): NavTarget {
+  // 언어 서버는 창의 이 머신 연결로 돈다 — 그 위치는 이 머신의 파일이다(M7-11 델타 리뷰 B3).
   return {
     path: loc.path,
+    machine: LOCAL_MACHINE,
     line: loc.line,
     column: loc.column,
     ...(loc.token
@@ -353,6 +358,7 @@ export function usageFiles(locations: readonly LspLocation[], source: NavSource)
     if (!file) {
       file = {
         path: loc.path,
+        machine: LOCAL_MACHINE,
         ...(loc.token
           ? { token: loc.token }
           : source.worktree !== undefined && { worktree: source.worktree }),
