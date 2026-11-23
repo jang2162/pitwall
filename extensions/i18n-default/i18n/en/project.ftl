@@ -593,6 +593,7 @@ db-closed-transaction-rolled-back = The open transaction on { $connection } was 
 
 git-askpass-title = Git asks for your credentials
 git-askpass-confirm-title = Git asks for your confirmation
+git-askpass-host-key-title = Unknown host key — connect to this host?
 git-askpass-notice-title = Git is waiting for your security key
 git-askpass-input = Answer
 git-askpass-submit = OK

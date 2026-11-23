@@ -3,6 +3,12 @@
 // 변수 자리). 여기 적은 id 가 ko · en 리소스에 모두 있는지는 src/i18n/resources.test.ts 가 본다.
 
 import type { Platform } from "@pitwall/keymap";
+import type {
+  RemoteFailureKind,
+  RemoteHostSource,
+  RemoteLastLinkState,
+  RemoteStage,
+} from "@pitwall/rpc-client";
 import { useLocalization } from "@fluent/react";
 import { useMemo } from "react";
 
@@ -86,6 +92,59 @@ export function welcomeStrings(t: Translate) {
       detectedEmpty: t("welcome-create-detected-empty"),
       cancel: t("welcome-create-cancel"),
       submit: t("welcome-create-submit"),
+    },
+    remote: {
+      label: t("welcome-remote-label"),
+      empty: t("welcome-remote-empty"),
+      addHint: t("welcome-remote-add-hint"),
+      source: {
+        settings: t("welcome-remote-source-settings"),
+        sshConfig: t("welcome-remote-source-ssh-config"),
+      } satisfies Record<RemoteHostSource, string>,
+      connect: t("welcome-remote-connect"),
+      disconnect: t("welcome-remote-disconnect"),
+      retry: t("welcome-remote-retry"),
+      showLog: t("welcome-remote-show-log"),
+      hideLog: t("welcome-remote-hide-log"),
+      trust: t("welcome-remote-trust"),
+      stages: t("welcome-remote-stages"),
+      stage: {
+        ssh: t("welcome-remote-stage-ssh"),
+        install: t("welcome-remote-stage-install"),
+        daemon: t("welcome-remote-stage-daemon"),
+        handshake: t("welcome-remote-stage-handshake"),
+      } satisfies Record<RemoteStage, string>,
+      status: {
+        idle: t("welcome-remote-status-idle"),
+        byUser: t("welcome-remote-status-by-user"),
+        connecting: (stage: string) => t("welcome-remote-status-connecting", { stage }),
+        connected: t("welcome-remote-status-connected"),
+        reconnecting: (seconds: number, attempt: number) =>
+          t("welcome-remote-status-reconnecting", { seconds, attempt }),
+        machineChanged: (expected: string, found: string) =>
+          t("welcome-remote-status-machine-changed", { expected, found }),
+      },
+      failed: (stage: string) => t("welcome-remote-failed", { stage }),
+      failure: {
+        hostKeyChanged: t("welcome-remote-failure-host-key-changed"),
+        hostKeyNotAccepted: t("welcome-remote-failure-host-key-not-accepted"),
+        ssh: t("welcome-remote-failure-ssh"),
+        unsupported: t("welcome-remote-failure-unsupported"),
+        install: t("welcome-remote-failure-install"),
+        versionMismatch: t("welcome-remote-failure-version-mismatch"),
+        rejected: t("welcome-remote-failure-rejected"),
+        link: t("welcome-remote-failure-link"),
+        alreadyConnected: t("welcome-remote-failure-already-connected"),
+        unavailable: t("welcome-remote-failure-unavailable"),
+      } satisfies Record<RemoteFailureKind, string>,
+      last: {
+        connected: (when: string) => t("welcome-remote-last-connected", { when }),
+        disconnected: (when: string) => t("welcome-remote-last-disconnected", { when }),
+        failed: (when: string) => t("welcome-remote-last-failed", { when }),
+      } satisfies Record<RemoteLastLinkState, (when: string) => string>,
+      master: t("welcome-remote-master"),
+      logTitle: (name: string) => t("welcome-remote-log-title", { name }),
+      logEmpty: t("welcome-remote-log-empty"),
     },
     notices: {
       fileNotInProject: (path: string) => t("welcome-notice-file-not-in-project", { path }),

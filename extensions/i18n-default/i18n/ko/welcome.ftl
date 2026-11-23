@@ -93,3 +93,50 @@ welcome-error-create = 프로젝트 만들기
 welcome-error-find-project = 프로젝트 찾기 요청 읽기
 welcome-error-open-file = 파일 열기
 welcome-error-candidates = 루트 후보 찾기
+
+# 원격 호스트 탭(S8 — 18-m7-plan M7-08). 목록은 설정의 [[remote_hosts]] 와 ~/.ssh/config 의 Host 이름이다.
+welcome-remote-label = 원격 호스트 목록
+welcome-remote-empty = 원격 호스트가 없다. ~/.ssh/config 에 Host 를 적거나 설정(settings.toml)에 [[remote_hosts]] 를 더한다.
+welcome-remote-add-hint = 원격 호스트는 ~/.ssh/config 의 Host 와 설정의 [[remote_hosts]] 에서 온다 — 고른 뒤 [연결].
+welcome-remote-source-settings = 설정
+welcome-remote-source-ssh-config = ssh config
+welcome-remote-connect = 연결
+welcome-remote-disconnect = 끊기
+welcome-remote-retry = 다시 시도
+welcome-remote-show-log = 연결 로그
+welcome-remote-hide-log = 로그 닫기
+welcome-remote-trust = 이 머신을 새로 믿기
+welcome-remote-stages = 연결 단계
+welcome-remote-stage-ssh = SSH
+welcome-remote-stage-install = 설치
+welcome-remote-stage-daemon = 데몬
+welcome-remote-stage-handshake = 핸드셰이크
+welcome-remote-status-idle = 끊김
+welcome-remote-status-by-user = 끊음
+# $stage: 지금 단계 이름
+welcome-remote-status-connecting = 붙는 중 — { $stage }
+welcome-remote-status-connected = 연결됨
+# $seconds: 다음 시도까지 초, $attempt: 몇 번째 시도
+welcome-remote-status-reconnecting = 다시 붙는 중 — { $seconds }초 뒤 ({ $attempt }번째)
+# $expected: 기억한 머신 id, $found: 지금 답한 머신 id
+welcome-remote-status-machine-changed = 다른 머신이 답했다 — 기억한 { $expected }, 지금 { $found }. SSH 호스트 키가 바뀐 것과 같다 — 그 머신이 맞을 때만 새로 믿는다.
+# $stage: 실패한 단계 이름
+welcome-remote-failed = { $stage } 단계에서 실패
+welcome-remote-failure-host-key-changed = 호스트 키가 바뀌었다 — ssh 가 거절했다. known_hosts 는 직접 고친다.
+welcome-remote-failure-host-key-not-accepted = 호스트 키를 받지 않았다.
+welcome-remote-failure-ssh = ssh 가 붙지 못했다(연결 · 인증).
+welcome-remote-failure-unsupported = 지원하지 않는 원격 플랫폼이다 — 아무것도 올리지 않았다.
+welcome-remote-failure-install = Relay 설치 · 페어링이 실패했다.
+welcome-remote-failure-version-mismatch = Relay 의 판이 이 앱과 다르다.
+welcome-remote-failure-rejected = Relay 가 이 기기를 받지 않았다.
+welcome-remote-failure-link = 링크가 서지 않았거나 끊겼다.
+welcome-remote-failure-already-connected = 이 머신은 다른 호스트 이름으로 이미 붙어 있다.
+welcome-remote-failure-unavailable = 원격 호스트를 쓸 수 없다.
+# $when: 마지막 링크 상태의 시각
+welcome-remote-last-connected = 마지막: 연결됨 ({ $when })
+welcome-remote-last-disconnected = 마지막: 끊김 ({ $when })
+welcome-remote-last-failed = 마지막: 실패 ({ $when })
+welcome-remote-master = SSH 마스터 연결 있음
+# $name: 호스트 이름
+welcome-remote-log-title = { $name } 연결 로그
+welcome-remote-log-empty = 아직 기록이 없다

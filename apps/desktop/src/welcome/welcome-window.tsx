@@ -32,6 +32,7 @@ import { rpcQueryKey } from "../rpc/queries";
 import { searchFilter } from "../ui/search-popup";
 import { welcomeActions } from "./actions";
 import { CreateProjectSheet } from "./create-project";
+import { RemoteHostsPanel, RemotePrompts } from "./remote-hosts";
 import { FindProjectPopup } from "./find-project";
 import type { FindProjectRequest, OpenProjectWindowArgs, WelcomeNative } from "./native";
 import {
@@ -110,6 +111,8 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
   const [dropping, setDropping] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   useKeymapPopup(menuOpen);
+  /** 왼쪽 탭(10-ui.md S1 · S8). */
+  const [tab, setTab] = useState<"projects" | "remote">("projects");
 
   const fail = useCallback(
     (what: string) => (e: unknown) => {
@@ -309,26 +312,35 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
         aria-label={T.nav.label}
         className="flex w-[150px] flex-none flex-col gap-0.5 border-r border-ui-border p-1.5"
       >
-        <button
-          type="button"
-          aria-current="page"
-          className="rounded-sm bg-ui-active px-2 py-0.5 text-left"
-        >
-          {T.nav.projects}
-        </button>
-        {[T.nav.remoteHosts, T.nav.extensions].map((label) => (
+        {(
+          [
+            ["projects", T.nav.projects],
+            ["remote", T.nav.remoteHosts],
+          ] as const
+        ).map(([id, label]) => (
           <button
-            key={label}
+            key={id}
             type="button"
-            disabled
-            title={T.nav.notYet}
-            className="rounded-sm px-2 py-0.5 text-left text-ui-muted-foreground"
+            aria-current={tab === id ? "page" : undefined}
+            onClick={() => setTab(id)}
+            className={`rounded-sm px-2 py-0.5 text-left ${tab === id ? "bg-ui-active" : "hover:bg-ui-hover"}`}
           >
             {label}
           </button>
         ))}
+        <button
+          type="button"
+          disabled
+          title={T.nav.notYet}
+          className="rounded-sm px-2 py-0.5 text-left text-ui-muted-foreground"
+        >
+          {T.nav.extensions}
+        </button>
       </nav>
-      <section className="flex min-w-0 flex-1 flex-col">
+      {/* 원격 호스트의 ssh 질문(호스트 키 · 암호)은 어느 탭이든 웰컴 창이 떠 있는 동안 듣는다. */}
+      <RemotePrompts />
+      {tab === "remote" && <RemoteHostsPanel />}
+      <section className={`min-w-0 flex-1 flex-col ${tab === "projects" ? "flex" : "hidden"}`}>
         {banner && (
           <div
             role="status"

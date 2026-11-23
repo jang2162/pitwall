@@ -717,6 +717,35 @@ it("focuses 아니오 first in an ssh yes/no askpass, so a stray Enter cannot ac
   });
 });
 
+it("asks an unknown ssh host key, which comes without a hint, as 취소 · 예 — 취소 first, 예 answers yes", async () => {
+  // OpenSSH 는 호스트 키 확인을 SSH_ASKPASS_PROMPT 없이(`secret`) 묻고 `yes` 만 받는다(18-m7-plan M7-P17).
+  const text =
+    "The authenticity of host 'mini (192.0.2.7)' can't be established.\nED25519 key fingerprint is SHA256:fakefingerprint.\nAre you sure you want to continue connecting (yes/no/[fingerprint])?";
+  await mount();
+  await act(async () =>
+    host.prompt({
+      kind: "open",
+      prompt: { promptId: 9, request: { kind: "askpass", text, hint: "secret" } },
+    }),
+  );
+  const dialog = await vi.waitFor(() => {
+    const el = byTestId("git-askpass-dialog");
+    if (!el) throw new Error("no askpass dialog");
+    return el;
+  });
+  expect(dialog.querySelector("input")).toBeNull();
+  expect(dialog.textContent).toContain("SHA256:fakefingerprint");
+  const cancel = button(dialog, "취소");
+  expect(document.activeElement).toBe(cancel);
+  await click(button(dialog, "예")!);
+  await vi.waitFor(() => expect(calls("git.prompt.answer")).toHaveLength(1));
+  expect(calls("git.prompt.answer")[0]!.params).toEqual({
+    projectId: "p1",
+    promptId: 9,
+    answer: { kind: "askpass", value: "yes" },
+  });
+});
+
 it("lists push, update and fetch in the VCS popup (⌃V) — not the args-only undo offer — and fetches every remote", async () => {
   host.answers.set("git.fetch", { workTree: "/work/demo" });
   await mount();

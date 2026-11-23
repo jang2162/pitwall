@@ -8,6 +8,9 @@
 // - askpass(`askpass`): git · ssh 의 질문(Host 가 제어 문자 · 길이를 다듬은 원문)을 다이얼로그로 묻는다. `hint` 가 `secret` 이면 비밀번호
 //   칸, `confirm`(ssh 의 예 · 아니오)이면 예(`proceed`) · 아니오(`cancel`), `notice`(보안 키 안내 — ssh 가 일을 마치면 닫힌다)면
 //   내리기(`cancel`)만. 꾸밈은 M2-20 몫이고 여기는 자리다.
+// - 호스트 키 확인(18-m7-plan 메인 판정 M7-P17): ssh 는 처음 보는 호스트 키를 `SSH_ASKPASS_PROMPT` 힌트 **없이**(`secret` 으로) 묻고
+//   답이 `yes`(또는 지문)여야 받는다 — 빈 답 · `no` 는 거절이다. 그래서 질문 글(`The authenticity of host … can't be established`)로
+//   알아보고 [취소] · [예] 로 그린다. 처음 포커스는 [취소] 이고 [예] 는 `yes` 를 돌려준다. 지문 글은 그대로 보인다.
 // - 질문이 닫히면(`closed` — 다른 창이 답함 · 시간 초과 · 쓰기가 끝남) 다이얼로그를 내린다.
 //
 // 비밀(askpass 의 답)은 로그 · 상태 · 알림에 남기지 않는다 — 다이얼로그를 내리면 칸도 사라지고, 답하지 못한 실패는 값 없이 경고만
@@ -121,7 +124,13 @@ export function listenGitPrompts(
 
 const CANCEL: GitPromptAnswer = { kind: "cancel" };
 
-function AskpassDialog({
+/** ssh 의 호스트 키 확인 질문인가(OpenSSH `sshconnect.c` 의 문장 — 힌트 없이 온다). */
+export function isHostKeyQuestion(text: string): boolean {
+  return /The authenticity of host .* can't be established/s.test(text);
+}
+
+/** askpass 질문의 다이얼로그(git · 원격 호스트의 ssh 가 같이 쓴다). */
+export function AskpassDialog({
   prompt,
   onAnswer,
 }: {
@@ -135,7 +144,10 @@ function AskpassDialog({
     e.preventDefault();
     onAnswer({ kind: "askpass", value });
   };
-  const title = { secret: T.title, confirm: T.confirmTitle, notice: T.noticeTitle }[prompt.hint];
+  const hostKey = prompt.hint === "secret" && isHostKeyQuestion(prompt.text);
+  const title = hostKey
+    ? T.hostKeyTitle
+    : { secret: T.title, confirm: T.confirmTitle, notice: T.noticeTitle }[prompt.hint];
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onAnswer(CANCEL)}>
       <Dialog.Portal>
@@ -148,7 +160,22 @@ function AskpassDialog({
           <Dialog.Description className="break-all whitespace-pre-line text-ui-muted-foreground">
             {prompt.text}
           </Dialog.Description>
-          {prompt.hint === "secret" && (
+          {hostKey && (
+            <div className="flex justify-end gap-2">
+              {/* 처음 포커스는 [취소] 다 — 모르는 호스트 키를 받아들이는 것은 보안 결정이다(M7-P17). [예] 는 ssh 가 받는 `yes` 다. */}
+              <button type="button" autoFocus className={BUTTON} onClick={() => onAnswer(CANCEL)}>
+                {T.cancel}
+              </button>
+              <button
+                type="button"
+                className={`${BUTTON} border-ui-accent`}
+                onClick={() => onAnswer({ kind: "askpass", value: "yes" })}
+              >
+                {T.yes}
+              </button>
+            </div>
+          )}
+          {prompt.hint === "secret" && !hostKey && (
             <form className="flex flex-col gap-3" onSubmit={submit}>
               <input
                 type="password"
