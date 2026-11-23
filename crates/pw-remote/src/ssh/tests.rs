@@ -194,18 +194,26 @@ async fn the_stages_come_in_order_and_a_relay_without_a_handshake_fails_there() 
     );
 }
 
-// 머신 id(M7-P6): 기억한 id 와 다른 Relay 키면 링크를 열기 전에 멈추고 둘 다 알린다.
+// 머신 id(M7-P6 · 델타 리뷰 F-a): 페어링 답(원격 stdout)이 기억한 id 와 달라도 그것만으로 「머신이 바뀜」 이 되지 않는다 — 원격이
+// 고른 값이 「새로 믿을」 id 가 되지 않게. 핸드셰이크가 기억한 id 를 기대하고 서명으로 가른다. 되돌린 자기 hello 는 서명이 없어
+// 거절이다(서명이 맞는 다른 키의 `MachineMismatch` 는 `pw-link` 의 시험 — `found` 는 증명된 지문).
 #[tokio::test]
-async fn another_machine_id_stops_before_the_link() {
+async fn a_pairing_answer_unlike_the_remembered_id_is_left_to_the_handshake() {
     let s = setup();
     let backend = s.backend(&[], None);
     let (result, seen) = connect(&backend, Some("SHA256:remembered")).await;
     let e = result.err().unwrap();
+    assert_eq!(e.machine_changed, None, "{e:?}");
     assert_eq!(
-        e.machine_changed,
-        Some(("SHA256:remembered".into(), "SHA256:fakemachine".into()))
+        (e.stage, e.kind),
+        (RemoteStage::Handshake, RemoteFailureKind::Rejected)
     );
-    assert!(!stages(&seen).contains(&RemoteStage::Daemon), "{seen:?}");
+    assert!(stages(&seen).contains(&RemoteStage::Handshake), "{seen:?}");
+    assert!(
+        seen.iter()
+            .any(|p| matches!(p, Progress::Note(n) if n.contains("the handshake decides"))),
+        "{seen:?}"
+    );
 }
 
 // 호스트 키가 바뀌었으면 ssh 가 거절한 원문을 진단에 그대로 — 덮는 길이 없다. 처음 보는 키는 askpass 로 묻고 `yes` 여야 받는다.
@@ -380,11 +388,10 @@ async fn an_unpaired_refusal_right_after_pairing_is_tried_once_more() {
     }
 }
 
-// 리뷰 B1: 핸드셰이크의 머신 id 불일치는 Desktop 이 기억한 id 가 있을 때만 「머신이 바뀜」 이다. 기억이 없으면(처음 붙는 호스트)
-// 원격이 페어링 답으로 남의 id 를 댄 것이라 그냥 거절이다 — 되돌린 자기 hello 의 키는 원격이 말한 `SHA256:fakemachine` 이 아니다.
+// 리뷰 B1 · 델타 F-a: 「머신이 바뀜」 은 Desktop 이 기억한 id 와 **서명이 맞는** 다른 키뿐이다. 처음 붙는 호스트에서 원격이 남의
+// id 를 대거나, 키를 증명하지 못하면 그냥 거절이다 — 되돌린 자기 hello 는 원격이 말한 `SHA256:fakemachine` 도 아니고 서명도 없다.
 #[tokio::test]
-async fn a_relay_whose_key_is_not_the_id_it_reported_is_refused_unless_this_desktop_remembered_one()
-{
+async fn a_relay_that_does_not_prove_the_id_it_reported_is_refused() {
     let s = setup();
     let backend = s.backend(&[], None);
     let (result, _) = connect(&backend, None).await;
@@ -395,13 +402,11 @@ async fn a_relay_whose_key_is_not_the_id_it_reported_is_refused_unless_this_desk
         (RemoteStage::Handshake, RemoteFailureKind::Rejected)
     );
 
+    // 기억이 있어도 서명 없는 키(되돌린 자기 hello)는 「머신이 바뀜」 이 아니다(델타 리뷰 F-a).
     let (result, _) = connect(&backend, Some("SHA256:fakemachine")).await;
     let e = result.err().unwrap();
-    let (expected, found) = e
-        .machine_changed
-        .expect("a remembered id that the key does not match");
-    assert_eq!(expected, "SHA256:fakemachine");
-    assert_ne!(found, "SHA256:fakemachine");
+    assert_eq!(e.machine_changed, None, "{e:?}");
+    assert_eq!(e.kind, RemoteFailureKind::Rejected);
 }
 
 #[test]

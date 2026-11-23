@@ -219,18 +219,19 @@ impl SshBackend {
                 "this device was added to the relay's pairings".into(),
             ));
         }
-        let machine = boot.machine.as_str().to_owned();
+        // 핸드셰이크가 기대할 id: 이 호스트에 기억한 id, 없으면(처음) 페어링 답의 id. 페어링 답은 원격 stdout 이라 증명이 아니다 —
+        // 기억과 달라도 여기서 「머신이 바뀜」 으로 멈추지 않고 핸드셰이크가 서명으로 가른다(델타 리뷰 F-a): 기억한 키의 Relay 면
+        // 붙고, 서명이 맞는 다른 키면 `MachineMismatch`(그 키의 지문 — 증명된 `found`), 서명이 맞지 않으면 거절이다.
         if let Some(expected) = expect
-            && expected != machine
+            && expected != boot.machine.as_str()
         {
-            let mut e = ConnectError::new(
-                RemoteStage::Handshake,
-                RemoteFailureKind::Rejected,
-                format!("the machine id changed: expected {expected}, found {machine}"),
-            );
-            e.machine_changed = Some((expected.to_owned(), machine));
-            return Err(e);
+            progress(Progress::Note(format!(
+                "the relay reported machine {} but this host remembers {expected}; the handshake decides",
+                boot.machine
+            )));
         }
+        let expected = expect.map_or_else(|| boot.machine.clone(), pw_link::DeviceId::from_stored);
+        let machine = expected.as_str().to_owned();
         let transport = Arc::new(installer.transport());
         let reporting = Arc::new(Reporting {
             inner: Arc::clone(&transport),
@@ -247,7 +248,7 @@ impl SshBackend {
             machine.clone(),
             reporting as Arc<dyn Transport>,
             identity,
-            Expect::Machine(boot.machine.clone()),
+            Expect::Machine(expected),
             self.limits,
         ));
         progress(Progress::Stage(RemoteStage::Daemon));

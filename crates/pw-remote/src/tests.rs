@@ -727,3 +727,29 @@ async fn every_remote_method_takes_only_a_host_connection() {
     }
     assert_eq!(s.fake.connects.load(Ordering::SeqCst), 0);
 }
+
+// 델타 리뷰 F-b: 처음 붙은 호스트의 id 기억도 「다른 이름이 그 id 를 아는가」 와 한 트랜잭션이다 — 다른 이름(`z`)이 이미 아는
+// 머신이면 그 링크를 쓰지 않고(닫고 라우터에 두지 않는다) `mini` 에 그 id 를 기억하지 않는다.
+#[tokio::test(start_paused = true)]
+async fn a_first_connection_to_a_machine_known_under_another_name_is_not_used() {
+    let s = setup();
+    s.registry.remember_remote_machine("z", MINI).unwrap();
+    let _use = s.remote.hold("mini").unwrap();
+    let status = until(&s.remote, |st| {
+        matches!(st, RemoteStatus::Disconnected { error: Some(_), .. })
+    })
+    .await;
+    assert!(
+        matches!(&status, RemoteStatus::Disconnected { error: Some(e), .. } if e.kind == RemoteFailureKind::AlreadyConnected),
+        "{status:?}"
+    );
+    assert!(s.fake.last_link().closed_by_us.load(Ordering::SeqCst));
+    assert!(s.router.host(MINI).is_err());
+    assert_eq!(
+        s.registry
+            .remote_host("mini")
+            .unwrap()
+            .and_then(|r| r.machine),
+        None
+    );
+}

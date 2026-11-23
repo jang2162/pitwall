@@ -309,38 +309,7 @@ impl Registry {
                 reason: format!("cannot move bundle members from machine `{old}` to `{new}`"),
             });
         }
-        let changed = self.write(|tx| {
-            let both: Option<String> = tx
-                .query_row(
-                    "SELECT a.bundle_id FROM bundle_members a JOIN bundle_members b
-                       ON a.bundle_id = b.bundle_id WHERE a.machine = ?1 AND b.machine = ?2",
-                    params![old, new],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            if let Some(bundle_id) = both {
-                return Err(RegistryError::InvalidPath {
-                    path: bundle_id.into(),
-                    reason: format!("the bundle already has a member on machine `{new}`"),
-                });
-            }
-            let ids: Vec<String> = tx
-                .prepare(
-                    "SELECT DISTINCT bundle_id FROM bundle_members
-                     WHERE machine = ?1 OR last_target_machine = ?1 ORDER BY bundle_id",
-                )?
-                .query_map([old], |row| row.get(0))?
-                .collect::<rusqlite::Result<_>>()?;
-            tx.execute(
-                "UPDATE bundle_members SET machine = ?2 WHERE machine = ?1",
-                params![old, new],
-            )?;
-            tx.execute(
-                "UPDATE bundle_members SET last_target_machine = ?2 WHERE last_target_machine = ?1",
-                params![old, new],
-            )?;
-            Ok(ids)
-        })?;
+        let changed = self.write(|tx| rename_machine_in(tx, old, new))?;
         for id in &changed {
             self.publish(ChangeKind::Bundle, id);
         }
@@ -587,6 +556,45 @@ pub(crate) fn forget_local_project(
         collapse(tx, &bundle_id)?;
     }
     Ok(())
+}
+
+/// [`Registry::rename_bundle_machine`] 의 트랜잭션 몸통(원격 호스트의 「새로 믿기」 가 검사와 같은 트랜잭션에서 부른다 —
+/// [`super::remote_hosts`]). 바뀐 묶음 id 들.
+pub(crate) fn rename_machine_in(
+    tx: &Transaction<'_>,
+    old: &str,
+    new: &str,
+) -> Result<Vec<String>, RegistryError> {
+    let both: Option<String> = tx
+        .query_row(
+            "SELECT a.bundle_id FROM bundle_members a JOIN bundle_members b
+                   ON a.bundle_id = b.bundle_id WHERE a.machine = ?1 AND b.machine = ?2",
+            params![old, new],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(bundle_id) = both {
+        return Err(RegistryError::InvalidPath {
+            path: bundle_id.into(),
+            reason: format!("the bundle already has a member on machine `{new}`"),
+        });
+    }
+    let ids: Vec<String> = tx
+        .prepare(
+            "SELECT DISTINCT bundle_id FROM bundle_members
+                 WHERE machine = ?1 OR last_target_machine = ?1 ORDER BY bundle_id",
+        )?
+        .query_map([old], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    tx.execute(
+        "UPDATE bundle_members SET machine = ?2 WHERE machine = ?1",
+        params![old, new],
+    )?;
+    tx.execute(
+        "UPDATE bundle_members SET last_target_machine = ?2 WHERE last_target_machine = ?1",
+        params![old, new],
+    )?;
+    Ok(ids)
 }
 
 #[cfg(test)]

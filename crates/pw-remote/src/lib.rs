@@ -562,37 +562,10 @@ impl RemoteHosts {
             }
         };
         let registry = self.registry().ok_or(RemoteError::Unavailable)?;
-        // `expected` 는 이 호스트에 Desktop 이 기억한 id 여야 한다 — 원격이 고른 값으로 남의 묶음 멤버를 옮기지 않는다(리뷰 B1).
-        let records = registry
-            .remote_hosts()
-            .map_err(|e| RemoteError::Conflict(e.to_string()))?;
-        let remembered = records
-            .iter()
-            .find(|r| r.host == name)
-            .and_then(|r| r.machine.as_deref());
-        if remembered != Some(expected.as_str()) {
-            return Err(RemoteError::Conflict(
-                "this host has no remembered machine id to replace; connect it again".into(),
-            ));
-        }
-        // 새 id 가 다른 호스트 이름으로 아는 머신이거나, 옛 id 를 다른 이름이 아직 기억하면 두 머신의 멤버가 섞인다(리뷰 F1).
-        if let Some(other) = records.iter().find(|r| {
-            r.host != name
-                && r.machine
-                    .as_deref()
-                    .is_some_and(|m| m == machine || m == expected)
-        }) {
-            return Err(RemoteError::Conflict(format!(
-                "machine {} is also known as host `{}`; remove that host or connect it under one name",
-                other.machine.as_deref().unwrap_or_default(),
-                other.host
-            )));
-        }
+        // 검사(기억한 id 가 `expected` 인가 — 리뷰 B1, `machine` · `expected` 를 다른 호스트 이름이 기억하는가 — F1)와 쓰기(묶음
+        // 멤버 옮기기 · 새 id 기억)는 레지스트리의 한 트랜잭션이다(F-b). `machine` 은 핸드셰이크가 서명으로 증명한 키의 지문이다(F-a).
         registry
-            .rename_bundle_machine(&expected, machine)
-            .map_err(|e| RemoteError::Conflict(e.to_string()))?;
-        registry
-            .remember_remote_machine(name, machine)
+            .trust_remote_machine(name, &expected, machine)
             .map_err(|e| RemoteError::Conflict(e.to_string()))?;
         self.note(
             name,
@@ -896,6 +869,26 @@ impl RemoteHosts {
             closed,
             close,
         } = link;
+        // 처음 본 id 는 검사(다른 호스트 이름이 이미 그 id 를 기억하는가)와 같은 트랜잭션으로 기억한다(리뷰 F-b). 다른 이름이
+        // 가진 머신이면 이 링크를 쓰지 않는다 — 한 머신의 묶음 멤버가 두 이름으로 갈라지지 않게.
+        if first
+            && let Some(registry) = self.registry()
+            && let Err(e) = registry.remember_first_remote_machine(name, &machine)
+        {
+            close();
+            let e = ConnectError::new(
+                RemoteStage::Handshake,
+                RemoteFailureKind::AlreadyConnected,
+                e.to_string(),
+            );
+            self.note(
+                name,
+                Some(RemoteStage::Handshake),
+                RemoteLogLevel::Error,
+                &e.message,
+            );
+            return Err(e);
+        }
         if let Some(router) = read(&self.inner.router)
             && let Err(HostError::DuplicateHost(_)) = router.add_host(host)
         {
@@ -928,12 +921,6 @@ impl RemoteHosts {
                 router.remove_host(&machine);
             }
             return Ok(None);
-        }
-        if first
-            && let Some(registry) = self.registry()
-            && let Err(e) = registry.remember_remote_machine(name, &machine)
-        {
-            tracing::warn!(target: "pw_remote", host = name, %e, "cannot remember the machine id");
         }
         self.mark(name, LinkMark::Connected);
         self.note(
