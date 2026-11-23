@@ -612,13 +612,19 @@ it("opens a file from the active remote checkout's file tree on that machine and
 // 그 체크아웃의 탭으로 연다 — 파일은 그 머신의 경로라 이 머신의 같은 경로로 읽지 않는다.
 it("opens a file sent from another machine's shell in that checkout's tab without changing the active checkout", async () => {
   await mount();
-  await push({ file: FILE });
+  // 활성 체크아웃은 이 머신의 워크트리 — 파일만 온 요청이면 메인 체크아웃으로 바뀔 자리다.
+  fake.files.get("local")!.set("/work/wt1/src/main.rs", "local text");
+  await push({ worktree: "/work/wt1", file: "/work/wt1/src/main.rs" });
   await vi.waitFor(() => expect(viewWith("local text")).toBeDefined());
   await push({ file: FILE, line: 1, checkout: { machine: MINI, worktree: null } });
   await vi.waitFor(() => expect(viewWith("remote text")).toBeDefined());
-  expect(activeWorktreeStore.getState().top).toBeUndefined();
+  expect(activeWorktreeStore.getState().top).toBe("/work/wt1");
   // 이 머신의 탭은 그대로 남고(같은 묶음의 뒤 탭은 그리지 않아 머리로 본다), 그 머신의 탭에는 그 머신의 표지가 있다.
-  expect(headers().some((h) => h.title === FILE && !h.querySelector("[data-machine]"))).toBe(true);
+  expect(
+    headers().some(
+      (h) => h.title === "/work/wt1/src/main.rs" && !h.querySelector("[data-machine]"),
+    ),
+  ).toBe(true);
   expect(remoteHeader()?.querySelector("[data-machine]")?.textContent).toBe("mini");
   expect(fake.calls.get(MINI)!.find((c) => c.method === "fs.read")?.params).toMatchObject({
     projectId: "r1",

@@ -33,7 +33,7 @@ import {
 } from "../editor/editor-tabs";
 import { type Cursor, cursorOf, type EditorWorkspace } from "../editor/editor-workspace";
 import type { FileTreeModel } from "../file-tree/tree-model";
-import { checkoutKey, checkoutOfKey, machineOf, qualify } from "../checkout/checkout";
+import { checkoutOfKey, machineOf } from "../checkout/checkout";
 import { requestedWorktree } from "../open-with/active-worktree";
 import type { ProjectOpen } from "../project-open";
 import type { ProjectState, TabState, WorktreeKey, WorktreeState } from "./project-state";
@@ -257,14 +257,12 @@ export function createWorktreeSession(deps: WorktreeSessionDeps) {
     if (!open.file) return;
     // 창의 열기 요청은 요청의 체크아웃 머신의 파일이다(CLI · OS 요청은 이 머신 — 워크트리 열쇠가 접두 없음). 체크아웃을 실은 요청
     // (원격 셸의 `pitwall <파일>` — 파일은 **그 머신의** 경로다)은 활성 체크아웃을 바꾸지 않고 그 체크아웃의 탭으로 연다(M7-11b).
+    // 그 머신의 접두는 열기 입구가 붙인다(`qualifyOpen` — 머신을 주면 그 머신으로).
     const target = open.checkout
       ? {
           machine: open.checkout.machine,
-          path: qualify(open.checkout.machine, open.file),
-          worktree: checkoutKey({
-            machine: open.checkout.machine,
-            worktree: open.checkout.worktree ?? undefined,
-          }),
+          path: open.file,
+          worktree: open.checkout.worktree ?? undefined,
         }
       : {
           machine: checkoutOfKey(open.worktree).machine,
