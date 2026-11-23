@@ -20,18 +20,19 @@ use pw_core::BoxFuture;
 use pw_git::write::prompt::ASKPASS_TIMEOUT;
 use pw_git::write::{Askpass, Prompts};
 use pw_link::install::{Fetch, InstallError, Installer, RelayDist};
-use pw_link::remote_hosts;
 use pw_link::ssh::{AskpassSession, Ssh, SshAskpass, SshError, SshTarget, SshTransport};
 use pw_link::transport::{LinkStream, Transport};
 use pw_link::{
     DesktopIdentity, DeviceKey, DeviceKeyStore, DialError, Expect, LinkLimits, LinkState,
     RejectReason, RemoteHost, Versions,
 };
+use pw_link::{remote_hosts, upgrade};
 use serde_json::Value;
 
 use crate::{
-    Backend, ConnectError, HostEntry, Link, PROMPTS_KEY, Progress, RemoteFailureKind,
-    RemoteHostSource, RemoteStage,
+    Backend, ConnectError, HostEntry, Link, PROMPTS_KEY, Progress, RemoteCommandLink,
+    RemoteFailureKind, RemoteHostSource, RemoteOldRelay, RemoteSilentRelay, RemoteStage,
+    RemoteStopOutcome, Tidied,
 };
 
 /// 이 빌드의 판(워크스페이스 판 하나 — Relay 와 같다).
@@ -440,6 +441,131 @@ pub fn machine_change(expect: Option<&str>, e: &DialError) -> Option<(String, St
     }
 }
 
+/// 판 바꾸기 · 정리(`pw_link::upgrade` — M7-07b). 붙기와 같은 ssh(사람의 옵션 · askpass)와 같은 판이다.
+impl SshBackend {
+    fn installer(&self, entry: &HostEntry) -> Result<Installer, String> {
+        let ssh = self.ssh(entry).map_err(|e| e.to_string())?;
+        Installer::new(
+            Arc::new(ssh),
+            self.versions.clone(),
+            RelayDist::new(self.parts.dist.clone(), Arc::clone(&self.parts.fetch)),
+        )
+        .map_err(|e| e.to_string())
+    }
+
+    /// 조사 → (사람이 둔 `pitwall` 링크가 옛 판이면) 이 판으로 옮김 → 정리. 링크를 옮기지 못하면 그 링크가 가리키는 바이너리는 이번
+    /// 정리에서 지우지 않는다(사람의 `pitwall` 이 깨지지 않게).
+    async fn tidy_run(&self, entry: &HostEntry) -> Result<Tidied, String> {
+        let installer = self.installer(entry)?;
+        let survey = installer.survey().await.map_err(|e| e.to_string())?;
+        let mut notes = Vec::new();
+        let mut keep = survey.clone();
+        let command = match &survey.command {
+            upgrade::CommandLink::Absent => RemoteCommandLink::Absent,
+            upgrade::CommandLink::Other => RemoteCommandLink::Other,
+            upgrade::CommandLink::Relay { file } => {
+                if survey.command_needs_moving() {
+                    match installer.link_command(true).await {
+                        Ok(_) => notes.push(format!(
+                            "moved ~/.local/bin/pitwall from {file} to this relay version"
+                        )),
+                        Err(e) => {
+                            notes.push(format!(
+                                "could not move ~/.local/bin/pitwall to this relay version ({e}); kept {file}"
+                            ));
+                            keep.binaries.retain(|b| &b.file != file);
+                        }
+                    }
+                }
+                RemoteCommandLink::Linked
+            }
+        };
+        let cleaned = installer.clean(&keep).await.map_err(|e| e.to_string())?;
+        notes.extend(
+            cleaned
+                .running
+                .iter()
+                .map(|file| format!("kept {file}: its daemon is running")),
+        );
+        notes.extend(cleaned.unknown.iter().map(|(file, code)| match code {
+            Some(code) => format!("kept {file}: its status did not answer (exit {code})"),
+            None => format!("kept {file}: its status did not answer"),
+        }));
+        // 정리가 지운 것은 조사의 옛 판 목록에서도 뺀다(떠 있던 데몬이 조사 뒤 끝났을 때).
+        let old = survey
+            .old_daemons()
+            .iter()
+            .filter(|d| !cleaned.removed.contains(&d.file))
+            .map(old_relay)
+            .collect();
+        let silent = survey
+            .unknown()
+            .into_iter()
+            .filter(|b| !cleaned.removed.contains(&b.file))
+            .map(|b| RemoteSilentRelay {
+                file: b.file.clone(),
+                version: b.build.as_ref().map(|(_, v)| v.to_string()),
+            })
+            .collect();
+        Ok(Tidied {
+            old,
+            silent,
+            command,
+            removed: cleaned.removed,
+            notes,
+        })
+    }
+
+    async fn stop_run(
+        &self,
+        entry: &HostEntry,
+        seen: &RemoteOldRelay,
+    ) -> Result<RemoteStopOutcome, String> {
+        let installer = self.installer(entry)?;
+        let seen = upgrade::OldDaemon {
+            file: seen.file.clone(),
+            status: upgrade::DaemonStatus {
+                version: seen.version.clone().unwrap_or_default(),
+                release_channel: seen.channel.clone().unwrap_or_default(),
+                name: None,
+                pid: seen.pid,
+                links: seen.links as usize,
+                owner_links: 0,
+                runs: seen.runs as usize,
+                terminals: seen.terminals as usize,
+            },
+        };
+        let outcome = installer.stop_old(&seen).await.map_err(|e| e.to_string())?;
+        Ok(match outcome {
+            upgrade::StopOutcome::Stopped => RemoteStopOutcome::Stopped,
+            upgrade::StopOutcome::Stopping => RemoteStopOutcome::Stopping,
+            upgrade::StopOutcome::Gone => RemoteStopOutcome::Gone,
+            upgrade::StopOutcome::NoAnswer => RemoteStopOutcome::NoAnswer,
+            upgrade::StopOutcome::Changed(now) => RemoteStopOutcome::Changed {
+                now: old_relay(&now),
+            },
+        })
+    }
+}
+
+fn count(n: usize) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
+}
+
+/// 조사의 옛 판 데몬 → 화면 · `remote.stopOld` 의 값.
+fn old_relay(daemon: &upgrade::OldDaemon) -> RemoteOldRelay {
+    let build = upgrade::parse_name(&daemon.file);
+    RemoteOldRelay {
+        file: daemon.file.clone(),
+        version: build.as_ref().map(|(_, v)| v.to_string()),
+        channel: build.map(|(c, _)| c),
+        pid: daemon.status.pid,
+        runs: count(daemon.status.runs),
+        terminals: count(daemon.status.terminals),
+        links: count(daemon.status.links),
+    }
+}
+
 impl Backend for SshBackend {
     fn hosts(&self, settings: Option<&Value>) -> (Vec<HostEntry>, Vec<String>) {
         let (configured, warnings) = remote_hosts::read(settings, None);
@@ -484,6 +610,31 @@ impl Backend for SshBackend {
         Box::pin(self.run(entry, expect, progress))
     }
 
+    fn tidy<'a>(&'a self, entry: &'a HostEntry) -> BoxFuture<'a, Result<Tidied, String>> {
+        Box::pin(self.tidy_run(entry))
+    }
+
+    fn stop_old<'a>(
+        &'a self,
+        entry: &'a HostEntry,
+        seen: &'a RemoteOldRelay,
+    ) -> BoxFuture<'a, Result<RemoteStopOutcome, String>> {
+        Box::pin(self.stop_run(entry, seen))
+    }
+
+    fn link_command<'a>(
+        &'a self,
+        entry: &'a HostEntry,
+        on: bool,
+    ) -> BoxFuture<'a, Result<bool, String>> {
+        Box::pin(async move {
+            self.installer(entry)?
+                .link_command(on)
+                .await
+                .map_err(|e| e.to_string())
+        })
+    }
+
     fn check<'a>(&'a self, entry: &'a HostEntry) -> BoxFuture<'a, Option<bool>> {
         Box::pin(async move {
             let ssh = self.ssh(entry).ok()?;
@@ -498,3 +649,6 @@ impl Backend for SshBackend {
 
 #[cfg(all(test, unix))]
 mod tests;
+
+#[cfg(all(test, unix))]
+mod upgrade_tests;

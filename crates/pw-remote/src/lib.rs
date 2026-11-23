@@ -43,6 +43,11 @@ pub use types::*;
 pub const TOPIC_STATUS: &str = "remote.status";
 pw_rpc::rpc_event!(TOPIC_STATUS, roles: [Owner]);
 
+/// 그 호스트의 원격 Relay 조사(`remote.relays`)가 바뀔 때 내는 토픽(payload [`RemoteRelaysChanged`]). 호스트 이름만 싣지만 원격
+/// 호스트 관리는 owner 의 것이라 owner 만.
+pub const TOPIC_RELAYS: &str = "remote.relays";
+pw_rpc::rpc_event!(TOPIC_RELAYS, roles: [Owner]);
+
 /// 원격 askpass 질문을 듣는 열쇠(`pw_git::write::Prompts` — 원격 호스트의 질문은 모두 여기로).
 pub const PROMPTS_KEY: &str = "remote";
 
@@ -146,6 +151,38 @@ pub trait Backend: Send + Sync {
     ) -> BoxFuture<'a, Result<Link, ConnectError>>;
     /// 링크 없이 가벼운 확인(`ssh -O check`). 확인할 수 없으면 `None`.
     fn check<'a>(&'a self, entry: &'a HostEntry) -> BoxFuture<'a, Option<bool>>;
+    /// 붙은 뒤 한 번(18-m7-plan M7-07b ①): 원격 Relay 조사 → 사람이 둔 `pitwall` 링크가 옛 판을 가리키면 이 판으로 옮김 → 정리(최근
+    /// 두 판만 — 떠 있는 데몬의 바이너리는 남긴다). 판 바꾸기가 없는 백엔드는 아무것도 없다고 답한다.
+    fn tidy<'a>(&'a self, _entry: &'a HostEntry) -> BoxFuture<'a, Result<Tidied, String>> {
+        Box::pin(async { Ok(Tidied::default()) })
+    }
+    /// [옛 판 끝내기]: 사람이 본 그 데몬(`seen`)이 지금도 그대로일 때만 끝낸다(`pw_link::upgrade::Installer::stop_old`).
+    fn stop_old<'a>(
+        &'a self,
+        _entry: &'a HostEntry,
+        _seen: &'a RemoteOldRelay,
+    ) -> BoxFuture<'a, Result<RemoteStopOutcome, String>> {
+        Box::pin(async { Err("this backend cannot stop old relays".to_owned()) })
+    }
+    /// `pitwall` 명령 링크를 이 판 바이너리로 두거나(`on`) 걷는다. 그 뒤 링크가 있는가.
+    fn link_command<'a>(
+        &'a self,
+        _entry: &'a HostEntry,
+        _on: bool,
+    ) -> BoxFuture<'a, Result<bool, String>> {
+        Box::pin(async { Err("this backend cannot link the pitwall command".to_owned()) })
+    }
+}
+
+/// [`Backend::tidy`] 의 결과(머신 id 는 [`RemoteHosts`] 가 붙인다).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Tidied {
+    pub old: Vec<RemoteOldRelay>,
+    pub silent: Vec<RemoteSilentRelay>,
+    pub command: RemoteCommandLink,
+    pub removed: Vec<String>,
+    /// 연결 로그에 남길 줄(영어 — 옮긴 링크 · 남긴 바이너리 등).
+    pub notes: Vec<String>,
 }
 
 /// `remote.*` 의 실패.
@@ -157,6 +194,8 @@ pub enum RemoteError {
     Unavailable,
     /// 지금 상태에서 할 수 없다(사람이 본 것과 다르다 등).
     Conflict(String),
+    /// 원격에서 하던 일이 실패했다(ssh · 원격 스크립트).
+    Remote(String),
 }
 
 impl std::fmt::Display for RemoteError {
@@ -165,6 +204,7 @@ impl std::fmt::Display for RemoteError {
             RemoteError::UnknownHost(name) => write!(f, "no remote host named `{name}`"),
             RemoteError::Unavailable => f.write_str("remote hosts are not available"),
             RemoteError::Conflict(why) => f.write_str(why),
+            RemoteError::Remote(why) => write!(f, "the remote host failed: {why}"),
         }
     }
 }
@@ -187,6 +227,10 @@ struct Slot {
     /// 선 링크를 닫는 것과 그 머신 id.
     link: Option<(String, Box<dyn FnOnce() + Send>)>,
     log: VecDeque<RemoteLogEntry>,
+    /// 지금 링크에서 본 원격 Relay(붙은 뒤 조사 — 링크가 닫히면 비운다).
+    relays: Option<RemoteRelays>,
+    /// 조사 · 끝내기 · 링크 바꾸기를 한 번에 하나씩(원격 셸이 서로의 결과를 덮지 않게).
+    upgrade: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Slot {
@@ -199,6 +243,8 @@ impl Slot {
             driver: None,
             link: None,
             log: VecDeque::new(),
+            relays: None,
+            upgrade: Arc::default(),
         }
     }
 }
@@ -662,11 +708,12 @@ impl RemoteHosts {
     }
 
     /// 돌던 바퀴를 멈추고 링크를 닫는다. 링크가 있었으면 참.
-    fn stop(&self, _name: &str, slot: &mut Slot) -> bool {
+    fn stop(&self, name: &str, slot: &mut Slot) -> bool {
         slot.generation += 1;
         if let Some(driver) = slot.driver.take() {
             driver.abort();
         }
+        self.set_relays(name, slot, None);
         match slot.link.take() {
             Some((machine, close)) => {
                 close();
@@ -735,6 +782,7 @@ impl RemoteHosts {
                         {
                             router.remove_host(&machine);
                         }
+                        self.set_relays(&name, slot, None);
                         None
                     });
                     if !alive {
@@ -869,7 +917,15 @@ impl RemoteHosts {
         };
         drop(_attempting);
         match result {
-            Ok(Some(closed)) => Some(Ok(closed.await)),
+            Ok(Some((closed, machine))) => {
+                // 붙은 뒤 한 번 — 조사 · 링크 옮기기 · 정리(M7-07b ①). 링크가 먼저 닫히면 조사를 버린다(ssh 도 끝난다).
+                let mut closed = closed;
+                let tidy = self.tidy(name, generation, &backend, &entry, &machine);
+                tokio::select! {
+                    reason = &mut closed => Some(Ok(reason)),
+                    () = tidy => Some(Ok(closed.await)),
+                }
+            }
             Ok(None) => None,
             Err(e) => Some(Err(e)),
         }
@@ -882,7 +938,7 @@ impl RemoteHosts {
         generation: u64,
         first: bool,
         link: Link,
-    ) -> Result<Option<BoxFuture<'static, String>>, ConnectError> {
+    ) -> Result<Option<(BoxFuture<'static, String>, String)>, ConnectError> {
         let Link {
             host,
             machine,
@@ -962,7 +1018,242 @@ impl RemoteHosts {
             RemoteLogLevel::Info,
             &format!("connected to machine {machine}"),
         );
-        Ok(Some(closed))
+        Ok(Some((closed, machine)))
+    }
+
+    /// 조사 결과를 바꾸고 알린다(`remote.relays`).
+    fn set_relays(&self, name: &str, slot: &mut Slot, relays: Option<RemoteRelays>) {
+        if slot.relays == relays {
+            return;
+        }
+        slot.relays = relays;
+        if let Some(host) = read(&self.inner.host) {
+            let _ = host.bus.publish(
+                Scope::Host,
+                TOPIC_RELAYS,
+                &RemoteRelaysChanged {
+                    name: name.to_owned(),
+                },
+            );
+        }
+    }
+
+    /// 지금 링크에서 본 원격 Relay(`remote.relays`). 링크가 없거나 아직 보지 않았으면 `None`.
+    pub fn relays(&self, name: &str) -> Option<RemoteRelays> {
+        lock(&self.inner.slots)
+            .get(name)
+            .and_then(|s| s.relays.clone())
+    }
+
+    /// 그 호스트가 지금 `machine` 에 붙어 있으면 그 바퀴와 원격 일의 자물쇠. 사람이 본 머신과 다르면 거절한다 — 그사이 다른 머신에
+    /// 붙었거나 끊겼으면 그 머신의 Relay 를 끝내거나 그 머신에 쓰지 않는다.
+    fn linked_to(
+        &self,
+        name: &str,
+        machine: &str,
+    ) -> Result<(u64, Arc<tokio::sync::Mutex<()>>), RemoteError> {
+        let slots = lock(&self.inner.slots);
+        let slot = slots.get(name);
+        match slot {
+            Some(slot)
+                if slot.link.as_ref().is_some_and(|(m, _)| m == machine)
+                    && slot.relays.as_ref().is_some_and(|r| r.machine == machine) =>
+            {
+                Ok((slot.generation, Arc::clone(&slot.upgrade)))
+            }
+            _ => Err(RemoteError::Conflict(format!(
+                "`{name}` is not connected to machine {machine} now"
+            ))),
+        }
+    }
+
+    /// 붙은 뒤 한 번: 조사 · 링크 옮기기 · 정리(M7-07b ①).
+    async fn tidy(
+        &self,
+        name: &str,
+        generation: u64,
+        backend: &Arc<dyn Backend>,
+        entry: &HostEntry,
+        machine: &str,
+    ) {
+        let gate = {
+            let slots = lock(&self.inner.slots);
+            match slots.get(name) {
+                Some(slot) if slot.generation == generation => Arc::clone(&slot.upgrade),
+                _ => return,
+            }
+        };
+        let _one = gate.lock().await;
+        self.refresh(name, generation, backend, entry, machine)
+            .await;
+    }
+
+    /// 조사 · 정리를 돌려 `remote.relays` 를 바꾼다(자물쇠를 쥔 쪽이 부른다). 그사이 바퀴가 바뀌었으면 결과를 버린다.
+    async fn refresh(
+        &self,
+        name: &str,
+        generation: u64,
+        backend: &Arc<dyn Backend>,
+        entry: &HostEntry,
+        machine: &str,
+    ) {
+        match backend.tidy(entry).await {
+            Ok(tidied) => {
+                for line in &tidied.notes {
+                    self.note(name, None, RemoteLogLevel::Info, line);
+                }
+                if !tidied.removed.is_empty() {
+                    self.note(
+                        name,
+                        None,
+                        RemoteLogLevel::Info,
+                        &format!("removed old relay versions: {}", tidied.removed.join(", ")),
+                    );
+                }
+                for old in &tidied.old {
+                    self.note(
+                        name,
+                        None,
+                        RemoteLogLevel::Info,
+                        &format!(
+                            "the old relay {} (pid {}) still has {} runs, {} terminals and {} links",
+                            old.file, old.pid, old.runs, old.terminals, old.links
+                        ),
+                    );
+                }
+                for silent in &tidied.silent {
+                    self.note(
+                        name,
+                        None,
+                        RemoteLogLevel::Info,
+                        &format!("the old relay {} does not answer; kept it", silent.file),
+                    );
+                }
+                let relays = RemoteRelays {
+                    machine: machine.to_owned(),
+                    old: tidied.old,
+                    silent: tidied.silent,
+                    command: tidied.command,
+                    removed: tidied.removed,
+                };
+                self.update(name, generation, |slot| {
+                    if slot.link.as_ref().is_some_and(|(m, _)| m == machine) {
+                        self.set_relays(name, slot, Some(relays));
+                    }
+                    None
+                });
+            }
+            Err(e) => self.note(
+                name,
+                None,
+                RemoteLogLevel::Error,
+                &format!("could not look at the old relay versions: {e}"),
+            ),
+        }
+    }
+
+    /// [옛 판 끝내기](`remote.stopOld` — M7-07b ③). 그 호스트가 지금 `machine`(사람이 본 머신)에 붙어 있고 `seen` 이 보인 옛 판
+    /// 하나일 때만 백엔드에 넘긴다 — 백엔드는 원격을 다시 보고, 사람이 본 pid · 실행 · 터미널 · 링크 수와 다르면 끝내지 않는다. 끝난
+    /// 뒤 다시 조사한다(지울 수 있게 된 바이너리를 지우고 새 수를 보인다).
+    pub async fn stop_old(
+        &self,
+        name: &str,
+        machine: &str,
+        seen: &RemoteOldRelay,
+    ) -> Result<RemoteStopOutcome, RemoteError> {
+        let entry = self.entry(name)?;
+        let backend = self.backend().ok_or(RemoteError::Unavailable)?;
+        let (generation, gate) = self.linked_to(name, machine)?;
+        let _one = gate.lock().await;
+        let shown = self
+            .relays(name)
+            .is_some_and(|r| r.machine == machine && r.old.iter().any(|o| o.file == seen.file));
+        if self.linked_to(name, machine)?.0 != generation || !shown {
+            return Err(RemoteError::Conflict(
+                "that old relay is not among what this host shows now".into(),
+            ));
+        }
+        self.note(
+            name,
+            None,
+            RemoteLogLevel::Info,
+            &format!(
+                "stopping the old relay {} as you saw it (pid {}, {} runs, {} terminals, {} links)",
+                seen.file, seen.pid, seen.runs, seen.terminals, seen.links
+            ),
+        );
+        let outcome = match backend.stop_old(&entry, seen).await {
+            Ok(outcome) => outcome,
+            Err(e) => {
+                self.note(
+                    name,
+                    None,
+                    RemoteLogLevel::Error,
+                    &format!("could not stop the old relay {}: {e}", seen.file),
+                );
+                return Err(RemoteError::Remote(e));
+            }
+        };
+        let said = match &outcome {
+            RemoteStopOutcome::Stopped => "stopped it".to_owned(),
+            RemoteStopOutcome::Stopping => "sent the stop; it is still ending its runs".to_owned(),
+            RemoteStopOutcome::Gone => "it was already gone".to_owned(),
+            RemoteStopOutcome::NoAnswer => "it does not answer; did not stop it".to_owned(),
+            RemoteStopOutcome::Changed { now } => format!(
+                "it changed since you saw it (now pid {}, {} runs, {} terminals, {} links); did not stop it",
+                now.pid, now.runs, now.terminals, now.links
+            ),
+        };
+        self.note(
+            name,
+            None,
+            RemoteLogLevel::Info,
+            &format!("old relay {}: {said}", seen.file),
+        );
+        self.refresh(name, generation, &backend, &entry, machine)
+            .await;
+        Ok(outcome)
+    }
+
+    /// `pitwall` 명령 링크 켜기 · 끄기(`remote.linkCommand` — 메인 판정 M7-P12, 사람이 고를 때만). 그 호스트가 지금 `machine` 에
+    /// 붙어 있을 때만. 끝난 뒤 다시 조사한다.
+    pub async fn link_command(
+        &self,
+        name: &str,
+        machine: &str,
+        on: bool,
+    ) -> Result<(), RemoteError> {
+        let entry = self.entry(name)?;
+        let backend = self.backend().ok_or(RemoteError::Unavailable)?;
+        let (generation, gate) = self.linked_to(name, machine)?;
+        let _one = gate.lock().await;
+        if self.linked_to(name, machine)?.0 != generation {
+            return Err(RemoteError::Conflict(format!(
+                "`{name}` reconnected; look again"
+            )));
+        }
+        let result = backend.link_command(&entry, on).await;
+        match &result {
+            Ok(linked) => self.note(
+                name,
+                None,
+                RemoteLogLevel::Info,
+                if *linked {
+                    "linked ~/.local/bin/pitwall to this relay version"
+                } else {
+                    "removed the ~/.local/bin/pitwall link"
+                },
+            ),
+            Err(e) => self.note(
+                name,
+                None,
+                RemoteLogLevel::Error,
+                &format!("could not change the ~/.local/bin/pitwall link: {e}"),
+            ),
+        }
+        self.refresh(name, generation, &backend, &entry, machine)
+            .await;
+        result.map(|_| ()).map_err(RemoteError::Remote)
     }
 }
 

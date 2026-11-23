@@ -243,3 +243,126 @@ pub struct RemotePromptAnswerParams {
     pub prompt_id: u64,
     pub answer: pw_git::write::GitPromptAnswer,
 }
+
+/// 떠 있는 옛 판 Relay 데몬 하나(18-m7-plan M7-07b ② — 사람이 본 그대로). 이 값 그대로 `remote.stopOld` 에 실어 보낸다 — 그사이
+/// pid · 실행 · 터미널 · 붙은 링크 수가 바뀌었으면 끝내지 않는다.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteOldRelay {
+    /// 원격 바이너리 이름(`pitwall-relay-{채널}-{판}`).
+    pub file: String,
+    /// 이름에서 읽은 판(읽지 못하면 `null`).
+    pub version: Option<String>,
+    pub channel: Option<String>,
+    pub pid: u32,
+    pub runs: u32,
+    pub terminals: u32,
+    /// 그 데몬에 붙은 링크 수(아직 옛 판인 다른 Desktop). 0 보다 크면 끝낼 때 그 연결도 끊긴다(M7-07 리뷰 R2).
+    pub links: u32,
+}
+
+/// 답하지 않는 옛 판 Relay(데몬이 있는지 모른다 — `status` 가 3 이 아닌 오류). 끝내기 단추가 없다.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteSilentRelay {
+    pub file: String,
+    pub version: Option<String>,
+}
+
+/// 원격의 `~/.local/bin/pitwall`(메인 판정 M7-P12 — 사람이 고를 때만 둔다).
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    Serialize,
+    Deserialize,
+    specta::Type,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteCommandLink {
+    /// 없다.
+    #[default]
+    Absent,
+    /// Relay 가 둔 링크(이 판으로 — 판이 바뀌면 붙을 때 옮긴다).
+    Linked,
+    /// 사람의 다른 파일 · 링크 — 건드리지 않는다.
+    Other,
+}
+
+/// 붙은 뒤 본 원격 Relay 들(`remote.relays` — 붙을 때마다 조사 → 링크 옮기기 → 정리가 한 번 돈다).
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteRelays {
+    /// 조사한 링크의 머신 id(증명된 것). `remote.stopOld` · `remote.linkCommand` 는 이 머신에만 간다.
+    pub machine: String,
+    pub old: Vec<RemoteOldRelay>,
+    pub silent: Vec<RemoteSilentRelay>,
+    pub command: RemoteCommandLink,
+    /// 이번 정리에서 지운 옛 판 바이너리 이름.
+    pub removed: Vec<String>,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteStopOldParams {
+    pub name: String,
+    /// 사람이 본 머신(`RemoteRelays::machine`). 그 호스트가 지금 다른 머신에 붙어 있으면 거절한다.
+    pub machine: String,
+    /// 사람이 본 그 데몬(`RemoteRelays::old` 의 하나 그대로).
+    pub seen: RemoteOldRelay,
+}
+
+/// [옛 판 끝내기] 의 결과.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(
+    tag = "outcome",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum RemoteStopOutcome {
+    /// 끝났다.
+    Stopped,
+    /// SIGTERM 은 보냈고 20초 안에 끝나지 않았다(실행 트리를 끝내는 중일 수 있다).
+    Stopping,
+    /// 사람이 본 뒤 바뀌었다 — 보내지 않았다. `now` 를 다시 보이고 다시 묻는다.
+    Changed { now: RemoteOldRelay },
+    /// 이미 없다.
+    Gone,
+    /// 답하지 않아 있는지 모른다 — 보내지 않았다.
+    NoAnswer,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteLinkCommandParams {
+    pub name: String,
+    /// 사람이 본 머신(`RemoteRelays::machine`).
+    pub machine: String,
+    /// 켜기(이 판 바이너리로 링크) · 끄기(Relay 의 링크를 걷음).
+    pub on: bool,
+}
+
+/// `remote.relays` 이벤트(그 호스트의 `remote.relays` 가 바뀌었다 — 다시 읽는다).
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteRelaysChanged {
+    pub name: String,
+}

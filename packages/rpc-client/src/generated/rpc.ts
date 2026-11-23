@@ -1268,6 +1268,11 @@ export type UnaryMethods = {
 	 */
 	"remote.hosts.list": { params: null; result: RemoteHostList };
 	/**
+	 * 원격의 `~/.local/bin/pitwall` 링크를 이 판 Relay 로 두거나(`on`) 걷는다(메인 판정 M7-P12 — 사람이 고를 때만). 그 자리에 사람의
+	 * 다른 파일이 있으면 Relay 가 거절한다. 그 호스트가 지금 `machine` 에 붙어 있을 때만.
+	 */
+	"remote.linkCommand": { params: RemoteLinkCommandParams; result: null };
+	/**
 	 * 그 호스트의 연결 로그(단계 · 실패 · ssh stderr 끝부분). askpass 답은 없다.
 	 */
 	"remote.log": { params: RemoteHostParams; result: RemoteLogEntry[] };
@@ -1276,9 +1281,28 @@ export type UnaryMethods = {
 	 */
 	"remote.prompt.answer": { params: RemotePromptAnswerParams; result: null };
 	/**
+	 * 지금 링크에서 본 원격 Relay(18-m7-plan M7-07b ②): 떠 있는 옛 판 데몬(판 · 실행 · 터미널 · 붙은 링크 수 — 사람이 본 그대로
+	 * `remote.stopOld` 에 싣는다) · 답하지 않는 옛 판 · `pitwall` 명령 링크 · 이번 정리에서 지운 것. 링크가 없거나 아직 보지 않았으면
+	 * `null`. 바뀌면 `remote.relays` 이벤트.
+	 */
+	"remote.relays": { params: RemoteHostParams; result: {
+	/**  조사한 링크의 머신 id(증명된 것). `remote.stopOld` · `remote.linkCommand` 는 이 머신에만 간다. */
+	machine: string,
+	old: RemoteOldRelay[],
+	silent: RemoteSilentRelay[],
+	command: RemoteCommandLink,
+	/**  이번 정리에서 지운 옛 판 바이너리 이름. */
+	removed: string[],
+} | null };
+	/**
 	 * 다시 시도: 쓰는 창이 있으면 기다림 없이 지금 붙는다.
 	 */
 	"remote.retry": { params: RemoteHostParams; result: null };
+	/**
+	 * [옛 판 끝내기](M7-07b ③): 그 호스트가 지금 `machine` 에 붙어 있고, 원격의 그 옛 판 데몬이 사람이 본 `seen` 그대로(pid · 실행 ·
+	 * 터미널 · 붙은 링크 수)일 때만 SIGTERM — 실행 트리는 그 데몬이 끝낸다. 바뀌었으면 끝내지 않고 `changed` 로 지금 것을 돌려준다.
+	 */
+	"remote.stopOld": { params: RemoteStopOldParams; result: RemoteStopOutcome };
 	/**
 	 * 「이 머신을 새로 믿기」: 그 호스트가 `machineChanged` 이고 `found` 가 `machine` 일 때만 — 묶음 멤버의 머신 id 를 옮기고 새
 	 * id 를 기억한 뒤 다시 붙는다.
@@ -1919,10 +1943,13 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"remote.disconnect": {"name":"remote.disconnect","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteHostParams","output":"()","doc":" 사람이 끊는다. 쓰는 창이 남아 있어도 다시 붙지 않는다(새 `remote.connect` · `remote.retry` 까지).\n","mcp":null,"fileScope":false},
 	"remote.hosts.check": {"name":"remote.hosts.check","kind":"unary","tier":"read","roles":["owner"],"params":"RemoteHostParams","output":"RemoteHostCheck","doc":" 링크 없이 가볍게 본다: 사람의 ControlMaster 가 떠 있는가(`ssh -O check`)와 마지막 링크 상태.\n","mcp":null,"fileScope":false},
 	"remote.hosts.list": {"name":"remote.hosts.list","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"RemoteHostList","doc":" 원격 호스트 목록: 전역 `[[remote_hosts]]` 와 `~/.ssh/config` 의 `Host` 이름(와일드카드 없음), 각각의 지금 상태 · 기억한\n 머신 id · 마지막 링크 상태. 링크를 열지 않는다.\n","mcp":null,"fileScope":false},
+	"remote.linkCommand": {"name":"remote.linkCommand","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteLinkCommandParams","output":"()","doc":" 원격의 `~/.local/bin/pitwall` 링크를 이 판 Relay 로 두거나(`on`) 걷는다(메인 판정 M7-P12 — 사람이 고를 때만). 그 자리에 사람의\n 다른 파일이 있으면 Relay 가 거절한다. 그 호스트가 지금 `machine` 에 붙어 있을 때만.\n","mcp":null,"fileScope":false},
 	"remote.log": {"name":"remote.log","kind":"unary","tier":"read","roles":["owner"],"params":"RemoteHostParams","output":"Vec<RemoteLogEntry>","doc":" 그 호스트의 연결 로그(단계 · 실패 · ssh stderr 끝부분). askpass 답은 없다.\n","mcp":null,"fileScope":false},
 	"remote.prompt.answer": {"name":"remote.prompt.answer","kind":"unary","tier":"write","roles":["owner"],"params":"RemotePromptAnswerParams","output":"()","doc":" 원격 askpass 질문의 답. 처음 온 답만 받는다.\n","mcp":null,"fileScope":false},
 	"remote.prompts": {"name":"remote.prompts","kind":"stream","tier":"read","roles":["owner"],"params":"()","output":"GitPromptEvent","doc":" 원격 호스트를 붙이는 ssh 의 질문 스트림(호스트 키 확인 · 암호). 열 때 아직 열린 질문이 먼저 온다.\n","mcp":null,"fileScope":false},
+	"remote.relays": {"name":"remote.relays","kind":"unary","tier":"read","roles":["owner"],"params":"RemoteHostParams","output":"Option<RemoteRelays>","doc":" 지금 링크에서 본 원격 Relay(18-m7-plan M7-07b ②): 떠 있는 옛 판 데몬(판 · 실행 · 터미널 · 붙은 링크 수 — 사람이 본 그대로\n `remote.stopOld` 에 싣는다) · 답하지 않는 옛 판 · `pitwall` 명령 링크 · 이번 정리에서 지운 것. 링크가 없거나 아직 보지 않았으면\n `null`. 바뀌면 `remote.relays` 이벤트.\n","mcp":null,"fileScope":false},
 	"remote.retry": {"name":"remote.retry","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteHostParams","output":"()","doc":" 다시 시도: 쓰는 창이 있으면 기다림 없이 지금 붙는다.\n","mcp":null,"fileScope":false},
+	"remote.stopOld": {"name":"remote.stopOld","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteStopOldParams","output":"RemoteStopOutcome","doc":" [옛 판 끝내기](M7-07b ③): 그 호스트가 지금 `machine` 에 붙어 있고, 원격의 그 옛 판 데몬이 사람이 본 `seen` 그대로(pid · 실행 ·\n 터미널 · 붙은 링크 수)일 때만 SIGTERM — 실행 트리는 그 데몬이 끝낸다. 바뀌었으면 끝내지 않고 `changed` 로 지금 것을 돌려준다.\n","mcp":null,"fileScope":false},
 	"remote.trustMachine": {"name":"remote.trustMachine","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteTrustMachineParams","output":"()","doc":" 「이 머신을 새로 믿기」: 그 호스트가 `machineChanged` 이고 `found` 가 `machine` 일 때만 — 묶음 멤버의 머신 id 를 옮기고 새\n id 를 기억한 뒤 다시 붙는다.\n","mcp":null,"fileScope":false},
 	"run.attach": {"name":"run.attach","kind":"stream","tier":"read","roles":["owner"],"params":"RunAttachParams","output":"RunAttachEvent","doc":" 실행의 출력을 `since` 오프셋부터 보낸다(앞에 쌓인 것 → 새로 나오는 것 → 끝). 스트림을 끊어도 실행은 돈다.\n","mcp":null,"fileScope":false},
 	"run.config.delete": {"name":"run.config.delete","kind":"unary","tier":"write","roles":["owner"],"params":"RunConfigDeleteParams","output":"RunConfigDeleted","doc":" 구성 파일을 지운다(`location` 이 없으면 공유 · 개인 둘 다). 그 프로젝트 창의 연결만. 그 id 의 구성(쓸 수 없는 것 포함)이\n 없으면 not found.\n","mcp":null,"fileScope":false},
@@ -1980,7 +2007,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 };
 
 /** 선언된 이벤트 토픽(`rpc_event!`). 선언 없는 토픽은 구독할 수 없다. */
-export type TopicName = "config.changed" | "config.error" | "db.queryProgress" | "db.schemaChanged" | "db.secretRequested" | "db.sessionChanged" | "debug.breakpoints" | "debug.continued" | "debug.ended" | "debug.output" | "debug.stopped" | "fs.changed" | "git.refsChanged" | "git.statusChanged" | "lsp.applyEdit" | "lsp.diagnostics" | "lsp.showDocument" | "lsp.status" | "mcp.activity" | "mcp.sessionsChanged" | "notification.show" | "project.changed" | "remote.status" | "run.chain" | "run.exited" | "run.ports" | "run.started" | "runtime.changed" | "task.finished" | "task.progress";
+export type TopicName = "config.changed" | "config.error" | "db.queryProgress" | "db.schemaChanged" | "db.secretRequested" | "db.sessionChanged" | "debug.breakpoints" | "debug.continued" | "debug.ended" | "debug.output" | "debug.stopped" | "fs.changed" | "git.refsChanged" | "git.statusChanged" | "lsp.applyEdit" | "lsp.diagnostics" | "lsp.showDocument" | "lsp.status" | "mcp.activity" | "mcp.sessionsChanged" | "notification.show" | "project.changed" | "remote.relays" | "remote.status" | "run.chain" | "run.exited" | "run.ports" | "run.started" | "runtime.changed" | "task.finished" | "task.progress";
 
 /** 토픽 메타데이터(구독할 수 있는 role). `events.subscribe` 는 호출자의 role 이 없는 토픽을 거절한다. */
 export const TOPICS: Record<TopicName, EventMeta> = {
@@ -2006,6 +2033,7 @@ export const TOPICS: Record<TopicName, EventMeta> = {
 	"mcp.sessionsChanged": {"name":"mcp.sessionsChanged","roles":["owner","mobile","readonly"]},
 	"notification.show": {"name":"notification.show","roles":["owner","mobile","readonly"]},
 	"project.changed": {"name":"project.changed","roles":["owner","mobile","readonly"]},
+	"remote.relays": {"name":"remote.relays","roles":["owner"]},
 	"remote.status": {"name":"remote.status","roles":["owner"]},
 	"run.chain": {"name":"run.chain","roles":["owner","mobile","readonly"]},
 	"run.exited": {"name":"run.exited","roles":["owner","mobile","readonly"]},
@@ -9296,6 +9324,15 @@ export type Remember =
 /**  기억하지 않는다 — 셋째 버튼이 없다(`open_with_upsert`). */
 { kind: "never" };
 
+/**  원격의 `~/.local/bin/pitwall`(메인 판정 M7-P12 — 사람이 고를 때만 둔다). */
+export type RemoteCommandLink = 
+/**  없다. */
+"absent" | 
+/**  Relay 가 둔 링크(이 판으로 — 판이 바뀌면 붙을 때 옮긴다). */
+"linked" | 
+/**  사람의 다른 파일 · 링크 — 건드리지 않는다. */
+"other";
+
 /**  실패 하나. `message` 는 영어 원문(진단), 화면은 `kind` 로 말을 고른다. 비밀(askpass 답)은 들지 않는다. */
 export type RemoteFailure = {
 	stage: RemoteStage,
@@ -9380,6 +9417,14 @@ export type RemoteLastLink = {
 /**  링크 없이 본 마지막 상태(메인 판정 M7-P6 — 마지막 링크 상태와 그 시각). */
 export type RemoteLastLinkState = "connected" | "disconnected" | "failed";
 
+export type RemoteLinkCommandParams = {
+	name: string,
+	/**  사람이 본 머신(`RemoteRelays::machine`). */
+	machine: string,
+	/**  켜기(이 판 바이너리로 링크) · 끄기(Relay 의 링크를 걷음). */
+	on: boolean,
+};
+
 /**  연결 로그 한 줄(18-m7-plan M7-08 ④). 비밀(askpass 답)은 남지 않는다. */
 export type RemoteLogEntry = {
 	/**  유닉스 시각(ms). */
@@ -9392,9 +9437,43 @@ export type RemoteLogEntry = {
 
 export type RemoteLogLevel = "info" | "error";
 
+/**
+ *  떠 있는 옛 판 Relay 데몬 하나(18-m7-plan M7-07b ② — 사람이 본 그대로). 이 값 그대로 `remote.stopOld` 에 실어 보낸다 — 그사이
+ *  pid · 실행 · 터미널 · 붙은 링크 수가 바뀌었으면 끝내지 않는다.
+ */
+export type RemoteOldRelay = {
+	/**  원격 바이너리 이름(`pitwall-relay-{채널}-{판}`). */
+	file: string,
+	/**  이름에서 읽은 판(읽지 못하면 `null`). */
+	version: string | null,
+	channel: string | null,
+	pid: number,
+	runs: number,
+	terminals: number,
+	/**  그 데몬에 붙은 링크 수(아직 옛 판인 다른 Desktop). 0 보다 크면 끝낼 때 그 연결도 끊긴다(M7-07 리뷰 R2). */
+	links: number,
+};
+
 export type RemotePromptAnswerParams = {
 	promptId: number,
 	answer: GitPromptAnswer,
+};
+
+/**  붙은 뒤 본 원격 Relay 들(`remote.relays` — 붙을 때마다 조사 → 링크 옮기기 → 정리가 한 번 돈다). */
+export type RemoteRelays = {
+	/**  조사한 링크의 머신 id(증명된 것). `remote.stopOld` · `remote.linkCommand` 는 이 머신에만 간다. */
+	machine: string,
+	old: RemoteOldRelay[],
+	silent: RemoteSilentRelay[],
+	command: RemoteCommandLink,
+	/**  이번 정리에서 지운 옛 판 바이너리 이름. */
+	removed: string[],
+};
+
+/**  답하지 않는 옛 판 Relay(데몬이 있는지 모른다 — `status` 가 3 이 아닌 오류). 끝내기 단추가 없다. */
+export type RemoteSilentRelay = {
+	file: string,
+	version: string | null,
 };
 
 /**  붙는 단계(진단 칸의 차례 — 18-m7-plan M7-08 ②). */
@@ -9423,6 +9502,27 @@ export type RemoteStatus =
  *  (`remote.trustMachine`)를 고르기 전에는 붙지 않는다.
  */
 { state: "machineChanged"; expected: string; found: string };
+
+export type RemoteStopOldParams = {
+	name: string,
+	/**  사람이 본 머신(`RemoteRelays::machine`). 그 호스트가 지금 다른 머신에 붙어 있으면 거절한다. */
+	machine: string,
+	/**  사람이 본 그 데몬(`RemoteRelays::old` 의 하나 그대로). */
+	seen: RemoteOldRelay,
+};
+
+/**  [옛 판 끝내기] 의 결과. */
+export type RemoteStopOutcome = 
+/**  끝났다. */
+{ outcome: "stopped" } | 
+/**  SIGTERM 은 보냈고 20초 안에 끝나지 않았다(실행 트리를 끝내는 중일 수 있다). */
+{ outcome: "stopping" } | 
+/**  사람이 본 뒤 바뀌었다 — 보내지 않았다. `now` 를 다시 보이고 다시 묻는다. */
+{ outcome: "changed"; now: RemoteOldRelay } | 
+/**  이미 없다. */
+{ outcome: "gone" } | 
+/**  답하지 않아 있는지 모른다 — 보내지 않았다. */
+{ outcome: "noAnswer" };
 
 export type RemoteTrustMachineParams = {
 	name: string,

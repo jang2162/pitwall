@@ -52,7 +52,7 @@ impl Stub {
                 .relay_dir()
                 .join(format!("pitwall-relay-dev-{version}")),
             &format!(
-                "#!/bin/sh\ncase \"$1\" in\n  status) if [ -f '{m}' ]; then cat '{m}'; exit 0; else exit 3; fi ;;\n  *) exit 2 ;;\nesac\n",
+                "#!/bin/sh\ncase \"$1\" in\n  status) if [ -f '{m}' ]; then cat '{m}'; exit 0; else exit 3; fi ;;\n  link-command) echo \"$*\" >> '{m}.link'; if [ \"$2\" = --remove ]; then echo '{{\"path\":\"p\",\"linked\":false}}'; else echo '{{\"path\":\"p\",\"linked\":true}}'; fi ;;\n  *) exit 2 ;;\nesac\n",
                 m = marker.display()
             ),
         );
@@ -71,6 +71,15 @@ impl Stub {
             ),
         )
         .unwrap();
+    }
+
+    /// `link-command` 로 불린 인자들(한 번에 한 줄).
+    fn link_calls(&self) -> Vec<String> {
+        std::fs::read_to_string(format!("{}.link", self.marker.display()))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
     }
 
     fn stop(&self) {
@@ -539,4 +548,55 @@ async fn the_clean_script_keeps_an_upload_in_progress() {
             .contains(&format!("pitwall-clean uploading {live}"))
     );
     assert!(remote.relay_dir().join(&live).exists());
+}
+
+/// 사람의 `~/.local/bin/pitwall` 을 조사가 읽는다(M7-07b): Relay 가 둔 링크(대상이 `pitwall-relay-*`)면 그 파일 이름, 사람의 다른 파일이면
+/// 「다른 것」, 없으면 「없음」. 링크 켜기 · 끄기는 **이 판의** 바이너리의 `link-command` 를 부르고, 이 판이 없으면 아무것도 부르지 않고
+/// 실패한다.
+#[tokio::test]
+async fn the_survey_reads_the_command_link_and_only_this_version_moves_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let remote = FakeRemote::new(dir.path(), "home", true);
+    let installer = installer(dir.path(), &remote);
+    let old = Stub::new(dir.path(), &remote, "1.0.0");
+    let bin = remote.home.join(".local/bin");
+    let link = bin.join("pitwall");
+    // 이 판이 아직 없다 — 옛 판 바이너리를 부르지 않는다.
+    assert!(installer.link_command(true).await.is_err());
+    assert!(old.link_calls().is_empty());
+
+    let current = Stub::new(dir.path(), &remote, CURRENT);
+    assert_eq!(
+        installer.survey().await.unwrap().command,
+        CommandLink::Absent
+    );
+
+    std::fs::create_dir_all(&bin).unwrap();
+    std::os::unix::fs::symlink(remote.relay_dir().join("pitwall-relay-dev-1.0.0"), &link).unwrap();
+    let survey = installer.survey().await.unwrap();
+    assert_eq!(
+        survey.command,
+        CommandLink::Relay {
+            file: "pitwall-relay-dev-1.0.0".into()
+        }
+    );
+    assert!(survey.command_needs_moving());
+
+    assert!(installer.link_command(true).await.unwrap());
+    assert!(!installer.link_command(false).await.unwrap());
+    assert_eq!(
+        current.link_calls(),
+        ["link-command", "link-command --remove"]
+    );
+    assert!(
+        old.link_calls().is_empty(),
+        "only this version's binary moves the link"
+    );
+
+    std::fs::remove_file(&link).unwrap();
+    std::fs::write(&link, "#!/bin/sh\n").unwrap();
+    assert_eq!(
+        installer.survey().await.unwrap().command,
+        CommandLink::Other
+    );
 }

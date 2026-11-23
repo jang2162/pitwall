@@ -11,7 +11,8 @@ use pw_rpc::{ConnectionScope, Ctx, Router, RpcError, code, rpc_method};
 
 use crate::{
     PROMPTS_KEY, RemoteError, RemoteHostCheck, RemoteHostList, RemoteHostParams, RemoteHosts,
-    RemoteLogEntry, RemotePromptAnswerParams, RemoteStatus, RemoteTrustMachineParams,
+    RemoteLinkCommandParams, RemoteLogEntry, RemotePromptAnswerParams, RemoteRelays, RemoteStatus,
+    RemoteStopOldParams, RemoteStopOutcome, RemoteTrustMachineParams,
 };
 
 rpc_method! {
@@ -36,6 +37,16 @@ rpc_method! {
     pub RemoteLog: "remote.log" {
         params: RemoteHostParams,
         result: Vec<RemoteLogEntry>,
+        tier: Read,
+        roles: [Owner],
+    }
+
+    /// 지금 링크에서 본 원격 Relay(18-m7-plan M7-07b ②): 떠 있는 옛 판 데몬(판 · 실행 · 터미널 · 붙은 링크 수 — 사람이 본 그대로
+    /// `remote.stopOld` 에 싣는다) · 답하지 않는 옛 판 · `pitwall` 명령 링크 · 이번 정리에서 지운 것. 링크가 없거나 아직 보지 않았으면
+    /// `null`. 바뀌면 `remote.relays` 이벤트.
+    pub RemoteRelaysGet: "remote.relays" {
+        params: RemoteHostParams,
+        result: Option<RemoteRelays>,
         tier: Read,
         roles: [Owner],
     }
@@ -86,6 +97,24 @@ rpc_method! {
         roles: [Owner],
     }
 
+    /// [옛 판 끝내기](M7-07b ③): 그 호스트가 지금 `machine` 에 붙어 있고, 원격의 그 옛 판 데몬이 사람이 본 `seen` 그대로(pid · 실행 ·
+    /// 터미널 · 붙은 링크 수)일 때만 SIGTERM — 실행 트리는 그 데몬이 끝낸다. 바뀌었으면 끝내지 않고 `changed` 로 지금 것을 돌려준다.
+    pub RemoteStopOld: "remote.stopOld" {
+        params: RemoteStopOldParams,
+        result: RemoteStopOutcome,
+        tier: Write,
+        roles: [Owner],
+    }
+
+    /// 원격의 `~/.local/bin/pitwall` 링크를 이 판 Relay 로 두거나(`on`) 걷는다(메인 판정 M7-P12 — 사람이 고를 때만). 그 자리에 사람의
+    /// 다른 파일이 있으면 Relay 가 거절한다. 그 호스트가 지금 `machine` 에 붙어 있을 때만.
+    pub RemoteLinkCommand: "remote.linkCommand" {
+        params: RemoteLinkCommandParams,
+        result: (),
+        tier: Write,
+        roles: [Owner],
+    }
+
     /// 원격 askpass 질문의 답. 처음 온 답만 받는다.
     pub RemotePromptAnswer: "remote.prompt.answer" {
         params: RemotePromptAnswerParams,
@@ -111,6 +140,7 @@ fn rpc(e: RemoteError) -> RpcError {
         RemoteError::UnknownHost(_) => RpcError::new(code::NOT_FOUND, e.to_string()),
         RemoteError::Unavailable => RpcError::internal(e.to_string()),
         RemoteError::Conflict(_) => RpcError::invalid_params(e.to_string()),
+        RemoteError::Remote(_) => RpcError::new(code::CONFLICT, e.to_string()),
     }
 }
 
@@ -140,6 +170,30 @@ pub fn register(router: &mut Router, remote: &RemoteHosts) {
         async move {
             host_scope(&ctx)?;
             Ok(r.log(&p.name))
+        }
+    });
+    let r = remote.clone();
+    router.unary(RemoteRelaysGet, move |ctx, p: RemoteHostParams| {
+        let r = r.clone();
+        async move {
+            host_scope(&ctx)?;
+            Ok(r.relays(&p.name))
+        }
+    });
+    let r = remote.clone();
+    router.unary(RemoteStopOld, move |ctx, p: RemoteStopOldParams| {
+        let r = r.clone();
+        async move {
+            host_scope(&ctx)?;
+            r.stop_old(&p.name, &p.machine, &p.seen).await.map_err(rpc)
+        }
+    });
+    let r = remote.clone();
+    router.unary(RemoteLinkCommand, move |ctx, p: RemoteLinkCommandParams| {
+        let r = r.clone();
+        async move {
+            host_scope(&ctx)?;
+            r.link_command(&p.name, &p.machine, p.on).await.map_err(rpc)
         }
     });
     let r = remote.clone();

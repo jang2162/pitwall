@@ -252,10 +252,13 @@ remote.connect Stream Write {Owner}
 remote.disconnect Unary Write {Owner}
 remote.hosts.check Unary Read {Owner}
 remote.hosts.list Unary Read {Owner}
+remote.linkCommand Unary Write {Owner}
 remote.log Unary Read {Owner}
 remote.prompt.answer Unary Write {Owner}
 remote.prompts Stream Read {Owner}
+remote.relays Unary Read {Owner}
 remote.retry Unary Write {Owner}
+remote.stopOld Unary Write {Owner}
 remote.trustMachine Unary Write {Owner}
 run.attach Stream Read {Owner}
 run.config.delete Unary Write {Owner}

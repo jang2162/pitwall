@@ -44,6 +44,8 @@ struct Fake {
     expects: Mutex<Vec<Option<String>>>,
     /// 링크의 원격 Host 를 만드는 것(없으면 빈 `LocalHost`). 받는 것은 증명된 머신 id.
     hosts: Mutex<Option<MakeHost>>,
+    /// 붙은 뒤 조사 · 정리를 부른 수.
+    tidies: AtomicUsize,
 }
 
 impl Fake {
@@ -123,6 +125,24 @@ impl Backend for Fake {
 
     fn check<'a>(&'a self, _entry: &'a HostEntry) -> BoxFuture<'a, Option<bool>> {
         Box::pin(async { Some(false) })
+    }
+
+    fn tidy<'a>(&'a self, _entry: &'a HostEntry) -> BoxFuture<'a, Result<Tidied, String>> {
+        let n = self.tidies.fetch_add(1, Ordering::SeqCst) as u32;
+        Box::pin(async move {
+            Ok(Tidied {
+                old: vec![RemoteOldRelay {
+                    file: "pitwall-relay-dev-0.9.0".into(),
+                    version: Some("0.9.0".into()),
+                    channel: Some("dev".into()),
+                    pid: 40 + n,
+                    runs: 1,
+                    terminals: 0,
+                    links: 0,
+                }],
+                ..Tidied::default()
+            })
+        })
     }
 }
 
@@ -692,6 +712,7 @@ async fn every_remote_method_takes_only_a_host_connection() {
         ("remote.hosts.list", Value::Null),
         ("remote.hosts.check", name.clone()),
         ("remote.log", name.clone()),
+        ("remote.relays", name.clone()),
         ("remote.connect", name.clone()),
         ("remote.prompts", Value::Null),
         ("remote.disconnect", name.clone()),
@@ -699,6 +720,16 @@ async fn every_remote_method_takes_only_a_host_connection() {
         (
             "remote.trustMachine",
             serde_json::json!({ "name": "mini", "machine": "SHA256:x" }),
+        ),
+        (
+            "remote.stopOld",
+            serde_json::json!({ "name": "mini", "machine": "SHA256:x", "seen": {
+                "file": "pitwall-relay-dev-1.0.0", "version": null, "channel": null,
+                "pid": 1, "runs": 0, "terminals": 0, "links": 0 } }),
+        ),
+        (
+            "remote.linkCommand",
+            serde_json::json!({ "name": "mini", "machine": "SHA256:x", "on": true }),
         ),
         (
             "remote.prompt.answer",
@@ -855,4 +886,52 @@ async fn trusting_a_new_machine_forgets_only_the_old_ids_secrets() {
         );
         assert!(left.contains(&machine_index_account(machine)), "{left:?}");
     }
+}
+
+// M7-07b ①: 붙은 뒤 조사 · 정리가 링크마다 한 번 돈다. 그 결과(`remote.relays`)는 그 링크의 머신 id 를 달고, 링크가 닫히면 비고
+// (`remote.relays` 이벤트), 다시 붙으면 다시 돈다.
+#[tokio::test(start_paused = true)]
+async fn each_link_tidies_once_and_its_relays_go_with_it() {
+    let s = setup();
+    let bus = read(&s.remote.inner.host).unwrap().bus;
+    let mut events = bus.subscribe(pw_core::bus::Filter::all().topics([TOPIC_RELAYS]));
+    let _use = s.remote.hold("mini").unwrap();
+    until(&s.remote, connected).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while s.remote.relays("mini").is_none() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("no survey after connecting");
+    let relays = s.remote.relays("mini").unwrap();
+    assert_eq!(relays.machine, MINI);
+    assert_eq!(relays.old[0].pid, 40);
+    let _again = s.remote.hold("mini").unwrap();
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert_eq!(s.fake.tidies.load(Ordering::SeqCst), 1, "one tidy per link");
+    assert!(
+        matches!(events.try_recv(), Some(pw_core::bus::Received::Event(_))),
+        "no remote.relays event"
+    );
+
+    s.fake.last_link().drop_link();
+    until(&s.remote, |st| {
+        matches!(st, RemoteStatus::Reconnecting { .. })
+    })
+    .await;
+    assert_eq!(
+        s.remote.relays("mini"),
+        None,
+        "the old link's survey stayed"
+    );
+    until(&s.remote, connected).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while s.remote.relays("mini").is_none() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("no survey after reconnecting");
+    assert_eq!(s.fake.tidies.load(Ordering::SeqCst), 2);
 }

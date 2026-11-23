@@ -46,7 +46,9 @@ pub const STATUS_NO_DAEMON: i32 = 3;
 /// 조사: `$DATA/relay/pitwall-relay-*` 마다 한 줄 — `current`(이 판), `running <이름> <status JSON>`, `stopped <이름> <종료 코드>`,
 /// `upload`·`upload-live <이름>`(올리기 임시 파일 — 그 셸이 살아 있으면 live). 끝 표지 `pitwall-survey end`. 이름에 빈칸이 든
 /// 파일은 건너뛰고, `pitwall-relay-<채널>-<숫자>…` 꼴이 아닌 파일은 실행하지 않는다(사람이 둔 `pitwall-relay-backup.sh` 등 —
-/// 리뷰 R3).
+/// 리뷰 R3). 끝 표지 앞에 사람의 `~/.local/bin/pitwall` 이 무엇인지 한 줄(`command <심링크 대상의 파일 이름>` — POSIX `ls -l` 의 ` -> ` 뒤,
+/// `readlink` 는 POSIX 도구가 아니다), 심링크가 아닌 파일이면 `command` 만, 없으면 줄 없음 — M7-07b, `pitwall-relay link-command`
+/// 의 「Relay 의 링크」 판정과 같은 재료).
 pub const SURVEY: &str = concat!(
     prelude!(),
     "if [ -d \"$d\" ]; then for p in \"$d\"/pitwall-relay-*; do \
@@ -58,7 +60,10 @@ pub const SURVEY: &str = concat!(
      if [ \"$p\" = \"$f\" ]; then echo \"pitwall-survey current $n\"; continue; fi; \
      case \"$n\" in pitwall-relay-*-[0-9]*) ;; *) continue ;; esac; \
      if o=$(\"$p\" status 2>/dev/null); then echo \"pitwall-survey running $n $o\"; \
-     else echo \"pitwall-survey stopped $n $?\"; fi; done; fi; echo \"pitwall-survey end\""
+     else echo \"pitwall-survey stopped $n $?\"; fi; done; fi; \
+     if [ -n \"${HOME:-}\" ]; then l=\"$HOME/.local/bin/pitwall\"; \
+     if [ -L \"$l\" ]; then t=$(ls -l \"$l\" 2>/dev/null) || t=\"\"; t=\"${t##* -> }\"; echo \"pitwall-survey command ${t##*/}\"; \
+     elif [ -e \"$l\" ]; then echo \"pitwall-survey command\"; fi; fi; echo \"pitwall-survey end\""
 );
 
 /// 정리: `$3`… 의 이름마다 — `pitwall-relay-` 로 시작하고 `/` 가 없는 것만, 이 판(`$f`)은 빼고, 지우기 직전 그 바이너리의
@@ -94,6 +99,18 @@ pub const STOP: &str = concat!(
      *) echo \"pitwall-stop changed\" ;; esac; \
      else c=$?; if [ \"$c\" = 3 ]; then echo \"pitwall-stop gone\"; else echo \"pitwall-stop unknown\"; fi; fi"
 );
+
+/// `pitwall` 명령 링크(메인 판정 M7-P12): `$3` 이 `on` 이면 이 판 바이너리의 `link-command`, `off` 면 `link-command --remove`. 이 판이
+/// 깔려 있지 않으면 65. 사람의 다른 파일이 그 자리에 있으면 Relay 가 거절한다(종료 1 — 덮지 않는다). stdout 은 Relay 의 JSON 한 줄.
+pub const LINK_COMMAND: &str = concat!(
+    prelude!(),
+    "if [ -f \"$f\" ]; then :; else echo \"pitwall: the relay of this version is not installed\" >&2; exit 65; fi; \
+     case \"$3\" in on) \"$f\" link-command ;; off) \"$f\" link-command --remove ;; \
+     *) echo \"pitwall: on or off\" >&2; exit 64 ;; esac"
+);
+
+/// [`LINK_COMMAND`] 의 ssh 한 번의 시간 상한.
+pub const LINK_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 옛 판 바이너리의 `pitwall-relay status` 한 줄(판에 묶이지 않는 꼴 — `pw_relay::command::Status`). 모르는 칸은 버리고, 수 칸이
 /// 없으면 0 이다 — `pid` 만 꼭 있어야 한다.
@@ -146,6 +163,21 @@ pub struct RemoteBinary {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Survey {
     pub binaries: Vec<RemoteBinary>,
+    /// 사람의 `pitwall` 명령 링크.
+    pub command: CommandLink,
+}
+
+/// 사람의 `~/.local/bin/pitwall`(메인 판정 M7-P12 — 설치 화면에서 사람이 고를 때만 둔다).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum CommandLink {
+    /// 없다.
+    #[default]
+    Absent,
+    /// Relay 가 둔 링크(대상 파일 이름이 `pitwall-relay` 로 시작 — `pitwall-relay link-command` 의 판정과 같다). `file` 은 그 대상의
+    /// 파일 이름이다.
+    Relay { file: String },
+    /// 사람의 다른 파일 · 링크 — 건드리지 않는다.
+    Other,
 }
 
 /// 떠 있는 옛 판 데몬 하나 — 화면의 「옛 판 Relay 에 n개 남음」 · [옛 판 끝내기] 의 재료.
@@ -222,6 +254,7 @@ impl Survey {
     pub fn parse(stdout: &[u8]) -> Result<Self, String> {
         let text = String::from_utf8_lossy(stdout);
         let mut binaries = Vec::new();
+        let mut command = CommandLink::Absent;
         let mut ended = false;
         for line in text.lines() {
             let Some(rest) = line.strip_prefix("pitwall-survey ") else {
@@ -229,6 +262,17 @@ impl Survey {
             };
             if rest == "end" {
                 ended = true;
+                continue;
+            }
+            if let Some(target) = rest.strip_prefix("command") {
+                let target = target.trim();
+                command = if target.starts_with("pitwall-relay") {
+                    CommandLink::Relay {
+                        file: target.to_owned(),
+                    }
+                } else {
+                    CommandLink::Other
+                };
                 continue;
             }
             let mut words = rest.splitn(3, ' ');
@@ -263,7 +307,24 @@ impl Survey {
         if !ended {
             return Err("the remote survey did not finish".into());
         }
-        Ok(Self { binaries })
+        Ok(Self { binaries, command })
+    }
+
+    /// 이 Desktop 판의 바이너리 이름(조사에 있으면).
+    pub fn current(&self) -> Option<&str> {
+        self.binaries
+            .iter()
+            .find(|b| b.state == BinaryState::Current)
+            .map(|b| b.file.as_str())
+    }
+
+    /// 사람이 둔 `pitwall` 링크가 이 판이 아닌 Relay 바이너리를 가리키는가 — 판을 올린 뒤 옛 판을 지우기 전에 새 판으로 옮길 것
+    /// (M7-15 보고 — 링크는 판이 박힌 바이너리를 가리킨다).
+    pub fn command_needs_moving(&self) -> bool {
+        match (&self.command, self.current()) {
+            (CommandLink::Relay { file }, Some(current)) => file != current,
+            _ => false,
+        }
     }
 
     /// 떠 있는 옛 판 데몬들(이 판은 빼고).
@@ -390,6 +451,28 @@ impl Installer {
         Cleaned::parse(&output.stdout).map_err(InstallError::Protocol)
     }
 
+    /// `pitwall` 명령 링크를 이 판 바이너리로 두거나(`on`) 걷는다. 돌려주는 것은 그 뒤 링크가 있는가(Relay 의 `linked`).
+    pub async fn link_command(&self, on: bool) -> Result<bool, InstallError> {
+        let output = self
+            .timed(
+                "command link",
+                LINK_COMMAND_TIMEOUT,
+                LINK_COMMAND,
+                &[if on { "on" } else { "off" }],
+            )
+            .await?;
+        #[derive(Deserialize)]
+        struct Linked {
+            linked: bool,
+        }
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .rev()
+            .find_map(|line| serde_json::from_str::<Linked>(line.trim()).ok())
+            .map(|l| l.linked)
+            .ok_or_else(|| InstallError::Protocol("the remote command link did not answer".into()))
+    }
+
     /// [옛 판 끝내기]: 사람이 본 그 데몬(`seen` — [`Survey::old_daemons`] 의 것)이 지금도 같은 pid · 같은 실행 · 터미널 수일 때만
     /// SIGTERM 을 보낸다. 다르면 보내지 않고 [`StopOutcome::Changed`] 로 지금 것을 돌려준다.
     pub async fn stop_old(&self, seen: &OldDaemon) -> Result<StopOutcome, InstallError> {
@@ -487,6 +570,7 @@ mod tests {
                 stopped("pitwall-relay-dev-1.2.0"),
                 stopped("pitwall-relay-stable-1.1.0"),
             ],
+            command: CommandLink::Absent,
         };
         assert_eq!(
             survey.to_remove(),
@@ -499,6 +583,7 @@ mod tests {
                 stopped("pitwall-relay-dev-1.9.0"),
                 stopped("pitwall-relay-dev-1.10.0"),
             ],
+            command: CommandLink::Absent,
         };
         assert_eq!(survey.to_remove(), ["pitwall-relay-dev-1.9.0"]);
         // 판을 낮춘 Desktop: 이 판(1.0.0)과 더 높은 것 가운데 가장 높은 하나.
@@ -508,6 +593,7 @@ mod tests {
                 stopped("pitwall-relay-dev-2.0.0"),
                 stopped("pitwall-relay-dev-3.0.0"),
             ],
+            command: CommandLink::Absent,
         };
         assert_eq!(survey.to_remove(), ["pitwall-relay-dev-2.0.0"]);
     }
@@ -529,6 +615,7 @@ mod tests {
                     BinaryState::Upload { live: false },
                 ),
             ],
+            command: CommandLink::Absent,
         };
         assert_eq!(survey.to_remove(), ["pitwall-relay-dev-2.0.0.part.78"]);
     }
@@ -542,6 +629,7 @@ mod tests {
             pitwall-survey stopped pitwall-relay-dev-0.7.0 4\n\
             pitwall-survey upload pitwall-relay-dev-2.0.0.part.9\n\
             pitwall-survey stopped pitwall-relay-dev-0.8.0;rm 3\n\
+            pitwall-survey command pitwall-relay-dev-1.0.0\n\
             pitwall-survey end\n";
         let survey = Survey::parse(out).unwrap();
         assert_eq!(survey.binaries.len(), 5, "{survey:?}");
@@ -560,6 +648,29 @@ mod tests {
         assert_eq!(old[0].status.pid, 42);
         assert_eq!(old[0].left(), 3);
         assert_eq!(survey.binaries[2].state, BinaryState::Stopped);
+        assert_eq!(
+            survey.command,
+            CommandLink::Relay {
+                file: "pitwall-relay-dev-1.0.0".into()
+            }
+        );
+        assert_eq!(survey.current(), Some("pitwall-relay-dev-2.0.0"));
+        assert!(
+            survey.command_needs_moving(),
+            "the link points at an old version"
+        );
+        for (line, command) in [
+            ("pitwall-survey command\n", CommandLink::Other),
+            ("pitwall-survey command my-tool\n", CommandLink::Other),
+            ("", CommandLink::Absent),
+        ] {
+            let out = format!(
+                "pitwall-survey current pitwall-relay-dev-2.0.0\n{line}pitwall-survey end\n"
+            );
+            let survey = Survey::parse(out.as_bytes()).unwrap();
+            assert_eq!(survey.command, command, "{line}");
+            assert!(!survey.command_needs_moving());
+        }
         assert!(Survey::parse(b"pitwall-survey current pitwall-relay-dev-2.0.0\n").is_err());
     }
 
@@ -575,7 +686,7 @@ mod tests {
     /// 스크립트는 로그인 셸이 무엇이든 같게 읽힌다(`ssh::check_script` — 홑따옴표 · 역빗금 · `!` · 줄바꿈 없음).
     #[test]
     fn the_scripts_pass_the_script_check() {
-        for script in [SURVEY, CLEAN, STOP] {
+        for script in [SURVEY, CLEAN, STOP, LINK_COMMAND] {
             crate::ssh::remote_command(script, &["dev", "1.0.0"]).unwrap();
         }
     }
