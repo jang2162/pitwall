@@ -420,13 +420,16 @@ fn window_target(state: &IpcState, label: &str, target: Target) -> Target {
 
 /// 원격만인 묶음 창의 자기 연결(이 머신 Host 의 묶음 id 범위 — [`window_target`])이 부를 수 있는 **읽기가 아닌** 메서드. 닫힌 표다
 /// (18-m7-plan M7-11b 리뷰 1): 그 창의 상태 쓰기, 그 창의 「체크아웃 추가」(묶음 쓰기 — 그 창은 이 연결로 부른다), 상태바의 작업
-/// 취소, UI 로그. 나머지 쓰기 · 실행 · 위험 등급(도구 설치 · 제거 · 모드, 터미널, 실행, 파일 쓰기, git 쓰기 …)은 Host 에 넘기지 않고
+/// 취소, UI 로그, MCP 승인의 답(M7-20). 나머지 쓰기 · 실행 · 위험 등급(도구 설치 · 제거 · 모드, 터미널, 실행, 파일 쓰기, git 쓰기 …)은 Host 에 넘기지 않고
 /// `PERMISSION_DENIED` 로 답한다 — `Project(_)` 만 보고 id 를 확인하지 않는 관문(`pw_tools` `tool_grant` 등)이 묶음 id 를 프로젝트로
 /// 받지 않게. 읽기 등급(`pw_rpc::Tier::Read` — 선언의 등급)과 프로토콜 메시지(취소 · credit · 구독)는 받는다: 그 창의 i18n · 키맵 ·
 /// 설정 · 묶음 목록 · 구문 강조 · 작업 목록 같은 Host 전역 읽기이고, 프로젝트를 받는 읽기는 묶음 id 를 모르는 프로젝트로 거절한다.
 pub const BUNDLE_WINDOW_WRITES: &[&str] = &[
     "bundle.addMember",
     "log.write",
+    // 원격만 묶음 창이 이 Desktop 허브의 승인 요청(그 묶음의 다른 머신을 겨눈 이 Desktop 세션의 호출)에 답한다 — 듣기
+    // (`mcp.approvals`)는 읽기라 이미 넘는다. 허브는 그 묶음 id 범위 연결만 답하게 한다(18-m7-plan M7-20 · M7-11b 판정).
+    "mcp.approval.answer",
     "project.state.set",
     "task.cancel",
 ];
@@ -1107,6 +1110,9 @@ mod tests {
         }
         assert!(bundle_window_admits("i18n.get"));
         assert!(!bundle_window_admits("no.such.method"));
+        // 원격만 묶음 창이 그 묶음의 다른 머신을 겨눈 승인 요청을 듣고 답한다(18-m7-plan M7-20 · M7-11b 판정).
+        assert!(bundle_window_admits("mcp.approvals"));
+        assert!(bundle_window_admits("mcp.approval.answer"));
     }
 
     /// 18-m7-plan M7-11: 묶음 창은 그 묶음 멤버의 체크아웃으로만 연결한다. 원격 멤버로 연 연결의 범위는 **그 머신 프로젝트**의

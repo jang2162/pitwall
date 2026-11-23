@@ -201,7 +201,9 @@ vi.mock("../tauri-transport", async () => {
           }
           case "mcp.approvals": {
             // 실제 Host 처럼 그 창 연결의 프로젝트만 듣게 한다(`scope_may_write`) — 멤버 연결은 그 머신의 프로젝트 id 다.
-            const project = "member" in target ? "r1" : "p1";
+            // 창 연결은 그 대상 id(로컬 프로젝트 또는 원격만 묶음의 묶음 id)다.
+            const project =
+              "member" in target ? "r1" : ((target as { projectId?: string }).projectId ?? "p1");
             if (params.projectId !== project)
               return send({
                 id: m.id,
@@ -746,16 +748,20 @@ it("starts a remote-only bundle window on its remote checkout, named after the b
   expect(own.filter((c) => c.method === "project.state.get").map((c) => c.params)).toContainEqual({
     projectId: "b-2",
   });
-  // 묶음 id 를 이 머신의 프로젝트로 다루는 호출이 없다(창 상태만 그 id 다). 승인도 그 id 로 듣지 않는다 — 원격만인 묶음의
-  // 다른 머신 호출은 Host 가 거절한다(M7-18 · 메인 판정 2026-11-23 (B) — 판정은 M7-20).
+  // 묶음 id 를 이 머신의 프로젝트로 다루는 호출이 없다(창 상태와 승인 듣기만 그 id 다). 승인은 창 연결로 그 묶음 id 를 듣는다 —
+  // 그 묶음의 다른 머신을 겨눈 이 Desktop 세션의 요청이 묶음 id 로 온다(18-m7-plan M7-20 · M7-11b 판정).
   const misused = [...fake.byTarget.values()]
     .flat()
     .filter(
       (c) =>
         !c.method.startsWith("project.state.") &&
+        c.method !== "mcp.approvals" &&
         (c.params.projectId === "b-2" || c.params.id === "b-2"),
     );
   expect(misused).toEqual([]);
+  await vi.waitFor(() =>
+    expect([...fake.approvals.values()]).toContainEqual({ machine: "local", projectId: "b-2" }),
+  );
   // 파일은 그 머신 연결로 연다.
   await push({ file: qualify(MINI, "/work/demo/src/farm.rs"), worktree: REMOTE_MAIN });
   await vi.waitFor(() => expect(viewWith("remote farm")).toBeDefined());

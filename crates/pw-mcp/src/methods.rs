@@ -181,6 +181,42 @@ rpc_method! {
     }
 }
 
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct McpTargetParams {
+    /// 이 Host 의 프로젝트 id.
+    pub project_id: String,
+    /// 부르려는 툴 이름.
+    pub tool: String,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct McpTarget {
+    /// 그 프로젝트의 `[mcp]` 노출 설정(이 Host 의 전역 위에 그 프로젝트 설정)이 그 툴을 켰는가. 이 Host 가 모르는 툴이면 거짓.
+    pub exposed: bool,
+    /// 그 프로젝트 정책의 승인 시한(초).
+    #[specta(type = pw_rpc::JsNumber)]
+    pub approval_timeout_secs: u64,
+}
+
+rpc_method! {
+    /// 다른 머신을 겨누는 에이전트 세션이 그 머신의 프로젝트를 겨누기 전에 묻는다(18-m7-plan M7-20 — 이 머신 체크아웃이 없는 묶음):
+    /// 그 프로젝트의 설정으로 그 툴이 켜졌는지와 승인 시한. 설정 파일을 하나라도 읽지 못하면 `PERMISSION_DENIED`
+    /// (`data.reason = "projectConfigUnreadable"` — 전역으로 떨어지지 않는다). **에이전트 범위 연결만** 부른다 — 그 세션이 겨눌 수
+    /// 있는 프로젝트(`agent_grant`)만. 디스크에 쓰지 않는다.
+    pub McpTargetMethod: "mcp.target" {
+        params: McpTargetParams,
+        result: McpTarget,
+        tier: Read,
+        roles: [Owner],
+    }
+}
+
 rpc_method! {
     /// 창이 떠 있는 동안 열어 두는 승인 요청 스트림(16-m5-plan M5-12). 열 때 아직 대기 중인 그 창의 요청이 먼저 온다. 프로젝트
     /// 요청은 그 프로젝트 창에만, 프로젝트 없는 요청은 가장 최근에 앞에 있던 창 하나에 온다. `projectId` 는 그 프로젝트 창의
@@ -269,6 +305,33 @@ impl Mcp {
         self.parts
             .get()
             .ok_or_else(|| RpcError::internal("the mcp status is not attached to the host yet"))
+    }
+
+    /// `mcp.target`. 디스크 IO(설정)를 한다.
+    pub fn target(
+        &self,
+        scope: &ConnectionScope,
+        params: &McpTargetParams,
+    ) -> Result<McpTarget, RpcError> {
+        let parts = self.parts()?;
+        pw_core::registry::agent::agent_grant(scope, &parts.projects, &params.project_id)?;
+        let project = parts
+            .projects
+            .get(&params.project_id)
+            .map_err(pw_core::registry::methods::rpc_error)?;
+        let policy = crate::policy::of_project(&parts.paths, &parts.global, &project)
+            .map_err(|e| e.to_rpc_error())?;
+        let exposure = exposure::of_project(&parts.paths, &parts.global, &project);
+        let exposed = parts
+            .catalog
+            .tools()
+            .iter()
+            .find(|t| t.name == params.tool)
+            .is_some_and(|t| exposure.enabled(t));
+        Ok(McpTarget {
+            exposed,
+            approval_timeout_secs: policy.approval_timeout.as_secs(),
+        })
     }
 
     /// `mcp.tools.list`. 디스크 IO(설정 · 감사 로그)를 한다.
@@ -416,6 +479,21 @@ impl WindowsOnly<'_> {
 
 /// 핸들러를 붙인다. 모두 [`WindowsOnly`] 를 지난다 — 이 함수 안에서 `Router` 를 직접 쓰지 않는다.
 pub fn register(router: &mut Router, mcp: Arc<Mcp>) {
+    // 에이전트 세션이 부르는 것 — `WindowsOnly` 밖이다. 창의 연결은 거절한다(창은 `mcp.tools.list` 를 쓴다).
+    let target = Arc::clone(&mcp);
+    router.unary(McpTargetMethod, move |ctx, params: McpTargetParams| {
+        let mcp = Arc::clone(&target);
+        async move {
+            if *ctx.scope() != ConnectionScope::Agent {
+                return Err(RpcError::new(
+                    code::PERMISSION_DENIED,
+                    "only an mcp session asks about its target",
+                ));
+            }
+            let scope = ctx.scope().clone();
+            blocking(move || mcp.target(&scope, &params)).await
+        }
+    });
     let mut router = WindowsOnly(router);
     let approvals = mcp.sessions.approvals().clone();
     router.stream(

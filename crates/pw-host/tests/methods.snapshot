@@ -226,6 +226,7 @@ mcp.audit.list Unary Read {Owner}
 mcp.sessions Unary Read {Owner}
 mcp.settings.get Unary Read {Owner}
 mcp.settings.set Unary Write {Owner}
+mcp.target Unary Read {Owner}
 mcp.tools.list Unary Read {Owner}
 open.answer Unary Read {Owner}
 open.listen Stream Read {Owner}

@@ -42323,6 +42323,52 @@
       ],
       "tier": "write"
     },
+    "mcp.target": {
+      "description": "다른 머신을 겨누는 에이전트 세션이 그 머신의 프로젝트를 겨누기 전에 묻는다(18-m7-plan M7-20 — 이 머신 체크아웃이 없는 묶음):\n그 프로젝트의 설정으로 그 툴이 켜졌는지와 승인 시한. 설정 파일을 하나라도 읽지 못하면 `PERMISSION_DENIED`\n(`data.reason = \"projectConfigUnreadable\"` — 전역으로 떨어지지 않는다). **에이전트 범위 연결만** 부른다 — 그 세션이 겨눌 수\n있는 프로젝트(`agent_grant`)만. 디스크에 쓰지 않는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "description": "이 Host 의 프로젝트 id.",
+            "type": "string"
+          },
+          "tool": {
+            "description": "부르려는 툴 이름.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId",
+          "tool"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "approvalTimeoutSecs": {
+            "description": "그 프로젝트 정책의 승인 시한(초).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "exposed": {
+            "description": "그 프로젝트의 `[mcp]` 노출 설정(이 Host 의 전역 위에 그 프로젝트 설정)이 그 툴을 켰는가. 이 Host 가 모르는 툴이면 거짓.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "exposed",
+          "approvalTimeoutSecs"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "mcp.tools.list": {
       "description": "MCP 툴 카탈로그 전부와 지금 노출 판정(켜졌는지 · 그 규칙), 최근 호출 수. 이 앱의 Host 가 처리하는 툴만이다.",
       "kind": "unary",

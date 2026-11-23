@@ -1145,6 +1145,13 @@ export type UnaryMethods = {
 	 */
 	"mcp.settings.set": { params: McpSettingsSetParams; result: McpSettingsView };
 	/**
+	 * 다른 머신을 겨누는 에이전트 세션이 그 머신의 프로젝트를 겨누기 전에 묻는다(18-m7-plan M7-20 — 이 머신 체크아웃이 없는 묶음):
+	 * 그 프로젝트의 설정으로 그 툴이 켜졌는지와 승인 시한. 설정 파일을 하나라도 읽지 못하면 `PERMISSION_DENIED`
+	 * (`data.reason = "projectConfigUnreadable"` — 전역으로 떨어지지 않는다). **에이전트 범위 연결만** 부른다 — 그 세션이 겨눌 수
+	 * 있는 프로젝트(`agent_grant`)만. 디스크에 쓰지 않는다.
+	 */
+	"mcp.target": { params: McpTargetParams; result: McpTarget };
+	/**
 	 * MCP 툴 카탈로그 전부와 지금 노출 판정(켜졌는지 · 그 규칙), 최근 호출 수. 이 앱의 Host 가 처리하는 툴만이다.
 	 */
 	"mcp.tools.list": { params: McpToolsListParams; result: McpToolInfo[] };
@@ -1950,6 +1957,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"mcp.sessions": {"name":"mcp.sessions","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"Vec<McpSessionInfo>","doc":" 이 앱에 열린 MCP 세션(시작 순서): id · 클라이언트 · 세션 프로젝트 · 전송 · 시작 시각 · 호출 수. 열고 닫히면\n `mcp.sessionsChanged`(Host 범위)가 나간다. 앱 없이 뜬 `pitwall mcp` 의 헤드리스 세션은 보이지 않는다.\n","mcp":null,"fileScope":false},
 	"mcp.settings.get": {"name":"mcp.settings.get","kind":"unary","tier":"read","roles":["owner"],"params":"McpSettingsGetParams","output":"McpSettingsView","doc":" 설정 창 「MCP」 쪽의 값: 전역 `[mcp]` 의 프리셋 · 자동 승인 · 그룹 키 · 감사 보관 일수(Host 가 판정에 쓰는 값)와 전역\n 설정 파일 경로. `projectId` 를 주면 그 프로젝트의 설정 파일들 · 그 파일들이 덮은 `[mcp]` 키 · 그 프로젝트의 자동 승인도\n 싣는다(읽기만). 툴 하나하나의 판정은 `mcp.tools.list` 다.\n","mcp":null,"fileScope":false},
 	"mcp.settings.set": {"name":"mcp.settings.set","kind":"unary","tier":"write","roles":["owner"],"params":"McpSettingsSetParams","output":"McpSettingsView","doc":" 전역 `settings.toml` 의 `[mcp]` 키 하나를 쓴다(`value: null` 이면 지운다). 프로젝트 설정은 쓰지 않는다. 값은 Host 가\n 판정한다 — 모르는 프리셋 · 그룹 · 툴, `auto_approve` 의 `dangerous`, 0 ~ 3650 정수가 아닌 보관 일수는 쓰지 않고\n `INVALID_PARAMS`(`data` 는 `McpSettingRefused`). 쓴 뒤 설정을 다시 읽어 열린 MCP 세션의 툴 목록이 바뀌고\n (`tools/list_changed`), 새 전역 값을 돌려준다.\n","mcp":null,"fileScope":false},
+	"mcp.target": {"name":"mcp.target","kind":"unary","tier":"read","roles":["owner"],"params":"McpTargetParams","output":"McpTarget","doc":" 다른 머신을 겨누는 에이전트 세션이 그 머신의 프로젝트를 겨누기 전에 묻는다(18-m7-plan M7-20 — 이 머신 체크아웃이 없는 묶음):\n 그 프로젝트의 설정으로 그 툴이 켜졌는지와 승인 시한. 설정 파일을 하나라도 읽지 못하면 `PERMISSION_DENIED`\n (`data.reason = \"projectConfigUnreadable\"` — 전역으로 떨어지지 않는다). **에이전트 범위 연결만** 부른다 — 그 세션이 겨눌 수\n 있는 프로젝트(`agent_grant`)만. 디스크에 쓰지 않는다.\n","mcp":null,"fileScope":false},
 	"mcp.tools.list": {"name":"mcp.tools.list","kind":"unary","tier":"read","roles":["owner"],"params":"McpToolsListParams","output":"Vec<McpToolInfo>","doc":" MCP 툴 카탈로그 전부와 지금 노출 판정(켜졌는지 · 그 규칙), 최근 호출 수. 이 앱의 Host 가 처리하는 툴만이다.\n","mcp":null,"fileScope":false},
 	"open.answer": {"name":"open.answer","kind":"unary","tier":"read","roles":["owner"],"params":"OpenAnswerParams","output":"()","doc":" `open.listen` 으로 받은 질문 · 열기 요청에 답한다. owner 의 Host 범위 연결만.\n","mcp":null,"fileScope":false},
 	"open.listen": {"name":"open.listen","kind":"stream","tier":"read","roles":["owner"],"params":"OpenListenParams","output":"OpenEvent","doc":" 이 Host 의 열기 요청을 받는다(창이 없는 Host — Relay 에 붙은 Desktop). owner 의 Host 범위 연결만.\n","mcp":null,"fileScope":false},
@@ -8951,6 +8959,20 @@ export type McpSettingsView = {
 	warnings: string[],
 	/**  `projectId` 를 줬을 때만. */
 	project: McpProjectSettings | null,
+};
+
+export type McpTarget = {
+	/**  그 프로젝트의 `[mcp]` 노출 설정(이 Host 의 전역 위에 그 프로젝트 설정)이 그 툴을 켰는가. 이 Host 가 모르는 툴이면 거짓. */
+	exposed: boolean,
+	/**  그 프로젝트 정책의 승인 시한(초). */
+	approvalTimeoutSecs: number,
+};
+
+export type McpTargetParams = {
+	/**  이 Host 의 프로젝트 id. */
+	projectId: string,
+	/**  부르려는 툴 이름. */
+	tool: string,
 };
 
 /**

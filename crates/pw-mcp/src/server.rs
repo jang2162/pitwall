@@ -310,6 +310,9 @@ struct Unlinked {
     machine: String,
     project: String,
     routing: String,
+    /// 이 머신 체크아웃이 없는 묶음(원격만)이다 — `routing` 이 묶음 id 이고, 노출 · 정책은 그 머신 Host 가 판정한다(`mcp.target` —
+    /// 18-m7-plan M7-20, M7-11b 판정).
+    remote_only: bool,
     /// 에이전트에게 보일 머신 이름.
     shown: String,
 }
@@ -632,10 +635,14 @@ impl Session {
         if !explicit {
             self.fill_worktree(&tool, &mut args, project_id.as_deref());
         }
+        // 이 머신 체크아웃이 없는 묶음(원격만)은 이 머신에 그 프로젝트의 설정이 없다 — 그 머신 Host 가 판정한다(붙은 뒤, 아래). 전역
+        // 설정만으로 판정하지 않는다(프로젝트에서 막은 툴을 건너뛰게 된다).
+        let remote_only = unlinked.as_ref().is_some_and(|u| u.remote_only);
         // 대상 프로젝트의 설정 · 노출 판정은 한 자리다 — 다른 머신을 겨눈 호출도 여기서 `project_id` 는 묶음의 이 머신 멤버(에이전트가
         // 고른 Desktop 쪽 프로젝트)다(리뷰 B1). 그 프로젝트가 끈 툴은 `checkout` 을 달아도 어디서도 돌지 않는다. 다른 머신 자신의 설정은
         // 이 세션이 읽지 않는다(그 머신의 로컬 규칙 — M7-20). 승인은 `auto_approve` 없이 묻는다.
         if tool.project_scoped()
+            && !remote_only
             && let Some(target) = project_id.as_deref()
         {
             let refused = match self.target_config_unreadable(target, &cancel).await {
@@ -657,6 +664,7 @@ impl Session {
             }
         }
         if tool.project_scoped()
+            && !remote_only
             && let Some(target) = project_id.as_deref()
             && self.inner.project.as_ref().is_none_or(|p| p.id != target)
         {
@@ -702,6 +710,25 @@ impl Session {
                 }
             },
         };
+        let remote_timeout = match (&remote, remote_only) {
+            (Some(aim), true) => match self.remote_target(&tool, aim, &cancel).await {
+                Ok(timeout) => Some(timeout),
+                Err(refusal) => {
+                    self.audit(
+                        None,
+                        &name,
+                        &args,
+                        project_id,
+                        refusal.mark.outcome,
+                        Some(refusal.message.clone()),
+                        None,
+                        started,
+                    );
+                    return Ok(failed(refusal.message, refusal.mark));
+                }
+            },
+            _ => None,
+        };
         if let Decision::Deny(reason) = policy::decide(tool.tier, &self.inner.services.approval) {
             // 붙은 owner Desktop 이 없는 Relay 는 헤드리스와 같다(결정 M7-D10 ④ · D61) — 표지도 같다.
             let code = if self.headless() || !self.attended() {
@@ -723,7 +750,15 @@ impl Session {
         }
         if tool.planned {
             return self
-                .planned(&tool, args, project_id, started, &cancel, remote.as_ref())
+                .planned(
+                    &tool,
+                    args,
+                    project_id,
+                    started,
+                    &cancel,
+                    remote.as_ref(),
+                    remote_timeout,
+                )
                 .await;
         }
         // 카탈로그가 `write` 이상을 모두 `planned` 로 만든다 — 여기 오는 것은 계획 없는 `read` 툴뿐이다.
@@ -748,6 +783,7 @@ impl Session {
         started: Instant,
         cancel: &CancellationToken,
         remote: Option<&RemoteAim>,
+        remote_timeout: Option<Duration>,
     ) -> Result<CallToolResult, ErrorData> {
         let name = tool.name.clone();
         let first = self
@@ -830,7 +866,10 @@ impl Session {
             Approval::Unavailable => None,
         };
         let decided = match remote {
-            Some(aim) => self.approve_remote(tool, &plan, aim, cancel).await,
+            Some(aim) => {
+                self.approve_remote(tool, &plan, aim, remote_timeout, cancel)
+                    .await
+            }
             None => {
                 self.approve(tool, &plan, project_id.as_deref(), cancel)
                     .await
@@ -1052,6 +1091,7 @@ impl Session {
         tool: &Tool,
         plan: &ToolPlan,
         aim: &RemoteAim,
+        remote_timeout: Option<Duration>,
         cancel: &CancellationToken,
     ) -> Result<AuditApproval, Refusal> {
         let name = &tool.name;
@@ -1115,7 +1155,15 @@ impl Session {
                 McpApprovalAnswer::Session
             });
         }
-        let policy = self.policy_for(Some(routing), cancel).await?;
+        // 승인 시한은 묶음의 이 머신 멤버의 정책이다. 원격만 묶음이면 그 머신 Host 가 판정한 그 프로젝트의 정책(`mcp.target`).
+        let timeout = match remote_timeout {
+            Some(timeout) => timeout,
+            None => {
+                self.policy_for(Some(routing), cancel)
+                    .await?
+                    .approval_timeout
+            }
+        };
         let ask = ApprovalAsk {
             project_id: Some(routing.to_owned()),
             machine: Some(aim.machine.clone()),
@@ -1128,7 +1176,7 @@ impl Session {
             answers,
             remember: if cli { key.clone() } else { None },
             remember_machine: (cli && by_machine).then(|| aim.machine.clone()),
-            timeout: policy.approval_timeout,
+            timeout,
         };
         match self
             .ask_window(route, ask, name, Some(routing), cancel)
@@ -1314,13 +1362,12 @@ impl Session {
         let shown = machines
             .machine_name(&machine)
             .unwrap_or_else(|| machine.clone());
-        // 승인을 물을 자리가 있어야 한다 — 그 묶음 창(로컬 멤버의 창)이 열려 있어야 한다(05 「체크아웃」).
-        let Some(routing) = bundle.local_project().map(str::to_owned) else {
-            return Err(unavailable(format!(
-                "project `{}` has no checkout on this computer, so Pitwall has no window to ask in for `{shown}`",
-                bundle.name
-            )));
-        };
+        // 승인을 물을 자리가 있어야 한다 — 그 묶음 창이 열려 있어야 한다(05 「체크아웃」). 창은 로컬 멤버 id 로, 이 머신 체크아웃이
+        // 없는 묶음(원격만)의 창은 묶음 id 로 듣는다(M7-11b · M7-20). 묶음 id 는 프로젝트 id 와 겹치지 않는다(`b-` 접두).
+        let remote_only = bundle.local_project().is_none();
+        let routing = bundle
+            .local_project()
+            .map_or_else(|| bundle.id.clone(), str::to_owned);
         let hears = match &self.inner.services.approval {
             Approval::Route(route) => route.hears(&routing),
             Approval::Unavailable => false,
@@ -1341,10 +1388,70 @@ impl Session {
                 machine,
                 project: member.project_id.clone(),
                 routing,
+                remote_only,
                 shown,
             }),
             true,
         ))
+    }
+
+    /// 원격만 묶음의 대상을 그 머신 Host 에 묻는다(`mcp.target` — 그 프로젝트 설정으로 그 툴의 노출 · 승인 시한). 못 읽으면
+    /// `project_config_unreadable`, 끈 툴이면 `not_exposed` 로 거절한다 — 그 머신이 답하지 못하면(옛 판 등) 넓히지 않고 거절한다.
+    async fn remote_target(
+        &self,
+        tool: &Tool,
+        aim: &RemoteAim,
+        cancel: &CancellationToken,
+    ) -> Result<Duration, Refusal> {
+        let params = serde_json::json!({ "projectId": aim.project, "tool": tool.name });
+        match aim
+            .link
+            .client
+            .call_until("mcp.target", params, cancel)
+            .await
+        {
+            Ok(value) => {
+                let exposed = value.get("exposed").and_then(Value::as_bool) == Some(true);
+                if !exposed {
+                    return Err(Refusal::denied(
+                        Reason::NotExposed,
+                        format!(
+                            "`{}` is turned off in the [mcp] settings of that machine's project",
+                            tool.name
+                        ),
+                    ));
+                }
+                let secs = value
+                    .get("approvalTimeoutSecs")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| Refusal {
+                        message: "that machine sent a target answer Pitwall cannot read".to_owned(),
+                        mark: Mark::error(None),
+                    })?;
+                Ok(Duration::from_secs(secs))
+            }
+            Err(CallError::Cancelled) => Err(Refusal::cancelled()),
+            Err(CallError::Rpc {
+                code,
+                message,
+                data,
+            }) if code == i64::from(pw_rpc::code::PERMISSION_DENIED)
+                && data
+                    .as_ref()
+                    .and_then(|d| d.get("reason"))
+                    .and_then(Value::as_str)
+                    == Some(pw_core::config::mcp_policy::PROJECT_CONFIG_UNREADABLE) =>
+            {
+                Err(Refusal::denied(Reason::ProjectConfigUnreadable, message))
+            }
+            Err(e) => Err(Refusal::denied(
+                Reason::MachineUnavailable,
+                format!(
+                    "that machine cannot tell whether `{}` may run on its project ({e}); refusing",
+                    tool.name
+                ),
+            )),
+        }
     }
 
     /// 풀린 다른 머신 대상에 연결을 잇는다(연결 풀 — 머신마다 하나). 노출 · 설정 판정을 지난 뒤에 부른다 — 노출이 끈 툴로는 그
@@ -1365,6 +1472,7 @@ impl Session {
             project,
             routing,
             shown,
+            remote_only: _,
         } = target;
         let link = tokio::select! {
             link = self.inner.pool.get(machines, &machine) => link,

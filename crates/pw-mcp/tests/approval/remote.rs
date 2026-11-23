@@ -41,13 +41,26 @@ impl Machine {
         std::fs::create_dir_all(&root).unwrap();
         let probe = Probe::default();
         let tools = probe.clone();
+        // 그 머신의 `mcp.*`(원격만 묶음의 대상 판정 `mcp.target` — 18-m7-plan M7-20)도 실제 것이다.
+        let mcp = Arc::new(Mcp::new(Sessions::default()));
+        let methods = Arc::clone(&mcp);
         let host = Arc::new(
             LocalHost::builder(id)
-                .config(paths)
-                .methods(move |router| register_tools(router, &tools))
+                .config(paths.clone())
+                .methods(move |router| {
+                    register_tools(router, &tools);
+                    methods::register(router, Arc::clone(&methods));
+                })
                 .build(),
         );
         let registry = host.registry().unwrap().clone();
+        mcp.attach(HostParts {
+            paths: paths.clone(),
+            global: host.config().unwrap().global.clone(),
+            projects: registry.clone(),
+            catalog: Arc::new(fake_catalog()),
+            audit: Arc::new(AuditLog::under_state(&paths.state)),
+        });
         probe.registry.set(registry.clone()).ok().unwrap();
         let project = registry
             .create(NewProject {
@@ -940,8 +953,8 @@ async fn unreadable_settings_of_the_bundle_member_refuse_another_machine() {
     );
 }
 
-/// 델타 리뷰 R7: 이 머신 멤버가 없는 묶음(원격만)은 승인을 물을 창이 없어 거절한다 — 그 머신의 프로젝트 id 와 같은 id 로 듣는 이 머신
-/// 창이 있어도 그 창으로 가지 않는다(프로젝트 id 는 머신 사이에 유일하지 않다 — M7-03 ⑥).
+/// 델타 리뷰 R7(M7-20 에서 고침): 이 머신 멤버가 없는 묶음(원격만)은 **그 묶음 창(묶음 id 로 듣는 창)** 이 없으면 거절한다 — 그 머신의
+/// 프로젝트 id 와 같은 id 로 듣는 이 머신 창이 있어도 그 창으로 가지 않는다(프로젝트 id 는 머신 사이에 유일하지 않다 — M7-03 ⑥).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_bundle_without_a_member_here_is_refused() {
     let r = Remote::new();
@@ -977,11 +990,120 @@ async fn a_bundle_without_a_member_here_is_refused() {
             text(&result)
         );
         assert!(
-            text(&result).contains("no checkout on this computer"),
+            text(&result).contains("needs the window of project `remote only`"),
             "{}",
             text(&result)
         );
     }
     assert!(r.connects().is_empty());
     assert_eq!((r.other.plans(), r.other.runs()), (0, 0));
+}
+
+const REMOTE_ONLY: &str = "b-00000000000000dd";
+
+/// box 멤버만 있는 묶음(원격만)을 더한다.
+fn remote_only(r: &Remote) {
+    r.machines.bundles.lock().unwrap().push(ProjectBundle {
+        id: REMOTE_ONLY.into(),
+        name: "remote only".into(),
+        favorite: false,
+        tags: Vec::new(),
+        opened_at: None,
+        implicit: false,
+        members: vec![ProjectBundleMember {
+            machine: BOX.into(),
+            project_id: r.other.project.clone(),
+            last_target: None,
+        }],
+    });
+}
+
+/// 18-m7-plan M7-20(M7-11b 판정): 이 머신 체크아웃이 없는 묶음(원격만)도 그 묶음 창이 열려 있으면 다른 머신 호출이 된다. 승인은 그
+/// 묶음 창(묶음 id 로 듣는 창)에 묻고 창이 답한다. 요청에 대상 머신이 실린다. 읽기 · 쓰기 모두 box 에서만 돈다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_remote_only_bundle_asks_its_bundle_window() {
+    let r = Remote::new();
+    remote_only(&r);
+    let mut window = r.f.window(REMOTE_ONLY);
+    let agent = r.agent("agent").await;
+    let read = agent
+        .call(
+            "fake_echo",
+            on("box", json!({"projectId": REMOTE_ONLY, "tag": "x"})),
+        )
+        .await;
+    assert_eq!(mark(&read), Mark::ok(), "{}", text(&read));
+    let call = agent.spawn(
+        "fake_write",
+        on("box", json!({"projectId": REMOTE_ONLY, "tag": "w"})),
+    );
+    let request = within(window.opened()).await;
+    assert_eq!(request.project_id.as_deref(), Some(REMOTE_ONLY));
+    assert_eq!(request.machine.as_deref(), Some(BOX));
+    window.answer(request.id, McpApprovalAnswer::Once).unwrap();
+    let result = within(call).await.unwrap();
+    assert_eq!(mark(&result), Mark::ok(), "{}", text(&result));
+    // 읽기 하나 · 쓰기 하나, 둘 다 box 에서.
+    assert_eq!((r.other.runs(), r.mini.runs()), (2, 0));
+}
+
+/// 원격만 묶음의 노출 · 정책은 **그 머신의 그 프로젝트 설정**이다(그 머신 Host 가 판정 — `mcp.target`): 그 프로젝트에서 끈 툴은
+/// 막히고(전역 설정만으로 판정하지 않는다), 그 프로젝트 설정을 읽지 못하면 거절한다(fail-closed). 둘 다 계획 · 실행 0.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_remote_only_bundle_follows_that_machines_project_settings() {
+    let r = Remote::new();
+    remote_only(&r);
+    let _window = r.f.window(REMOTE_ONLY);
+    let agent = r.agent("agent").await;
+    let pitwall = r.other.root.join(".pitwall");
+    std::fs::create_dir_all(pitwall.join("db")).unwrap();
+    std::fs::write(
+        pitwall.join("project.toml"),
+        "schema = 1\n[mcp.tools]\nfake_echo = false\nfake_write = false\n",
+    )
+    .unwrap();
+    for tool in ["fake_echo", "fake_write"] {
+        let off = agent
+            .call(
+                tool,
+                on("box", json!({"projectId": REMOTE_ONLY, "tag": "x"})),
+            )
+            .await;
+        assert_eq!(
+            mark(&off),
+            Mark::denied(Reason::NotExposed),
+            "{tool}: {}",
+            text(&off)
+        );
+    }
+    std::fs::write(pitwall.join("project.toml"), "schema = 1\n").unwrap();
+    std::fs::write(pitwall.join("db/y.toml"), "name = \"y\n").unwrap();
+    for tool in ["fake_echo", "fake_write"] {
+        let broken = agent
+            .call(
+                tool,
+                on("box", json!({"projectId": REMOTE_ONLY, "tag": "x"})),
+            )
+            .await;
+        assert_eq!(
+            mark(&broken),
+            Mark::denied(Reason::ProjectConfigUnreadable),
+            "{tool}: {}",
+            text(&broken)
+        );
+    }
+    assert_eq!((r.other.plans(), r.other.runs()), (0, 0));
+    std::fs::remove_file(pitwall.join("db/y.toml")).unwrap();
+    let fixed = agent
+        .call(
+            "fake_echo",
+            on("box", json!({"projectId": REMOTE_ONLY, "tag": "x"})),
+        )
+        .await;
+    assert_eq!(
+        mark(&fixed),
+        Mark::ok(),
+        "대조: 고치면 돈다 — {}",
+        text(&fixed)
+    );
 }

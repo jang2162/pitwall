@@ -8,7 +8,7 @@ import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
 
 import { LOCAL_MACHINE } from "../checkout/checkout";
-import { useCheckoutHost, useCheckoutHosts } from "../checkout/checkout-hosts";
+import { isBundleRowId, useCheckoutHost, useCheckoutHosts } from "../checkout/checkout-hosts";
 import { useHost } from "../rpc/host";
 import { agentLine } from "./agent-text";
 import { ApprovalDialog } from "./approval-dialog";
@@ -73,7 +73,8 @@ export function McpApprovals({ projectId }: { projectId: string | null }) {
  * 프로젝트 창의 승인(18-m7-plan M7-18 · M7-20).
  *
  * - **이 Desktop 의 허브**는 늘 창의 이 머신 연결 · 이 머신 프로젝트 id 로 듣는다 — 활성 체크아웃이 다른 머신이어도 그렇다. 다른 머신을
- *   겨누는 이 Desktop 세션의 요청도 묶음의 로컬 멤버 id 로 온다. 이 머신 체크아웃이 없는 묶음 창(원격만)은 듣지 않는다.
+ *   겨누는 이 Desktop 세션의 요청도 묶음의 로컬 멤버 id 로 온다. 이 머신 체크아웃이 없는 묶음 창(원격만)은 창 연결의 묶음 id 로
+ *   듣는다(M7-20 — 그 묶음의 요청은 묶음 id 로 온다).
  * - **다른 머신 Relay 의 허브**(그 머신에서 도는 에이전트의 요청 — M7-20 ③)는 그 머신 연결이 열려 있는 동안(활성 체크아웃이거나 탭이
  *   열린 머신 — 연결은 쓰는 머신만 연다, 08 「창과 활성 체크아웃」) 그 연결 · 그 머신의 프로젝트 id 로 듣는다. 이것만으로 링크를 열지
  *   않는다 — 붙은 owner Desktop 이 없는 동안 그 머신의 에이전트는 `write` 이상을 거절받는다(결정 M7-D10 ④). 요청은 머신마다의
@@ -84,7 +85,12 @@ export function ProjectWindowApprovals() {
   const hosts = useCheckoutHosts();
   const remote = useStore(hosts?.store ?? NO_HOSTS, (s) => s.remote);
   const members = useStore(hosts?.store ?? NO_HOSTS, (s) => s.directory.members);
-  const localClient = local.projectId === undefined ? undefined : local.client;
+  // 이 머신 프로젝트 창이면 그 프로젝트 id, 원격만 묶음 창이면 창 연결의 묶음 id 로 듣는다 — 그 묶음의 다른 머신을 겨눈 이 Desktop
+  // 세션의 요청은 묶음 id 로 온다(18-m7-plan M7-20 · M7-11b 판정). 묶음 id 는 프로젝트 id 와 겹치지 않는다(`b-`).
+  const ownId = "projectId" in local.target ? local.target.projectId : undefined;
+  const hearAs =
+    local.projectId ?? (ownId !== undefined && isBundleRowId(ownId) ? ownId : undefined);
+  const localClient = hearAs === undefined ? undefined : local.client;
   const listening = useMemo(() => {
     const out: { machine: string; client: RpcClient; projectId: string; store: ApprovalStore }[] =
       [];
@@ -102,8 +108,8 @@ export function ProjectWindowApprovals() {
   }, [localClient, listening]);
   return (
     <>
-      {localClient && local.projectId !== undefined && (
-        <WindowApprovals client={localClient} projectId={local.projectId} />
+      {localClient && hearAs !== undefined && (
+        <WindowApprovals client={localClient} projectId={hearAs} />
       )}
       {listening.map((l, i) => (
         <WindowApprovals
