@@ -1072,7 +1072,10 @@ it("makes a run console that appears while its link resumes read-only from the s
   await act(async () => projectOpenInbox.push({ worktree: REMOTE_MAIN }));
   await settle();
   await link({ state: "resuming", machine: MINI });
-  await act(async () => windowRuns().upsert(RUN(MINI, "r1", null) as never, MINI));
+  // 멈춘 동안 그 머신에서 실행이 생겼다(이벤트로 온다 — 그 머신 Host 에도 있다).
+  const run = RUN(MINI, "r1", null);
+  fake.runs.get(MINI)!.push(run);
+  await act(async () => windowRuns().upsert(run as never, MINI));
   await settle();
   await act(async () => void registry().run("toolWindow.run"));
   await settle();
@@ -1082,6 +1085,10 @@ it("makes a run console that appears while its link resumes read-only from the s
   await act(async () => windowRuns().console(key)!.term.input("x"));
   await settle();
   expect(calls(MINI, "run.input")).toHaveLength(0);
+  // 대조: 멈춤이 풀리면 입력이 간다.
+  await link({ state: "connected", machine: MINI });
+  await act(async () => windowRuns().console(key)!.term.input("y"));
+  await vi.waitFor(() => expect(calls(MINI, "run.input")).toHaveLength(1));
 });
 
 it("keeps a remote run's console through a resuming link and picks it up with `since` after the link really closed", async () => {
