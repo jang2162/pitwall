@@ -270,6 +270,7 @@ mcp-settings-http-regenerated = A new token was made.
 mcp-settings-http-token-failed = Could not handle the token: { $error }
 mcp-settings-http-clients = Client settings
 mcp-settings-http-clients-note = Put the token above in place of <token>.
+mcp-settings-refused-edit-on-that-machine = This machine's HTTP endpoint is not turned on from a settings window — edit settings.toml ([mcp.http]) on that machine.
 mcp-settings-refused-bad-value = The host did not take this value.
 
 ## Password request for a DB connection (16-m5-plan M5-17 ②)

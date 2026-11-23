@@ -118,6 +118,7 @@ pub fn serve_http(
             default_port: http::RELAY_PORT,
             connections,
             limits: http::Limits::default(),
+            settings_window: false,
         },
         cancel,
     );

@@ -652,11 +652,19 @@ pub fn register(router: &mut Router, mcp: Arc<Mcp>) {
         let sessions = tokens.clone();
         async move {
             let http = http_for(&ctx, &sessions)?;
-            let token = blocking(move || {
-                http.regenerate()
-                    .map_err(|_| RpcError::internal("cannot write the mcp http token file"))
-            })
-            .await?;
+            // Relay 의 토큰은 그 머신에서만 바꾼다 — 링크로 갈면 그 머신 사람의 로컬 클라이언트가 모르게 끊긴다.
+            if !http.settings_window() {
+                return Err(RpcError::new(
+                    code::PERMISSION_DENIED,
+                    "the mcp http token of this machine is replaced only on that machine: delete its \
+                     mcp/http-token file and turn [mcp.http] enabled off and on in its settings.toml",
+                )
+                .with_data(serde_json::json!({ "reason": "editOnThatMachine" })));
+            }
+            let token = http
+                .regenerate()
+                .await
+                .map_err(|_| RpcError::internal("cannot write the mcp http token file"))?;
             Ok(McpHttpTokenView {
                 token: Some(token.reveal().to_owned()),
             })

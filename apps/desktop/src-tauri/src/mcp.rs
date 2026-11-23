@@ -405,6 +405,7 @@ pub fn serve_http(
                 default_port: http::DESKTOP_PORT,
                 connections: pw_mcp::Connections::default(),
                 limits: http::Limits::default(),
+                settings_window: true,
             },
             tokio_util::sync::CancellationToken::new(),
         );

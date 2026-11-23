@@ -124,6 +124,7 @@ impl Fixture {
                 default_port: port,
                 connections: connections.clone(),
                 limits,
+                settings_window: true,
             },
             stop.clone(),
         );
@@ -608,7 +609,7 @@ async fn the_token_survives_a_restart_and_regenerating_cuts_the_old_one_and_its_
         200
     );
 
-    let fresh = second.http.regenerate().unwrap();
+    let fresh = second.http.regenerate().await.unwrap();
     assert_ne!(fresh.reveal(), token);
     assert_eq!(second.token(), fresh.reveal());
     let old = again
@@ -725,7 +726,7 @@ async fn the_token_is_not_in_logs_the_audit_or_replies() {
     );
     replies.push(agent.call(4, "no_such_tool", json!({})).await);
     let old = token.clone();
-    let fresh = e.http.regenerate().unwrap();
+    let fresh = e.http.regenerate().await.unwrap();
     replies.push(
         agent
             .call(5, "fake_echo", json!({"projectId": f.alpha}))

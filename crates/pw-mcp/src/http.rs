@@ -185,6 +185,10 @@ pub struct HttpParts {
     /// 인증을 지나 `initialize` 까지 마친 HTTP 세션을 함께 센다(Relay 의 유휴 판정 — 소켓의 것과 같은 것을 넣는다).
     pub connections: Connections,
     pub limits: Limits,
+    /// 사람의 설정 창이 켜기 · 포트(`mcp.settings.set` 의 `httpEnabled` · `httpPort`)와 「토큰 새로 만들기」 를 할 수 있는가.
+    /// Desktop 은 참, Relay 는 거짓 — Relay 의 HTTP 는 그 머신 `settings.toml` 을 손으로만 켜고 토큰도 그 머신에서만 바꾼다
+    /// (18-m7-plan M7-25 메인 판정). 링크로 붙은 owner Desktop 도 바꾸지 못한다.
+    pub settings_window: bool,
 }
 
 /// Streamable HTTP 의 켜고 끄기 · 토큰. 복제해도 같은 것이다.
@@ -212,6 +216,8 @@ struct Running {
     port: u16,
     server: Arc<front::Server>,
     stop: CancellationToken,
+    /// 듣는 태스크들 — 닫을 때 끝나기를 기다려 `apply` 가 돌아온 뒤에는 그 포트가 받지 않는다.
+    listening: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl Http {
@@ -243,7 +249,7 @@ impl Http {
                 }
                 watcher.apply().await;
             }
-            watcher.stop_running();
+            watcher.stop_running().await;
         });
         http
     }
@@ -269,7 +275,7 @@ impl Http {
                 return;
             }
         }
-        self.stop_running();
+        self.stop_running().await;
         let mut problem = None;
         let mut running = None;
         if settings.enabled {
@@ -305,16 +311,24 @@ impl Http {
             self.inner.parts.connections.clone(),
             self.inner.parts.limits,
         );
-        for listener in listeners {
-            tokio::spawn(front::accept_loop(
-                Arc::clone(&server),
-                listener,
-                stop.clone(),
-            ));
-        }
+        let listening = listeners
+            .into_iter()
+            .map(|listener| {
+                tokio::spawn(front::accept_loop(
+                    Arc::clone(&server),
+                    listener,
+                    stop.clone(),
+                ))
+            })
+            .collect();
         tokio::spawn(front::reap_idle(Arc::clone(&server), stop.clone()));
         tracing::info!(port, "mcp http endpoint listening on loopback");
-        Ok(Running { port, server, stop })
+        Ok(Running {
+            port,
+            server,
+            stop,
+            listening,
+        })
     }
 
     fn needs_retry(&self) -> bool {
@@ -328,12 +342,22 @@ impl Http {
         )
     }
 
-    fn stop_running(&self) {
-        if let Some(running) = self.state().running.take() {
-            running.stop.cancel();
-            running.server.close_all();
-            tracing::info!(port = running.port, "mcp http endpoint closed");
+    /// 듣기를 닫는다 — 듣는 태스크가 리스너를 놓을 때까지 기다린다(돌아온 뒤에는 그 포트에 연결이 붙지 않는다).
+    async fn stop_running(&self) {
+        let Some(running) = self.state().running.take() else {
+            return;
+        };
+        running.stop.cancel();
+        running.server.close_all();
+        for task in running.listening {
+            let _ = task.await;
         }
+        tracing::info!(port = running.port, "mcp http endpoint closed");
+    }
+
+    /// 사람의 설정 창이 켜기 · 포트 · 토큰 새로 만들기를 할 수 있는가([`HttpParts::settings_window`]).
+    pub fn settings_window(&self) -> bool {
+        self.inner.parts.settings_window
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -368,9 +392,14 @@ impl Http {
         self.inner.parts.tokens.read()
     }
 
-    /// 「토큰 새로 만들기」: 파일을 바꾸고, 듣고 있으면 옛 토큰을 거절하고 열린 HTTP 세션을 모두 닫는다. 디스크 IO 를 한다.
-    pub fn regenerate(&self) -> io::Result<Token> {
-        let token = self.inner.parts.tokens.regenerate()?;
+    /// 「토큰 새로 만들기」: 파일을 바꾸고, 듣고 있으면 옛 토큰을 거절하고 열린 HTTP 세션을 모두 닫는다. 맞추기(`apply`)와 같은
+    /// 잠금 아래서 한다 — 여는 도중 옛 토큰을 읽은 서버가 새 파일 뒤에 남지 않게.
+    pub async fn regenerate(&self) -> io::Result<Token> {
+        let _one = self.inner.apply.lock().await;
+        let tokens = self.inner.parts.tokens.clone();
+        let token = tokio::task::spawn_blocking(move || tokens.regenerate())
+            .await
+            .map_err(io::Error::other)??;
         if let Some(running) = &self.state().running {
             running.server.replace_token(token.clone());
         }

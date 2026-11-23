@@ -188,6 +188,8 @@ pub enum McpSettingRefusal {
     BadRetentionDays,
     /// 포트가 1 ~ 65535 정수가 아니다.
     BadPort,
+    /// 이 Host 의 `[mcp.http]` 는 설정 창이 쓰지 않는다 — 그 머신의 `settings.toml` 을 손으로 고친다(Relay — 18-m7-plan M7-25).
+    EditOnThatMachine,
     /// 그 키의 꼴이 아니다(bool 자리에 글 · `name` 이 없음 등).
     BadValue,
 }
@@ -421,6 +423,24 @@ impl Mcp {
     /// `mcp.settings.set`: 판정 → 전역 `settings.toml` 의 그 키만 쓰기 → 다시 읽기. 디스크 IO 를 한다.
     pub fn set_setting(&self, params: &McpSettingsSetParams) -> Result<McpSettingsView, RpcError> {
         let parts = self.parts()?;
+        // `[mcp.http]` 는 설정 창이 켜고 끄는 Host(Desktop)만 쓴다. Relay(그 머신에서 손으로만) · HTTP 가 없는 Host 는 거절 —
+        // 파일을 건드리지 않는다.
+        if matches!(
+            params.key,
+            McpSettingKey::HttpEnabled | McpSettingKey::HttpPort
+        ) && !self
+            .sessions()
+            .http()
+            .is_some_and(http::Http::settings_window)
+        {
+            return Err(refused(
+                params.key,
+                McpSettingRefusal::EditOnThatMachine,
+                "the mcp http endpoint of this host is not turned on or off from a settings window; \
+                 edit settings.toml on that machine ([mcp.http])"
+                    .to_owned(),
+            ));
+        }
         let write = validate(parts, params)?;
         let mut path: Vec<&str> = vec![KEY];
         path.extend(write.path.iter().map(String::as_str));

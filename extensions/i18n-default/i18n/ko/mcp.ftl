@@ -247,6 +247,7 @@ mcp-settings-http-regenerated = 새 토큰을 만들었다.
 mcp-settings-http-token-failed = 토큰을 다루지 못했다: { $error }
 mcp-settings-http-clients = 클라이언트 설정 예
 mcp-settings-http-clients-note = <token> 자리에 위의 토큰을 넣는다.
+mcp-settings-refused-edit-on-that-machine = 이 머신의 HTTP 는 설정 창에서 켜지 않는다 — 그 머신의 settings.toml([mcp.http])을 고친다.
 mcp-settings-refused-bad-value = Host 가 이 값을 받지 않았다.
 
 ## DB 연결의 비밀 입력 요청(16-m5-plan M5-17 ②)

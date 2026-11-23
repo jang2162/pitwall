@@ -262,6 +262,7 @@ export function mcpStrings(t: Translate) {
         unknownTool: t("mcp-settings-refused-unknown-tool"),
         badRetentionDays: t("mcp-settings-refused-retention"),
         badPort: t("mcp-settings-refused-port"),
+        editOnThatMachine: t("mcp-settings-refused-edit-on-that-machine"),
         badValue: t("mcp-settings-refused-bad-value"),
       } satisfies Record<McpSettingRefusal, string>,
     },

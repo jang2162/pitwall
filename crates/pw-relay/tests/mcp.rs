@@ -1158,10 +1158,55 @@ async fn only_a_proven_owner_links_host_connection_reads_the_relay_token() {
         LinkLimits::default(),
     );
     assert!(stranger.attach().await.is_err());
-    // owner 링크의 Host 범위는 새로 만들 수 있다.
+    // owner 링크의 Host 범위도 토큰을 새로 만들지 못한다 — Relay 의 토큰은 그 머신에서만 바꾼다(메인 판정 — 원격에서 갈면 그 머신
+    // 사람의 로컬 클라이언트가 모르게 끊긴다).
     let mut rpc = Rpc::open(&owner, Caller::new(Role::Owner)).await;
     let regen = rpc.call("mcp.http.regenerateToken", json!(null)).await;
-    let fresh = regen["result"]["token"].as_str().unwrap().to_owned();
-    assert_ne!(fresh, token);
-    assert_eq!(http_token(&f), fresh);
+    assert_eq!(
+        regen["error"]["data"]["reason"],
+        json!("editOnThatMachine"),
+        "{regen}"
+    );
+    assert_eq!(http_token(&f), token);
+}
+
+/// Relay 의 HTTP 는 그 머신 `settings.toml` 을 손으로만 켠다(메인 판정 — 리뷰 B1): owner 링크의 설정 창 연결(Host 범위) · 프로젝트
+/// 창 연결이 `mcp.settings.set` 으로 켜기 · 포트를 쓰려 하면 `editOnThatMachine` 으로 거절되고, 듣지 않으며, 설정 파일은 그대로다.
+/// 같은 연결의 다른 `[mcp]` 쓰기(프리셋)는 된다(대조).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_linked_desktop_cannot_turn_the_relay_http_on() {
+    let f = fixture("");
+    f.http.apply().await;
+    assert!(!f.http.status().listening);
+    let file = f.paths.config.join("settings.toml");
+    let before = std::fs::read_to_string(&file).unwrap();
+    let owner = f.desktop(Role::Owner, "mac").await;
+    for caller in [Caller::new(Role::Owner), f.project_caller("project-x")] {
+        let what = format!("{caller:?}");
+        let mut rpc = Rpc::open(&owner, caller).await;
+        for (key, value) in [
+            ("httpEnabled", json!(true)),
+            ("httpPort", json!(free_port())),
+        ] {
+            let reply = rpc
+                .call("mcp.settings.set", json!({"key": key, "value": value}))
+                .await;
+            assert_eq!(
+                reply["error"]["data"]["reason"],
+                json!("editOnThatMachine"),
+                "{what} {key}: {reply}"
+            );
+        }
+    }
+    f.http.apply().await;
+    assert!(!f.http.status().listening, "링크로는 켜지지 않는다");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), before, "파일 불변");
+    let mut rpc = Rpc::open(&owner, Caller::new(Role::Owner)).await;
+    let preset = rpc
+        .call(
+            "mcp.settings.set",
+            json!({"key": "preset", "value": "full"}),
+        )
+        .await;
+    assert!(preset["error"].is_null(), "{preset}");
 }

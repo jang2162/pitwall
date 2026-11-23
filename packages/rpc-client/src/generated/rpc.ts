@@ -9011,6 +9011,8 @@ export type McpSettingRefusal =
 "badRetentionDays" | 
 /**  포트가 1 ~ 65535 정수가 아니다. */
 "badPort" | 
+/**  이 Host 의 `[mcp.http]` 는 설정 창이 쓰지 않는다 — 그 머신의 `settings.toml` 을 손으로 고친다(Relay — 18-m7-plan M7-25). */
+"editOnThatMachine" | 
 /**  그 키의 꼴이 아니다(bool 자리에 글 · `name` 이 없음 등). */
 "badValue";
 
