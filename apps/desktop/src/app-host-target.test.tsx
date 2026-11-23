@@ -93,7 +93,13 @@ it("opens the project window's connection to its project", async () => {
   await act(async () => new Promise((r) => setTimeout(r, 20)));
   act(() => root.unmount());
   // 시험은 앱처럼 StrictMode 로 그린다 — effect 를 걷었다 다시 걸어 연결이 한 번 더 열리고, 걷힌 쪽의 것은 닫힌다.
-  expect(targets.length).toBeGreaterThan(0);
-  expect(targets.every((t) => "projectId" in t && t.projectId === "p1")).toBe(true);
+  // 창의 연결은 그 프로젝트로 연다. 그 밖에는 원격 링크를 쥐는 이 머신의 Host 범위 연결뿐이다(checkout/checkout-hosts.tsx,
+  // 18-m7-plan M7-11 — `remote.*` 는 Host 범위만 받는다).
+  expect(targets.some((t) => "projectId" in t)).toBe(true);
+  expect(
+    targets.every(
+      (t) => ("projectId" in t && t.projectId === "p1") || ("hostId" in t && t.hostId === "local"),
+    ),
+  ).toBe(true);
   expect(closed.count).toBe(targets.length);
 });

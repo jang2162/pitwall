@@ -38,5 +38,6 @@ it("git 문서 탭은 최근 파일에 넣지 않고 파일 탭만 넣는다", (
   recent.track(api);
   activate(2);
   activate(0);
-  expect(recent.list()).toEqual([{ path: "/work/demo/src/main.rs" }]);
+  // 이 머신의 탭은 머신을 적어 둔다(M7-11 — 다른 머신이 활성일 때 다시 열어도 이 머신 파일).
+  expect(recent.list()).toEqual([{ path: "/work/demo/src/main.rs", machine: "local" }]);
 });
