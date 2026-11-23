@@ -88,18 +88,25 @@ fn clone_of(src: &TestRepo) -> TestRepo {
     dst
 }
 
-/// 연결로 보내는 프레임을 보고 한 번 무언가를 하는 sink(원본에서 `git.send.prepare` 가 나가기 직전 — ⑤).
+/// 한 번 도는 덫(부르면 비운다).
+type Hook = Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>;
+
+/// 연결로 보내는 프레임을 보고 덫을 한 번 돌리는 sink(⑤): 원본에 `git.send.prepare` 가 나가기 직전, 또는 그보다 먼저 셋째
+/// `git.send.compare`(계획 · 해시 재확인 다음의 읽기 — 브랜치 끝을 다시 읽는 잘못)가 나가기 직전.
 struct OnSend {
     inner: Box<dyn pw_core::FrameSink>,
-    method: &'static str,
-    hook: Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>,
+    compares: AtomicUsize,
+    hook: Hook,
 }
 
 impl pw_core::FrameSink for OnSend {
     fn send(&self, frame: Value) {
-        if frame["method"] == json!(self.method)
-            && let Some(hook) = self.hook.lock().unwrap().take()
-        {
+        let fire = match frame["method"].as_str() {
+            Some("git.send.prepare") => true,
+            Some("git.send.compare") => self.compares.fetch_add(1, Ordering::SeqCst) >= 2,
+            _ => false,
+        };
+        if fire && let Some(hook) = self.hook.lock().unwrap().take() {
             hook();
         }
         self.inner.send(frame);
@@ -113,7 +120,7 @@ struct FakeMachines {
     state: Mutex<LinkState>,
     connects: AtomicUsize,
     refuse: Mutex<Option<MachineError>>,
-    before_prepare: Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>,
+    before_prepare: Hook,
 }
 
 impl Machines for FakeMachines {
@@ -161,7 +168,7 @@ impl Machines for FakeMachines {
             let connection = pw_core::Connection {
                 sink: Box::new(OnSend {
                     inner: connection.sink,
-                    method: "git.send.prepare",
+                    compares: AtomicUsize::new(0),
                     hook: Arc::clone(&self.before_prepare),
                 }),
                 source: connection.source,
