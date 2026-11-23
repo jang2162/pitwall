@@ -14,6 +14,7 @@
 //   호스트 키 질문은 [취소](처음 포커스) · [예](`yes`)다(git-prompts.tsx).
 
 import type {
+  ProjectBundle,
   GitPromptAnswer,
   RemoteHostInfo,
   RemoteOldRelay,
@@ -23,7 +24,9 @@ import type {
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
+import { AddCheckoutDialog, useRefreshBundles } from "../checkout/add-checkout";
 import { type AskpassPrompt, AskpassDialog } from "../git/git-prompts";
+import { useAppStrings } from "../i18n/app-strings";
 import { useI18n } from "../i18n/i18n-provider";
 import { useHost, useRpcQuery } from "../rpc/host";
 import { connectEventInvalidation } from "../rpc/invalidation";
@@ -253,6 +256,7 @@ function HostRow({
   onTrust,
   onToggleLog,
   onError,
+  onAddCheckout,
 }: {
   host: RemoteHostInfo;
   status: RemoteStatus;
@@ -264,8 +268,11 @@ function HostRow({
   onTrust(found: string): void;
   onToggleLog(): void;
   onError(message: string): void;
+  /** 이 머신의 경로로 원격만인 새 프로젝트를 만든다(18-m7-plan M7-11b ①). 붙어 있고 머신 id 를 알 때만 단추가 있다. */
+  onAddCheckout?(machine: string): void;
 }) {
   const T = useWelcomeStrings().remote;
+  const addLabel = useAppStrings().checkoutAdd.action;
   const { locales } = useI18n();
   const when = (at: number) =>
     new Intl.DateTimeFormat(locales[0], { dateStyle: "short", timeStyle: "short" }).format(at);
@@ -315,6 +322,15 @@ function HostRow({
             </button>
           )
         )}
+        {onAddCheckout && using && status.state === "connected" && host.machine !== null && (
+          <button
+            type="button"
+            className={BUTTON}
+            onClick={() => host.machine !== null && onAddCheckout(host.machine)}
+          >
+            {addLabel}
+          </button>
+        )}
         <button type="button" className={BUTTON} aria-expanded={logOpen} onClick={onToggleLog}>
           {logOpen ? T.hideLog : T.showLog}
         </button>
@@ -335,8 +351,15 @@ function HostRow({
 }
 
 /** 「원격 호스트」 탭. */
-export function RemoteHostsPanel() {
+export function RemoteHostsPanel({
+  onBundleAdded,
+}: {
+  /** 원격만인 새 프로젝트를 더했다 — 웰컴 창이 그 창을 연다. 없으면 [체크아웃 추가…] 가 없다. */
+  onBundleAdded?(bundle: ProjectBundle): void;
+} = {}) {
   const { client, key } = useHost();
+  const [adding, setAdding] = useState<string>();
+  const refreshBundles = useRefreshBundles();
   const queryClient = useQueryClient();
   const T = useWelcomeStrings().remote;
   const list = useRpcQuery("remote.hosts.list", null);
@@ -419,6 +442,7 @@ export function RemoteHostsPanel() {
               }
               onToggleLog={() => setLogOf((now) => (now === host.name ? undefined : host.name))}
               onError={setError}
+              onAddCheckout={onBundleAdded && setAdding}
             />
           );
         })}
@@ -430,6 +454,19 @@ export function RemoteHostsPanel() {
         >
           {error}
         </div>
+      )}
+      {adding !== undefined && onBundleAdded && (
+        <AddCheckoutDialog
+          client={client}
+          bundle={undefined}
+          machine={adding}
+          onClose={() => setAdding(undefined)}
+          onAdded={(bundle) => {
+            setAdding(undefined);
+            refreshBundles();
+            onBundleAdded(bundle);
+          }}
+        />
       )}
     </section>
   );

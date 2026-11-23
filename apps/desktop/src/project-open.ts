@@ -25,14 +25,9 @@ export interface ProjectOpen {
   col?: number;
   /**
    * 파일이 든 체크아웃(원격 셸의 `pitwall <파일>` — src-tauri/src/remote_open.rs). 있으면 활성 체크아웃을 바꾸지 않고 그 체크아웃의
-   * 탭으로 연다. `file` 은 **그 머신의** 경로다.
+   * 탭으로 연다(layout/worktree-session.ts). `file` 은 **그 머신의** 경로다(접두 없음).
    */
   checkout?: { machine: string; worktree?: string | null };
-}
-
-/** 이 머신(`local`)이 아닌 체크아웃의 열기 요청인가. 그 탭은 M7-11b 의 체크아웃별 탭이 연다 — 그 전에는 로컬 경로로 열지 않는다. */
-export function isOtherMachineOpen(open: ProjectOpen): boolean {
-  return open.checkout !== undefined && open.checkout.machine !== "local";
 }
 
 /** 프로젝트 창의 쿼리(`?window=project&project=<id>`)에서 프로젝트 id. */

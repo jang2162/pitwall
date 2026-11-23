@@ -343,7 +343,10 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
       </nav>
       {/* 원격 호스트의 ssh 질문(호스트 키 · 암호)은 어느 탭이든 웰컴 창이 떠 있는 동안 듣는다. */}
       <RemotePrompts />
-      {tab === "remote" && <RemoteHostsPanel />}
+      {/* 원격 호스트의 [체크아웃 추가…] 로 만든 원격만인 프로젝트는 곧바로 그 창을 연다(18-m7-plan M7-11b ①). */}
+      {tab === "remote" && (
+        <RemoteHostsPanel onBundleAdded={(bundle) => void openWindow({ projectId: bundle.id })} />
+      )}
       <section className={`min-w-0 flex-1 flex-col ${tab === "projects" ? "flex" : "hidden"}`}>
         {banner && (
           <div

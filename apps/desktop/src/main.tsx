@@ -21,7 +21,6 @@ import { parseTheme } from "./theme/tokens";
 import {
   describeOpen,
   projectIdFromQuery,
-  isOtherMachineOpen,
   projectOpenInbox,
   tauriProjectOpenSource,
   watchProjectOpens,
@@ -46,11 +45,6 @@ if (windowKind === "project" || windowKind === "file") {
     );
   watchProjectOpens(tauriProjectOpenSource, (request) => {
     log.info(`open request: ${describeOpen(request) ?? "(focus only)"}`, "project");
-    // 다른 머신 체크아웃의 파일은 그 머신의 경로다 — 로컬 경로로 열지 않는다(그 탭은 M7-11b).
-    if (isOtherMachineOpen(request)) {
-      log.warn("an open request for another machine's checkout is not shown yet", "project");
-      return;
-    }
     projectOpenInbox.push(request);
   });
 }

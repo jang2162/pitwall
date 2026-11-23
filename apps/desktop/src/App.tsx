@@ -20,7 +20,7 @@ import {
   filePathFromQuery,
   fileWindowTitle,
 } from "./file-window/file-window";
-import { CheckoutHostsProvider } from "./checkout/checkout-hosts";
+import { CheckoutHostsProvider, useWindowProject } from "./checkout/checkout-hosts";
 import { ActiveMachineMark, ProjectWindow } from "./layout/project-window";
 import { McpApprovals } from "./mcp/approvals-host";
 import { projectIdFromQuery } from "./project-open";
@@ -99,16 +99,20 @@ function WindowTitle({ kind }: { kind: WindowKind }) {
 
 /** 프로젝트 창의 제목 줄은 그 프로젝트의 이름이다 — OS 창 제목과 같다(src-tauri/src/windows.rs `open_project_as`). 읽기 전에는 비운다. */
 function ProjectWindowTitle() {
-  const project = useRpcQuery("project.get", {
-    id: projectIdFromQuery(window.location.search) ?? "",
-  });
-  // 활성 체크아웃이 다른 머신이면 그 머신 이름을 글로 단다(18-m7-plan M7-11 ③).
+  const windowId = projectIdFromQuery(window.location.search);
+  // 묶음 창(`project-b-…`)은 묶음 이름이다 — 묶음 id 는 Host 의 프로젝트가 아니다(18-m7-plan M7-11b).
+  const { bundleWindow, bundle } = useWindowProject(windowId);
   return (
     <span data-tauri-drag-region className="flex items-center gap-1.5">
-      {project.data?.name ?? ""}
+      {bundleWindow ? (bundle?.name ?? "") : <ProjectName id={windowId ?? ""} />}
+      {/* 활성 체크아웃이 다른 머신이면 그 머신 이름을 글로 단다(18-m7-plan M7-11 ③). */}
       <ActiveMachineMark />
     </span>
   );
+}
+
+function ProjectName({ id }: { id: string }) {
+  return useRpcQuery("project.get", { id }).data?.name ?? "";
 }
 
 /** 프로젝트 창은 체크아웃별 연결을 둔다(checkout/checkout-hosts.tsx, 18-m7-plan M7-11). 다른 창은 그대로다. */

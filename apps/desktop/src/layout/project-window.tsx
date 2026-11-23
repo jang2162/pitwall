@@ -109,13 +109,23 @@ import {
   activeWorktreeStore,
   useActiveMachine,
 } from "../open-with/active-worktree";
-import { checkoutOfKey, LOCAL_MACHINE, machineOf, qualify, unqualify } from "../checkout/checkout";
+import {
+  checkoutKey,
+  checkoutOfKey,
+  LOCAL_MACHINE,
+  machineOf,
+  qualify,
+  unqualify,
+} from "../checkout/checkout";
 import {
   ActiveCheckoutHost,
   type CheckoutHosts,
   useCheckoutHosts,
+  useWindowProject,
+  type WindowProject,
 } from "../checkout/checkout-hosts";
 import { MachineMark, TargetMachineProvider } from "../checkout/machine-mark";
+import { AddCheckoutFeature } from "../checkout/add-checkout";
 import { type OpenWithTarget, REVEAL_TOOLS, useOpenWith } from "../open-with/open-with";
 import { DbStatus } from "../db/safety/db-status";
 import { LSP_STATUS_TOPIC, snippetHighlighter } from "../lsp/lsp-sessions";
@@ -510,6 +520,9 @@ function errorText(e: unknown): string {
  * 꼴이라(checkout/checkout.ts) 풀어서 그 머신의 연결 · 프로젝트 id 로 보내고(`route`), 돌아온 경로에 머신을 다시 붙인다(`back`).
  * 문서(에디터)와 스스로 읽는 뷰어(미리보기 — M7-13)가 같은 길을 쓴다.
  */
+/** 다른 머신의 문서 길이 그 머신을 쥐는 시간(`machineRoute`). 붙기 기다림(`CLIENT_WAIT_MS`)과 첫 읽기를 덮는다. */
+const ROUTE_HOLD_MS = 40_000;
+
 function machineRoute(
   now: () => {
     client: RpcClient | undefined;
@@ -535,6 +548,11 @@ function machineRoute(
       };
     }
     if (!hosts) throw new Error(`the machine ${machine} is not connected`);
+    // 그 머신을 잠깐 쥔다 — 활성 체크아웃도 아니고 탭도 아직 없는 머신(원격 셸의 열기 요청 · 다른 머신의 최근 파일)은 아무도 쥐지 않아
+    // 붙지 않는다(`client` 는 쥔 머신만 기다린다). 읽는 동안 붙어 있고, 그 사이 생긴 탭이 이어 쥔다(`useTabMachines`).
+    // 이미 누가 쥐고 있으면(활성 체크아웃 · 그 머신의 탭) 더 쥐지 않는다 — 다 놓았을 때 링크가 곧바로 닫히게.
+    if (!hosts.store.getState().remote[machine]?.users)
+      setTimeout(hosts.retain(machine), ROUTE_HOLD_MS);
     const remote = await hosts.client(machine);
     return {
       machine,
@@ -580,9 +598,11 @@ function useWindowEditor(
   const statRef =
     useRef<(path: string, worktree: string | undefined) => Promise<FsStat>>(undefined);
   const [workspace] = useState(() => {
+    // 창의 이 머신 연결(구문 강조 · 언어 서버). 구문 강조는 원격만인 묶음 창에서도 이 머신 Host 가 한다(08 「로컬 / 원격 역할 분담」 —
+    // 프로젝트가 없어도 된다). 언어 서버는 이 머신 프로젝트가 있을 때만 붙는다(아래 `lsp`).
     const host = () => {
       const c = latest.current.client;
-      if (!c || projectId === undefined) throw new Error("Host is not connected");
+      if (!c) throw new Error("Host is not connected");
       return c;
     };
     const { route, back } = machineRoute(() => ({
@@ -909,13 +929,17 @@ function useWindowProjectState(projectId: string | undefined): {
 
 function ProjectWindowBody({
   projectId,
+  windowProject,
   log,
   closeWindow,
   guardClose,
   openProjectWindow,
   onDockApi,
 }: {
+  /** 이 창의 로컬 프로젝트 id(`WindowProject.localProject`). 원격만인 묶음 창 · 프로젝트 없는 창(시험)은 없다. */
   projectId?: string;
+  /** 창이 보는 묶음 · 창 id. 없으면(시험) 창 id 는 `projectId`. */
+  windowProject?: WindowProject;
   log?: WindowLog;
   closeWindow(): Promise<void>;
   guardClose?: KeymapNative["guardClose"];
@@ -954,7 +978,15 @@ function ProjectWindowBody({
   useDemoTaskActions();
 
   const previewHost = useWindowPreviewHost(projectId);
-  const projectState = useWindowProjectState(projectId);
+  const windowId = windowProject?.windowId ?? projectId;
+  const projectState = useWindowProjectState(windowId);
+  // 원격만인 묶음 창은 이 머신 체크아웃이 없다 — 처음 활성 체크아웃은 그 묶음 첫 멤버의 메인 체크아웃이다(세션이 시작하기 전에).
+  const remoteStart = remoteOnlyStart(windowProject);
+  const activeMachine = useActiveMachine();
+  useEffect(() => {
+    if (remoteStart && activeMachine === LOCAL_MACHINE)
+      activeWorktreeStore.setState({ top: checkoutKey({ machine: remoteStart }) });
+  }, [remoteStart, activeMachine]);
   useEffect(() => (api ? workspace.attach(api) : undefined), [api, workspace]);
   useDocumentSync(workspace, projectId);
   useMachineDocumentSync(workspace);
@@ -998,9 +1030,13 @@ function ProjectWindowBody({
   // 창이 받은 열기 요청은 워크트리 세션이 받는다(워크트리 전환 · 탭 묶음, worktree-session.ts). 도킹 영역 · Host 연결 · 프로젝트
   // 상태가 모두 준비된 뒤에 받는다 — 그 전의 요청은 우편함이 들고 있다.
   const ready =
-    api !== undefined && client !== undefined && projectId !== undefined && projectState.ready;
+    api !== undefined &&
+    client !== undefined &&
+    windowId !== undefined &&
+    projectState.ready &&
+    (remoteStart === undefined || activeMachine !== LOCAL_MACHINE);
   useEffect(() => {
-    if (!ready || !api || !client || projectId === undefined) return;
+    if (!ready || !api || !client) return;
     const started = createWorktreeSession({
       api,
       workspace,
@@ -1027,7 +1063,7 @@ function ProjectWindowBody({
       started.dispose();
       if (session.current === started) session.current = undefined;
     };
-  }, [ready, api, client, projectId, workspace, projectState.store, log, statDocument]);
+  }, [ready, api, client, workspace, projectState.store, log, statDocument]);
   useTabMachines(api, useCheckoutHosts());
   const switcher = useTabSwitcher(workspace);
   const editorActionList = useMemo(
@@ -1169,6 +1205,8 @@ function ProjectWindowBody({
                     {/* 실행 · 터미널은 머신마다 자기 연결로 붙는다 — 활성 체크아웃이 바뀌어도 다시 그리지 않는다(M7-14). */}
                     {projectId !== undefined && <RunFeature projectId={projectId} />}
                     <TerminalFeature api={api} />
+                    {/* 「원격 체크아웃 추가…」(브랜치 팝업 끝 — 18-m7-plan M7-11b ①). 창의 묶음에 더한다. */}
+                    <AddCheckoutFeature windowProject={windowProject} />
                     <StatusBar label={strings.status.label} />
                     {switcher.element}
                     {editorOperations}
@@ -1238,6 +1276,12 @@ function MachineStatus() {
   );
 }
 
+/** 원격만인 묶음 창의 처음 활성 체크아웃 머신(그 묶음의 첫 멤버). 로컬 멤버가 있는 창 · 묶음을 모르는 창은 없다. */
+function remoteOnlyStart(windowProject: WindowProject | undefined): string | undefined {
+  if (!windowProject?.bundleWindow || windowProject.localProject !== undefined) return undefined;
+  return windowProject.bundle?.members.find((m) => m.machine !== LOCAL_MACHINE)?.machine;
+}
+
 /** 창 내용이 활성 체크아웃에 맞춰 두는 것: 상태바의 머신 표지. `children` 에 활성 체크아웃 머신의 프로젝트 id 를 넘긴다. */
 function ProjectWindowContent({
   activeProject,
@@ -1271,30 +1315,31 @@ export function ProjectWindow({
   /** 도킹 영역이 준비되면 그 api 를 받는다(시험이 탭을 그룹 사이로 옮긴다). */
   onDockApi?(api: DockviewApi): void;
 }) {
+  // 창 id(`projectId` — 창 쿼리)는 로컬 프로젝트 id 이거나 묶음 id 다(18-m7-plan M7-11b). 이 머신의 기능은 그 창의 로컬 프로젝트로,
+  // 창 상태는 창 id 로 돈다. 묶음 창은 묶음을 읽을 때까지 그리지 않는다 — 로컬 멤버를 알아야 이 머신 기능의 프로젝트가 정해진다.
+  const windowProject = useWindowProject(projectId);
+  if (!windowProject.settled) return null;
+  const localProject = windowProject.localProject;
+  const body = (
+    <ProjectWindowBody
+      projectId={localProject}
+      windowProject={windowProject}
+      log={log}
+      closeWindow={closeWindow}
+      guardClose={guardClose}
+      openProjectWindow={openProjectWindow}
+      onDockApi={onDockApi}
+    />
+  );
   return (
     <NotificationProvider>
       <StatusBarProvider>
-        <HostNotifications projectId={projectId} />
-        <TaskProvider projectId={projectId}>
-          {projectId === undefined ? (
-            <ProjectWindowBody
-              log={log}
-              closeWindow={closeWindow}
-              guardClose={guardClose}
-              openProjectWindow={openProjectWindow}
-              onDockApi={onDockApi}
-            />
+        <HostNotifications projectId={localProject} />
+        <TaskProvider projectId={localProject}>
+          {localProject === undefined ? (
+            body
           ) : (
-            <TrustProvider projectId={projectId}>
-              <ProjectWindowBody
-                projectId={projectId}
-                log={log}
-                closeWindow={closeWindow}
-                guardClose={guardClose}
-                openProjectWindow={openProjectWindow}
-                onDockApi={onDockApi}
-              />
-            </TrustProvider>
+            <TrustProvider projectId={localProject}>{body}</TrustProvider>
           )}
         </TaskProvider>
       </StatusBarProvider>

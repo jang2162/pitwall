@@ -37,6 +37,9 @@ export const activeWorktreeStore = createStore<ActiveWorktreeState>()(() => ({ t
 export function requestedWorktree(
   open: ProjectOpen,
 ): { change: true; top: string | undefined } | { change: false } {
+  // 체크아웃을 실은 요청(원격 셸의 `pitwall <파일>`)은 활성 체크아웃을 바꾸지 않고 그 체크아웃의 탭으로 연다(18-m7-plan M7-15 ② ·
+  // M7-11b, layout/worktree-session.ts).
+  if (open.checkout) return { change: false };
   if (open.worktree) return { change: true, top: open.worktree };
   if (open.file || open.mainCheckout) return { change: true, top: undefined };
   return { change: false };

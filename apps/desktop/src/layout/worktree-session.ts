@@ -33,7 +33,7 @@ import {
 } from "../editor/editor-tabs";
 import { type Cursor, cursorOf, type EditorWorkspace } from "../editor/editor-workspace";
 import type { FileTreeModel } from "../file-tree/tree-model";
-import { checkoutOfKey, machineOf } from "../checkout/checkout";
+import { checkoutKey, checkoutOfKey, machineOf, qualify } from "../checkout/checkout";
 import { requestedWorktree } from "../open-with/active-worktree";
 import type { ProjectOpen } from "../project-open";
 import type { ProjectState, TabState, WorktreeKey, WorktreeState } from "./project-state";
@@ -255,14 +255,23 @@ export function createWorktreeSession(deps: WorktreeSessionDeps) {
       }
     } else if (!shown) await restore(deps.activeWorktree());
     if (!open.file) return;
-    // 창의 열기 요청은 요청의 체크아웃 머신의 파일이다(CLI · OS 요청은 이 머신 — 워크트리 열쇠가 접두 없음).
-    const panel = await workspace.open({
-      path: open.file,
-      worktree: open.worktree,
-      machine: checkoutOfKey(open.worktree).machine,
-      line: open.line,
-      column: open.col,
-    });
+    // 창의 열기 요청은 요청의 체크아웃 머신의 파일이다(CLI · OS 요청은 이 머신 — 워크트리 열쇠가 접두 없음). 체크아웃을 실은 요청
+    // (원격 셸의 `pitwall <파일>` — 파일은 **그 머신의** 경로다)은 활성 체크아웃을 바꾸지 않고 그 체크아웃의 탭으로 연다(M7-11b).
+    const target = open.checkout
+      ? {
+          machine: open.checkout.machine,
+          path: qualify(open.checkout.machine, open.file),
+          worktree: checkoutKey({
+            machine: open.checkout.machine,
+            worktree: open.checkout.worktree ?? undefined,
+          }),
+        }
+      : {
+          machine: checkoutOfKey(open.worktree).machine,
+          path: open.file,
+          worktree: open.worktree,
+        };
+    const panel = await workspace.open({ ...target, line: open.line, column: open.col });
     // 뷰가 생기기 전(문서를 읽는 중)에 저장해도 요청의 줄이 남게.
     if (panel && open.line !== undefined)
       known.set(panel.id, { cursor: { line: open.line, column: open.col ?? 1 } });

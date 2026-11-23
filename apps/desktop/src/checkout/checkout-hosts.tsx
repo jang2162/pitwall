@@ -299,6 +299,47 @@ export function createCheckoutHosts(
 }
 
 const CheckoutHostsContext = createContext<CheckoutHosts | undefined>(undefined);
+const WindowBundleContext = createContext<
+  { bundle: ProjectBundle | undefined; settled: boolean } | undefined
+>(undefined);
+
+/** 행 있는 묶음 id(`b-…` — pw_core `registry::bundle::BUNDLE_ID_PREFIX`)인가. 아니면 로컬 프로젝트 id 다. */
+export function isBundleRowId(id: string): boolean {
+  return id.startsWith("b-");
+}
+
+/** 이 창이 보는 묶음(18-m7-plan M7-11b). */
+export interface WindowProject {
+  /** 창 쿼리의 id — 로컬 프로젝트 id 또는 묶음 id. 창 상태(`project.state.*`)는 이 id 로 읽고 쓴다. */
+  windowId: string | undefined;
+  /** 창 id 가 행 있는 묶음 id 인가(`project-b-…` 창). */
+  bundleWindow: boolean;
+  /** 그 묶음. 묶음 목록을 아직 읽지 못했으면 없다. */
+  bundle: ProjectBundle | undefined;
+  /** 묶음 창의 묶음 목록을 읽었는가(실패도). 로컬 프로젝트 id 창은 늘 참 — 기다릴 것이 없다. */
+  settled: boolean;
+  /**
+   * 이 창의 **이 머신 프로젝트 id** — 로컬 프로젝트 id 창이면 그 id, 묶음 창이면 그 묶음의 로컬 멤버. 원격만인 묶음이거나 아직 모르면
+   * 없다. 이 머신의 기능(신뢰 · 작업 · 실행 · 문서 · 언어 서버)은 이 id 로 돈다 — 묶음 id 는 Host 가 아는 프로젝트가 아니다.
+   */
+  localProject: string | undefined;
+}
+
+/** 창 id 의 묶음. 체크아웃 공급자 밖(부품 시험 · 다른 창)이면 묶음 없이 창 id 를 로컬 프로젝트로 본다. */
+export function useWindowProject(windowId: string | undefined): WindowProject {
+  const known = useContext(WindowBundleContext);
+  const bundleWindow = windowId !== undefined && isBundleRowId(windowId);
+  const bundle = known?.bundle;
+  return {
+    windowId,
+    bundleWindow,
+    bundle,
+    settled: !bundleWindow || (known?.settled ?? true),
+    localProject: bundleWindow
+      ? bundle?.members.find((m) => m.machine === LOCAL_MACHINE)?.projectId
+      : windowId,
+  };
+}
 const LinkHostContext = createContext<HostConnection | undefined>(undefined);
 
 const HOST_SCOPE: HostTarget = { hostId: LOCAL_MACHINE };
@@ -378,10 +419,14 @@ export function CheckoutHostsProvider({
       hostNames: hostNamesOf(names.data),
     });
   }, [hosts, bundle, names.data]);
+  const settled = bundles.data !== undefined || bundles.error != null;
+  const windowBundleValue = useMemo(() => ({ bundle, settled }), [bundle, settled]);
   return (
     <LocalHostContext value={local}>
       <LinkHostContext value={link}>
-        <CheckoutHostsContext value={hosts}>{children}</CheckoutHostsContext>
+        <WindowBundleContext value={windowBundleValue}>
+          <CheckoutHostsContext value={hosts}>{children}</CheckoutHostsContext>
+        </WindowBundleContext>
       </LinkHostContext>
     </LocalHostContext>
   );

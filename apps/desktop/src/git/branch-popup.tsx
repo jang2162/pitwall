@@ -38,6 +38,7 @@ import { headName } from "./branch-status";
 import { type BranchStrings, useBranchStrings } from "./branch-strings";
 import { canCompareCommits } from "./compare-action";
 import { RECEIVE_ACTION, SEND_ACTION } from "./send/send-feature";
+import { ADD_CHECKOUT_ACTION } from "../checkout/add-checkout";
 
 export interface BranchFavorites {
   readonly list: readonly string[];
@@ -304,6 +305,29 @@ function SendItems({ run }: { run?(id: string): void }) {
   );
 }
 
+/**
+ * 「+ 원격 체크아웃 추가…」(10-ui.md 2.9 의 목록 끝 · 18-m7-plan M7-11b ①) — 창의 「체크아웃 추가」 액션(checkout/add-checkout.tsx)을
+ * 부른다. 그 액션이 없거나 꺼져 있으면(묶음을 아직 모른다) 보이지 않는다.
+ */
+function AddCheckoutItem({ run }: { run?(id: string): void }) {
+  const { registry } = useKeymap();
+  useRegistryVersion(registry);
+  if (!run || !registry.isEnabled(ADD_CHECKOUT_ACTION)) return null;
+  const label = registry.get(ADD_CHECKOUT_ACTION)?.label ?? ADD_CHECKOUT_ACTION;
+  return (
+    <Command.Group className={GROUP_CLASS}>
+      <Command.Item
+        value={`action:${ADD_CHECKOUT_ACTION}`}
+        keywords={[label]}
+        onSelect={() => run(ADD_CHECKOUT_ACTION)}
+        className={SEARCH_ITEM_CLASS}
+      >
+        {`+ ${label}`}
+      </Command.Item>
+    </Command.Group>
+  );
+}
+
 const NO_CHECKOUTS = createStore<{ directory: { members: ReadonlyMap<string, string> } }>()(() => ({
   directory: { members: new Map() },
 }));
@@ -339,6 +363,7 @@ function RefList({
     <>
       <CheckoutGroup onSwitch={onSwitchCheckout} />
       <SendItems run={onRunAction} />
+      <AddCheckoutItem run={onRunAction} />
     </>
   );
   if (!refs)

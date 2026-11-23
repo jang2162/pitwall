@@ -41,6 +41,10 @@ const fake = vi.hoisted(() => ({
   linkStreams: 0,
   /** 열린 `mcp.approvals` 스트림: 스트림 id → (머신, 들은 프로젝트). */
   approvals: new Map<number, { machine: string; projectId: unknown }>(),
+  /** `bundle.list` 의 답(이 머신 연결만). */
+  bundles: [] as unknown[],
+  /** 연결 대상(JSON) → 받은 호출(메서드 · 인자). */
+  byTarget: new Map<string, { method: string; params: Record<string, unknown> }[]>(),
 }));
 
 vi.mock("../tauri-transport", async () => {
@@ -62,6 +66,9 @@ vi.mock("../tauri-transport", async () => {
         const m = JSON.parse(text) as { id?: number; method: string; params: never };
         const reply = (result: unknown) => send({ id: m.id, result });
         const params = (m.params ?? {}) as Record<string, unknown>;
+        const key = JSON.stringify(target);
+        if (!fake.byTarget.has(key)) fake.byTarget.set(key, []);
+        fake.byTarget.get(key)!.push({ method: m.method, params });
         const files = fake.files.get(machine)!;
         if (m.method.startsWith("fs.")) fake.calls.get(machine)!.push({ method: m.method, params });
         if (m.method.startsWith("remote.") && !hostScope)
@@ -106,20 +113,7 @@ vi.mock("../tauri-transport", async () => {
             return reply(null);
           case "bundle.list":
             if (machine !== "local") break;
-            return reply([
-              {
-                id: "b-1",
-                name: "demo",
-                favorite: false,
-                tags: [],
-                openedAt: null,
-                implicit: false,
-                members: [
-                  { machine: "local", projectId: "p1", lastTarget: null },
-                  { machine: MINI_ID, projectId: "r1", lastTarget: null },
-                ],
-              },
-            ]);
+            return reply(fake.bundles);
           case "remote.hosts.list":
             if (machine !== "local") break;
             return reply({
@@ -328,6 +322,21 @@ beforeEach(() => {
   fake.targets = [];
   fake.linkStreams = 0;
   fake.approvals = new Map();
+  fake.byTarget = new Map();
+  fake.bundles = [
+    {
+      id: "b-1",
+      name: "demo",
+      favorite: false,
+      tags: [],
+      openedAt: null,
+      implicit: false,
+      members: [
+        { machine: "local", projectId: "p1", lastTarget: null },
+        { machine: MINI, projectId: "r1", lastTarget: null },
+      ],
+    },
+  ];
   activeWorktreeStore.setState({ top: undefined });
   resetWindowFileTree();
   localStorage.clear();
@@ -542,4 +551,94 @@ it("opens a file from the active remote checkout's file tree on that machine and
   await vi.waitFor(() => expect(viewWith("remote other")).toBeDefined());
   expect(viewWith("local other")).toBeUndefined();
   expect(localFileCalls()).toHaveLength(0);
+});
+
+// 이월(M7-15 ② — 18-m7-plan M7-11b): 원격 셸의 `pitwall <파일>` 은 체크아웃을 실어 온다(`checkout`). 창은 **활성 체크아웃을 바꾸지 않고**
+// 그 체크아웃의 탭으로 연다 — 파일은 그 머신의 경로라 이 머신의 같은 경로로 읽지 않는다.
+it("opens a file sent from another machine's shell in that checkout's tab without changing the active checkout", async () => {
+  await mount();
+  await push({ file: FILE });
+  await vi.waitFor(() => expect(viewWith("local text")).toBeDefined());
+  await push({ file: FILE, line: 1, checkout: { machine: MINI, worktree: null } });
+  await vi.waitFor(() => expect(viewWith("remote text")).toBeDefined());
+  expect(activeWorktreeStore.getState().top).toBeUndefined();
+  // 이 머신의 탭은 그대로 남고(같은 묶음의 뒤 탭은 그리지 않아 머리로 본다), 그 머신의 탭에는 그 머신의 표지가 있다.
+  expect(headers().some((h) => h.title === FILE && !h.querySelector("[data-machine]"))).toBe(true);
+  expect(remoteHeader()?.querySelector("[data-machine]")?.textContent).toBe("mini");
+  expect(fake.calls.get(MINI)!.find((c) => c.method === "fs.read")?.params).toMatchObject({
+    projectId: "r1",
+    path: FILE,
+  });
+  expect(fake.calls.get("local")!.filter((c) => c.method === "fs.read")).toHaveLength(1);
+});
+
+// 18-m7-plan M7-11b ②: 원격만인 묶음 창(`project-b-…` — 로컬 멤버 없음). 처음 활성 체크아웃은 그 묶음 첫 멤버의 메인 체크아웃이고,
+// 제목은 묶음 이름, 창 상태는 창 id(묶음 id)로 읽는다. 이 머신의 프로젝트가 아닌 묶음 id 로 이 머신 기능(신뢰 · 프로젝트 · 파일)을
+// 부르지 않는다.
+it("starts a remote-only bundle window on its remote checkout, named after the bundle", async () => {
+  window.history.replaceState(null, "", "/?window=project&project=b-2");
+  fake.bundles = [
+    {
+      id: "b-2",
+      name: "farm",
+      favorite: false,
+      tags: [],
+      openedAt: null,
+      implicit: false,
+      members: [{ machine: MINI, projectId: "r1", lastTarget: null }],
+    },
+  ];
+  fake.files.get(MINI)!.set("/work/demo/src/farm.rs", "remote farm");
+  await mount();
+  await vi.waitFor(() => expect(activeWorktreeStore.getState().top).toBe(REMOTE_MAIN));
+  expect(document.querySelector("header")?.textContent).toContain("farm");
+  expect(document.querySelector("header [data-machine]")?.textContent).toBe("mini");
+  const own = fake.byTarget.get(JSON.stringify({ projectId: "b-2" })) ?? [];
+  expect(own.filter((c) => c.method === "project.state.get").map((c) => c.params)).toContainEqual({
+    projectId: "b-2",
+  });
+  // 묶음 id 를 이 머신의 프로젝트로 다루는 호출이 없다(창 상태만 그 id 다).
+  const misused = [...fake.byTarget.values()]
+    .flat()
+    .filter(
+      (c) =>
+        !c.method.startsWith("project.state.") &&
+        (c.params.projectId === "b-2" || c.params.id === "b-2"),
+    );
+  expect(misused).toEqual([]);
+  // 파일은 그 머신 연결로 연다.
+  await push({ file: qualify(MINI, "/work/demo/src/farm.rs"), worktree: REMOTE_MAIN });
+  await vi.waitFor(() => expect(viewWith("remote farm")).toBeDefined());
+  expect(fake.targets).toContainEqual({ member: { host: MINI, project: "r1" } });
+});
+
+// 18-m7-plan M7-11b ①: 브랜치 팝업 끝의 「+ 원격 체크아웃 추가…」 가 이 창의 묶음에 더하는 화면을 연다.
+it("opens the add-checkout screen for this window's bundle from the branch popup", async () => {
+  await mount();
+  await act(async () => {
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        code: "KeyB",
+        key: "B",
+        ctrlKey: true,
+        shiftKey: true,
+      }),
+    );
+  });
+  await settle();
+  const item = await vi.waitFor(() => {
+    const found = document.querySelector<HTMLElement>(
+      '[cmdk-item][data-value="action:checkout.addRemote"]',
+    );
+    expect(found?.textContent).toBe("+ 원격 체크아웃 추가…");
+    return found!;
+  });
+  await act(async () => item.click());
+  await settle();
+  const dialog = document.querySelector("[data-testid=add-checkout-dialog]");
+  expect(dialog?.textContent).toContain("「demo」 에 다른 머신의 체크아웃을 더합니다");
+  // 이미 그 묶음의 멤버인 머신(mini)은 고를 수 없다 — 다른 머신이 없다.
+  expect(dialog?.textContent).toContain("고를 머신이 없다");
 });

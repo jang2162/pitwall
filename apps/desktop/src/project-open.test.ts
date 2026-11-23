@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createOpenInbox,
   describeOpen,
-  isOtherMachineOpen,
   type ProjectOpen,
   type ProjectOpenSource,
   projectIdFromQuery,
@@ -127,14 +126,6 @@ describe("createOpenInbox", () => {
   });
 });
 
-it("tells another machine's checkout open apart from this machine's", () => {
-  expect(isOtherMachineOpen({ file: "/a" })).toBe(false);
-  expect(isOtherMachineOpen({ file: "/a", checkout: { machine: "local" } })).toBe(false);
-  expect(
-    isOtherMachineOpen({
-      file: "/home/me/a",
-      checkout: { machine: "SHA256:mini", worktree: null },
-    }),
-  ).toBe(true);
+it("describes a checkout open request for the log", () => {
   expect(describeOpen({ file: "/a", checkout: { machine: "m" } })).toBe("checkout m, file /a");
 });

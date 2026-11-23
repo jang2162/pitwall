@@ -413,3 +413,38 @@ tools-updates-title =
         [one] 1 tool update
        *[other] { $count } tool updates
     }
+# Add checkout (branch popup "+ Add Remote Checkout…" · the remote host's [Add Checkout…]) — adds another machine's checkout to a bundle
+checkout-add-action = Add Remote Checkout…
+checkout-add-title = Add Remote Checkout
+# $project: the bundle (project) name
+checkout-add-into = Adds another machine's checkout to “{ $project }”. It must be the same repository (a clone with a common commit).
+checkout-add-new = Makes a new project from a repository on this machine. It has no checkout on this computer.
+checkout-add-machine = Machine
+checkout-add-no-machines = No machine to pick — connect to it once from Remote Hosts in the welcome window
+checkout-add-path = Path
+checkout-add-path-hint = An absolute path on that machine (inside the Relay's roots)
+checkout-add-submit = Add
+checkout-add-cancel = Cancel
+checkout-add-close = Close
+# $machine: machine name
+checkout-add-running = Checking the history of the checkout on { $machine }… The status bar shows the progress too
+checkout-add-connecting = Connecting to { $machine }…
+checkout-add-added = Checkout added
+checkout-add-allow-large = Add Anyway
+# $count: a lower bound of the files counted
+checkout-add-large = This path holds more than { $count } files. Check that you picked the repository folder — or add it anyway
+checkout-add-not-git = That path is not a git repository
+checkout-add-no-commits = That checkout has no commits yet — Pitwall cannot tell whether it is the same repository
+checkout-add-second-clone = That machine already has a checkout of this project and this path is a separate clone. One checkout per machine — make it a worktree
+checkout-add-already = That path is a checkout (worktree) the machine already has — the branch popup already lists it
+# $machine: machine name
+checkout-add-no-common = It shares no commit with the checkout on { $machine } — it is not the same repository
+checkout-add-shallow = It is a shallow clone, so Pitwall cannot tell whether it matches the checkout on { $machine } — fetch deeper and try again
+checkout-add-other-bundle = That checkout already belongs to another project
+checkout-add-changed = The project's checkouts changed while checking — add it again
+# $seconds: the time limit in seconds
+checkout-add-timed-out = Stopped: Pitwall could not tell within { $seconds } seconds whether it is the same repository. The history is very large or the machine is slow — try again
+checkout-add-cancelled = Adding was cancelled
+checkout-add-unavailable = Pitwall is not connected to that machine — connect from Remote Hosts and try again
+# $message: why it failed
+checkout-add-failed = Could not add the checkout: { $message }

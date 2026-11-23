@@ -410,3 +410,38 @@ tools-runtime-missing = { $runtime } 가 필요하다 — mise 로 설치한다(
 action-tools-manage = 도구 관리 열기
 # $count: 업데이트가 있는 도구 수
 tools-updates-title = 도구 업데이트 { $count }개
+# 체크아웃 추가(브랜치 팝업 「+ 원격 체크아웃 추가…」 · 원격 호스트의 [체크아웃 추가…]) — 묶음에 다른 머신의 체크아웃을 더한다
+checkout-add-action = 원격 체크아웃 추가…
+checkout-add-title = 원격 체크아웃 추가
+# $project: 더할 묶음(프로젝트) 이름
+checkout-add-into = 「{ $project }」 에 다른 머신의 체크아웃을 더합니다. 같은 저장소(공통 커밋이 있는 클론)여야 합니다.
+checkout-add-new = 이 머신의 저장소로 새 프로젝트를 만듭니다. 이 컴퓨터에는 체크아웃이 없는 프로젝트가 됩니다.
+checkout-add-machine = 머신
+checkout-add-no-machines = 고를 머신이 없다 — 웰컴 창의 「원격 호스트」 에서 먼저 한 번 연결한다
+checkout-add-path = 경로
+checkout-add-path-hint = 그 머신의 절대 경로(Relay 의 roots 안)
+checkout-add-submit = 추가
+checkout-add-cancel = 취소
+checkout-add-close = 닫기
+# $machine: 머신 이름
+checkout-add-running = { $machine } 의 체크아웃 역사를 확인하는 중… 진행은 상태바에도 보입니다
+checkout-add-connecting = { $machine } 에 연결하는 중…
+checkout-add-added = 체크아웃을 더했다
+checkout-add-allow-large = 그대로 더하기
+# $count: 센 파일 수의 하한
+checkout-add-large = 이 경로에 파일이 { $count }개 넘게 있습니다. 저장소 폴더를 맞게 골랐는지 확인하세요 — 그대로 더할 수도 있습니다
+checkout-add-not-git = 그 경로는 git 저장소가 아니다
+checkout-add-no-commits = 그 체크아웃에는 아직 커밋이 없다 — 같은 저장소인지 볼 수 없다
+checkout-add-second-clone = 그 머신에는 이 프로젝트의 체크아웃이 이미 있고, 이 경로는 따로 된 클론이다. 한 머신에는 체크아웃 하나 — 워크트리로 만들어 쓴다
+checkout-add-already = 그 경로는 그 머신에 이미 있는 체크아웃(워크트리)이다 — 브랜치 팝업에 이미 나온다
+# $machine: 머신 이름
+checkout-add-no-common = { $machine } 의 체크아웃과 공통 커밋이 없다 — 같은 저장소가 아니다
+checkout-add-shallow = 얕은 클론이라 { $machine } 의 체크아웃과 같은 저장소인지 알 수 없다 — 더 깊이 가져온 뒤 다시 한다
+checkout-add-other-bundle = 그 체크아웃은 이미 다른 프로젝트에 묶여 있다
+checkout-add-changed = 확인하는 사이 프로젝트의 체크아웃이 바뀌었다 — 다시 추가한다
+# $seconds: 시간 상한(초)
+checkout-add-timed-out = { $seconds }초 안에 같은 저장소인지 확인하지 못해 멈췄다. 역사가 아주 크거나 그 머신이 느리다 — 다시 해 본다
+checkout-add-cancelled = 추가를 취소했다
+checkout-add-unavailable = 그 머신에 연결되어 있지 않다 — 원격 호스트에서 연결한 뒤 다시 한다
+# $message: 실패 이유
+checkout-add-failed = 체크아웃을 더하지 못했다: { $message }
