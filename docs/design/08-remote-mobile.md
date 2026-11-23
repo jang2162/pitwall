@@ -143,7 +143,7 @@ stop_lsp_after = "30m"
 | 커밋 보내기 · 가져오기 | 한 머신의 체크아웃에 있는 브랜치를 다른 머신의 체크아웃으로 origin 을 거치지 않고 옮긴다(「프로젝트와 체크아웃 (D57)」 의 「커밋 보내기 · 가져오기」) |
 | 세션 유지 | Relay가 상주하므로 연결이 끊겨도 실행 중 프로세스 · 로그 유지, 재접속 시 이어보기. 사람이 탭 · 창을 닫을 때는 원격의 것에 [끝내기] · [두고 닫기] 를 묻는다 |
 | 미저장 편집 | **Desktop 웹뷰에 창이 사는 동안 보관** (연결 끊김에도 유실 없음 — 앱 종료는 지금처럼 미저장 확인, 18-m7-plan 결정 M7-D8), 재접속 시 복원 · 원격 파일이 그사이 바뀌었으면 diff로 충돌 해결 |
-| 원격 터미널에서 `pitwall <file>` | 원격 Relay가 연결된 Desktop에 "파일 열기" 이벤트 전달 (Zed가 지원하지 못하는 부분 — 에이전트가 원격에서 작업할 때 유용). 그 프로젝트의 창에서 활성 체크아웃을 바꾸지 않고 그 체크아웃의 탭으로 연다. 행선지는 붙은 owner Desktop 가운데 마지막으로 사람 입력이 있던 것 하나 — Relay 는 요청마다 듣는 Desktop(`open.listen`, owner 링크의 Host 범위 연결만)에 「입력 뒤 지난 시간」 만 묻고, Desktop 은 창 목록을 보내지 않는다. 그 Desktop 에 묶음 창이 없으면 앞으로 가져오지 않고 연다. 듣는 Desktop 이 없으면 거절하고 원격에 까닭을 찍는다(구현 `pw_core::open::desks` · `pw_relay::narrow` · `apps/desktop/src-tauri/src/remote_open.rs`, 18-m7-plan M7-15) |
+| 원격 터미널에서 `pitwall <file>` | 원격 Relay가 연결된 Desktop에 "파일 열기" 이벤트 전달 (Zed가 지원하지 못하는 부분 — 에이전트가 원격에서 작업할 때 유용). 그 프로젝트의 창에서 활성 체크아웃을 바꾸지 않고 그 체크아웃의 탭으로 연다(그 탭은 M7-11b — 그 전에는 창만 열고 원격에 「파일은 아직 보일 수 없다」 를 실패로 답한다). 행선지는 붙은 owner Desktop 가운데 마지막으로 사람 입력이 있던 것 하나 — Relay 는 요청마다 듣는 Desktop(`open.listen`, owner 링크의 Host 범위 연결만)에 「입력 뒤 지난 시간」 만 묻고, Desktop 은 창 목록을 보내지 않는다. 그 Desktop 에 묶음 창이 없으면 앞으로 가져오지 않고 연다. 듣는 Desktop 이 없으면 거절하고 원격에 까닭을 찍는다(구현 `pw_core::open::desks` · `pw_relay::narrow` · `apps/desktop/src-tauri/src/remote_open.rs`, 18-m7-plan M7-15) |
 
 ### 로컬 / 원격 역할 분담 (Zed와 동일 원칙)
 
