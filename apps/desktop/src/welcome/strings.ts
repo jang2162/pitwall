@@ -8,6 +8,7 @@ import type {
   RemoteHostSource,
   RemoteLastLinkState,
   RemoteStage,
+  RemoteStopOutcome,
 } from "@pitwall/rpc-client";
 import { useLocalization } from "@fluent/react";
 import { useMemo } from "react";
@@ -146,6 +147,25 @@ export function welcomeStrings(t: Translate) {
       master: t("welcome-remote-master"),
       logTitle: (name: string) => t("welcome-remote-log-title", { name }),
       logEmpty: t("welcome-remote-log-empty"),
+      disconnectHolds: t("welcome-remote-disconnect-holds"),
+      old: {
+        title: t("welcome-remote-old-title"),
+        left: (version: string, runs: number, terminals: number) =>
+          t("welcome-remote-old-left", { version, runs, terminals }),
+        links: (links: number) => t("welcome-remote-old-links", { links }),
+        stop: t("welcome-remote-old-stop"),
+        stopLinks: (links: number) => t("welcome-remote-old-stop-links", { links }),
+        silent: (version: string) => t("welcome-remote-old-silent", { version }),
+        outcome: {
+          stopped: t("welcome-remote-old-stopped"),
+          stopping: t("welcome-remote-old-stopping"),
+          changed: t("welcome-remote-old-changed"),
+          gone: t("welcome-remote-old-gone"),
+          noAnswer: t("welcome-remote-old-no-answer"),
+        } satisfies Record<RemoteStopOutcome["outcome"], string>,
+      },
+      command: t("welcome-remote-command"),
+      commandOther: t("welcome-remote-command-other"),
     },
     notices: {
       fileNotInProject: (path: string) => t("welcome-notice-file-not-in-project", { path }),

@@ -5,12 +5,18 @@
 // - 진단 칸: SSH → 설치 → 데몬 → 핸드셰이크 단계와 실패한 단계, 「연결 로그」(`remote.log` — ssh stderr 끝부분, askpass 답은 없다).
 //   로그 · 실패 글은 원격이 준 글이 섞일 수 있어 그대로(번역 없이) 글자로만 보인다 — Host 가 제어 · 양방향 글자를 뺐다.
 // - 머신이 바뀌었으면(`machineChanged`) 두 id 를 보이고 [이 머신을 새로 믿기] 만 둔다(메인 판정 M7-P6).
+// - 붙은 뒤에는 그 링크에서 본 원격 Relay(`remote.relays` — 붙을 때마다 조사 · 정리가 한 번 돈다, 18-m7-plan M7-07b)를 보인다:
+//   떠 있는 옛 판 데몬마다 남은 실행 · 터미널 수와 [옛 판 끝내기]. 끝내기는 **보인 값 그대로**(pid · 실행 · 터미널 · 붙은 링크 수와
+//   조사한 머신 id)를 `remote.stopOld` 에 싣는다 — 그사이 바뀌었으면 Host 가 끝내지 않고 새 수를 보인다. 다른 Desktop 이 그 옛 판에
+//   붙어 있으면 그 수와 「그 연결도 끊긴다」 를 보이고 단추 글도 다르다. 원격의 `pitwall` 명령 링크(`~/.local/bin/pitwall`)는 사람이
+//   고를 때만 둔다(`remote.linkCommand` — 메인 판정 M7-P12).
 // - ssh 의 질문(호스트 키 확인 · 암호)은 `RemotePrompts` 가 `remote.prompts` 로 듣고 git 과 같은 askpass 다이얼로그로 묻는다 —
 //   호스트 키 질문은 [취소](처음 포커스) · [예](`yes`)다(git-prompts.tsx).
 
 import type {
   GitPromptAnswer,
   RemoteHostInfo,
+  RemoteOldRelay,
   RemoteStage,
   RemoteStatus,
 } from "@pitwall/rpc-client";
@@ -70,6 +76,91 @@ export function statusText(status: RemoteStatus, T: WelcomeStrings["remote"]): s
     case "machineChanged":
       return T.status.machineChanged(status.expected, status.found);
   }
+}
+
+/** 끊어도 Relay 가 그 머신의 실행 · 터미널을 쥐고 있는 상태인가(이어 붙기 시한 동안 — [끊기] 아래 안내, M7-09 리뷰 권고 7). */
+export function holdsAfterDisconnect(status: RemoteStatus): boolean {
+  return status.state === "reconnecting";
+}
+
+/** 그 링크에서 본 원격 Relay: 옛 판 데몬과 [옛 판 끝내기], 답하지 않는 옛 판, `pitwall` 명령 링크. */
+function Relays({
+  name,
+  T,
+  onError,
+}: {
+  name: string;
+  T: WelcomeStrings["remote"];
+  onError(message: string): void;
+}) {
+  const { client } = useHost();
+  const relays = useRpcQuery("remote.relays", { name });
+  const [said, setSaid] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  const data = relays.data;
+  if (!data || !client) return null;
+  const failed = (method: string) => (e: unknown) => {
+    onError(String(e instanceof Error ? e.message : e));
+    console.warn(LOG, method, "failed", e);
+  };
+  const stop = (seen: RemoteOldRelay) => {
+    setBusy(true);
+    setSaid(undefined);
+    // 보인 값 그대로 — Host 가 지금 원격과 견준다.
+    client
+      .call("remote.stopOld", { name, machine: data.machine, seen })
+      .then((outcome) => setSaid(T.old.outcome[outcome.outcome]))
+      .catch(failed("remote.stopOld"))
+      .finally(() => {
+        setBusy(false);
+        void relays.refetch();
+      });
+  };
+  const link = (on: boolean) => {
+    setBusy(true);
+    client
+      .call("remote.linkCommand", { name, machine: data.machine, on })
+      .catch(failed("remote.linkCommand"))
+      .finally(() => {
+        setBusy(false);
+        void relays.refetch();
+      });
+  };
+  return (
+    <section
+      aria-label={T.old.title}
+      data-testid="remote-relays"
+      className="flex flex-col gap-1 text-[12px]"
+    >
+      {data.old.map((old) => (
+        <div key={old.file} data-old-relay={old.file} className="flex flex-wrap items-center gap-2">
+          <span>{T.old.left(old.version ?? old.file, old.runs, old.terminals)}</span>
+          {old.links > 0 && <span className="text-ui-accent">{T.old.links(old.links)}</span>}
+          <button type="button" className={BUTTON} disabled={busy} onClick={() => stop(old)}>
+            {old.links > 0 ? T.old.stopLinks(old.links) : T.old.stop}
+          </button>
+        </div>
+      ))}
+      {data.silent.map((silent) => (
+        <div key={silent.file} data-silent-relay={silent.file}>
+          {T.old.silent(silent.version ?? silent.file)}
+        </div>
+      ))}
+      {said && <div role="status">{said}</div>}
+      <label className="flex items-center gap-1">
+        <input
+          type="checkbox"
+          checked={data.command === "linked"}
+          disabled={busy || data.command === "other"}
+          onChange={(e) => link(e.currentTarget.checked)}
+        />
+        {T.command}
+      </label>
+      {data.command === "other" && (
+        <span className="text-ui-muted-foreground">{T.commandOther}</span>
+      )}
+    </section>
+  );
 }
 
 /** 이 창이 그 호스트를 쓰는 동안 `remote.connect` 스트림을 열어 둔다. StrictMode 의 붙였다 떼기는 열기 · 닫기의 짝이다. */
@@ -157,6 +248,7 @@ function HostRow({
   onRetry,
   onTrust,
   onToggleLog,
+  onError,
 }: {
   host: RemoteHostInfo;
   status: RemoteStatus;
@@ -167,6 +259,7 @@ function HostRow({
   onRetry(): void;
   onTrust(found: string): void;
   onToggleLog(): void;
+  onError(message: string): void;
 }) {
   const T = useWelcomeStrings().remote;
   const { locales } = useI18n();
@@ -220,7 +313,11 @@ function HostRow({
           {logOpen ? T.hideLog : T.showLog}
         </button>
       </div>
+      {using && live && holdsAfterDisconnect(status) && (
+        <span className="text-[11px] text-ui-muted-foreground">{T.disconnectHolds}</span>
+      )}
       <Stages status={status} T={T} />
+      {using && status.state === "connected" && <Relays name={host.name} T={T} onError={onError} />}
       {host.lastLink && !using && (
         <span className="text-[11px] text-ui-muted-foreground">
           {T.last[host.lastLink.state](when(host.lastLink.at))}
@@ -248,7 +345,15 @@ export function RemoteHostsPanel() {
     const invalidation = connectEventInvalidation(client, queryClient, null, [
       {
         topic: "remote.status",
-        keys: [rpcQueryKey(key, "remote.hosts.list"), rpcQueryKey(key, "remote.log")],
+        keys: [
+          rpcQueryKey(key, "remote.hosts.list"),
+          rpcQueryKey(key, "remote.log"),
+          rpcQueryKey(key, "remote.relays"),
+        ],
+      },
+      {
+        topic: "remote.relays",
+        keys: [rpcQueryKey(key, "remote.relays"), rpcQueryKey(key, "remote.log")],
       },
     ]);
     return () => invalidation.dispose();
@@ -307,6 +412,7 @@ export function RemoteHostsPanel() {
                   .catch((e: unknown) => setError(String(e instanceof Error ? e.message : e)))
               }
               onToggleLog={() => setLogOf((now) => (now === host.name ? undefined : host.name))}
+              onError={setError}
             />
           );
         })}

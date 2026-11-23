@@ -141,3 +141,22 @@ welcome-remote-master = SSH 마스터 연결 있음
 # $name: 호스트 이름
 welcome-remote-log-title = { $name } 연결 로그
 welcome-remote-log-empty = 아직 기록이 없다
+# 끊기 단추 아래 — 다시 붙는 중일 때(M7-09 리뷰 권고 7)
+welcome-remote-disconnect-holds = 끊어도 Relay 가 이어 붙기 시한(2분) 동안 그 머신의 실행 · 터미널을 쥐고 있다.
+welcome-remote-old-title = 옛 판 Relay
+# $version: 옛 판, $runs: 남은 실행 수, $terminals: 남은 터미널 수
+welcome-remote-old-left = 옛 판 Relay { $version } 에 실행 { $runs }개 · 터미널 { $terminals }개가 남았다.
+# $links: 그 옛 판에 붙은 다른 Desktop 연결 수
+welcome-remote-old-links = 다른 Desktop 연결 { $links }개가 이 옛 판에 붙어 있다 — 끝내면 그 연결도 끊긴다.
+welcome-remote-old-stop = 옛 판 끝내기
+# $links: 함께 끊기는 연결 수
+welcome-remote-old-stop-links = 옛 판 끝내기 (연결 { $links }개도 끊김)
+# $version: 답하지 않는 옛 판
+welcome-remote-old-silent = 옛 판 Relay { $version } 이 답하지 않는다 — 끝내지 않는다.
+welcome-remote-old-stopped = 옛 판 Relay 를 끝냈다.
+welcome-remote-old-stopping = 끝내라고 보냈다 — 아직 실행을 끝내는 중이다.
+welcome-remote-old-changed = 본 뒤에 바뀌어 끝내지 않았다 — 지금 수를 보고 다시 고른다.
+welcome-remote-old-gone = 그 옛 판 Relay 는 이미 끝났다.
+welcome-remote-old-no-answer = 그 옛 판 Relay 가 답하지 않아 끝내지 않았다.
+welcome-remote-command = 원격에서 pitwall 명령 쓰기 (~/.local/bin/pitwall)
+welcome-remote-command-other = ~/.local/bin/pitwall 에 다른 파일이 있어 두지 않는다.

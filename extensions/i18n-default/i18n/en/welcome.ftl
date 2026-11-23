@@ -135,3 +135,22 @@ welcome-remote-last-failed = Last: failed ({ $when })
 welcome-remote-master = SSH master connection open
 welcome-remote-log-title = { $name } connection log
 welcome-remote-log-empty = Nothing logged yet
+# Under the disconnect button while reconnecting (M7-09 review, recommendation 7)
+welcome-remote-disconnect-holds = Even if you disconnect, the relay keeps that machine's runs and terminals for its resume window (2 minutes).
+welcome-remote-old-title = Old relay versions
+# $version: the old version, $runs: runs left, $terminals: terminals left
+welcome-remote-old-left = The old relay { $version } still has { $runs } runs and { $terminals } terminals.
+# $links: other Desktop connections on that old version
+welcome-remote-old-links = { $links } other Desktop connections use this old version — stopping it cuts them too.
+welcome-remote-old-stop = Stop the old version
+# $links: connections cut with it
+welcome-remote-old-stop-links = Stop the old version (cuts { $links } connections)
+# $version: the old version that does not answer
+welcome-remote-old-silent = The old relay { $version } does not answer — not stopping it.
+welcome-remote-old-stopped = Stopped the old relay.
+welcome-remote-old-stopping = Sent the stop — it is still ending its runs.
+welcome-remote-old-changed = It changed after you looked, so it was not stopped — check the new counts and choose again.
+welcome-remote-old-gone = That old relay had already ended.
+welcome-remote-old-no-answer = That old relay does not answer, so it was not stopped.
+welcome-remote-command = Use the pitwall command on the remote (~/.local/bin/pitwall)
+welcome-remote-command-other = ~/.local/bin/pitwall is another file, so it is left alone.
