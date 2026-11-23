@@ -5,9 +5,12 @@
 //! - **사람의 ssh 그대로**: 실행 파일은 시스템 `ssh` 이고 사람의 `~/.ssh/config` · 에이전트 · ProxyJump · ControlMaster ·
 //!   `known_hosts` 를 ssh 가 따른다. Pitwall 이 넣는 옵션은 `-T`(pty 없음 — 링크는 바이트 스트림이다)뿐이다.
 //! - **호스트 키 확인은 ssh 의 것**(M7-P17): `StrictHostKeyChecking=no` · `accept-new` · `UserKnownHostsFile=/dev/null` 같은 확인을
-//!   끄는 옵션은 넘기지 않고, 사람의 `ssh_args`(전역 `[[remote_hosts]]`)에 있어도 거절한다([`check_options`]). 처음 보는 호스트
-//!   키는 ssh 가 askpass(`SSH_ASKPASS_PROMPT=confirm`)로 묻고 그 질문이 창의 다이얼로그로 간다([`SshAskpass`] — 데스크톱이 git 과
-//!   같은 askpass(결정 D43)를 붙인다). 바뀐 호스트 키는 ssh 가 거절한 원문을 [`SshError::HostKeyChanged`] 로 그대로 돌려준다 — 덮는
+//!   끄는 옵션은 넘기지 않고, 사람의 `ssh_args`(전역 `[[remote_hosts]]`)에 있는 흔한 꼴도 거절한다([`check_options`] — 완전한
+//!   목록이 아니다: `-F` 로 준 설정 파일 · `KnownHostsCommand` 등은 ssh 가 따르는 사람의 설정이다). 처음 보는 호스트
+//!   키는 ssh 가 askpass 로 묻고 그 질문이 창의 다이얼로그로 간다([`SshAskpass`] — 데스크톱이 git 과 같은 askpass(결정 D43)를
+//!   붙인다). **그 질문은 `SSH_ASKPASS_PROMPT` 힌트 없이 온다**(OpenSSH `sshconnect.c` `confirm()` — `confirm` 힌트는 에이전트 ·
+//!   ControlMaster 확인에만 붙는다). 답이 `yes`(또는 지문)여야 받고 빈 답 · `no` · askpass 실패는 거절이다 — 창은 질문 글로 호스트
+//!   키 확인을 알아보고 [예] 에 `yes` 를 돌려준다(M7-08). 바뀐 호스트 키는 ssh 가 거절한 원문을 [`SshError::HostKeyChanged`] 로 그대로 돌려준다 — 덮는
 //!   길이 없다.
 //! - **주입이 들어갈 자리가 없다**: 목적지 · 사용자는 허용 글자(`[A-Za-z0-9._-]`, `-` 로 시작하지 않음 — IPv6 주소는 따로)만 받고
 //!   `--` 뒤에 둔다(`-oProxyCommand=…` 같은 호스트 이름이 옵션이 되지 않게, 사람의 `ProxyCommand … %h` 로 셸 메타문자가 명령이 되지
@@ -39,7 +42,8 @@ pub const STDOUT_LIMIT: usize = 64 * 1024;
 /// 원격 명령 인자 하나의 최대 길이.
 pub const MAX_ARG: usize = 256;
 
-/// ssh 가 연결 · 인증 · 호스트 키에서 실패하면 내는 종료 코드.
+/// ssh 가 연결 · 인증 · 호스트 키에서 실패하면 내는 종료 코드. [`Ssh::run`] 은 이 코드를 늘 ssh 의 실패로 본다 — **원격 스크립트 ·
+/// `pitwall-relay` 하위 명령은 255 로 끝나지 않는다**(M7-07 · M7-08 이 스크립트를 더할 때도).
 const SSH_FAILED: i32 = 255;
 
 /// 붙을 곳: `~/.ssh/config` 의 호스트 이름(별칭) 또는 호스트 이름 · 주소, 사용자, 포트. 사용자 · 포트가 없으면 ssh 가 사람의
@@ -702,6 +706,16 @@ mod tests {
     }
 
     /// 사람의 `ssh_args` 라도 호스트 키 확인을 끄는 설정 · 링크를 깨는 옵션 · 옵션 아닌 낱말은 받지 않는다.
+    #[test]
+    fn ssh_argv_itself_refuses_a_host_that_could_become_an_option() {
+        for host in ["-oProxyCommand=x", "a;b", "a b"] {
+            assert!(
+                ssh_argv(&SshTarget::alias(host), &[], "true").is_err(),
+                "{host:?}"
+            );
+        }
+    }
+
     #[test]
     fn ssh_args_that_skip_the_host_key_check_or_break_the_link_are_refused() {
         let refused: &[&[&str]] = &[

@@ -419,7 +419,10 @@ fn read_capped(path: &Path) -> Result<Vec<u8>, String> {
 
 fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    // 한 Desktop 이 두 호스트에 같은 판을 동시에 처음 올려도 임시 파일이 겹치지 않게 프로세스 안의 차례를 붙인다(M7-06 리뷰 R-f).
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!(".{name}.{}.{n}.tmp", std::process::id()));
     std::fs::write(&tmp, bytes)
         .and_then(|()| std::fs::rename(&tmp, dir.join(name)))
         .map_err(|e| {

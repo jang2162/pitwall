@@ -55,7 +55,7 @@
 **방법 A. 원격에서 직접 설치** — `curl -fsSL https://.../install.sh | sh` (또는 Homebrew/apt/단일 바이너리) → 서비스 등록(v1.0 전 — 18-m7-plan 「3」. M7 에서는 릴리스 바이너리를 아래 경로 · 이름 규칙으로 직접 배치하고 `pitwall-relay pair` 코드로 페어링한다)
 
 **방법 B. Desktop에서 SSH로 설치 (Zed 방식)**
-1. 시스템 `ssh` 바이너리 사용 (사용자의 `~/.ssh/config`, 에이전트, ProxyJump, ControlMaster를 그대로 존중). 비밀번호는 설정에 저장하지 않고 키 인증 권장, 프롬프트는 GUI askpass로 처리. 처음 보는 호스트 키는 ssh 의 확인(askpass `confirm`)이 창으로 가고, 확인을 끄는 옵션(`StrictHostKeyChecking=no` · `UserKnownHostsFile=/dev/null` 등)은 Pitwall 이 넘기지 않으며 사람의 `ssh_args` 에 있어도 거절한다. 바뀐 호스트 키는 ssh 의 거절 원문을 보인다(18-m7-plan M7-06 · M7-P17 — 구현 `pw_link::ssh`)
+1. 시스템 `ssh` 바이너리 사용 (사용자의 `~/.ssh/config`, 에이전트, ProxyJump, ControlMaster를 그대로 존중). 비밀번호는 설정에 저장하지 않고 키 인증 권장, 프롬프트는 GUI askpass로 처리. 처음 보는 호스트 키는 ssh 의 확인이 askpass 로 창에 간다 — 그 질문은 `SSH_ASKPASS_PROMPT` 힌트 없이 오고 `yes`(또는 지문)를 돌려야 받는다(빈 답 · `no` 는 거절). 확인을 끄는 옵션(`StrictHostKeyChecking=no` · `UserKnownHostsFile=/dev/null` 등)은 Pitwall 이 넘기지 않으며 사람의 `ssh_args` 에 있으면 흔한 꼴은 거절한다(사람의 `~/.ssh/config` · `-F` 로 준 설정 파일은 ssh 가 그대로 따른다). 바뀐 호스트 키는 ssh 의 거절 원문을 보인다(18-m7-plan M7-06 · M7-P17 — 구현 `pw_link::ssh`)
 2. 원격 OS/아키텍처 감지 (`uname -sm`)
 3. `~/.local/share/pitwall/relay/pitwall-relay-{channel}-{version}` 존재 여부 확인 (원격의 `$XDG_DATA_HOME` 존중) — **Desktop 버전과 정확히 일치**해야 함. 자리는 원격 셸이 Relay 와 같은 순서로 푼다(`PITWALL_DATA_DIR` → `$XDG_DATA_HOME/pitwall` → `$HOME/.local/share/pitwall`, 그 아래 `relay/`). 있어도 해시가 매니페스트와 다르면 다시 올린다
 4. 없으면 설치:

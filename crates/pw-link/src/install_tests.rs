@@ -278,65 +278,82 @@ impl SshAskpass for ScriptAskpass {
     }
 }
 
-fn askpass(dir: &Path, answer_yes: bool) -> (Arc<dyn SshAskpass>, std::path::PathBuf) {
+/// 부를 때마다 `answers` 의 다음 줄을 답하는 askpass(`FAIL` 이면 1 로 끝남 — 사람이 [취소]). 질문마다 `[hint=<SSH_ASKPASS_PROMPT>]`
+/// 줄과 질문 글을 `asked` 에 적는다.
+fn askpass(dir: &Path, answers: &[&str]) -> (Arc<dyn SshAskpass>, std::path::PathBuf) {
     std::fs::create_dir_all(dir).unwrap();
     let asked = dir.join("asked");
     let script = dir.join("askpass");
-    let answer = if answer_yes {
-        "echo yes; exit 0"
-    } else {
-        "exit 1"
-    };
+    let _ = std::fs::remove_file(dir.join("count"));
+    let _ = std::fs::remove_file(&asked);
+    std::fs::write(dir.join("answers"), answers.join("\n") + "\n").unwrap();
     write_executable(
         &script,
         &format!(
-            "#!/bin/sh\nprintf '%s\\n%s\\n' \"$SSH_ASKPASS_PROMPT\" \"$1\" >> '{}'\n{answer}\n",
-            asked.display()
+            "#!/bin/sh\nd='{}'\nn=$(cat \"$d/count\" 2>/dev/null || echo 0); n=$((n+1)); echo $n > \"$d/count\"\n\
+             printf '[hint=%s]\\n%s\\n' \"$SSH_ASKPASS_PROMPT\" \"$1\" >> \"$d/asked\"\n\
+             line=$(sed -n \"${{n}}p\" \"$d/answers\")\n\
+             if [ \"$line\" = FAIL ]; then exit 1; fi\nprintf '%s\\n' \"$line\"\n",
+            dir.display()
         ),
     );
     (Arc::new(ScriptAskpass { script }), asked)
 }
 
-/// 호스트 키(메인 판정 M7-P17): 처음 보는 호스트는 ssh 가 askpass 의 `confirm` 으로 지문 원문을 묻는다 — 아니오면 아무것도 돌지
-/// 않고, 예면 known_hosts 에 남아 다음에는 묻지 않는다. 바뀐 호스트 키는 묻지 않고 ssh 의 거절 원문을 그대로 돌려준다.
+/// 호스트 키(메인 판정 M7-P17): 처음 보는 호스트는 ssh(OpenSSH `confirm()`)가 askpass 를 `SSH_ASKPASS_PROMPT` 힌트 **없이** 지문이
+/// 든 문장 원문으로 부른다. 답이 `yes`(또는 지문)여야 받고, 빈 답 · `no` · 취소는 거절이며 아무것도 돌지 않는다. 다른 답이면 다시
+/// 묻는다. 받으면 known_hosts 에 남아 다음에는 묻지 않는다. 바뀐 호스트 키는 묻지 않고 ssh 의 거절 원문을 그대로 돌려준다.
 #[tokio::test]
 async fn host_keys_are_asked_through_askpass_and_a_changed_key_is_refused_verbatim() {
     let dir = tempfile::tempdir().unwrap();
     let remote = FakeRemote::new(dir.path(), "home", true);
     remote.uname("Linux x86_64");
     use_dev_dist(&dev_dist(dir.path()));
+    let ask_dir = dir.path().join("ask");
+    let probe_with = |answers: &[&str]| {
+        let (askpass, asked) = askpass(&ask_dir, answers);
+        let asker = installer_with(
+            &remote,
+            &[("FAKE_SSH_HOSTKEY", "unknown")],
+            offline_dist(dir.path()),
+            Some(askpass),
+        );
+        (asker, asked)
+    };
 
-    let (no, asked) = askpass(&dir.path().join(""), false);
-    let refused = installer_with(
-        &remote,
-        &[("FAKE_SSH_HOSTKEY", "unknown")],
-        offline_dist(dir.path()),
-        Some(no),
-    );
-    let err = refused.probe().await.unwrap_err();
-    assert!(
-        matches!(err, InstallError::Ssh(SshError::HostKeyNotAccepted { .. })),
-        "{err}"
-    );
+    // 취소 · 빈 답 · `no` 는 거절이다 — 빈 답을 「예」 로 돌리는 다이얼로그는 호스트를 받지 못한다.
+    for answers in [&["FAIL"][..], &[""], &["no"]] {
+        let (asker, asked) = probe_with(answers);
+        let err = asker.probe().await.unwrap_err();
+        assert!(
+            matches!(err, InstallError::Ssh(SshError::HostKeyNotAccepted { .. })),
+            "{answers:?}: {err}"
+        );
+        let question = std::fs::read_to_string(&asked).unwrap();
+        assert!(
+            question.starts_with("[hint=]\n"),
+            "no askpass hint: {question}"
+        );
+        assert!(
+            question.contains("The authenticity of host 'mini"),
+            "{question}"
+        );
+        assert!(question.contains("SHA256:fakefingerprint"), "{question}");
+        assert!(!remote.known.exists(), "{answers:?}");
+        assert!(remote_files(&remote).is_empty());
+    }
+
+    // 다른 답이면 다시 묻고, `yes` 를 돌려야 받는다.
+    let (asker, asked) = probe_with(&["ok", "yes"]);
+    asker.probe().await.unwrap();
     let question = std::fs::read_to_string(&asked).unwrap();
-    assert!(question.starts_with("confirm\n"), "{question}");
-    assert!(question.contains("SHA256:fakefingerprint"), "{question}");
+    assert_eq!(question.matches("[hint=]").count(), 2, "{question}");
     assert!(
-        question.contains("The authenticity of host 'mini"),
+        question.contains("Please type 'yes', 'no' or the fingerprint"),
         "{question}"
     );
-    assert!(remote_files(&remote).is_empty());
-
-    let (yes, _) = askpass(&dir.path().join(""), true);
-    let accepted = installer_with(
-        &remote,
-        &[("FAKE_SSH_HOSTKEY", "unknown")],
-        offline_dist(dir.path()),
-        Some(yes),
-    );
-    accepted.probe().await.unwrap();
     std::fs::remove_file(&asked).unwrap();
-    accepted.probe().await.unwrap();
+    asker.probe().await.unwrap();
     assert!(!asked.exists(), "a known host is not asked again");
 
     // askpass 가 없으면 묻지 못하고 실패한다 — 묻지 않고 받는 길로 가지 않는다.
@@ -351,7 +368,7 @@ async fn host_keys_are_asked_through_askpass_and_a_changed_key_is_refused_verbat
         InstallError::Ssh(SshError::HostKeyNotAccepted { .. })
     ));
 
-    let (yes, asked_changed) = askpass(&dir.path().join("x"), true);
+    let (yes, asked_changed) = askpass(&dir.path().join("x"), &["yes"]);
     let changed = installer_with(
         &remote,
         &[("FAKE_SSH_HOSTKEY", "changed")],
@@ -419,4 +436,81 @@ async fn a_binary_that_differs_from_its_manifest_is_not_uploaded() {
         "nothing but the probe reached the remote"
     );
     assert!(remote_files(&remote).is_empty());
+}
+
+/// 이 판 이름의 바이너리가 이미 있어도 해시가 매니페스트와 다르면(깨짐 · 반쯤 올라감) 다시 올린다(M7-06 리뷰 F2).
+#[tokio::test]
+async fn an_installed_binary_with_another_hash_is_uploaded_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let remote = FakeRemote::new(dir.path(), "home", true);
+    remote.uname("Linux x86_64");
+    let dist = dev_dist(dir.path());
+    use_dev_dist(&dist);
+    std::fs::create_dir_all(remote.relay_dir()).unwrap();
+    let installed = remote.relay_dir().join(installed_name());
+    std::fs::write(&installed, b"half an upload").unwrap();
+    let installer = installer(&remote, &[], offline_dist(dir.path()));
+    let probe = installer.probe().await.unwrap();
+    assert!(matches!(probe.installed, Installed::Sha256(_)));
+    assert!(
+        installer.install(&probe, &no_progress).await.unwrap(),
+        "uploaded again"
+    );
+    assert_eq!(
+        std::fs::read(&installed).unwrap(),
+        std::fs::read(dist.join(format!("pitwall-relay-{VERSION}-linux-x86_64"))).unwrap()
+    );
+}
+
+/// 원격 자리는 Relay 의 `AppPaths` 와 같은 순서로 푼다: `PITWALL_DATA_DIR` → `$XDG_DATA_HOME/pitwall` → `$HOME/.local/share/pitwall`
+/// (M7-06 리뷰 R-b).
+#[tokio::test]
+async fn the_remote_data_folder_follows_pitwall_data_dir_then_xdg() {
+    let dir = tempfile::tempdir().unwrap();
+    let remote = FakeRemote::new(dir.path(), "home", true);
+    remote.uname("Linux x86_64");
+    use_dev_dist(&dev_dist(dir.path()));
+    let xdg = dir.path().join("xdg");
+    let own = dir.path().join("own");
+    let xdg_s = xdg.to_str().unwrap();
+    let own_s = own.to_str().unwrap();
+    let probe = |extra: &[(&str, &str)]| {
+        let installer = installer(&remote, extra, offline_dist(dir.path()));
+        async move {
+            let probe = installer.probe().await.unwrap();
+            installer.install(&probe, &no_progress).await.unwrap();
+        }
+    };
+    probe(&[("FAKE_REMOTE_XDG_DATA_HOME", xdg_s)]).await;
+    assert!(xdg.join("pitwall/relay").join(installed_name()).exists());
+    probe(&[
+        ("FAKE_REMOTE_XDG_DATA_HOME", xdg_s),
+        ("FAKE_REMOTE_PITWALL_DATA_DIR", own_s),
+    ])
+    .await;
+    assert!(own.join("relay").join(installed_name()).exists());
+    assert!(
+        remote_files(&remote).is_empty(),
+        "the home default is not used"
+    );
+}
+
+/// 판 · 채널에 `/` 가 있으면 원격 파일 이름이 폴더를 넘으므로 받지 않는다(M7-06 리뷰 R-d).
+#[test]
+fn a_version_or_channel_with_a_slash_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let remote = FakeRemote::new(dir.path(), "home", true);
+    for (version, channel) in [("1.2.3/../x", "dev"), ("1.2.3", "a/b")] {
+        let ssh =
+            Ssh::with_program(remote.ssh.clone(), SshTarget::alias("mini"), Vec::new()).unwrap();
+        assert!(
+            Installer::new(
+                Arc::new(ssh),
+                Versions::new(version, channel),
+                offline_dist(dir.path())
+            )
+            .is_err(),
+            "{version} {channel}"
+        );
+    }
 }

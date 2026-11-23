@@ -2,9 +2,12 @@
 //! 원격 머신 대신 이 기기의 `sh -c` 로 돌린다 — 실제 sshd 처럼 원격 명령 글을 셸이 한 번 더 읽는다. 원격 환경은 비워 두고
 //! `HOME`(공백 · 따옴표 · `$` 가 든 폴더를 줄 수 있다) · `PATH`(고른 도구만 든 폴더)만 준다.
 //!
-//! 호스트 키(`FAKE_SSH_HOSTKEY`): `known`(기본 — 묻지 않음), `unknown`(known 파일에 없으면 `SSH_ASKPASS` 를
-//! `SSH_ASKPASS_PROMPT=confirm` 으로 불러 OpenSSH 의 문장으로 묻고, 예면 기억 · 아니면 255), `changed`(OpenSSH 의 경고 원문과 255).
-//! `FAKE_SSH_CORRUPT=1` 이면 원격 명령의 stdin 끝에 한 바이트를 더한다(전송 중 바뀐 바이너리).
+//! 호스트 키(`FAKE_SSH_HOSTKEY`): `known`(기본 — 묻지 않음), `unknown`(known 파일에 없으면 OpenSSH `sshconnect.c` `confirm()`
+//! 처럼 묻는다 — `SSH_ASKPASS` 를 `SSH_ASKPASS_PROMPT` 힌트 **없이** 그 문장으로 부르고, 답이 `yes` · 지문이면 기억, 빈 답 · `no` ·
+//! askpass 실패면 255, 그 밖의 답이면 「Please type 'yes', 'no' or the fingerprint:」 로 다시 묻는다), `changed`(OpenSSH 의 경고
+//! 원문과 255).
+//! `FAKE_REMOTE_XDG_DATA_HOME` · `FAKE_REMOTE_PITWALL_DATA_DIR`(공백 없는 경로)를 주면 원격 환경에 `XDG_DATA_HOME` ·
+//! `PITWALL_DATA_DIR` 로 넣는다. `FAKE_SSH_CORRUPT=1` 이면 원격 명령의 stdin 끝에 한 바이트를 더한다(전송 중 바뀐 바이너리).
 
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
@@ -40,20 +43,23 @@ EOF
       prompt="The authenticity of host '$dest (192.0.2.7)' can't be established.
 ED25519 key fingerprint is SHA256:fakefingerprint.
 Are you sure you want to continue connecting (yes/no/[fingerprint])?"
-      if answer=$(SSH_ASKPASS_PROMPT=confirm "$SSH_ASKPASS" "$prompt"); then :; else
-        echo "Host key verification failed." >&2; exit 255
-      fi
-      case "$answer" in
-        ""|yes) echo "$dest" >> "$FAKE_SSH_KNOWN" ;;
-        *) echo "Host key verification failed." >&2; exit 255 ;;
-      esac
+      while :; do
+        if answer=$("$SSH_ASKPASS" "$prompt"); then :; else
+          echo "Host key verification failed." >&2; exit 255
+        fi
+        case "$answer" in
+          yes|SHA256:fakefingerprint) echo "$dest" >> "$FAKE_SSH_KNOWN"; break ;;
+          ""|no) echo "Host key verification failed." >&2; exit 255 ;;
+          *) prompt="Please type 'yes', 'no' or the fingerprint: " ;;
+        esac
+      done
     fi ;;
 esac
 if [ "${FAKE_SSH_CORRUPT:-}" = 1 ]; then
-  { cat; printf x; } | env -i HOME="$FAKE_REMOTE_HOME" PATH="$FAKE_REMOTE_PATH" sh -c "$cmd"
+  { cat; printf x; } | env -i HOME="$FAKE_REMOTE_HOME" PATH="$FAKE_REMOTE_PATH" ${FAKE_REMOTE_XDG_DATA_HOME:+XDG_DATA_HOME=$FAKE_REMOTE_XDG_DATA_HOME} ${FAKE_REMOTE_PITWALL_DATA_DIR:+PITWALL_DATA_DIR=$FAKE_REMOTE_PITWALL_DATA_DIR} sh -c "$cmd"
   exit $?
 fi
-exec env -i HOME="$FAKE_REMOTE_HOME" PATH="$FAKE_REMOTE_PATH" sh -c "$cmd"
+exec env -i HOME="$FAKE_REMOTE_HOME" PATH="$FAKE_REMOTE_PATH" ${FAKE_REMOTE_XDG_DATA_HOME:+XDG_DATA_HOME=$FAKE_REMOTE_XDG_DATA_HOME} ${FAKE_REMOTE_PITWALL_DATA_DIR:+PITWALL_DATA_DIR=$FAKE_REMOTE_PITWALL_DATA_DIR} sh -c "$cmd"
 "#;
 
 /// 원격 머신 하나(가짜 ssh · 원격 홈 · 원격 PATH · argv 기록).

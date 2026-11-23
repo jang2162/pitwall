@@ -294,4 +294,26 @@ mod tests {
             );
         }
     }
+
+    /// 깨진 페어링 파일(사람이 고치다 틀림)에 `pair` 하면 오류로 끝나고 파일을 덮지 않는다 — 덮으면 다른 기기 키가 모두 지워진다
+    /// (M7-06 리뷰 F3).
+    #[test]
+    fn pairing_into_a_broken_table_fails_and_leaves_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("relay");
+        pw_link::pairing::ensure_dir(&data).unwrap();
+        let broken = b"{\"devices\": [ {\"key\": \"AAAA\"";
+        let path = file(&data);
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true).mode(0o600);
+            std::io::Write::write_all(&mut options.open(&path).unwrap(), broken).unwrap();
+        }
+        let key = DeviceKey::generate().unwrap();
+        assert!(pair(&data, &key.public(), "mac").is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), broken);
+        assert!(unpair(&data, &key.id()).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), broken);
+    }
 }
