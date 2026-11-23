@@ -213,6 +213,48 @@ vi.mock("../tauri-transport", async () => {
             files.set(path, content.text);
             return reply({ path, size: content.text.length, mtimeMs: 2, version: version(path) });
           }
+          // 조각 읽기(crates/pw-fs/src/chunks.rs 의 규칙 — 다른 머신 문서의 통째 읽기는 이것으로 온다, M7-13b).
+          case "fs.readChunk": {
+            if (!files.has(path)) break;
+            const max = Number(params.maxBytes);
+            if (!(max >= 16 && max <= 16 * 1024 * 1024))
+              return send({ id: m.id, error: { code: -32602, message: "maxBytes", data: null } });
+            if (params.expectedVersion != null && params.expectedVersion !== version(path))
+              return send({
+                id: m.id,
+                error: { code: -32004, message: "conflict", data: { current: version(path) } },
+              });
+            const whole = files.get(path)!;
+            const offset = Number(params.offset ?? 0);
+            let end = whole.length;
+            while (
+              end > offset &&
+              new TextEncoder().encode(JSON.stringify(whole.slice(offset, end))).length > max
+            )
+              end = offset + Math.floor((end - offset) / 2);
+            return reply({
+              path,
+              size: whole.length,
+              mtimeMs: 1,
+              version: version(path),
+              judgment: {
+                binary: false,
+                encoding: "UTF-8",
+                lossy: false,
+                bom: null,
+                lineEnding: "lf",
+                longLines: false,
+                sizeClass: "editable",
+                editable: true,
+                highlight: false,
+              },
+              offset,
+              next: end,
+              total: whole.length,
+              eof: end === whole.length,
+              content: { kind: "text", text: whole.slice(offset, end) },
+            });
+          }
           case "lang.detect":
             return reply({
               files: (params.files as unknown[]).map(() => ({
@@ -347,7 +389,7 @@ it("keeps another machine's tab on its own connection while the active checkout 
     headers().find((h) => h.title === FILE && !h.querySelector("[data-machine]"));
   expect(localHeader()).toBeDefined();
   expect(fake.targets).toContainEqual({ member: { host: MINI, project: "r1" } });
-  expect(fake.calls.get(MINI)!.find((c) => c.method === "fs.read")?.params).toMatchObject({
+  expect(fake.calls.get(MINI)!.find((c) => c.method === "fs.readChunk")?.params).toMatchObject({
     projectId: "r1",
     path: FILE,
     worktree: null,
