@@ -6,7 +6,8 @@
 // 열기」 는 탭이 뷰어를 덮어쓰고 있을 때만 보인다. 일반 파일이 아니어서 열지 않은 문서(FIFO · 장치)에는 셋 다 없다.
 // 파일의 git 상태(M2-12, src/git/git-status.ts)가 있으면 제목을 그 색으로 칠하고 이름 앞에 글자(M · A …)를 둔다 — 색만으로 가르지
 // 않는다. 툴팁은 경로 다음 줄에 상태를 적는다. 파일 탭(git 문서가 아님)의 메뉴 끝에 「히스토리 보기」(`git.showFileHistory`, M2-18 —
-// 그 액션이 이 창에 있을 때만).
+// 그 액션이 이 창에 있을 때만). 활성 체크아웃과 다른 머신의 탭(18-m7-plan M7-11 ③)은 이름 앞에 그 머신의 표지(글)를 단다 — 툴팁의
+// 경로는 그 머신의 경로다.
 
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import { DockviewDefaultTab, type IDockviewPanelHeaderProps } from "dockview-react";
@@ -14,7 +15,10 @@ import { Pin } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { useStore } from "zustand";
 
+import { machineOf, unqualify } from "../checkout/checkout";
+import { MachineMark } from "../checkout/machine-mark";
 import { dbDocumentDetail } from "../db/documents/spec";
+import { useActiveMachine } from "../open-with/active-worktree";
 import { gitDocumentDetail } from "../git/documents/spec";
 import { windowFileTree } from "../file-tree/project-view";
 import { nestedRepository } from "../git/history/git-history";
@@ -86,6 +90,9 @@ export function EditorTabHeader(props: IDockviewPanelHeaderProps<EditorTabParams
   });
   const git = useGitDecoration(params.path);
   const gitStrings = project.git.status;
+  const machine = machineOf(params.path, params.worktree);
+  const otherMachine = machine !== useActiveMachine() ? machine : undefined;
+  const shownPath = unqualify(params.path).path;
   const [menuOpen, setMenuOpen] = useState(false);
   useKeymapPopup(menuOpen);
 
@@ -108,12 +115,13 @@ export function EditorTabHeader(props: IDockviewPanelHeaderProps<EditorTabParams
               : params.db
                 ? `${props.api.title ?? ""}\n${dbDocumentDetail(params.db)}`
                 : git
-                  ? `${params.path}\n${gitStatusTitle(git, gitStrings)}`
-                  : params.path
+                  ? `${shownPath}\n${gitStatusTitle(git, gitStrings)}`
+                  : shownPath
           }
           onDoubleClick={() => run("editor.toggleMaximized")}
           className={`flex h-full items-center ${params.preview ? "italic" : ""} ${gitToneClass(git)}`}
         >
+          <MachineMark machine={otherMachine} className="ml-1.5 not-italic" />
           {params.pinned && <Pin size={11} aria-label={T.pinned} className="ml-1.5 flex-none" />}
           {dirty && (
             <span role="img" aria-label={T.unsaved} title={T.unsaved} className="ml-1.5 flex-none">

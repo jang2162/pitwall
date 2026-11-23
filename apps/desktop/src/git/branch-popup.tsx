@@ -9,6 +9,9 @@
 // - 워크트리 묶음은 `git.worktrees` 다(F5-15 의 목록 · 전환, 결정 M2-D5). 고르면 M1-25 의 워크트리 전환 경로(창의 열기 요청 →
 //   워크트리 세션: 탭 묶음 저장 · 미저장 확인 · 복원)로 바꾼다. 다른 저장소 체크아웃의 등록 프로젝트처럼 이 창이 그리로 바꿀 수 없는
 //   것은 고를 수 없게 보인다.
+// - 「다른 머신의 체크아웃」 묶음(18-m7-plan M7-11 ②)은 묶음 창의 다른 머신 멤버다 — 고르면 그 머신 멤버의 메인 체크아웃이 활성
+//   체크아웃이 된다(같은 전환 절차). 그 머신의 다른 워크트리는 그 체크아웃으로 바꾼 뒤 위 워크트리 묶음에 나온다(목록이 활성
+//   체크아웃 연결로 읽힌다 — 쓰지 않는 머신에 연결을 열지 않는다, D56). 그 머신의 연결이 없어도(끊김) 이 묶음은 보인다.
 // - VCS 작업 팝업은 이 창에 등록된 git 액션(`git.*` · 커밋 · Git 툴 윈도우)을 단축키와 함께 보인다 — 다른 행이 액션을 더하면 저절로
 //   늘어난다.
 
@@ -20,7 +23,12 @@ import { ArrowLeft, Star } from "lucide-react";
 import { type ReactNode, useState } from "react";
 
 import { useKeymap, useKeymapPopup, useRegistryVersion } from "../keymap/keymap-provider";
-import { useActiveWorktree } from "../open-with/active-worktree";
+import { useStore } from "zustand";
+import { createStore } from "zustand/vanilla";
+
+import { useCheckoutHosts } from "../checkout/checkout-hosts";
+import { MachineMark, useMachineName } from "../checkout/machine-mark";
+import { useActiveMachine, useActiveWorktree } from "../open-with/active-worktree";
 import { useRpcQuery } from "../rpc/host";
 import { isComposingKey } from "../ui/ime";
 import { SEARCH_ITEM_CLASS } from "../ui/search-popup";
@@ -238,19 +246,52 @@ function WorktreeItem({
   );
 }
 
-/** 첫 화면: 새 브랜치 · 즐겨찾기 · 로컬 · 원격 · 태그 · 워크트리. */
+/** 「다른 머신의 체크아웃」 묶음 — 활성 체크아웃 머신이 아닌 묶음 멤버. 없으면 그리지 않는다. */
+function CheckoutGroup({ onSwitch }: { onSwitch?(machine: string): void }) {
+  const T = useBranchStrings();
+  const hosts = useCheckoutHosts();
+  const active = useActiveMachine();
+  const members = useStore(hosts?.store ?? NO_CHECKOUTS, (s) => s.directory.members);
+  const name = useMachineName();
+  const others = [...members.keys()].filter((m) => m !== active);
+  if (!onSwitch || others.length === 0) return null;
+  return (
+    <Command.Group heading={T.popup.groups.checkouts} className={GROUP_CLASS}>
+      {others.map((machine) => (
+        <Command.Item
+          key={machine}
+          value={`checkout:${machine}`}
+          keywords={[name(machine)]}
+          onSelect={() => onSwitch(machine)}
+          className={SEARCH_ITEM_CLASS}
+        >
+          <MachineMark machine={machine} />
+          <Muted>{T.popup.worktreeMain}</Muted>
+        </Command.Item>
+      ))}
+    </Command.Group>
+  );
+}
+
+const NO_CHECKOUTS = createStore<{ directory: { members: ReadonlyMap<string, string> } }>()(() => ({
+  directory: { members: new Map() },
+}));
+
+/** 첫 화면: 새 브랜치 · 즐겨찾기 · 로컬 · 원격 · 태그 · 워크트리 · 다른 머신의 체크아웃. */
 function RefList({
   projectId,
   favorites,
   onChoose,
   onCreate,
   onSwitchWorktree,
+  onSwitchCheckout,
 }: {
   projectId: string;
   favorites: BranchFavorites;
   onChoose(ref: BranchRef): void;
   onCreate(): void;
   onSwitchWorktree(worktree: GitWorktree): void;
+  onSwitchCheckout?(machine: string): void;
 }) {
   const T = useBranchStrings();
   const { refs, error } = useBranch();
@@ -260,17 +301,24 @@ function RefList({
     { projectId, worktree: worktree ?? null },
     { staleTime: 0 },
   );
+  const checkouts = <CheckoutGroup onSwitch={onSwitchCheckout} />;
   if (!refs)
     return (
-      <Command.Item disabled value="note:loading" className={SEARCH_ITEM_CLASS}>
-        {error ? T.popup.failed(error) : T.popup.loading}
-      </Command.Item>
+      <>
+        <Command.Item disabled value="note:loading" className={SEARCH_ITEM_CLASS}>
+          {error ? T.popup.failed(error) : T.popup.loading}
+        </Command.Item>
+        {checkouts}
+      </>
     );
   if (refs.workTree === null || refs.unsupported)
     return (
-      <Command.Item disabled value="note:none" className={SEARCH_ITEM_CLASS}>
-        {refs.unsupported ? T.status.unsupportedDetail : T.popup.noRepository}
-      </Command.Item>
+      <>
+        <Command.Item disabled value="note:none" className={SEARCH_ITEM_CLASS}>
+          {refs.unsupported ? T.status.unsupportedDetail : T.popup.noRepository}
+        </Command.Item>
+        {checkouts}
+      </>
     );
   const every = allRefs(refs);
   const favored = favorites.list.flatMap((name) => every.filter((r) => refName(r) === name));
@@ -322,6 +370,7 @@ function RefList({
           ))}
         </Command.Group>
       )}
+      {checkouts}
     </>
   );
 }
@@ -397,6 +446,7 @@ export function BranchPopup({
   ops,
   favorites,
   onSwitchWorktree,
+  onSwitchCheckout,
 }: {
   open: boolean;
   onOpenChange(open: boolean): void;
@@ -404,6 +454,8 @@ export function BranchPopup({
   ops: BranchOps;
   favorites: BranchFavorites;
   onSwitchWorktree(worktree: GitWorktree): void;
+  /** 묶음의 다른 머신 체크아웃으로 바꾼다. 없으면 그 묶음이 없다. */
+  onSwitchCheckout?(machine: string): void;
 }) {
   const T = useBranchStrings();
   useKeymapPopup(open);
@@ -456,6 +508,7 @@ export function BranchPopup({
           onChoose={choose}
           onCreate={() => run(() => ops.create())}
           onSwitchWorktree={(w) => run(() => onSwitchWorktree(w))}
+          onSwitchCheckout={onSwitchCheckout && ((m) => run(() => onSwitchCheckout(m)))}
         />
       )}
     </PopupShell>

@@ -658,6 +658,7 @@ branch-group-local = Local
 branch-group-remote = Remote
 branch-group-tags = Tags
 branch-group-worktrees = Worktrees
+branch-group-checkouts = Checkouts on other machines
 branch-new = New Branch…
 branch-current = current
 branch-favorite = Add to Favorites

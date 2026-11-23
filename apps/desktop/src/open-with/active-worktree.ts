@@ -5,16 +5,22 @@
 // 워크트리 없이 파일을 연 요청은 메인 체크아웃으로 돌아온 것으로 본다(브랜치 팝업의 메인 체크아웃 전환은 `mainCheckout`).
 // 폴더만 다시 연 요청은 창을 앞으로 가져오기만 해서(빈 요청) 여기에 오지 않는다 — 그 경우 워크트리는 바뀌지 않는다.
 //
+// **다른 머신의 체크아웃**(18-m7-plan M7-11): store 의 `top` 은 체크아웃 열쇠(checkout/checkout.ts — 다른 머신이면 머신이 붙은
+// 꼴)다. 기능(파일 트리 · git · DB · 감시 …)은 [`activeWorktree`] · [`useActiveWorktree`] 로 **그 머신의 워크트리 경로**를 받는다 — 그
+// 기능은 활성 체크아웃의 연결(checkout/checkout-hosts.tsx)로 부르므로 머신을 따로 알 필요가 없다. 열쇠 자체가 필요한 곳(탭 묶음 ·
+// 탭)은 [`activeCheckoutKey`] 를 쓴다.
+//
 // 프로젝트 창에서 활성 워크트리를 바꾸는 것은 워크트리 세션(layout/worktree-session.ts)이다 — 바꾸기 전에 지금 워크트리의 탭 묶음을
 // 저장하고 탭을 닫는다(미저장 확인을 취소하면 바꾸지 않는다).
 
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
 
+import { type Checkout, checkoutOfKey } from "../checkout/checkout";
 import type { ProjectOpen } from "../project-open";
 
 interface ActiveWorktreeState {
-  /** 활성 워크트리의 꼭대기. 메인 체크아웃이면 `undefined`. */
+  /** 활성 체크아웃의 열쇠(활성 워크트리의 꼭대기 — 다른 머신이면 머신이 붙은 꼴). 이 머신의 메인 체크아웃이면 `undefined`. */
   top: string | undefined;
 }
 
@@ -34,12 +40,27 @@ export function rememberActiveWorktree(open: ProjectOpen): void {
   if (next.change) activeWorktreeStore.setState({ top: next.top });
 }
 
-/** 지금 값. 키를 누른 때의 값을 읽는 쪽(액션 · RPC 인자)이 쓴다. */
+/** 지금 값 — 활성 체크아웃 머신의 워크트리 꼭대기. 키를 누른 때의 값을 읽는 쪽(액션 · RPC 인자)이 쓴다. */
 export function activeWorktree(): string | undefined {
-  return activeWorktreeStore.getState().top;
+  return checkoutOfKey(activeWorktreeStore.getState().top).worktree;
 }
 
 /** 화면이 구독하는 값. 바뀌면 다시 그린다. */
 export function useActiveWorktree(): string | undefined {
-  return useStore(activeWorktreeStore, (s) => s.top);
+  return useStore(activeWorktreeStore, (s) => checkoutOfKey(s.top).worktree);
+}
+
+/** 활성 체크아웃의 열쇠(탭 묶음 · 탭의 `worktree` 와 같은 꼴). */
+export function activeCheckoutKey(): string | undefined {
+  return activeWorktreeStore.getState().top;
+}
+
+/** 활성 체크아웃. */
+export function activeCheckout(): Checkout {
+  return checkoutOfKey(activeWorktreeStore.getState().top);
+}
+
+/** 활성 체크아웃의 머신(화면이 구독). */
+export function useActiveMachine(): string {
+  return useStore(activeWorktreeStore, (s) => checkoutOfKey(s.top).machine);
 }

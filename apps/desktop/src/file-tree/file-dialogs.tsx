@@ -9,6 +9,7 @@ import { useKeymapPopup } from "../keymap/keymap-provider";
 import { isComposingKey } from "../ui/ime";
 import type { ConfirmQuestion, NameQuestion } from "./file-ops";
 import { useFileTreeStrings } from "./strings";
+import { TargetMachineLine } from "../checkout/machine-mark";
 
 const BUTTON = "rounded-sm border border-ui-border px-3 py-1 hover:bg-ui-hover disabled:opacity-50";
 const SHEET =
@@ -111,6 +112,7 @@ function ConfirmDialog({
         <Dialog.Overlay className="fixed inset-0 bg-black/20" />
         <Dialog.Content data-testid="file-confirm-dialog" className={SHEET}>
           <Dialog.Title className="text-sm font-semibold">{question.title}</Dialog.Title>
+          <TargetMachineLine />
           <Dialog.Description className="whitespace-pre-line text-ui-muted-foreground">
             {question.body}
           </Dialog.Description>

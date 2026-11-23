@@ -2,7 +2,7 @@
 // 윈도우는 `TOOL_WINDOWS` 에 한 줄로 등록하고, 나머지는 자리만 잡는다. 에디터(src/editor)는 창마다 하나의 작업 공간
 // (`createEditorWorkspace`)을 두고, 창이 받은 열기 요청(src/project-open.ts 의 우편함)을 그것으로 연다.
 
-import { ERROR_CODE, RpcCallError } from "@pitwall/rpc-client";
+import { ERROR_CODE, type FsStat, RpcCallError } from "@pitwall/rpc-client";
 import "dockview-react/dist/styles/dockview.css";
 
 import type { UiLogger } from "@pitwall/logger";
@@ -31,7 +31,15 @@ import {
   SquareTerminal,
   TriangleAlert,
 } from "lucide-react";
-import { type ComponentType, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ComponentType,
+  Fragment,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Toaster } from "sonner";
 
@@ -40,7 +48,7 @@ import { editorActions } from "../editor/editor-actions";
 import { useEditorOperations } from "../editor/editor-operations";
 import { EditorPanel } from "../editor/editor-panel";
 import { EditorTabHeader } from "../editor/editor-tab";
-import { EDITOR_PANEL, EDITOR_TAB_HEADER } from "../editor/editor-tabs";
+import { EDITOR_PANEL, EDITOR_TAB_HEADER, editorPanels, tabParams } from "../editor/editor-tabs";
 import {
   createEditorWorkspace,
   type EditorWorkspace,
@@ -90,7 +98,19 @@ import {
   useNotify,
 } from "../notifications/notifications";
 import type { KeymapNative } from "../keymap/native";
-import { activeWorktree, activeWorktreeStore } from "../open-with/active-worktree";
+import {
+  activeCheckoutKey,
+  activeWorktree,
+  activeWorktreeStore,
+  useActiveMachine,
+} from "../open-with/active-worktree";
+import { checkoutOfKey, LOCAL_MACHINE, machineOf, qualify, unqualify } from "../checkout/checkout";
+import {
+  ActiveCheckoutHost,
+  type CheckoutHosts,
+  useCheckoutHosts,
+} from "../checkout/checkout-hosts";
+import { MachineMark, TargetMachineProvider } from "../checkout/machine-mark";
 import { type OpenWithTarget, REVEAL_TOOLS, useOpenWith } from "../open-with/open-with";
 import { DbStatus } from "../db/safety/db-status";
 import { LSP_STATUS_TOPIC, snippetHighlighter } from "../lsp/lsp-sessions";
@@ -487,11 +507,15 @@ function useWindowEditor(
   projectId: string | undefined,
   log: WindowLog | undefined,
   ask: (paths: readonly string[]) => Promise<UnsavedAnswer>,
-): EditorWorkspace {
+): {
+  workspace: EditorWorkspace;
+  stat: (path: string, worktree: string | undefined) => Promise<FsStat>;
+} {
   const { client } = useHost();
+  const hosts = useCheckoutHosts();
   const notify = useNotify();
   const strings = useProjectStrings().editor;
-  const latest = useRef({ client, notify, strings, log, ask });
+  const latest = useRef({ client, hosts, notify, strings, log, ask });
   // LSP 기능 행의 이벤트 구독(`services.subscribe`) — Host 연결이 생기기 전에 부르면 기다렸다가 붙인다(재리뷰 N-4).
   const [subscriptions] = useState(() =>
     projectId === undefined ? undefined : projectSubscriptions(projectId),
@@ -499,35 +523,78 @@ function useWindowEditor(
   useEffect(() => subscriptions?.connect(client), [subscriptions, client]);
   // 루트 밖 문서(외부 소스 탭, M4-08) — 작업 공간에 넘기고 아래 `useLspNavigation` 이 Host 연결을 붙인다.
   const [outside] = useState(createOutsideSources);
-  latest.current = { client, notify, strings, log, ask };
+  latest.current = { client, hosts, notify, strings, log, ask };
+  const statRef =
+    useRef<(path: string, worktree: string | undefined) => Promise<FsStat>>(undefined);
   const [workspace] = useState(() => {
     const host = () => {
       const c = latest.current.client;
       if (!c || projectId === undefined) throw new Error("Host is not connected");
       return c;
     };
-    const scope = (worktree: string | undefined) => ({
-      projectId: projectId ?? "",
-      worktree: worktree ?? null,
+    // 문서는 그 탭의 체크아웃 머신 연결로 읽고 쓴다(18-m7-plan M7-11 ② — 활성 체크아웃 연결이 아니다). 다른 머신의 경로 · 워크트리는
+    // 머신이 붙은 꼴이라(checkout/checkout.ts) 풀어서 그 머신의 프로젝트 id 로 보내고, 돌아온 경로에 머신을 다시 붙인다.
+    const route = async (path: string, worktree: string | undefined) => {
+      const machine = machineOf(path, worktree);
+      const scoped = {
+        path: unqualify(path).path,
+        worktree: checkoutOfKey(worktree).worktree ?? null,
+      };
+      if (machine === LOCAL_MACHINE)
+        return {
+          machine,
+          client: host(),
+          base: { projectId: projectId ?? "", worktree: scoped.worktree },
+          path: scoped.path,
+        };
+      const hosts = latest.current.hosts;
+      if (!hosts) throw new Error(`the machine ${machine} is not connected`);
+      const remote = await hosts.client(machine);
+      return {
+        machine,
+        client: remote.client,
+        base: { projectId: remote.projectId, worktree: scoped.worktree },
+        path: scoped.path,
+      };
+    };
+    const back = <T extends { path: string }>(machine: string, result: T): T => ({
+      ...result,
+      path: qualify(machine, result.path),
     });
-    const stat = (path: string, worktree: string | undefined) =>
-      host().call("fs.stat", { ...scope(worktree), path });
+    const stat = async (path: string, worktree: string | undefined) => {
+      const r = await route(path, worktree);
+      return back(r.machine, await r.client.call("fs.stat", { ...r.base, path: r.path }));
+    };
+    statRef.current = stat;
     return createEditorWorkspace({
       documents: createDocumentStore({
         stat,
-        read: (params, worktree) => host().call("fs.read", { ...scope(worktree), ...params }),
-        write: (params, worktree) => host().call("fs.write", { ...scope(worktree), ...params }),
+        read: async (params, worktree) => {
+          const r = await route(params.path, worktree);
+          return back(
+            r.machine,
+            await r.client.call("fs.read", { ...r.base, ...params, path: r.path }),
+          );
+        },
+        write: async (params, worktree) => {
+          const r = await route(params.path, worktree);
+          return back(
+            r.machine,
+            await r.client.call("fs.write", { ...r.base, ...params, path: r.path }),
+          );
+        },
         detect: async (path, head, worktree) => {
-          const { files } = await host().call("lang.detect", {
-            ...scope(worktree),
-            files: [{ path, head }],
+          const r = await route(path, worktree);
+          const { files } = await r.client.call("lang.detect", {
+            ...r.base,
+            files: [{ path: r.path, head }],
           });
           return files[0]?.language ?? null;
         },
       }),
       stat,
-      // 내비게이션 기록이 다른 워크트리의 자리를 건너뛴다(src/editor/navigation.ts).
-      activeWorktree,
+      // 내비게이션 기록이 다른 워크트리 · 다른 머신의 자리를 건너뛴다(src/editor/navigation.ts).
+      activeWorktree: activeCheckoutKey,
       onOpenFailed: (path, message) =>
         latest.current.notify({
           level: "error",
@@ -586,7 +653,7 @@ function useWindowEditor(
     });
   });
   useLspNavigation(workspace, outside, projectId);
-  return workspace;
+  return { workspace, stat: statRef.current! };
 }
 
 /**
@@ -781,7 +848,7 @@ function ProjectWindowBody({
   apiRef.current = api;
   const unsaved = useUnsavedPrompt();
   const runClose = useRunClosePrompt(windowRuns(), client, projectId);
-  const workspace = useWindowEditor(projectId, log, unsaved.ask);
+  const { workspace, stat: statDocument } = useWindowEditor(projectId, log, unsaved.ask);
   const actions = useMemo(
     () =>
       toolWindowActions(() => apiRef.current, strings, {
@@ -852,11 +919,12 @@ function ProjectWindowBody({
       state: projectState.store,
       tree: windowFileTree(),
       treeWorktree: () => treeScope.getState().worktree,
-      activeWorktree,
+      activeWorktree: activeCheckoutKey,
       setActiveWorktree: (top) => activeWorktreeStore.setState({ top }),
       // 「없다」(NOT_FOUND)만 건너뛴다. 사라진 워크트리(invalid params) 등은 여는 길이 알린다.
+      // 탭의 체크아웃 머신 연결로 본다(문서 읽기와 같은 길).
       exists: (path, worktree) =>
-        client.call("fs.stat", { projectId, worktree: worktree ?? null, path }).then(
+        statDocument(path, worktree).then(
           () => true,
           (e: unknown) => !(e instanceof RpcCallError && e.code === ERROR_CODE.NOT_FOUND),
         ),
@@ -871,7 +939,8 @@ function ProjectWindowBody({
       started.dispose();
       if (session.current === started) session.current = undefined;
     };
-  }, [ready, api, client, projectId, workspace, projectState.store, log]);
+  }, [ready, api, client, projectId, workspace, projectState.store, log, statDocument]);
+  useTabMachines(api, useCheckoutHosts());
   const switcher = useTabSwitcher(workspace);
   const editorActionList = useMemo(
     () =>
@@ -892,92 +961,197 @@ function ProjectWindowBody({
   return (
     <EditorWorkspaceProvider workspace={workspace}>
       <PreviewHostProvider host={previewHost}>
-        <div className="flex min-h-0 flex-1 flex-col">
-          {projectId !== undefined && <OperationBanner placement="editor" />}
-          <div className="flex min-h-0 flex-1">
-            <ToolWindowBar dock="left" api={api} />
-            {projectState.ready ? (
-              <ProjectDock
-                storage={projectState.store.layout}
-                titles={strings.toolWindows}
-                onApi={(next) => {
-                  setApi(next);
-                  onDockApi?.(next);
-                }}
-                emptyArea={EmptyEditorArea}
-              />
-            ) : (
-              <div className="min-w-0 flex-1 bg-editor-background" />
-            )}
-            <ToolWindowBar dock="right" api={api} />
-          </div>
-          {projectId !== undefined && <FileWatch projectId={projectId} />}
-          {projectId !== undefined && <GitStatusWatch projectId={projectId} />}
-          {projectId !== undefined && (
-            <GitBranchFeature projectId={projectId} state={projectState.store} />
+        <ActiveCheckoutHost>
+          {(active) => (
+            <TargetMachineProvider machine={active.machine}>
+              <ProjectWindowContent
+                activeProject={active.machine === LOCAL_MACHINE ? projectId : active.projectId}
+              >
+                {(activeProject) => (
+                  <div className="flex min-h-0 flex-1 flex-col">
+                    {projectId !== undefined && <OperationBanner placement="editor" />}
+                    <div className="flex min-h-0 flex-1">
+                      <ToolWindowBar dock="left" api={api} />
+                      {projectState.ready ? (
+                        <ProjectDock
+                          storage={projectState.store.layout}
+                          titles={strings.toolWindows}
+                          onApi={(next) => {
+                            setApi(next);
+                            onDockApi?.(next);
+                          }}
+                          emptyArea={EmptyEditorArea}
+                        />
+                      ) : (
+                        <div className="min-w-0 flex-1 bg-editor-background" />
+                      )}
+                      <ToolWindowBar dock="right" api={api} />
+                    </div>
+                    {/* 기능은 활성 체크아웃의 연결 · 그 머신 프로젝트로 돈다(M7-11 ①). 머신이 바뀌면 다시 그린다 — 탭(도킹 영역)은 남는다. */}
+                    <Fragment key={active.machine}>
+                      {activeProject !== undefined && <FileWatch projectId={activeProject} />}
+                      {activeProject !== undefined && <GitStatusWatch projectId={activeProject} />}
+                      {activeProject !== undefined && (
+                        <GitBranchFeature projectId={activeProject} state={projectState.store} />
+                      )}
+                      {activeProject !== undefined && (
+                        <GitPrompts projectId={activeProject} workspace={workspace} />
+                      )}
+                      {activeProject !== undefined && <McpApprovals projectId={activeProject} />}
+                      {activeProject !== undefined && (
+                        <GitDocuments projectId={activeProject} workspace={workspace} />
+                      )}
+                      {activeProject !== undefined && (
+                        <GitGutter projectId={activeProject} workspace={workspace} />
+                      )}
+                      {activeProject !== undefined && (
+                        <GitMerge projectId={activeProject} workspace={workspace} />
+                      )}
+                      {activeProject !== undefined && (
+                        <GitRemoteFeature projectId={activeProject} />
+                      )}
+                      {activeProject !== undefined && <DbGridFeature />}
+                      {activeProject !== undefined && (
+                        <DbConnectionFeature projectId={activeProject} />
+                      )}
+                      {activeProject !== undefined && (
+                        <DbConsoleFeature
+                          projectId={activeProject}
+                          workspace={workspace}
+                          api={api}
+                        />
+                      )}
+                      {activeProject !== undefined && (
+                        <DbRedisFeature projectId={activeProject} workspace={workspace} />
+                      )}
+                      {activeProject !== undefined && (
+                        <DbObjectSearch projectId={activeProject} api={api} />
+                      )}
+                      {activeProject !== undefined && (
+                        <SymbolSearchFeature projectId={activeProject} workspace={workspace} />
+                      )}
+                      {activeProject !== undefined && (
+                        <DbTableDataFeature
+                          projectId={activeProject}
+                          workspace={workspace}
+                          api={api}
+                        />
+                      )}
+                      {activeProject !== undefined && (
+                        <GitCommitFeature
+                          projectId={activeProject}
+                          state={projectState.store}
+                          workspace={workspace}
+                          api={api}
+                        />
+                      )}
+                      {activeProject !== undefined && <GitFileHistory workspace={workspace} />}
+                      {activeProject !== undefined && <GitLogReveal workspace={workspace} />}
+                      {activeProject !== undefined && (
+                        <ProjectRuntimeActions projectId={activeProject} />
+                      )}
+                      {activeProject !== undefined && <RuntimeStatus projectId={activeProject} />}
+                      {activeProject !== undefined && <McpStatus projectId={activeProject} />}
+                      {activeProject !== undefined && <RunFeature projectId={activeProject} />}
+                      {activeProject !== undefined && (
+                        <RunPickerFeature projectId={activeProject} api={api} />
+                      )}
+                      {activeProject !== undefined && (
+                        <DebugFeature projectId={activeProject} workspace={workspace} />
+                      )}
+                      {activeProject !== undefined && (
+                        <DbStatus projectId={activeProject} workspace={workspace} api={api} />
+                      )}
+                      {activeProject !== undefined && <ProjectOpenWith projectId={activeProject} />}
+                      {activeProject !== undefined && <FindInFiles workspace={workspace} />}
+                      {activeProject !== undefined && (
+                        <ProjectSearch
+                          projectId={activeProject}
+                          workspace={workspace}
+                          api={api}
+                          openProjectWindow={openProjectWindow}
+                          recent={recentFiles}
+                        />
+                      )}
+                    </Fragment>
+                    <StatusBar label={strings.status.label} />
+                    {switcher.element}
+                    {editorOperations}
+                    {unsaved.element}
+                    {/* 창을 닫을 때 끝나는 실행은 이 창의 로컬 프로젝트 것이다(실행의 대상 체크아웃은 M7-14). */}
+                    <TargetMachineProvider machine={LOCAL_MACHINE}>
+                      {runClose.element}
+                    </TargetMachineProvider>
+                    {/* 상태바(22px) 위에 띄운다. */}
+                    <Toaster
+                      theme={appearance}
+                      position="bottom-right"
+                      offset={{ bottom: 30, right: 12 }}
+                    />
+                  </div>
+                )}
+              </ProjectWindowContent>
+            </TargetMachineProvider>
           )}
-          {projectId !== undefined && <GitPrompts projectId={projectId} workspace={workspace} />}
-          {projectId !== undefined && <McpApprovals projectId={projectId} />}
-          {projectId !== undefined && <GitDocuments projectId={projectId} workspace={workspace} />}
-          {projectId !== undefined && <GitGutter projectId={projectId} workspace={workspace} />}
-          {projectId !== undefined && <GitMerge projectId={projectId} workspace={workspace} />}
-          {projectId !== undefined && <GitRemoteFeature projectId={projectId} />}
-          {projectId !== undefined && <DbGridFeature />}
-          {projectId !== undefined && <DbConnectionFeature projectId={projectId} />}
-          {projectId !== undefined && (
-            <DbConsoleFeature projectId={projectId} workspace={workspace} api={api} />
-          )}
-          {projectId !== undefined && (
-            <DbRedisFeature projectId={projectId} workspace={workspace} />
-          )}
-          {projectId !== undefined && <DbObjectSearch projectId={projectId} api={api} />}
-          {projectId !== undefined && (
-            <SymbolSearchFeature projectId={projectId} workspace={workspace} />
-          )}
-          {projectId !== undefined && (
-            <DbTableDataFeature projectId={projectId} workspace={workspace} api={api} />
-          )}
-          {projectId !== undefined && (
-            <GitCommitFeature
-              projectId={projectId}
-              state={projectState.store}
-              workspace={workspace}
-              api={api}
-            />
-          )}
-          {projectId !== undefined && <GitFileHistory workspace={workspace} />}
-          {projectId !== undefined && <GitLogReveal workspace={workspace} />}
-          {projectId !== undefined && <ProjectRuntimeActions projectId={projectId} />}
-          {projectId !== undefined && <RuntimeStatus projectId={projectId} />}
-          {projectId !== undefined && <McpStatus projectId={projectId} />}
-          {projectId !== undefined && <RunFeature projectId={projectId} />}
-          {projectId !== undefined && <RunPickerFeature projectId={projectId} api={api} />}
-          {projectId !== undefined && <DebugFeature projectId={projectId} workspace={workspace} />}
-          {projectId !== undefined && (
-            <DbStatus projectId={projectId} workspace={workspace} api={api} />
-          )}
-          {projectId !== undefined && <ProjectOpenWith projectId={projectId} />}
-          {projectId !== undefined && <FindInFiles workspace={workspace} />}
-          {projectId !== undefined && (
-            <ProjectSearch
-              projectId={projectId}
-              workspace={workspace}
-              api={api}
-              openProjectWindow={openProjectWindow}
-              recent={recentFiles}
-            />
-          )}
-          <StatusBar label={strings.status.label} />
-          {switcher.element}
-          {editorOperations}
-          {unsaved.element}
-          {runClose.element}
-          {/* 상태바(22px) 위에 띄운다. */}
-          <Toaster theme={appearance} position="bottom-right" offset={{ bottom: 30, right: 12 }} />
-        </div>
+        </ActiveCheckoutHost>
       </PreviewHostProvider>
     </EditorWorkspaceProvider>
   );
+}
+
+/**
+ * 탭이 열린 다른 머신의 연결을 쥔다(M7-11 ① — 「연결은 쓰는 머신만」): 에디터 탭의 머신마다 `retain` 하고, 그 머신의 탭이 모두
+ * 닫히면 놓는다. 활성 체크아웃의 머신은 `ActiveCheckoutHost` 가 쥔다.
+ */
+function useTabMachines(api: DockviewApi | undefined, hosts: CheckoutHosts | undefined) {
+  useEffect(() => {
+    if (!api || !hosts) return;
+    const held = new Map<string, () => void>();
+    const sync = () => {
+      const now = new Set(
+        editorPanels(api).map((p) => machineOf(tabParams(p).path, tabParams(p).worktree)),
+      );
+      for (const machine of now) if (!held.has(machine)) held.set(machine, hosts.retain(machine));
+      for (const [machine, release] of held)
+        if (!now.has(machine)) {
+          release();
+          held.delete(machine);
+        }
+    };
+    sync();
+    const subs = [api.onDidAddPanel(sync), api.onDidRemovePanel(sync)];
+    return () => {
+      for (const sub of subs) sub.dispose();
+      for (const release of held.values()) release();
+    };
+  }, [api, hosts]);
+}
+
+/** 활성 체크아웃의 머신 표지(상태바 · 타이틀바, M7-11 ③). 이 머신이면 그리지 않는다. */
+export function ActiveMachineMark() {
+  const machine = useActiveMachine();
+  return machine === LOCAL_MACHINE ? null : <MachineMark machine={machine} />;
+}
+
+/** 상태바의 머신 항목 — 활성 체크아웃이 다른 머신일 때만 보인다. */
+function MachineStatus() {
+  return (
+    <span data-testid="status-machine">
+      <ActiveMachineMark />
+    </span>
+  );
+}
+
+/** 창 내용이 활성 체크아웃에 맞춰 두는 것: 상태바의 머신 표지. `children` 에 활성 체크아웃 머신의 프로젝트 id 를 넘긴다. */
+function ProjectWindowContent({
+  activeProject,
+  children,
+}: {
+  activeProject: string | undefined;
+  children: (activeProject: string | undefined) => ReactNode;
+}) {
+  useStatusBarItem({ id: "machine", ...STATUS_SLOTS.machine, component: MachineStatus });
+  return children(activeProject);
 }
 
 export function ProjectWindow({

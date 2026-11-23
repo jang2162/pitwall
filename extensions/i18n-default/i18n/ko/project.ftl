@@ -640,6 +640,7 @@ branch-group-local = 로컬
 branch-group-remote = 원격
 branch-group-tags = 태그
 branch-group-worktrees = 워크트리
+branch-group-checkouts = 다른 머신의 체크아웃
 branch-new = 새 브랜치…
 branch-current = 지금
 branch-favorite = 즐겨찾기에 더하기

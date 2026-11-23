@@ -37,6 +37,8 @@ export function branchStrings(t: Translate) {
         remote: t("branch-group-remote"),
         tags: t("branch-group-tags"),
         worktrees: t("branch-group-worktrees"),
+        /** 묶음의 다른 머신 체크아웃(18-m7-plan M7-11 ②). */
+        checkouts: t("branch-group-checkouts"),
       },
       newBranch: t("branch-new"),
       current: t("branch-current"),

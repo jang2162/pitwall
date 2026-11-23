@@ -40,6 +40,8 @@ export interface StatusBarSlot {
 export const STATUS_SLOTS = {
   /** 브랜치 · ahead/behind · 진행 중 작업(M2-13, src/git/branch-status.tsx). 왼쪽 맨 앞. */
   branch: { side: "left", order: 0 },
+  /** 활성 체크아웃이 다른 머신이면 그 머신 이름(M7-11 ③ — checkout/machine-mark.tsx). 브랜치 바로 뒤 — 어느 머신의 브랜치인지. */
+  machine: { side: "left", order: 10 },
   /** 단일 파일 창의 「단일 파일」 · 「프로젝트로 열기」(M1-24). 그 창에는 Host 항목이 없다. */
   fileWindow: { side: "left", order: 50 },
   host: { side: "left", order: 100 },

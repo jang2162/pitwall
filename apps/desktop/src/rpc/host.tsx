@@ -70,6 +70,20 @@ export interface HostConnection {
 const HostContext = createContext<HostConnection | undefined>(undefined);
 
 /** `target` 은 모듈 상수로 넘긴다. 렌더마다 새 객체를 주면 렌더마다 연결을 다시 연다. */
+/**
+ * 연결 하나를 그대로 문맥으로 둔다 — 창의 체크아웃별 연결(checkout/checkout-hosts.tsx)이 활성 체크아웃의 연결을 그 아래 기능에
+ * 넘길 때 쓴다. 연결을 열고 닫는 것은 넘기는 쪽이다.
+ */
+export function HostConnectionProvider({
+  connection,
+  children,
+}: {
+  connection: HostConnection;
+  children: ReactNode;
+}) {
+  return <HostContext value={connection}>{children}</HostContext>;
+}
+
 export function HostProvider({
   target,
   invalidations = RPC_INVALIDATIONS,
@@ -111,13 +125,9 @@ export function HostProvider({
   }, [target]);
 
   useEffect(() => {
-    if (!client || !("projectId" in target)) return;
-    const invalidation = connectEventInvalidation(
-      client,
-      queryClient,
-      target.projectId,
-      invalidations,
-    );
+    const projectId = targetProjectId(target);
+    if (!client || projectId === undefined) return;
+    const invalidation = connectEventInvalidation(client, queryClient, projectId, invalidations);
     return () => invalidation.dispose();
   }, [client, target, queryClient, invalidations]);
 
@@ -134,6 +144,17 @@ export function HostProvider({
 
   const value = useMemo(() => ({ target, key, client }), [target, key, client]);
   return <HostContext value={value}>{children}</HostContext>;
+}
+
+/** 연결 대상의 프로젝트 id(그 Host 의 레지스트리 id). Host 로 고른 연결이면 `undefined`. 원격 멤버면 그 머신 프로젝트의 id 다. */
+export function targetProjectId(target: HostTarget): string | undefined {
+  if ("member" in target) return target.member.project;
+  return "projectId" in target ? target.projectId : undefined;
+}
+
+/** 문맥의 연결. `HostProvider` 밖이면 `undefined`(던지지 않는다 — 어디서나 그려지는 부품용). */
+export function useOptionalHost(): HostConnection | undefined {
+  return useContext(HostContext);
 }
 
 export function useHost(): HostConnection {
@@ -154,7 +175,17 @@ export function useRpcQuery<M extends UnaryMethod>(
   params: UnaryMethods[M]["params"],
   options: RpcQueryOptions = {},
 ) {
-  const { client, key } = useHost();
+  return useRpcQueryOn(useHost(), method, params, options);
+}
+
+/** [`useRpcQuery`] 를 문맥이 아닌 연결 `connection` 에 부른다(창의 로컬 연결 — checkout/checkout-hosts.tsx `useLocalHost`). */
+export function useRpcQueryOn<M extends UnaryMethod>(
+  connection: Pick<HostConnection, "client" | "key">,
+  method: M,
+  params: UnaryMethods[M]["params"],
+  options: RpcQueryOptions = {},
+) {
+  const { client, key } = connection;
   return useQuery(
     client
       ? { ...rpcQueryOptions(client, key, method, params), ...options }

@@ -15,6 +15,7 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 import { useKeymapPopup } from "../keymap/keymap-provider";
 import { setRunConfirmAsker } from "./run-confirm";
 import { useRunStrings } from "./strings";
+import { TargetMachineLine } from "../checkout/machine-mark";
 
 const BUTTON = "rounded-sm border border-ui-border px-3 py-1 hover:bg-ui-hover";
 const CODE =
@@ -130,6 +131,7 @@ export function RunConfirmDialog({
           <Dialog.Title className="text-sm font-semibold">
             {T.title(title ?? shown.name)}
           </Dialog.Title>
+          <TargetMachineLine />
           <Dialog.Description className="text-ui-muted-foreground">{T.body}</Dialog.Description>
           {shown.secretLooking && (
             <p

@@ -115,6 +115,10 @@ export function appStrings(t: Translate) {
       thisMachine: t("machine-this"),
       /** 머신 표지 목록의 접근성 이름. */
       label: t("machine-marks-label"),
+      /** 표지 하나의 풀이(접근성 이름 · 툴팁). */
+      markTitle: (machine: string) => t("machine-mark-title", { machine }),
+      /** 위험 작업 확인의 대상 머신 문장(다른 머신의 체크아웃일 때만). */
+      onMachine: (machine: string) => t("machine-on", { machine }),
     },
     theme: {
       label: t("theme-switcher-label"),

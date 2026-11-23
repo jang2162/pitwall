@@ -15,6 +15,7 @@ type Result<M extends UnaryMethod> = UnaryMethods[M]["result"];
 
 /** 쿼리 키 안의 Host 자리. */
 export function hostKey(target: HostTarget): string {
+  if ("member" in target) return `member:${target.member.host}:${target.member.project}`;
   return "hostId" in target ? `host:${target.hostId}` : `project:${target.projectId}`;
 }
 

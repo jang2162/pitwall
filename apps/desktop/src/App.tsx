@@ -1,7 +1,7 @@
 import type { UiLogger } from "@pitwall/logger";
 import type { DockviewApi } from "dockview-react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 
 import { useAppStrings } from "./i18n/app-strings";
 import { I18nProvider, useI18n } from "./i18n/i18n-provider";
@@ -20,7 +20,8 @@ import {
   filePathFromQuery,
   fileWindowTitle,
 } from "./file-window/file-window";
-import { ProjectWindow } from "./layout/project-window";
+import { CheckoutHostsProvider } from "./checkout/checkout-hosts";
+import { ActiveMachineMark, ProjectWindow } from "./layout/project-window";
 import { McpApprovals } from "./mcp/approvals-host";
 import { projectIdFromQuery } from "./project-open";
 import { HostProvider, useRpcQuery } from "./rpc/host";
@@ -101,7 +102,23 @@ function ProjectWindowTitle() {
   const project = useRpcQuery("project.get", {
     id: projectIdFromQuery(window.location.search) ?? "",
   });
-  return <span data-tauri-drag-region>{project.data?.name ?? ""}</span>;
+  // 활성 체크아웃이 다른 머신이면 그 머신 이름을 글로 단다(18-m7-plan M7-11 ③).
+  return (
+    <span data-tauri-drag-region className="flex items-center gap-1.5">
+      {project.data?.name ?? ""}
+      <ActiveMachineMark />
+    </span>
+  );
+}
+
+/** 프로젝트 창은 체크아웃별 연결을 둔다(checkout/checkout-hosts.tsx, 18-m7-plan M7-11). 다른 창은 그대로다. */
+function WindowCheckouts({ kind, children }: { kind: WindowKind; children: ReactNode }) {
+  if (kind !== "project") return children;
+  return (
+    <CheckoutHostsProvider windowId={projectIdFromQuery(window.location.search)}>
+      {children}
+    </CheckoutHostsProvider>
+  );
 }
 
 export function App({
@@ -129,42 +146,44 @@ export function App({
   return (
     <QueryClientProvider client={queryClient}>
       <HostProvider target={target}>
-        <I18nProvider log={log}>
-          <KeymapProvider native={native} log={log}>
-            <AppActions native={native} kind={kind} />
-            <div className="flex h-full flex-col bg-ui-background text-ui-foreground">
-              {/* macOS 에서는 웹뷰가 타이틀바 자리까지 덮으므로 이 줄이 창을 옮기는 손잡이가 된다. */}
-              <header className="titlebar bg-ui-toolbar" data-tauri-drag-region>
-                <WindowTitle kind={kind} />
-                {/* 창 기능이 그리는 툴바 자리(프로젝트 창의 실행 선택기 — run/run-picker.tsx). */}
-                <div className="titlebar-end" data-titlebar-end />
-              </header>
-              {kind === "welcome" && <Welcome native={welcomeNative} log={log} />}
-              {kind === "project" && (
-                <ProjectWindow
-                  log={log}
-                  closeWindow={native.closeWindow}
-                  guardClose={native.guardClose}
-                  openProjectWindow={native.openProjectWindow}
-                  onDockApi={onDockApi}
-                />
-              )}
-              {kind === "settings" && <SettingsWindow native={settingsNative} />}
-              {/* 프로젝트 없는 MCP 승인 요청(16-m5-plan M5-14) — 프로젝트 창은 layout/project-window.tsx 가 자기 프로젝트로 둔다. */}
-              {(kind === "welcome" || kind === "settings") && <McpApprovals projectId={null} />}
-              {kind === "file" && (
-                <FileWindow
-                  native={fileNative}
-                  log={log}
-                  closeWindow={native.closeWindow}
-                  guardClose={native.guardClose}
-                  onDockApi={onDockApi}
-                />
-              )}
-              <KeymapErrorBar />
-            </div>
-          </KeymapProvider>
-        </I18nProvider>
+        <WindowCheckouts kind={kind}>
+          <I18nProvider log={log}>
+            <KeymapProvider native={native} log={log}>
+              <AppActions native={native} kind={kind} />
+              <div className="flex h-full flex-col bg-ui-background text-ui-foreground">
+                {/* macOS 에서는 웹뷰가 타이틀바 자리까지 덮으므로 이 줄이 창을 옮기는 손잡이가 된다. */}
+                <header className="titlebar bg-ui-toolbar" data-tauri-drag-region>
+                  <WindowTitle kind={kind} />
+                  {/* 창 기능이 그리는 툴바 자리(프로젝트 창의 실행 선택기 — run/run-picker.tsx). */}
+                  <div className="titlebar-end" data-titlebar-end />
+                </header>
+                {kind === "welcome" && <Welcome native={welcomeNative} log={log} />}
+                {kind === "project" && (
+                  <ProjectWindow
+                    log={log}
+                    closeWindow={native.closeWindow}
+                    guardClose={native.guardClose}
+                    openProjectWindow={native.openProjectWindow}
+                    onDockApi={onDockApi}
+                  />
+                )}
+                {kind === "settings" && <SettingsWindow native={settingsNative} />}
+                {/* 프로젝트 없는 MCP 승인 요청(16-m5-plan M5-14) — 프로젝트 창은 layout/project-window.tsx 가 자기 프로젝트로 둔다. */}
+                {(kind === "welcome" || kind === "settings") && <McpApprovals projectId={null} />}
+                {kind === "file" && (
+                  <FileWindow
+                    native={fileNative}
+                    log={log}
+                    closeWindow={native.closeWindow}
+                    guardClose={native.guardClose}
+                    onDockApi={onDockApi}
+                  />
+                )}
+                <KeymapErrorBar />
+              </div>
+            </KeymapProvider>
+          </I18nProvider>
+        </WindowCheckouts>
       </HostProvider>
     </QueryClientProvider>
   );

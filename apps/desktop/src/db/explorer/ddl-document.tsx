@@ -35,7 +35,7 @@ import {
   revisionSyntax,
   type StaticSyntaxSource,
 } from "../../git/diff/revision-syntax";
-import { useHost } from "../../rpc/host";
+import { useHost, targetProjectId } from "../../rpc/host";
 import type { DbDocumentProps } from "../documents/db-document-panel";
 import { dbDocumentKey, type DbDocumentSpec, newDbTabId } from "../documents/spec";
 import { errorText, withDbAccess } from "./explorer-model";
@@ -219,7 +219,7 @@ export function DdlView({ spec, load, eager, font = {}, syntax }: DdlViewProps) 
 /** 에디터 탭 안의 DDL 문서(DB 문서 틀의 `ddl`). */
 export function DdlDocument({ spec, params }: DbDocumentProps<"ddl">) {
   const { client, target } = useHost();
-  const projectId = "projectId" in target ? target.projectId : undefined;
+  const projectId = targetProjectId(target);
   const font = useEditorFont();
   const access = useDbAccessPrompt();
   const ask = useRef(access.resolve);

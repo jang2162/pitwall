@@ -41,6 +41,7 @@ import { keepOpenWhileComposing } from "../../ui/ime";
 import { ConnectionMark, type DbConnectionMarkInput } from "./connection-mark";
 import { ConnectionNameField } from "./name-confirm";
 import { type DbSafetyStrings, useDbSafetyStrings } from "./strings";
+import { TargetMachineLine } from "../../checkout/machine-mark";
 
 /** 위험도 순서(crates/pw-db-sql 의 `RiskGrade` 의 `Ord`). */
 export const RISK_GRADES: readonly RiskGrade[] = [
@@ -336,6 +337,7 @@ export function RiskConfirmDialog({
             {risky && <TriangleAlert size={16} aria-hidden className="flex-none text-ui-accent" />}
             {titleKind === "unread" ? T.confirm.titleUnread : T.confirm.title[titleKind]}
           </Dialog.Title>
+          <TargetMachineLine />
           <Dialog.Description asChild>
             <div className="flex flex-col gap-1">
               <span className="flex items-center gap-2">

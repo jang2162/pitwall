@@ -15,6 +15,9 @@
 // - 저장은 바뀔 때마다(탭 열기 · 닫기 · 활성 · 이동, 커서, 트리 펼침) 잠깐 모아(`SAVE_DELAY_MS`) 묶음을 다시 만든다. 스크롤은
 //   이벤트가 없어 그때 · 창을 닫을 때(`flush`) 읽는다. 바꾸는 · 여는 동안에는 만들지 않는다 — 닫히는 탭이 저장본을 비우지 않게.
 // - 탭의 커서 · 맨 위 줄은 뷰가 있으면 뷰에서, 없으면(아직 읽는 중) 마지막으로 알던 값이다.
+// - **다른 머신의 체크아웃**(18-m7-plan M7-11 ②): 열쇠(`WorktreeKey`)는 체크아웃 열쇠다(checkout/checkout.ts — 다른 머신이면 머신이
+//   붙은 꼴). 활성 체크아웃을 바꾸는 절차는 워크트리 전환과 같지만 **닫는 탭은 떠나는 체크아웃 머신의 탭뿐이다** — 활성 체크아웃과
+//   다른 머신의 탭(그 머신 연결로 연 탭)은 남는다. 그래서 묶음에도 그 체크아웃 머신의 탭만 담는다.
 
 import { EditorView } from "@codemirror/view";
 import type { DockviewApi, IDockviewPanel } from "dockview-react";
@@ -30,11 +33,18 @@ import {
 } from "../editor/editor-tabs";
 import { type Cursor, cursorOf, type EditorWorkspace } from "../editor/editor-workspace";
 import type { FileTreeModel } from "../file-tree/tree-model";
+import { checkoutOfKey, machineOf } from "../checkout/checkout";
 import { requestedWorktree } from "../open-with/active-worktree";
 import type { ProjectOpen } from "../project-open";
 import type { ProjectState, TabState, WorktreeKey, WorktreeState } from "./project-state";
 
 export const SAVE_DELAY_MS = 200;
+
+/** 탭의 머신(경로 · 워크트리 열쇠에 붙은 머신). */
+function panelMachine(panel: IDockviewPanel): string {
+  const { path, worktree } = tabParams(panel);
+  return machineOf(path, worktree);
+}
 
 /** 뷰의 맨 위 줄(1부터). */
 export function topLine(view: EditorView): number {
@@ -96,7 +106,9 @@ export function createWorktreeSession(deps: WorktreeSessionDeps) {
       .filter((g) => g.api.location.type === "grid")
       .flatMap((g) => g.panels)
       // git 문서 탭은 묶음에 담지 않는다(src/git/documents/spec.ts) — 다시 시작해도 되살리지 않는다.
-      .filter((p) => isEditorPanel(p) && (isFileTab(p) || isDbTab(p)));
+      .filter((p) => isEditorPanel(p) && (isFileTab(p) || isDbTab(p)))
+      // 그 체크아웃 머신의 탭만 — 다른 머신의 탭은 활성 체크아웃을 바꿔도 남는다(머리 주석).
+      .filter((p) => panelMachine(p) === checkoutOfKey(key).machine);
     const active = workspace.activeTab();
     const tabs = panels.map((panel): TabState => {
       const { path, worktree, preview, pinned, db } = tabParams(panel);
@@ -218,7 +230,9 @@ export function createWorktreeSession(deps: WorktreeSessionDeps) {
     save();
     busy++;
     try {
-      if (!(await workspace.closeTabs(editorPanels(api)))) return false;
+      const leaving = checkoutOfKey(shown ? shown.key : deps.activeWorktree()).machine;
+      const closing = editorPanels(api).filter((p) => panelMachine(p) === leaving);
+      if (!(await workspace.closeTabs(closing))) return false;
       known.clear();
       deps.setActiveWorktree(key);
     } finally {

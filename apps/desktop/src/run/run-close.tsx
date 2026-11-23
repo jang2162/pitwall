@@ -15,6 +15,7 @@ import { type ReactNode, useCallback, useRef, useState } from "react";
 import { useKeymapPopup } from "../keymap/keymap-provider";
 import { isLive, type RunClient, type RunTabs } from "./run-tabs";
 import { useRunStrings } from "./strings";
+import { TargetMachineLine } from "../checkout/machine-mark";
 
 const BUTTON = "rounded-sm border border-ui-border px-3 py-1 hover:bg-ui-hover";
 
@@ -36,6 +37,7 @@ export function RunCloseDialog({
           className="sheet-top fixed left-1/2 flex w-[460px] max-w-[94vw] -translate-x-1/2 flex-col gap-3 rounded-b-md border border-t-0 border-ui-border bg-ui-panel px-4 py-3 text-ui-foreground shadow-lg"
         >
           <Dialog.Title className="text-sm font-semibold">{T.title(runs.length)}</Dialog.Title>
+          <TargetMachineLine />
           <Dialog.Description className="text-ui-muted-foreground">{T.body}</Dialog.Description>
           <ul className="flex max-h-48 flex-col gap-1 overflow-y-auto text-[12px]">
             {runs.map((run) => {

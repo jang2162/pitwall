@@ -20,7 +20,7 @@ import { useEditorWorkspace } from "../../editor/editor-workspace";
 import { useKeymap, useKeymapPopup } from "../../keymap/keymap-provider";
 import { useProjectStrings } from "../../layout/strings";
 import { useNotify } from "../../notifications/notifications";
-import { useHost } from "../../rpc/host";
+import { useHost, targetProjectId } from "../../rpc/host";
 import { ChangesView } from "../documents/changes-view";
 import { openGitDocument } from "../documents/git-documents";
 import type { GitDocumentSpec } from "../documents/spec";
@@ -191,7 +191,7 @@ export function HistoryDocument({
   const T = useGitHistoryStrings();
   const D = useProjectStrings().git.documents;
   const { client, target } = useHost();
-  const projectId = "projectId" in target ? target.projectId : undefined;
+  const projectId = targetProjectId(target);
   const { registry } = useKeymap();
   const workspace = useEditorWorkspace();
   const notify = useNotify();

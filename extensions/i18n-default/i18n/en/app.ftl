@@ -72,6 +72,8 @@ search-recent-badge = recent
 search-current-project = this window
 machine-this = This computer
 machine-marks-label = Machines
+machine-mark-title = Machine: { $machine }
+machine-on = This runs on the checkout on { $machine }
 search-db-table = table
 search-db-view = view
 # $key: ⌘↩ or Ctrl+Enter

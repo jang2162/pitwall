@@ -9,7 +9,14 @@
 import type { Transport } from "@pitwall/rpc-client";
 import { Channel, invoke } from "@tauri-apps/api/core";
 
-export type HostTarget = { hostId: string } | { projectId: string };
+/**
+ * 연결 대상(Rust `pw_core::Target`). `member` 는 묶음 창이 그 묶음의 다른 머신 멤버로 여는 연결이다 — 그 머신 프로젝트의 `Project`
+ * 범위가 된다(src-tauri/src/ipc.rs `window_admits`, 18-m7-plan M7-11).
+ */
+export type HostTarget =
+  | { hostId: string }
+  | { projectId: string }
+  | { member: { host: string; project: string } };
 
 export interface TauriConnection {
   transport: Transport;

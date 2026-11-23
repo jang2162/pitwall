@@ -27,12 +27,28 @@ import { type BranchStrings, useBranchStrings } from "./branch-strings";
 import { useGitDialogs } from "./dialogs/git-dialogs";
 import { useGitDialogStrings } from "./dialogs/strings";
 import { offerUndo } from "./dialogs/undo";
+import { checkoutKey, LOCAL_MACHINE } from "../checkout/checkout";
+import { activeCheckout } from "../open-with/active-worktree";
 
-/** 고른 워크트리로 바꾸는 열기 요청. 바꿀 수 없는 워크트리면 아무것도 하지 않는다. */
-export function switchWorktree(worktree: GitWorktree, push = projectOpenInbox.push) {
+/**
+ * 고른 워크트리로 바꾸는 열기 요청. 바꿀 수 없는 워크트리면 아무것도 하지 않는다. 목록은 활성 체크아웃 머신의 것이라(그 연결로
+ * 읽는다) 다른 머신이면 워크트리에 그 머신을 붙인다(checkout/checkout.ts, 18-m7-plan M7-11 ②).
+ */
+export function switchWorktree(
+  worktree: GitWorktree,
+  push = projectOpenInbox.push,
+  machine = activeCheckout().machine,
+) {
   const to = worktree.switchTo;
   if (!to || worktree.current) return;
+  if (machine !== LOCAL_MACHINE)
+    return push({ worktree: checkoutKey({ machine, worktree: to.worktree ?? undefined }) });
   push(to.worktree === null ? { mainCheckout: true } : { worktree: to.worktree });
+}
+
+/** 묶음의 그 머신 체크아웃(멤버의 메인 체크아웃)으로 활성 체크아웃을 바꾸는 열기 요청 — 워크트리 전환과 같은 절차다. */
+export function switchCheckout(machine: string, push = projectOpenInbox.push) {
+  push(machine === LOCAL_MACHINE ? { mainCheckout: true } : { worktree: checkoutKey({ machine }) });
 }
 
 /** 브랜치 팝업(⌃⇧B) · VCS 작업 팝업(⌃V) 액션. 프로젝트 창에만 등록된다. */
@@ -146,6 +162,7 @@ export function GitBranchFeature({ projectId, state }: { projectId: string; stat
         ops={ops}
         favorites={{ list: favorites, toggle: toggleFavorite }}
         onSwitchWorktree={(w) => switchWorktree(w)}
+        onSwitchCheckout={(machine) => switchCheckout(machine)}
       />
       <VcsPopup
         open={popup === "vcs"}

@@ -14,6 +14,7 @@ import { type ReactNode, useCallback, useRef, useState } from "react";
 import { useKeymapPopup } from "../../keymap/keymap-provider";
 import { isComposingKey } from "../../ui/ime";
 import { type GitDialogStrings, useGitDialogStrings } from "./strings";
+import { TargetMachineLine } from "../../checkout/machine-mark";
 
 export const BUTTON =
   "rounded-sm border border-ui-border px-3 py-1 hover:bg-ui-hover disabled:opacity-50";
@@ -154,6 +155,7 @@ export function ConfirmDialog({
             )}
             {question.title}
           </Dialog.Title>
+          <TargetMachineLine />
           <Dialog.Description className={question.body ? "whitespace-pre-line" : "sr-only"}>
             {question.body ?? question.title}
           </Dialog.Description>

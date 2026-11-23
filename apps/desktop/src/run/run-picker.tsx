@@ -22,7 +22,7 @@ import { useKeymapPopup, useRegisterActions } from "../keymap/keymap-provider";
 import { showPanel } from "../layout/project-layout";
 import { useNotify } from "../notifications/notifications";
 import { windowDebug } from "../debug/debug-session";
-import { activeWorktreeStore } from "../open-with/active-worktree";
+import { useActiveWorktree } from "../open-with/active-worktree";
 import { useHost } from "../rpc/host";
 import { useToolConfirm } from "../tools/confirm-dialog";
 import { changeTool, type ToolsCall } from "../tools/install";
@@ -428,7 +428,7 @@ export function RunPickerFeature({
 }) {
   const strings = useRunStrings();
   const { client } = useHost();
-  const worktree = useStore(activeWorktreeStore, (s) => s.top ?? null);
+  const worktree = useActiveWorktree() ?? null;
   const [chooser, setChooser] = useState<"select" | "run">();
   const { launch, debug, riskElement, toolConfirmElement } = useLauncher(configs, tabs, api);
   const slot = useTitlebarSlot();

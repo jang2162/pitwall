@@ -29,7 +29,7 @@ import {
   useRetirableNotify,
 } from "../../notifications/notifications";
 import { useActiveWorktree } from "../../open-with/active-worktree";
-import { useHost } from "../../rpc/host";
+import { useHost, targetProjectId } from "../../rpc/host";
 import { useTheme } from "../../theme/theme-switcher";
 import { useBranch, windowBranch } from "../branch-state";
 import { BranchPanel } from "./branch-panel";
@@ -162,7 +162,7 @@ export function GitLogView({ onDrawn, load = true }: GitLogViewProps) {
   const T = useGitLogStrings();
   const formatDate = useFormatDate();
   const { client, target } = useHost();
-  const projectId = "projectId" in target ? target.projectId : undefined;
+  const projectId = targetProjectId(target);
   const worktree = useActiveWorktree();
   const { registry } = useKeymap();
   const notify = useNotify();

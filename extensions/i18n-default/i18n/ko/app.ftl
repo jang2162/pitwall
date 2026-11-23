@@ -73,6 +73,8 @@ search-current-project = 이 창
 # 묶음(한 저장소의 여러 머신 체크아웃)의 머신 표지 — 웰컴 · 프로젝트 스위처의 프로젝트 줄
 machine-this = 이 컴퓨터
 machine-marks-label = 머신
+machine-mark-title = 머신: { $machine }
+machine-on = { $machine } 의 체크아웃에서 합니다
 search-db-table = 테이블
 search-db-view = 뷰
 # $key: ⌘↩ · Ctrl+Enter

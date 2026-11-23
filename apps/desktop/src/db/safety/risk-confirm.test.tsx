@@ -14,11 +14,13 @@ import type {
   RiskGrade,
   RiskReason,
 } from "@pitwall/rpc-client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, vi } from "vitest";
 
 import { act, endTest, it } from "../../test-support/ended-test";
+import { LOCAL_MACHINE, TargetMachineProvider } from "../../checkout/machine-mark";
 import { bundledLocalization, bundledTranslator } from "../../i18n/testing";
 import {
   type ConfirmQuestion,
@@ -81,15 +83,22 @@ function request(over: Partial<DbConfirmRequired> = {}): DbConfirmRequired {
 const DEV = { name: "local-pg", production: false, readOnly: false, color: "db.tag.green" };
 const PROD = { name: "prod-billing", production: true, readOnly: false, color: null };
 
-async function show(question: ConfirmQuestion) {
+async function show(question: ConfirmQuestion, machine?: string) {
   const answers: (DbConfirmed | undefined)[] = [];
   const element = document.createElement("div");
   document.body.append(element);
   root = createRoot(element);
+  const dialog = <RiskConfirmDialog question={question} onAnswer={(a) => answers.push(a)} />;
   await act(async () =>
     root!.render(
       <LocalizationProvider l10n={bundledLocalization("ko")}>
-        <RiskConfirmDialog question={question} onAnswer={(a) => answers.push(a)} />
+        {machine === undefined ? (
+          dialog
+        ) : (
+          <QueryClientProvider client={new QueryClient()}>
+            <TargetMachineProvider machine={machine}>{dialog}</TargetMachineProvider>
+          </QueryClientProvider>
+        )}
       </LocalizationProvider>,
     ),
   );
@@ -110,6 +119,20 @@ async function type(input: HTMLInputElement, value: string) {
 }
 
 describe("RiskConfirmDialog", () => {
+  // 18-m7-plan M7-11 ④: 다른 머신의 체크아웃이면 확인 문장에 그 머신 이름이 있다. 이 머신이면 없다.
+  it("names the machine in the sentence only when the checkout is on another machine", async () => {
+    const machine = "SHA256:mini";
+    await show({ request: request(), connection: DEV }, machine);
+    const line = dialog().querySelector<HTMLElement>("[data-testid=target-machine]");
+    expect(line?.textContent).toContain(machine);
+    expect(line?.textContent).toContain("체크아웃에서");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+    await show({ request: request(), connection: DEV }, LOCAL_MACHINE);
+    expect(dialog().querySelector("[data-testid=target-machine]")).toBeNull();
+    expect(dialog().textContent).not.toContain(machine);
+  });
+
   it.each([
     { grade: "write", reasons: ["dml"] },
     { grade: "unboundedWrite", reasons: ["missingWhere"] },

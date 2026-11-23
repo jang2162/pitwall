@@ -19,7 +19,7 @@ import { useGitDialogs } from "../../git/dialogs/git-dialogs";
 import { useKeymap, useRegisterActions } from "../../keymap/keymap-provider";
 import { useNotify, usePanelVisible } from "../../notifications/notifications";
 import { useActiveWorktree } from "../../open-with/active-worktree";
-import { useHost } from "../../rpc/host";
+import { useHost, targetProjectId } from "../../rpc/host";
 import { writeClipboardText } from "../grid/clipboard";
 import { useDbAccessPrompt } from "../safety/access-prompt";
 import { DbExplorerView, type ExplorerOps } from "./db-explorer";
@@ -105,7 +105,7 @@ function useEditorWorkspaceOptional() {
 function DbExplorerPanel() {
   const T = useDbExplorerStrings();
   const { client, target } = useHost();
-  const projectId = "projectId" in target ? target.projectId : undefined;
+  const projectId = targetProjectId(target);
   const worktree = useActiveWorktree();
   const workspace = useEditorWorkspaceOptional();
   const openDdl = useCallback<OpenDdl>(
