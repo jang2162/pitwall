@@ -36,6 +36,7 @@ pub mod ssh;
 #[cfg(feature = "bootstrap")]
 pub mod upgrade;
 
+pub use claim::link_window;
 pub use desktop::{DesktopIdentity, DesktopLink, DialError, Expect, LinkState, RemoteHost, dial};
 pub use device::{
     DeviceId, DeviceKey, DeviceKeyStore, KeychainKeyStore, MachineId, PublicKey, RelayKeyFile,

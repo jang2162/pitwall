@@ -244,7 +244,8 @@ impl State {
     }
 
     /// 프로젝트 없는 요청을 보일 창: 가장 최근에 앞에 온 창의 가장 최근 듣기, 포커스를 모르면 가장 최근 듣기. 창 식별자가 없는
-    /// 연결은 후보가 아니다.
+    /// 연결은 후보가 아니다. Relay 에서는 창 식별자가 붙은 Desktop 의 label(`<기기 id>/<label>` — `pw_link::link_window`)이고 창
+    /// 이벤트가 오지 않아([`Approvals::focused`] 를 부르는 자리가 없다) 늘 「가장 최근 듣기」 다(18-m7-plan M7-11).
     fn front(&self) -> Option<u64> {
         self.live()
             .filter(|(_, l)| l.window.is_some())

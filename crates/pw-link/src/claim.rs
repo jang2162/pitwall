@@ -90,6 +90,13 @@ pub(crate) fn admit(
     })
 }
 
+/// 링크로 온 연결의 창 label(`<기기 id>/<label>` — [`admit`])을 (기기 id, 그 Desktop 의 창 label)로 나눈다. 접두가 없으면
+/// `None`(이 머신의 창이거나 창이 없다). 기기 id 의 base64 에는 `/` 가 들 수 있고 Desktop 의 창 label 에는 들지 않으므로 **마지막**
+/// `/` 에서 나눈다. Host 쪽에서 창 label 을 해석하는 자리(Relay 의 설정 창 판정 등 — 18-m7-plan M7-11)가 이것으로 본다.
+pub fn link_window(label: &str) -> Option<(&str, &str)> {
+    label.rsplit_once('/')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,6 +111,15 @@ mod tests {
 
     fn project() -> ScopeClaim {
         ScopeClaim::Project { id: "p1".into() }
+    }
+
+    #[test]
+    fn a_link_window_label_splits_back_into_the_device_and_the_desktop_label() {
+        let device = DeviceId::from_stored("SHA256:ab/c+d");
+        let caller = admit(claim(Role::Owner, project()), Role::Owner, &device).unwrap();
+        let label = caller.window.unwrap();
+        assert_eq!(link_window(&label), Some(("SHA256:ab/c+d", "project-1")));
+        assert_eq!(link_window("settings"), None);
     }
 
     #[test]

@@ -66,9 +66,9 @@ pub fn assemble_with(
             app: std::env::current_exe().map_err(|e| e.to_string()),
             source: pw_open_with::cli::CliSource::Ok,
         },
-        // Relay 에는 창이 없다. 링크의 창 label 은 `<기기 id>/<label>` 이라(M7-03) 설정 창으로 읽지 않는다 — 접두를 아는 해석은
-        // M7-11 이 맞춘다.
-        settings_window: Arc::new(|_: &str| false),
+        // Relay 에는 창이 없다. 링크의 창 label 은 `<기기 id>/<label>` 이다(M7-03) — 붙은 Desktop 의 설정 창(그 앱의
+        // `SETTINGS_LABEL`)이면 설정 창으로 본다(18-m7-plan M7-11). 접두 없는 label 은 이 머신의 창이 아니다.
+        settings_window: Arc::new(is_desktop_settings_window),
         tokio,
     });
     if let Some(registry) = assembled.host.registry() {
@@ -76,6 +76,12 @@ pub fn assemble_with(
         warn_hidden(registry);
     }
     assembled
+}
+
+/// 링크로 온 창 label 이 붙은 Desktop 의 설정 창인가(`apps/desktop/src-tauri/src/windows.rs` 의 `SETTINGS_LABEL`). 도구 설치의
+/// 허가(`pw_tools::install::tool_grant`)가 본다 — role(owner)은 링크가 따로 자른다.
+fn is_desktop_settings_window(label: &str) -> bool {
+    pw_link::link_window(label).is_some_and(|(_, window)| window == "settings")
 }
 
 /// `roots` 를 좁혀 밖에 남은 프로젝트는 레지스트리가 숨긴다(`Registry::set_root_policy` — M7-04 리뷰 권고 5). 시작할 때 그 수와
@@ -93,6 +99,25 @@ fn warn_hidden(registry: &pw_core::registry::Registry) {
         Ok(_) => {}
         Err(e) => {
             tracing::warn!(target: "pw_relay", %e, "cannot check the registry against `roots`")
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 18-m7-plan M7-11(M7-03 리뷰 권고 6): 링크의 창 label 은 기기 id 가 붙어 온다. 붙은 Desktop 의 설정 창은 도구 설치의 설정 창이고,
+    /// 접두 없는 label · 다른 창은 아니다.
+    #[test]
+    fn the_settings_window_of_a_linked_desktop_is_read_through_its_prefix() {
+        assert!(is_desktop_settings_window("SHA256:ab/c+d/settings"));
+        for refused in [
+            "settings",
+            "SHA256:ab/c+d/welcome",
+            "SHA256:ab/c+d/project-1",
+        ] {
+            assert!(!is_desktop_settings_window(refused), "{refused}");
         }
     }
 }
