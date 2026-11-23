@@ -587,3 +587,89 @@ async fn an_owner_issued_code_pairs_a_new_device_over_noise_once() {
         Some(pw_link::PairError::Rejected(RejectReason::Code))
     );
 }
+
+/// 이월(M7-23 → M7-24): 기기를 해제하면 그 기기 링크의 포트 포워딩 채널(M7-22)도 곧바로 닫힌다 — 로컬 TCP 연결이 끝난다. 해제하지
+/// 않은 기기의 포워딩은 그대로 돈다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unpairing_closes_the_forwarding_channels_of_that_device() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (_tmp, base) = base();
+    let (owner, laptop) = (key(), key());
+    let relay = relay(
+        &base,
+        &[
+            (&owner, Role::Owner, "mac"),
+            (&laptop, Role::Owner, "laptop"),
+        ],
+    );
+    // 그 머신의 루프백 echo 서버(포워딩 대상).
+    let echo = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = echo.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = echo.accept().await {
+            tokio::spawn(async move {
+                let (mut r, mut w) = socket.split();
+                let _ = tokio::io::copy(&mut r, &mut w).await;
+            });
+        }
+    });
+    // 기기 하나의 포워딩 하나: 로컬 TCP 쌍의 한쪽을 링크에 넘기고 다른 쪽으로 쓴다.
+    async fn forwarded(remote: &RemoteHost, port: u16) -> tokio::net::TcpStream {
+        let local = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = tokio::net::TcpStream::connect(local.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server, _) = local.accept().await.unwrap();
+        let carry = remote.forward(pw_link::forward::ForwardTo::new("127.0.0.1", port), server);
+        tokio::spawn(carry);
+        client
+    }
+    async fn echoes(socket: &mut tokio::net::TcpStream) -> bool {
+        if socket.write_all(b"ping").await.is_err() {
+            return false;
+        }
+        let mut got = [0u8; 4];
+        matches!(
+            tokio::time::timeout(WAIT, socket.read_exact(&mut got)).await,
+            Ok(Ok(_))
+        ) && &got == b"ping"
+    }
+    let admin_remote = desktop(
+        &relay,
+        &owner,
+        Arc::new(Forward(Arc::clone(&relay.transport))),
+    );
+    admin_remote.attach().await.unwrap();
+    let mut admin_conn = admin_remote.connect(admin()).await.unwrap();
+    let laptop_remote = desktop(
+        &relay,
+        &laptop,
+        Arc::new(Forward(Arc::clone(&relay.transport))),
+    );
+    laptop_remote.attach().await.unwrap();
+
+    let mut kept = forwarded(&admin_remote, port).await;
+    let mut cut = forwarded(&laptop_remote, port).await;
+    assert!(echoes(&mut kept).await);
+    assert!(echoes(&mut cut).await);
+
+    let removed = call(
+        &mut admin_conn,
+        20,
+        "relay.unpair",
+        json!({"device": laptop.id()}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(removed["removed"], json!(true));
+    // 해제한 기기의 포워딩 연결은 끝난다(읽기가 EOF · 오류로 돌아온다).
+    let mut rest = Vec::new();
+    let ended = tokio::time::timeout(WAIT, cut.read_to_end(&mut rest)).await;
+    assert!(
+        ended.is_ok(),
+        "the forwarding of the unpaired device stayed open"
+    );
+    assert!(!echoes(&mut cut).await);
+    // 남은 owner 의 포워딩은 그대로다.
+    assert!(echoes(&mut kept).await);
+}
