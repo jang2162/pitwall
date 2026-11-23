@@ -8,6 +8,7 @@
 // - 받기(`uploadId`)는 연 연결의 것이다(`UploadOwner`) — 다른 연결의 청크 · finish 는 not found.
 // - 경로가 바뀌는 `apply` 는 그 프로젝트의 `git.prompts` 를 듣는 연결에 미저장 확인을 묻는다. 듣는 연결이 없으면 `2006`(NO_WINDOW),
 //   `cancel` 이면 `-32002` 로 아무것도 하지 않는다(crates/pw-git/src/write/mod.rs).
+// - `git.reset` 이 keep · hard 면 작업 트리 쓰기라 `apply` 와 같이 미저장 확인을 묻는다(없으면 `2006`). soft · mixed 는 묻지 않는다.
 // - `git.reset` 은 `expected`(HEAD 커밋) · `expectedRef`(HEAD 의 ref)를 주었고 지금과 다르면 `-32004` 로 아무것도 하지 않는다(선택 칸 —
 //   주지 않으면 대조하지 않는다).
 //
@@ -126,7 +127,7 @@ export function createGitHost(repo: FakeRepo): FakeGitHost {
   const mayWrite = (conn: FakeConnection, projectId: unknown) =>
     conn.scope.kind === "project" && conn.scope.projectId === projectId;
 
-  function ask(paths: string[]): Promise<{ kind: string } | undefined> {
+  function ask(paths: string[] | null): Promise<{ kind: string } | undefined> {
     const first = [...listening][0];
     if (!first) return Promise.resolve(undefined);
     const promptId = nextPrompt++;
@@ -394,7 +395,20 @@ export function createGitHost(repo: FakeRepo): FakeGitHost {
           return true;
         }
         case "git.resetPreview":
-          reply({ lost: { changes: [], overwritten: [] }, fingerprint: "fp" });
+          // 커밋 안 한 변경이 있으면 그것을 잃을 것으로 보인다(되돌리기 확인 창이 뜬다).
+          reply({
+            lost: {
+              changes: repo.dirty.map((path) => ({
+                path,
+                origPath: null,
+                staged: null,
+                unstaged: "modified",
+                conflict: null,
+              })),
+              overwritten: [],
+            },
+            fingerprint: "fp",
+          });
           return true;
         case "git.reset": {
           // 실제처럼 준 것만 대조한다(`expected` · `expectedRef` 는 선택 칸 — 없으면 대조하지 않는다).
@@ -406,8 +420,22 @@ export function createGitHost(repo: FakeRepo): FakeGitHost {
             fail(error(-32004, "HEAD moved since it was read", { head: tipOfHead() }));
             return true;
           }
-          repo.branches.set(repo.head, params.commit as string);
-          reply({ head: params.commit });
+          const write = () => {
+            repo.branches.set(repo.head, params.commit as string);
+            reply({ head: params.commit });
+          };
+          // soft · mixed 는 작업 트리를 건드리지 않는다. keep · hard 는 작업 트리 쓰기라 미저장 확인을 묻는다
+          // (crates/pw-git/src/history/methods.rs `reset` 의 `Changes::WorkTree` → write/mod.rs `confirm_unsaved`).
+          if (params.mode !== "keep" && params.mode !== "hard") {
+            write();
+            return true;
+          }
+          void ask(null).then((answer) => {
+            if (answer === undefined)
+              return fail(error(2006, "no project window is listening for git prompts"));
+            if (answer.kind !== "proceed") return fail(error(-32002, "cancelled"));
+            write();
+          });
           return true;
         }
       }

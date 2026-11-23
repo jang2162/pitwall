@@ -519,7 +519,12 @@ export function GitSendFeature() {
   const activeMachine = useActiveMachine();
   const activeWorktree = useActiveWorktree();
   const [stage, setStage] = useState<Stage>();
-  const [undoMachine, setUndoMachine] = useState<string>();
+  /**
+   * 되돌리는 중인 대상 머신(겹치면 여럿). 되돌리기(`git.reset` keep)는 작업 트리 쓰기라 대상 Host 가 그 프로젝트의 `git.prompts` 를
+   * 듣는 창에 미저장 확인을 묻는다 — 듣는 창이 없으면 `2006` 으로 하지 않는다(M7-17 리뷰 B1). 그래서 되돌리기가 끝날 때까지 그 머신의
+   * 듣기(`TargetPrompts`)를 둔다. 보내기의 듣기와 같은 수명 규칙이다(확인 · 보내기 동안).
+   */
+  const [undoing, setUndoing] = useState<readonly string[]>([]);
   useStatusBarItem({ id: "gitSend", ...STATUS_SLOTS.gitSend, component: SendProgressItem });
 
   const members = useStore(hosts?.store ?? NO_HOSTS, (s) => s.directory.members);
@@ -624,7 +629,14 @@ export function GitSendFeature() {
           run: () => {
             const machine = plan.target.machine;
             const release = hosts.retain(machine);
-            setUndoMachine(machine);
+            setUndoing((now) => [...now, machine]);
+            const done = () => {
+              release();
+              setUndoing((now) => {
+                const at = now.indexOf(machine);
+                return at < 0 ? now : [...now.slice(0, at), ...now.slice(at + 1)];
+              });
+            };
             void hosts
               .client(machine)
               .then(({ client, projectId }) =>
@@ -644,7 +656,7 @@ export function GitSendFeature() {
               .catch((e: unknown) =>
                 notify({ level: "error", title: D.undo.failed, body: errorText(e) }),
               )
-              .finally(release);
+              .finally(done);
           },
         });
       }
@@ -652,10 +664,14 @@ export function GitSendFeature() {
     notify({ ...text, ...(buttons.length > 0 && { actions: buttons }) });
   };
 
-  const target =
-    stage && stage.kind !== "pick" && stage.plan.target.machine !== activeMachine
-      ? stage.plan.target.machine
-      : undefined;
+  // 대상 머신의 `git.prompts` 듣기 — 확인 · 보내기 동안의 대상과 되돌리는 중인 대상. 활성 체크아웃 머신은 창의 것이 이미 듣는다.
+  const listening = [
+    ...new Set([
+      ...(stage && stage.kind !== "pick" ? [stage.plan.target.machine] : []),
+      ...undoing,
+    ]),
+  ].filter((m) => m !== activeMachine);
+  const undoMachine = undoing.at(-1);
 
   return (
     <>
@@ -675,7 +691,9 @@ export function GitSendFeature() {
           onGo={(head) => void run(stage.plan, head)}
         />
       )}
-      {target !== undefined && <TargetPrompts key={target} machine={target} />}
+      {listening.map((machine) => (
+        <TargetPrompts key={machine} machine={machine} />
+      ))}
       <TargetMachineProvider machine={undoMachine ?? LOCAL_MACHINE}>
         {dialogs.element}
       </TargetMachineProvider>

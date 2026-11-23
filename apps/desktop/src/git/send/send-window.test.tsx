@@ -8,6 +8,7 @@
 // 머신 `MINI` 의 멤버(`r1`)가 **같은 작업 트리 경로**(`/work/demo`)를 가진다 — 머신을 섞으면 경로가 같아 티가 나지 않는 자리를 잡는다.
 
 import { EditorView } from "@codemirror/view";
+import { ActionRegistry } from "@pitwall/keymap";
 import type { DockviewApi } from "dockview-react";
 import { act as reactAct } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -16,6 +17,7 @@ import { afterEach, beforeEach, expect, vi } from "vitest";
 import defaultTheme from "../../../../../extensions/theme-default/themes/default.json";
 import { App } from "../../App";
 import { checkoutKey, qualify } from "../../checkout/checkout";
+import { openTab } from "../../editor/editor-tabs";
 import { resetWindowFileTree } from "../../file-tree/project-view";
 import type { KeymapNative } from "../../keymap/native";
 import { activeWorktreeStore } from "../../open-with/active-worktree";
@@ -355,6 +357,8 @@ it("preselects the source checkout's last target in the picker", async () => {
 it("names both real machines in the confirmation and writes only through the target machine's connection", async () => {
   local.repo.dirty = ["notes.txt"];
   mini.repo.runs = [{ worktree: null, state: "running" }];
+  // 다른 워크트리의 터미널은 「대상 체크아웃에서 도는 것」 이 아니다(리뷰 R8).
+  mini.repo.terminals = [{ worktree: "/work/demo-wt", state: "running" }];
   await mount();
   await runAction("git.send.open");
   const item = await vi.waitFor(() => itemFor(MINI)!);
@@ -374,7 +378,9 @@ it("names both real machines in the confirmation and writes only through the tar
   expect(dialog.querySelector("h2")?.textContent).toContain("feat");
   // 원본의 커밋 안 한 변경 · 대상에서 도는 실행을 알린다(막지 않는다).
   expect(dialog.querySelector("[data-send-note=uncommitted]")).not.toBeNull();
-  expect(dialog.querySelector("[data-send-note=busy]")?.textContent).toContain("1");
+  expect(dialog.querySelector("[data-send-note=busy]")?.textContent).toContain(
+    "실행 1개 · 터미널 0개",
+  );
 
   await act(async () => dialog.querySelector<HTMLButtonElement>("[data-send-go]")!.click());
   await vi.waitFor(() => expect(mini.repo.branches.get("feat")).toBe("c1"));
@@ -503,4 +509,100 @@ it("asks about the remote checkout's unsaved document when receiving into it", a
   );
   expect(mini.repo.branches.has("feat")).toBe(false);
   void dock;
+});
+
+/** 창의 액션 레지스트리를 잡는다(키맵 공급자가 만든 것 — 맨 처음 등록을 받은 것). 마운트 전에 부른다. */
+function captureRegistry(): () => ActionRegistry {
+  // 원래 구현을 그대로 부르는 감시 — 첫 호출의 `this` 가 창의 레지스트리다.
+  const spy = vi.spyOn(ActionRegistry.prototype, "register");
+  return () => spy.mock.contexts[0] as ActionRegistry;
+}
+
+const undoIn = (toast: HTMLElement) =>
+  [...toast.querySelectorAll<HTMLButtonElement>("button")].find(
+    (b) => b.textContent === "되돌리기",
+  );
+
+// 리뷰 B1 · F3: 대상이 활성 체크아웃 머신이 아닐 때의 [되돌리기] — `git.reset` keep 은 작업 트리 쓰기라 대상 Host 가 그 머신의
+// `git.prompts` 를 듣는 창에 묻는다(가짜도 실제처럼 듣는 창이 없으면 `2006`). 잃을 변경이 있으면 확인 창이 뜨고, 그 머신 문장은
+// 실제 대상 머신(mini)이다.
+it("keeps listening on the target machine while undoing there and names that machine in the undo confirmation", async () => {
+  mini.repo.branches.set("feat", "c0");
+  await mount();
+  await sendTo(MINI);
+  const toast = await vi.waitFor(() => {
+    const found = toasts().find((t) => undoIn(t));
+    expect(found).toBeDefined();
+    return found!;
+  });
+  // 보내기가 끝나 대상 듣기는 닫혔다. 그사이 대상 작업 트리에 커밋 안 한 변경이 생겼다 — 되돌리면 잃을 것이 있다.
+  await vi.waitFor(() => expect(mini.listeners()).toBe(0));
+  mini.repo.dirty = ["notes.txt"];
+  await act(async () => undoIn(toast)!.click());
+  const dialog = await vi.waitFor(() => {
+    const found = document.querySelector<HTMLElement>("[data-testid=git-confirm-dialog]");
+    expect(found).not.toBeNull();
+    return found!;
+  });
+  const line = dialog.querySelector<HTMLElement>("[data-testid=target-machine]");
+  expect(line?.dataset.machine).toBe(MINI);
+  expect(line?.textContent).toContain("mini");
+  const yes = [...dialog.querySelectorAll<HTMLButtonElement>("button")].find(
+    (b) => b.textContent === "되돌리기",
+  )!;
+  await act(async () => yes.click());
+  await vi.waitFor(() => expect(mini.repo.branches.get("feat")).toBe("c0"));
+  // 되돌리기가 끝나면 그 머신 듣기도 놓는다.
+  await vi.waitFor(() => expect(mini.listeners()).toBe(0));
+});
+
+// 리뷰 F1: 활성 체크아웃은 이 머신이고 mini 의 파일 탭을 고쳐 둔 채 mini 로 보낸다 — 대상 듣기가 그 머신 접두로 미저장 문서를
+// 찾아 묻는다(두 머신의 경로가 같다).
+it("asks about an unsaved document of the inactive target machine before applying there", async () => {
+  await mount();
+  await act(
+    async () =>
+      void openTab(dock!, { path: qualify(MINI, FILE), worktree: checkoutKey({ machine: MINI }) }),
+  );
+  const view = await vi.waitFor(() => {
+    const found = [...document.querySelectorAll<HTMLElement>(".cm-editor")]
+      .map((e) => EditorView.findFromDOM(e)!)
+      .find((v) => v.state.doc.toString().includes("remote text"));
+    expect(found).toBeDefined();
+    return found!;
+  });
+  await act(async () =>
+    view.dispatch({ changes: { from: 0, insert: "edited " }, userEvent: "input.type" }),
+  );
+  await settle();
+  await sendTo(MINI);
+  await vi.waitFor(() =>
+    expect(document.querySelector("[data-testid=unsaved-dialog]")).not.toBeNull(),
+  );
+  expect(mini.repo.branches.has("feat")).toBe(false);
+});
+
+// 리뷰 F2: [거기서 실행] · [거기서 터미널] 은 대상 체크아웃(mini)을 싣는다 — 활성 체크아웃(이 머신)이 아니다.
+it("opens Run There and Terminal There on the target checkout", async () => {
+  const registry = captureRegistry();
+  await mount();
+  const calls: unknown[] = [];
+  for (const id of ["run.chooseIn", "terminal.newTabIn"])
+    registry().register({ id, label: id, args: true, run: (a) => void calls.push([id, a]) });
+  await sendTo(MINI);
+  const toast = await vi.waitFor(() => {
+    const found = toastWith("거기서 실행");
+    expect(found).toBeDefined();
+    return found!;
+  });
+  for (const label of ["거기서 실행", "거기서 터미널"]) {
+    const button = [...toast.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === label,
+    )!;
+    await act(async () => button.click());
+  }
+  expect(calls).toEqual([
+    ["run.chooseIn", { checkout: { machine: MINI, worktree: null } }],
+    ["terminal.newTabIn", { checkout: { machine: MINI, worktree: null } }],
+  ]);
 });
