@@ -37,6 +37,7 @@ mod git;
 mod plan_tiers;
 mod project;
 mod project_write;
+mod remote_run;
 mod run;
 mod run_chain;
 mod run_exec;
