@@ -53,7 +53,18 @@ pub fn assemble_serving(
     open_requests: pw_core::open::OpenRequests,
     mcp_sessions: pw_mcp::sessions::Sessions,
 ) -> Assembled {
-    open_requests.attach(Arc::new(open_requests.desks()));
+    let desks = open_requests.desks();
+    open_requests.attach(Arc::new(desks.clone()));
+    // 프로젝트 없는 승인 요청은 열기 요청과 같이 마지막으로 사람 입력이 있던 owner Desktop 으로(결정 M7-D3 — 18-m7-plan M7-20).
+    mcp_sessions.approvals().choose_front_by(Arc::new(move || {
+        let desks = desks.clone();
+        Box::pin(async move {
+            desks
+                .latest_input_window()
+                .await
+                .and_then(|w| w.rsplit_once('/').map(|(device, _)| device.to_owned()))
+        })
+    }));
     let engine = semver::Version::parse(crate::VERSION).unwrap_or(semver::Version::new(0, 0, 0));
     let extensions = Arc::new(pw_ext::Registry::load(&pw_ext::LoadOptions::with_data_dir(
         engine,

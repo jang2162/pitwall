@@ -24,6 +24,9 @@ use serde_json::{Value, json};
 
 use crate::windows::ProjectOpen;
 
+/// 듣는 연결의 창 label(그런 창은 없다 — Relay 가 이 Desktop 의 기기 id 를 아는 데만 쓴다).
+pub const LISTENER_LABEL: &str = "open-listener";
+
 /// 붙은 원격 호스트 목록을 다시 보는 간격.
 pub const FOLLOW_EVERY: Duration = Duration::from_secs(1);
 /// 입력이 없었던 Desktop 의 「지난 시간」.
@@ -147,7 +150,13 @@ pub async fn listen(
     input: Arc<LastInput>,
     windows: Arc<dyn Windows>,
 ) {
-    let Ok(connection) = host.connect(Caller::new(Role::Owner)).await else {
+    // 창 label 을 싣는다 — 링크가 `<기기 id>/<label>` 로 붙여 Relay 가 「마지막 입력 Desktop」 의 기기를 안다(프로젝트 없는 승인 요청을
+    // 그 Desktop 의 창에 보인다 — 18-m7-plan M7-20 · 결정 M7-D3). 이 label 의 창은 없다.
+    let caller = Caller {
+        window: Some(LISTENER_LABEL.to_owned()),
+        ..Caller::new(Role::Owner)
+    };
+    let Ok(connection) = host.connect(caller).await else {
         return;
     };
     let mut rpc = Rpc::new(connection);

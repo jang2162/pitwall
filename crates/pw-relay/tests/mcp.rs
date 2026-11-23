@@ -601,37 +601,80 @@ async fn the_first_of_two_desktops_to_answer_wins() {
     assert!(f.run_file("first").exists());
 }
 
-/// ⑥ Desktop 이 둘일 때 프로젝트 없는 요청(`project_register`)은 한 Desktop 의 창 하나에만 보인다.
+/// 열기 요청을 듣는 Desktop 흉내(`open.listen` — Desktop 의 `remote_open` 처럼 창 label 을 싣고 연다): 「입력 뒤 지난 시간」 질문에
+/// `idle` 로 답한다. 돌려준 것을 버리면 듣기를 그만둔다.
+async fn desk(remote: &RemoteHost, idle: u64) -> tokio::task::JoinHandle<()> {
+    let mut rpc = Rpc::open(
+        remote,
+        Caller {
+            window: Some("open-listener".into()),
+            ..Caller::new(Role::Owner)
+        },
+    )
+    .await;
+    let opened = rpc.call("open.listen", json!({})).await;
+    assert!(opened["error"].is_null(), "{opened}");
+    let stream = opened["result"]["streamId"].clone();
+    rpc.0.sink.send(json!({"jsonrpc": "2.0", "method": "stream.credit", "params": {"streamId": stream, "credit": 64}}));
+    let first = rpc.event().await.unwrap();
+    let token = first["listener"].as_str().unwrap().to_owned();
+    tokio::spawn(async move {
+        while let Ok(event) = rpc.event().await {
+            if event["kind"] == "query" {
+                rpc.send(
+                    "open.answer",
+                    json!({"listener": token, "requestId": event["requestId"], "answer": {"kind": "idle", "idleMs": idle}}),
+                );
+            }
+        }
+    })
+}
+
+/// ⑥ Desktop 이 둘일 때 프로젝트 없는 요청(`project_register`)은 한 Desktop 의 창 하나에만 보이고, 그 Desktop 은 **마지막으로 사람
+/// 입력이 있던 것**이다(결정 M7-D3 — 열기 요청과 같은 길, 입력 시각은 Desktop 이 낸다). 나중에 듣기 시작했어도 입력이 더 오래된
+/// Desktop 으로 가지 않는다. 듣는 Desktop(`open.listen`)이 없으면 다른 창으로 떨어지지 않고 거절이다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_projectless_request_shows_on_one_desktop_only() {
+async fn a_projectless_request_goes_to_the_desktop_with_the_latest_input() {
     let f = fixture("");
     let mac = f.desktop(Role::Owner, "mac").await;
     let laptop = f.desktop(Role::Owner, "laptop").await;
     f.owners(2).await;
-    let mut one = Rpc::open(&mac, f.project_caller("mac/project-1")).await;
-    f.listen(&mut one, Some(&f.project)).await.unwrap();
-    let mut two = Rpc::open(&laptop, f.project_caller("laptop/project-1")).await;
-    f.listen(&mut two, Some(&f.project)).await.unwrap();
+    // 입력이 최근인 laptop 이 먼저 듣고, 한 시간 전에 입력이 있던 mac 이 나중에 듣는다(허브의 「가장 최근 듣기」 라면 mac 이다).
+    let mut here = Rpc::open(&laptop, f.project_caller("project-1")).await;
+    f.listen(&mut here, Some(&f.project)).await.unwrap();
+    let mut away = Rpc::open(&mac, f.project_caller("project-1")).await;
+    f.listen(&mut away, Some(&f.project)).await.unwrap();
 
     let agent = f.agent().await;
     let other = f.work.join("other");
     std::fs::create_dir_all(&other).unwrap();
+
+    // 열기 요청을 듣는 Desktop 이 없다 — 마지막 입력을 모르니 창이 있어도 보이지 않고 거절이다.
+    let refused = agent.call("project_register", json!({"root": other})).await;
+    assert_eq!(reason(&refused), Some("needs_approval"), "{refused}");
+    assert!(here.quiet(Duration::from_millis(200)).await);
+    assert!(away.quiet(Duration::from_millis(200)).await);
+
+    let _away_desk = desk(&mac, 3_600_000).await;
+    let _here_desk = desk(&laptop, 800).await;
     let mut call = agent
         .spawn_call("project_register", json!({"root": other}))
         .await;
-    let shown = tokio::select! {
+    let request = tokio::select! {
         r = &mut call => panic!("the call ended without asking: {r:?}"),
-        request = one.opened() => (request, &mut two),
-        request = two.opened() => (request, &mut one),
+        request = here.opened() => request,
+        request = away.opened() => panic!("the desktop with the older input got it: {request}"),
     };
-    let (request, rest) = shown;
     assert_eq!(request["notThisProject"], true);
     assert_eq!(request["projectId"], Value::Null);
     assert!(
-        rest.quiet(Duration::from_millis(500)).await,
+        away.quiet(Duration::from_millis(500)).await,
         "both desktops saw it"
     );
-    drop(call);
+    let answered = here.answer(&request["id"], "deny").await;
+    assert!(answered["error"].is_null(), "{answered}");
+    let result = settle(call).await;
+    assert_eq!(reason(&result), Some("approval_denied"), "{result}");
 }
 
 /// ⑦ 붙은 owner Desktop 이 없으면 `auto_approve` 에 든 등급이어도 `write` 이상은 헤드리스처럼 거절된다(결정 M7-D10 ④). 붙으면

@@ -208,11 +208,21 @@ pub struct Approvals {
 /// 「붙은 사람이 있는가」([`Approvals::require_attendance`]).
 pub type Attendance = Arc<dyn Fn() -> bool + Send + Sync>;
 
+/// 프로젝트 없는 요청을 보일 Desktop 고르기([`Approvals::choose_front_by`]): 마지막으로 사람 입력이 있던 Desktop 의 기기 id. 모르면
+/// `None`(그 요청은 거절된다).
+pub type FrontDesktop = Arc<
+    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
+        + Send
+        + Sync,
+>;
+
 #[derive(Default)]
 struct Shared {
     state: Mutex<State>,
     /// 걸리지 않았으면 늘 붙은 것으로 본다(Desktop — 창이 이 프로세스 안에 있다).
     attendance: Mutex<Option<Attendance>>,
+    /// 걸리지 않았으면 프로젝트 없는 요청은 포커스 순서로 고른다(Desktop).
+    front_desktop: Mutex<Option<FrontDesktop>>,
     /// 승인을 지나는 중인 호출 수([`Approvals::hold`]) — 끝낼 때 그 호출들이 감사 기록을 큐에 넣을 때까지 기다린다.
     holding: AtomicUsize,
 }
@@ -282,6 +292,19 @@ impl State {
                 (focus, **id)
             })
             .map(|(id, _)| *id)
+    }
+
+    /// 기기 `device` 의 창(링크의 label `<기기 id>/<label>`)으로 듣는 것 가운데 가장 최근 것.
+    fn front_of(&self, device: &str) -> Option<u64> {
+        self.live()
+            .filter(|(_, l)| {
+                l.window
+                    .as_deref()
+                    .and_then(|w| w.rsplit_once('/'))
+                    .is_some_and(|(d, _)| d == device)
+            })
+            .map(|(id, _)| *id)
+            .max()
     }
 
     fn send(&mut self, route: &Route, event: &McpApprovalEvent) {
@@ -367,6 +390,18 @@ impl Approvals {
         attendance.is_none_or(|attended| attended())
     }
 
+    /// 창이 없는 Host(Relay)가 프로젝트 없는 요청의 행선지를 「마지막으로 사람 입력이 있던 owner Desktop」 으로 건다(결정 M7-D3 —
+    /// 열기 요청과 같은 길, `pw_core::open::desks`). 건 뒤에는 요청마다 그 Desktop 의 기기 id 를 묻고, 창 label 이 그 기기의 것
+    /// (`<기기 id>/<label>` — 링크의 label)인 듣기 가운데 가장 최근 것 하나에 보인다. 모르거나 그 Desktop 에 듣는 창이 없으면 거절이다
+    /// — 다른 Desktop 으로 떨어지지 않는다. 입력 시각은 Desktop 이 내고 Relay 는 비교만 한다.
+    pub fn choose_front_by(&self, front: FrontDesktop) {
+        *self
+            .inner
+            .front_desktop
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(front);
+    }
+
     /// 창 `window` 가 앞으로 왔다(앱의 창 이벤트).
     pub fn focused(&self, window: &str) {
         let mut state = self.lock();
@@ -411,15 +446,32 @@ impl Approvals {
 
     /// 창에 묻고 답을 기다린다. 보일 창이 없으면 기다리지 않는다. 이 future 를 버리면 요청을 거둔다(창에 닫힘이 간다).
     pub async fn ask(&self, ask: ApprovalAsk) -> Result<McpApprovalAnswer, AskError> {
+        // 프로젝트 없는 요청이고 행선지를 고르는 길이 걸렸으면(Relay) 그 Desktop 을 먼저 묻는다 — 묻는 동안 잠그지 않는다.
+        let chooser = match ask.project_id {
+            Some(_) => None,
+            None => self
+                .inner
+                .front_desktop
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone(),
+        };
+        let desktop = match chooser {
+            Some(choose) => Some(choose().await.ok_or(AskError::NoWindow)?),
+            None => None,
+        };
         let (rx, _closing) = {
             let mut state = self.lock();
             if state.closed {
                 return Err(AskError::Shutdown);
             }
-            let route = match &ask.project_id {
-                Some(project) if state.hears(project) => Route::Project(project.clone()),
-                Some(_) => return Err(AskError::NoWindow),
-                None => Route::Listener(state.front().ok_or(AskError::NoWindow)?),
+            let route = match (&ask.project_id, &desktop) {
+                (Some(project), _) if state.hears(project) => Route::Project(project.clone()),
+                (Some(_), _) => return Err(AskError::NoWindow),
+                (None, Some(device)) => {
+                    Route::Listener(state.front_of(device).ok_or(AskError::NoWindow)?)
+                }
+                (None, None) => Route::Listener(state.front().ok_or(AskError::NoWindow)?),
             };
             let waiting = state
                 .pending

@@ -142,6 +142,9 @@ struct Pending {
 struct Listener {
     token: String,
     events: mpsc::Sender<OpenEvent>,
+    /// 듣는 연결의 창 label(링크로 왔으면 `<기기 id>/<label>`). 승인 허브가 「마지막 입력 Desktop」 의 창을 고를 때 쓴다
+    /// ([`Desks::latest_input_window`] — 18-m7-plan M7-20).
+    window: Option<String>,
 }
 
 #[derive(Default)]
@@ -214,6 +217,11 @@ impl Desks {
 
     /// 듣기를 연다.
     pub fn listen(&self) -> Listening {
+        self.listen_from(None)
+    }
+
+    /// [`Self::listen`] 인데 듣는 연결의 창 label 을 기억한다.
+    pub fn listen_from(&self, window: Option<String>) -> Listening {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let token = super::token();
         let (tx, rx) = mpsc::channel(QUEUE);
@@ -222,6 +230,7 @@ impl Desks {
             Listener {
                 token: token.clone(),
                 events: tx,
+                window,
             },
         );
         Listening {
@@ -277,43 +286,58 @@ impl Desks {
         self.lock().pending.remove(&(token.to_owned(), request_id));
     }
 
-    /// 요청 하나를 마지막 입력 Desktop 에 넘기고 그 답을 기다린다.
-    pub async fn open(&self, request: &OpenRequest) -> Result<OpenedIn, DeskError> {
-        let listeners: Vec<(String, mpsc::Sender<OpenEvent>)> = self
+    /// 듣는 Desktop 모두에 「입력 뒤 지난 시간」 을 묻고 가장 작은 값을 낸 듣기를 고른다. 아무도 답하지 않으면 `None`.
+    async fn latest_input(
+        &self,
+        request_id: u64,
+    ) -> Option<(String, mpsc::Sender<OpenEvent>, Option<String>)> {
+        let listeners: Vec<(String, mpsc::Sender<OpenEvent>, Option<String>)> = self
             .lock()
             .listeners
             .values()
-            .map(|l| (l.token.clone(), l.events.clone()))
+            .map(|l| (l.token.clone(), l.events.clone(), l.window.clone()))
             .collect();
-        if listeners.is_empty() {
-            return Err(DeskError::NoDesktop);
-        }
-        let request_id = self.next.fetch_add(1, Ordering::Relaxed);
         let asked: Vec<_> = listeners
-            .iter()
-            .filter_map(|(token, events)| {
+            .into_iter()
+            .filter_map(|(token, events, window)| {
                 self.ask(
-                    token,
-                    events,
+                    &token,
+                    &events,
                     request_id,
                     Phase::Query,
                     OpenEvent::Query { request_id },
                 )
-                .map(|rx| (token.clone(), events.clone(), rx))
+                .map(|rx| (token, events, window, rx))
             })
             .collect();
         let deadline = tokio::time::Instant::now() + QUERY_TIMEOUT;
-        let mut best: Option<(u64, String, mpsc::Sender<OpenEvent>)> = None;
-        for (token, events, rx) in asked {
+        let mut best: Option<(u64, String, mpsc::Sender<OpenEvent>, Option<String>)> = None;
+        for (token, events, window, rx) in asked {
             let answer = tokio::time::timeout_at(deadline, rx).await;
             self.forget(&token, request_id);
             if let Ok(Ok(OpenAnswer::Idle { idle_ms })) = answer
                 && best.as_ref().is_none_or(|(b, ..)| idle_ms < *b)
             {
-                best = Some((idle_ms, token, events));
+                best = Some((idle_ms, token, events, window));
             }
         }
-        let Some((_, token, events)) = best else {
+        best.map(|(_, token, events, window)| (token, events, window))
+    }
+
+    /// 마지막으로 사람 입력이 있던 Desktop 의 듣기 연결 창 label(링크로 왔으면 `<기기 id>/<label>`). 승인 허브가 프로젝트 없는
+    /// 요청을 그 Desktop 의 창에 보이는 데 쓴다(결정 M7-D3 — 18-m7-plan M7-20). 듣는 Desktop 이 없거나 아무도 답하지 않았거나
+    /// 고른 듣기에 창 label 이 없으면 `None`.
+    pub async fn latest_input_window(&self) -> Option<String> {
+        let request_id = self.next.fetch_add(1, Ordering::Relaxed);
+        self.latest_input(request_id)
+            .await
+            .and_then(|(.., window)| window)
+    }
+
+    /// 요청 하나를 마지막 입력 Desktop 에 넘기고 그 답을 기다린다.
+    pub async fn open(&self, request: &OpenRequest) -> Result<OpenedIn, DeskError> {
+        let request_id = self.next.fetch_add(1, Ordering::Relaxed);
+        let Some((token, events, _)) = self.latest_input(request_id).await else {
             return Err(DeskError::NoDesktop);
         };
         let open = OpenEvent::Open {
@@ -372,7 +396,7 @@ pub fn register(router: &mut Router, desks: Desks) {
         let desks = d.clone();
         async move {
             host_scope(&ctx)?;
-            let mut listening = desks.listen();
+            let mut listening = desks.listen_from(ctx.window().map(str::to_owned));
             sink.send(OpenEvent::Listening {
                 listener: listening.token().to_owned(),
             })
