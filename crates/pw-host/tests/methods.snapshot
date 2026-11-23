@@ -286,9 +286,12 @@ syntax.highlights Unary Read {Owner, Mobile, Readonly}
 syntax.open Unary Read {Owner, Mobile, Readonly}
 task.cancel Unary Write {Owner}
 task.list Unary Read {Owner, Mobile, Readonly}
+terminal.attach Stream Exec {Owner}
 terminal.close Unary Exec {Owner}
 terminal.create Stream Exec {Owner}
+terminal.detach Unary Exec {Owner}
 terminal.input Unary Exec {Owner}
+terminal.list Unary Read {Owner}
 terminal.resize Unary Write {Owner}
 theme.get Unary Read {Owner, Mobile, Readonly}
 theme.list Unary Read {Owner, Mobile, Readonly}

@@ -1453,13 +1453,26 @@ export type UnaryMethods = {
 	"task.list": { params: TaskListParams; result: TaskInfo[] };
 	/**
 	 * 셸과 그 세션의 프로세스를 끝낸다(SIGHUP, 남으면 SIGKILL). 스트림은 남은 출력과 `exited` 를 보내고 끝난다. 이미 끝난
-	 * 터미널 · 다른 세션이 연 터미널이면 아무것도 하지 않는다.
+	 * 터미널 · 다른 세션이 연 터미널이면 아무것도 하지 않는다. 원격 Host 에서는 그 프로젝트의 창이면 떼어진 터미널도 끝낸다(다른
+	 * 범위는 permission denied).
 	 */
 	"terminal.close": { params: TerminalCloseParams; result: null };
+	/**
+	 * 원격 Host 의 터미널에서 이 연결의 스트림을 떼고 셸은 둔다([두고 닫기] — 18-m7-plan M7-09 ②). 떼어진 터미널은 머신당 16개까지
+	 * — 넘으면 `endOldest` 가 아닐 때 conflict 오류(`data.wouldEnd`)로 아무것도 하지 않고, `endOldest` 면 가장 오래 떼어진 것부터
+	 * 끝낸다. 로컬 Host 는 invalid params(창이 닫히면 끝난다), 프로젝트 창이 아니면 permission denied, 다른 프로젝트의 번호는 없는
+	 * 터미널(invalid params).
+	 */
+	"terminal.detach": { params: TerminalDetachParams; result: TerminalDetached };
 	/**
 	 * 셸에 입력을 보낸다. 끝난 터미널 · 다른 세션이 연 터미널이면 invalid params 오류.
 	 */
 	"terminal.input": { params: TerminalInputParams; result: null };
+	/**
+	 * 그 프로젝트의 원격 Host 터미널(붙음 · 떼어짐 · 떼어진 채 끝남). 다시 붙은 창이 읽어 체크아웃마다 다시 연다. 그 프로젝트의
+	 * 창만(아니면 permission denied). 로컬 Host 는 늘 비었다.
+	 */
+	"terminal.list": { params: TerminalListParams; result: TerminalList };
 	/**
 	 * PTY 크기를 바꾼다(셸은 SIGWINCH 를 받는다). 끝난 터미널 · 다른 세션이 연 터미널 · 0 인 크기는
 	 * invalid params 오류.
@@ -1611,6 +1624,12 @@ export type StreamMethods = {
 	 * 글롭은 invalid params 로, 없는 경로는 `NOT_FOUND` 로 스트림이 `failed` 로 끝난다(청크 없이).
 	 */
 	"search.text": { params: SearchTextParams; item: SearchTextChunk };
+	/**
+	 * 원격 Host 의 터미널에 다시 붙어 `since` 오프셋부터 출력을 받는다(`attached` 하나 → `output` 여럿 → 끝났으면 `exited`). 스트림을
+	 * 끊어도 셸은 돈다. 그 프로젝트의 창 · owner 만 — 다른 범위는 permission denied, 다른 프로젝트의 번호 · 없는 터미널은 invalid
+	 * params.
+	 */
+	"terminal.attach": { params: TerminalAttachParams; item: TerminalAttachEvent };
 	/**
 	 * 프로젝트의 디렉터리에서 셸을 PTY 로 띄운다(결정 M1-D14: `$SHELL -l`, 전역 설정 `[terminal] shell` 로 덮기). 환경은 그
 	 * 디렉터리의 런타임 환경 + `TERM=xterm-256color` · `COLORTERM=truecolor` · `TERM_PROGRAM=Pitwall`. 출력은 credit 스트림(청크는 16 KiB
@@ -1914,9 +1933,12 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"syntax.open": {"name":"syntax.open","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SyntaxOpenParams","output":"SyntaxOpenResult","doc":" 문서를 연다(이미 있는 id 면 다시 연다). 문법을 처음 쓰면 여기서 올린다. 문법을 올리지 못하면 internal 오류다(그 문서는\n 닫힌다). 크기 상한을 넘는 문서는 열지 않고 `off` 로 알린다.\n","mcp":null,"fileScope":true},
 	"task.cancel": {"name":"task.cancel","kind":"unary","tier":"write","roles":["owner"],"params":"TaskCancelParams","output":"bool","doc":" 작업을 취소한다. 그런 작업이 없으면(이미 끝남 · 모르는 id) `false`. 취소된 작업의 종료 알림은 `cancelled` 다.\n","mcp":null,"fileScope":false},
 	"task.list": {"name":"task.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"TaskListParams","output":"Vec<TaskInfo>","doc":" 끝나지 않은 작업(id 순). 진행 · 종료 알림(`task.progress` · `task.finished`)을 구독하기 전에 시작한 작업을 읽는다.\n","mcp":null,"fileScope":false},
-	"terminal.close": {"name":"terminal.close","kind":"unary","tier":"exec","roles":["owner"],"params":"TerminalCloseParams","output":"()","doc":" 셸과 그 세션의 프로세스를 끝낸다(SIGHUP, 남으면 SIGKILL). 스트림은 남은 출력과 `exited` 를 보내고 끝난다. 이미 끝난\n 터미널 · 다른 세션이 연 터미널이면 아무것도 하지 않는다.\n","mcp":null,"fileScope":false},
+	"terminal.attach": {"name":"terminal.attach","kind":"stream","tier":"exec","roles":["owner"],"params":"TerminalAttachParams","output":"TerminalAttachEvent","doc":" 원격 Host 의 터미널에 다시 붙어 `since` 오프셋부터 출력을 받는다(`attached` 하나 → `output` 여럿 → 끝났으면 `exited`). 스트림을\n 끊어도 셸은 돈다. 그 프로젝트의 창 · owner 만 — 다른 범위는 permission denied, 다른 프로젝트의 번호 · 없는 터미널은 invalid\n params.\n","mcp":null,"fileScope":false},
+	"terminal.close": {"name":"terminal.close","kind":"unary","tier":"exec","roles":["owner"],"params":"TerminalCloseParams","output":"()","doc":" 셸과 그 세션의 프로세스를 끝낸다(SIGHUP, 남으면 SIGKILL). 스트림은 남은 출력과 `exited` 를 보내고 끝난다. 이미 끝난\n 터미널 · 다른 세션이 연 터미널이면 아무것도 하지 않는다. 원격 Host 에서는 그 프로젝트의 창이면 떼어진 터미널도 끝낸다(다른\n 범위는 permission denied).\n","mcp":null,"fileScope":false},
 	"terminal.create": {"name":"terminal.create","kind":"stream","tier":"exec","roles":["owner"],"params":"TerminalCreateParams","output":"TerminalEvent","doc":" 프로젝트의 디렉터리에서 셸을 PTY 로 띄운다(결정 M1-D14: `$SHELL -l`, 전역 설정 `[terminal] shell` 로 덮기). 환경은 그\n 디렉터리의 런타임 환경 + `TERM=xterm-256color` · `COLORTERM=truecolor` · `TERM_PROGRAM=Pitwall`. 출력은 credit 스트림(청크는 16 KiB\n 이하)이고, 소비자가 읽지 않으면 Host 버퍼(512 KiB)가 찬 뒤 셸이 쓰기에서 멈춘다 — 기본 window(32)면 내보낸 청크와 합쳐\n 1 MiB 를 넘지 않는다. `terminalId` 는 이 세션(연결) 안에서만 유효하다. 없는 프로젝트 · 프로젝트 밖이거나 없는\n `cwd` · 0 인 크기면 스트림이 invalid params 오류로, 그 프로젝트의 창이 아닌 연결(웰컴 · 설정 · 다른 프로젝트 창)이면 permission\n denied 오류로, 셸을 띄우지 못하면 internal 오류로 끝난다(`started` 없이).\n","mcp":null,"fileScope":false},
+	"terminal.detach": {"name":"terminal.detach","kind":"unary","tier":"exec","roles":["owner"],"params":"TerminalDetachParams","output":"TerminalDetached","doc":" 원격 Host 의 터미널에서 이 연결의 스트림을 떼고 셸은 둔다([두고 닫기] — 18-m7-plan M7-09 ②). 떼어진 터미널은 머신당 16개까지\n — 넘으면 `endOldest` 가 아닐 때 conflict 오류(`data.wouldEnd`)로 아무것도 하지 않고, `endOldest` 면 가장 오래 떼어진 것부터\n 끝낸다. 로컬 Host 는 invalid params(창이 닫히면 끝난다), 프로젝트 창이 아니면 permission denied, 다른 프로젝트의 번호는 없는\n 터미널(invalid params).\n","mcp":null,"fileScope":false},
 	"terminal.input": {"name":"terminal.input","kind":"unary","tier":"exec","roles":["owner"],"params":"TerminalInputParams","output":"()","doc":" 셸에 입력을 보낸다. 끝난 터미널 · 다른 세션이 연 터미널이면 invalid params 오류.\n","mcp":null,"fileScope":false},
+	"terminal.list": {"name":"terminal.list","kind":"unary","tier":"read","roles":["owner"],"params":"TerminalListParams","output":"TerminalList","doc":" 그 프로젝트의 원격 Host 터미널(붙음 · 떼어짐 · 떼어진 채 끝남). 다시 붙은 창이 읽어 체크아웃마다 다시 연다. 그 프로젝트의\n 창만(아니면 permission denied). 로컬 Host 는 늘 비었다.\n","mcp":null,"fileScope":false},
 	"terminal.resize": {"name":"terminal.resize","kind":"unary","tier":"write","roles":["owner"],"params":"TerminalResizeParams","output":"()","doc":" PTY 크기를 바꾼다(셸은 SIGWINCH 를 받는다). 끝난 터미널 · 다른 세션이 연 터미널 · 0 인 크기는\n invalid params 오류.\n","mcp":null,"fileScope":false},
 	"theme.get": {"name":"theme.get","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ThemeGetParams","output":"ThemeFile","doc":" 테마 하나의 파일 내용. 없는 id 면 invalid params 오류다.\n","mcp":null,"fileScope":true},
 	"theme.list": {"name":"theme.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"ThemeList","doc":" 등록된 테마 목록.\n","mcp":null,"fileScope":true},
@@ -11043,6 +11065,24 @@ export type TaskProgress = {
 
 export type TaskStatus = { status: "running" } | { status: "completed" } | { status: "failed"; error: string } | { status: "cancelled" };
 
+/**  `terminal.attach` 스트림의 항목. */
+export type TerminalAttachEvent = 
+/**
+ *  첫 항목: 지금의 터미널. `from` 은 처음 보낼 오프셋 — `since` 앞이 링 버퍼에서 버려졌으면 `since` 보다 크고, 그 차이가
+ *  `dropped`(잃은 바이트)다.
+ */
+{ kind: "attached"; terminal: TerminalInfo; from: number; dropped: number } | 
+/**  출력(`terminal.create` 의 `output` 과 같다 — `offset` 이 늘 실린다). */
+{ kind: "output"; offset: number; data: string } | 
+/**  마지막 항목 — 셸이 끝났고 남은 출력을 다 보냈다. */
+{ kind: "exited"; code: number | null };
+
+export type TerminalAttachParams = {
+	terminalId: number,
+	/**  이 오프셋부터 보낸다(받은 마지막 `output` 의 `offset` + 바이트 수). 없으면 0 — 남은 처음부터. */
+	since?: number | null,
+};
+
 export type TerminalCloseParams = {
 	terminalId: number,
 };
@@ -11064,6 +11104,20 @@ export type TerminalCreateParams = {
 	rows: number,
 };
 
+export type TerminalDetachParams = {
+	terminalId: number,
+	/**
+	 *  떼어진 터미널이 상한을 넘으면 가장 오래 떼어진 것부터 끝낸다(사람이 확인했다). 거짓이면 넘을 때 아무것도 하지 않고 conflict
+	 *  오류(`data.wouldEnd` — 끝낼 번호)를 준다.
+	 */
+	endOldest?: boolean,
+};
+
+export type TerminalDetached = {
+	/**  상한 때문에 끝낸 떼어진 터미널. */
+	ended: number[],
+};
+
 /**  `terminal.create` 스트림의 항목. */
 export type TerminalEvent = 
 /**  첫 항목. `terminalId` 로 `terminal.input` · `resize` · `close` 를 부른다. */
@@ -11074,18 +11128,46 @@ pid: number | null;
 shell: string[]; 
 /**  셸의 작업 디렉터리(정규화한 절대 경로). */
 cwd: string } | 
-/**  PTY 출력. `data` 는 바이트의 base64 — 청크 경계가 UTF-8 문자 가운데일 수 있다. */
-{ kind: "output"; data: string } | 
+/**
+ *  PTY 출력. `data` 는 바이트의 base64 — 청크 경계가 UTF-8 문자 가운데일 수 있다. 원격 Host 의 터미널이면 `offset` 은 그
+ *  청크의 첫 바이트의 오프셋(셸이 시작된 뒤 낸 바이트 수) — 앞 청크의 끝보다 크면 그 사이는 링 버퍼에서 버려졌다. 다시 붙을 때
+ *  받은 마지막 끝을 `terminal.attach` 의 `since` 로 준다. 로컬 Host 는 `null`.
+ */
+{ kind: "output"; data: string; offset?: number | null } | 
 /**
  *  마지막 항목(12-m1-plan.md M1-08 의 `terminal.exited { code }`). 출력을 모두 보낸 뒤에 온다. 신호로 끝났으면(`terminal.close`
  *  포함) `code` 가 `null`.
  */
 { kind: "exited"; code: number | null };
 
+/**  Host 수명 터미널 하나(`terminal.list` · `terminal.attach` 의 `attached`). */
+export type TerminalInfo = {
+	terminalId: number,
+	/**  띄울 때 준 워크트리(`terminal.create` 의 `worktree`) — 창이 체크아웃마다 다시 연다. */
+	worktree: string | null,
+	cwd: string,
+	shell: string[],
+	pid: number | null,
+	/**  붙은 스트림이 있는가. 없으면 떼어진 터미널이다. */
+	attached: boolean,
+	/**  셸이 끝났다(남은 출력과 `exited` 는 다음 붙기가 받는다). */
+	exited: boolean,
+	/**  끝 코드(신호로 끝났거나 아직 돌면 `null`). */
+	code: number | null,
+};
+
 export type TerminalInputParams = {
 	terminalId: number,
 	/**  셸에 보낼 글자(키 입력 · 붙여넣기). 받은 순서대로 쓰인다. */
 	data: string,
+};
+
+export type TerminalList = {
+	terminals: TerminalInfo[],
+};
+
+export type TerminalListParams = {
+	projectId: string,
 };
 
 export type TerminalResizeParams = {

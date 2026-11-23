@@ -32,6 +32,8 @@ struct Fixture {
     terminals: Arc<Terminals>,
     project: String,
     root: PathBuf,
+    projects: Projects,
+    bus: EventBus,
 }
 
 impl Fixture {
@@ -62,6 +64,36 @@ impl Fixture {
         cooldown: Duration,
         provider: Option<Arc<dyn RuntimeProvider>>,
     ) -> Self {
+        Self::build(
+            settings,
+            login_shell,
+            timeout,
+            cooldown,
+            provider,
+            Lifetime::Connection,
+        )
+    }
+
+    /// 원격 Host 의 터미널(Host 수명 — 18-m7-plan M7-09 ②). 떼어진 터미널 상한은 `max_detached`.
+    fn hosted(max_detached: usize) -> Self {
+        Self::build(
+            "schema = 1\n",
+            LOGIN_SHELL,
+            Duration::from_secs(5),
+            pw_runtime::login_shell::TIMEOUT_COOLDOWN,
+            None,
+            Lifetime::Host { max_detached },
+        )
+    }
+
+    fn build(
+        settings: &str,
+        login_shell: &str,
+        timeout: Duration,
+        cooldown: Duration,
+        provider: Option<Arc<dyn RuntimeProvider>>,
+        lifetime: Lifetime,
+    ) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let paths = AppPaths::under(&tmp.path().join("app"));
         fs::create_dir_all(&paths.config).unwrap();
@@ -69,7 +101,7 @@ impl Fixture {
         let bus = EventBus::new(DEFAULT_CAPACITY);
         let global = ConfigStore::open(ConfigSource::global(&paths), bus.clone(), Scope::Host);
         assert_eq!(global.fault(), None);
-        let projects = Projects::new(paths, None, bus);
+        let projects = Projects::new(paths, None, bus.clone());
         let home = tmp.path().join("home");
         fs::create_dir_all(&home).unwrap();
         let shell = tmp.path().join("fake-login-shell");
@@ -87,7 +119,7 @@ impl Fixture {
         if let Some(provider) = provider {
             runtime = runtime.with_provider(provider);
         }
-        let terminals = Arc::new(Terminals::new(Arc::new(runtime)));
+        let terminals = Arc::new(Terminals::with_lifetime(Arc::new(runtime), lifetime));
         terminals.attach(HostParts {
             global,
             projects: projects.clone(),
@@ -106,6 +138,8 @@ impl Fixture {
             terminals,
             project: project.id,
             root,
+            projects,
+            bus,
         }
     }
 
@@ -115,13 +149,17 @@ impl Fixture {
     }
 
     fn client_in(&self, scope: ConnectionScope) -> Client {
+        self.client_as(Role::Owner, scope)
+    }
+
+    fn client_as(&self, role: Role, scope: ConnectionScope) -> Client {
         let mut router = Router::new();
         methods::register(&mut router, Arc::clone(&self.terminals));
         let (session, rx) = Session::new(
             Arc::new(router),
             EventHub::new(),
             Caller {
-                role: Role::Owner,
+                role,
                 scope,
                 window: None,
             },
@@ -132,6 +170,7 @@ impl Fixture {
             next_id: 1,
             responses: Vec::new(),
             events: Vec::new(),
+            others: Vec::new(),
             ended: Vec::new(),
         }
     }
@@ -156,6 +195,8 @@ struct Client {
     next_id: i64,
     responses: Vec<Response>,
     events: Vec<(u64, TerminalEvent)>,
+    /// `TerminalEvent` 가 아닌 스트림 항목(`terminal.attach` 의 `attached`).
+    others: Vec<(u64, Value)>,
     ended: Vec<StreamEnd>,
 }
 
@@ -184,8 +225,10 @@ impl Client {
             Outbound::Response(r) => self.responses.push(r),
             Outbound::Notification(n) if n.method == STREAM_CHUNK => {
                 let chunk: StreamChunk = n.params_as().unwrap();
-                let event = serde_json::from_value(chunk.data).unwrap();
-                self.events.push((chunk.stream_id, event));
+                match serde_json::from_value(chunk.data.clone()) {
+                    Ok(event) => self.events.push((chunk.stream_id, event)),
+                    Err(_) => self.others.push((chunk.stream_id, chunk.data)),
+                }
             }
             Outbound::Notification(n) if n.method == STREAM_END => {
                 self.ended.push(n.params_as().unwrap());
@@ -254,7 +297,7 @@ impl Client {
                 panic!("`{wanted}` did not appear in {text:?}");
             };
             match event {
-                TerminalEvent::Output { data } => {
+                TerminalEvent::Output { data, .. } => {
                     text.push_str(&String::from_utf8_lossy(&STANDARD.decode(data).unwrap()));
                 }
                 other => panic!("expected output, got {other:?} after {text:?}"),
@@ -1051,7 +1094,7 @@ async fn closing_a_terminal_with_unread_output_ends_its_processes() {
     else {
         panic!("expected started");
     };
-    let TerminalEvent::Output { data } = c.next_event(stream).await else {
+    let TerminalEvent::Output { data, .. } = c.next_event(stream).await else {
         panic!("expected output");
     };
     let text = String::from_utf8_lossy(&STANDARD.decode(data).unwrap()).into_owned();
@@ -1108,7 +1151,7 @@ async fn ten_megabytes_reach_a_slow_reader_intact_within_the_buffer_cap() {
     let code = loop {
         c.credit(stream, 1);
         match c.next_event(stream).await {
-            TerminalEvent::Output { data } => {
+            TerminalEvent::Output { data, .. } => {
                 let bytes = STANDARD.decode(data).unwrap();
                 assert!(bytes.len() <= CHUNK);
                 received.extend_from_slice(&bytes);
@@ -1194,7 +1237,7 @@ async fn unread_output_stays_within_a_megabyte_with_the_default_window() {
     let mut sent = 0;
     for _ in 0..CREDIT_WINDOW {
         match c.next_event(stream).await {
-            TerminalEvent::Output { data } => sent += STANDARD.decode(data).unwrap().len(),
+            TerminalEvent::Output { data, .. } => sent += STANDARD.decode(data).unwrap().len(),
             other => panic!("unexpected {other:?}"),
         }
     }
@@ -1482,6 +1525,7 @@ async fn node_version_follows_mise_toml(mise: Option<PathBuf>) {
         next_id: 1,
         responses: Vec::new(),
         events: Vec::new(),
+        others: Vec::new(),
         ended: Vec::new(),
     };
     let params = json!({ "projectId": id, "cols": 80, "rows": 24 });
@@ -1544,3 +1588,5 @@ async fn real_mise_pins_the_node_version_of_a_new_terminal() {
     }
     node_version_follows_mise_toml(Some(mise)).await;
 }
+
+mod hosted;

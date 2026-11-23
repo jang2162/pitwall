@@ -49,6 +49,8 @@ tokio-util = { workspace = true }
 tracing = "0.1.44"
 
 [dev-dependencies]
+# Relay 터미널의 출력(base64)을 읽는 시험(tests/link.rs — 18-m7-plan M7-09). pw-run 과 같은 판.
+base64 = "0.23.1"
 # 조립한 Host 를 링크 너머에 두는 시험(tests/link.rs — 18-m7-plan M7-03 · M7-02 ②).
 pw-link = { path = "../pw-link" }
 pw-rpc = { path = "../pw-rpc" }

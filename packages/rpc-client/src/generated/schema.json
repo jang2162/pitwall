@@ -53402,8 +53402,182 @@
       ],
       "tier": "read"
     },
+    "terminal.attach": {
+      "description": "원격 Host 의 터미널에 다시 붙어 `since` 오프셋부터 출력을 받는다(`attached` 하나 → `output` 여럿 → 끝났으면 `exited`). 스트림을\n끊어도 셸은 돈다. 그 프로젝트의 창 · owner 만 — 다른 범위는 permission denied, 다른 프로젝트의 번호 · 없는 터미널은 invalid\nparams.",
+      "item": {
+        "$defs": {
+          "TerminalInfo": {
+            "description": "Host 수명 터미널 하나(`terminal.list` · `terminal.attach` 의 `attached`).",
+            "properties": {
+              "attached": {
+                "description": "붙은 스트림이 있는가. 없으면 떼어진 터미널이다.",
+                "type": "boolean"
+              },
+              "code": {
+                "description": "끝 코드(신호로 끝났거나 아직 돌면 `null`).",
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "exited": {
+                "description": "셸이 끝났다(남은 출력과 `exited` 는 다음 붙기가 받는다).",
+                "type": "boolean"
+              },
+              "pid": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "shell": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "terminalId": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "worktree": {
+                "description": "띄울 때 준 워크트리(`terminal.create` 의 `worktree`) — 창이 체크아웃마다 다시 연다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "terminalId",
+              "worktree",
+              "cwd",
+              "shell",
+              "pid",
+              "attached",
+              "exited",
+              "code"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`terminal.attach` 스트림의 항목.",
+        "oneOf": [
+          {
+            "description": "첫 항목: 지금의 터미널. `from` 은 처음 보낼 오프셋 — `since` 앞이 링 버퍼에서 버려졌으면 `since` 보다 크고, 그 차이가\n`dropped`(잃은 바이트)다.",
+            "properties": {
+              "dropped": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "from": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "attached",
+                "type": "string"
+              },
+              "terminal": {
+                "$ref": "#/$defs/TerminalInfo"
+              }
+            },
+            "required": [
+              "kind",
+              "terminal",
+              "from",
+              "dropped"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "출력(`terminal.create` 의 `output` 과 같다 — `offset` 이 늘 실린다).",
+            "properties": {
+              "data": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "output",
+                "type": "string"
+              },
+              "offset": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "offset",
+              "data"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "마지막 항목 — 셸이 끝났고 남은 출력을 다 보냈다.",
+            "properties": {
+              "code": {
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "exited",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "code"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "kind": "stream",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "since": {
+            "default": null,
+            "description": "이 오프셋부터 보낸다(받은 마지막 `output` 의 `offset` + 바이트 수). 없으면 0 — 남은 처음부터.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "terminalId": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "terminalId"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
     "terminal.close": {
-      "description": "셸과 그 세션의 프로세스를 끝낸다(SIGHUP, 남으면 SIGKILL). 스트림은 남은 출력과 `exited` 를 보내고 끝난다. 이미 끝난\n터미널 · 다른 세션이 연 터미널이면 아무것도 하지 않는다.",
+      "description": "셸과 그 세션의 프로세스를 끝낸다(SIGHUP, 남으면 SIGKILL). 스트림은 남은 출력과 `exited` 를 보내고 끝난다. 이미 끝난\n터미널 · 다른 세션이 연 터미널이면 아무것도 하지 않는다. 원격 Host 에서는 그 프로젝트의 창이면 떼어진 터미널도 끝낸다(다른\n범위는 permission denied).",
       "kind": "unary",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -53477,7 +53651,7 @@
             "type": "object"
           },
           {
-            "description": "PTY 출력. `data` 는 바이트의 base64 — 청크 경계가 UTF-8 문자 가운데일 수 있다.",
+            "description": "PTY 출력. `data` 는 바이트의 base64 — 청크 경계가 UTF-8 문자 가운데일 수 있다. 원격 Host 의 터미널이면 `offset` 은 그\n청크의 첫 바이트의 오프셋(셸이 시작된 뒤 낸 바이트 수) — 앞 청크의 끝보다 크면 그 사이는 링 버퍼에서 버려졌다. 다시 붙을 때\n받은 마지막 끝을 `terminal.attach` 의 `since` 로 준다. 로컬 Host 는 `null`.",
             "properties": {
               "data": {
                 "type": "string"
@@ -53485,11 +53659,21 @@
               "kind": {
                 "const": "output",
                 "type": "string"
+              },
+              "offset": {
+                "default": null,
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
               }
             },
             "required": [
               "kind",
-              "data"
+              "data",
+              "offset"
             ],
             "type": "object"
           },
@@ -53564,6 +53748,51 @@
       ],
       "tier": "exec"
     },
+    "terminal.detach": {
+      "description": "원격 Host 의 터미널에서 이 연결의 스트림을 떼고 셸은 둔다([두고 닫기] — 18-m7-plan M7-09 ②). 떼어진 터미널은 머신당 16개까지\n— 넘으면 `endOldest` 가 아닐 때 conflict 오류(`data.wouldEnd`)로 아무것도 하지 않고, `endOldest` 면 가장 오래 떼어진 것부터\n끝낸다. 로컬 Host 는 invalid params(창이 닫히면 끝난다), 프로젝트 창이 아니면 permission denied, 다른 프로젝트의 번호는 없는\n터미널(invalid params).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "endOldest": {
+            "default": false,
+            "description": "떼어진 터미널이 상한을 넘으면 가장 오래 떼어진 것부터 끝낸다(사람이 확인했다). 거짓이면 넘을 때 아무것도 하지 않고 conflict\n오류(`data.wouldEnd` — 끝낼 번호)를 준다.",
+            "type": "boolean"
+          },
+          "terminalId": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "terminalId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "ended": {
+            "description": "상한 때문에 끝낸 떼어진 터미널.",
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ended"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "exec"
+    },
     "terminal.input": {
       "description": "셸에 입력을 보낸다. 끝난 터미널 · 다른 세션이 연 터미널이면 invalid params 오류.",
       "kind": "unary",
@@ -53594,6 +53823,104 @@
         "owner"
       ],
       "tier": "exec"
+    },
+    "terminal.list": {
+      "description": "그 프로젝트의 원격 Host 터미널(붙음 · 떼어짐 · 떼어진 채 끝남). 다시 붙은 창이 읽어 체크아웃마다 다시 연다. 그 프로젝트의\n창만(아니면 permission denied). 로컬 Host 는 늘 비었다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "TerminalInfo": {
+            "description": "Host 수명 터미널 하나(`terminal.list` · `terminal.attach` 의 `attached`).",
+            "properties": {
+              "attached": {
+                "description": "붙은 스트림이 있는가. 없으면 떼어진 터미널이다.",
+                "type": "boolean"
+              },
+              "code": {
+                "description": "끝 코드(신호로 끝났거나 아직 돌면 `null`).",
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "exited": {
+                "description": "셸이 끝났다(남은 출력과 `exited` 는 다음 붙기가 받는다).",
+                "type": "boolean"
+              },
+              "pid": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "shell": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "terminalId": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "worktree": {
+                "description": "띄울 때 준 워크트리(`terminal.create` 의 `worktree`) — 창이 체크아웃마다 다시 연다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "terminalId",
+              "worktree",
+              "cwd",
+              "shell",
+              "pid",
+              "attached",
+              "exited",
+              "code"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "terminals": {
+            "items": {
+              "$ref": "#/$defs/TerminalInfo"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "terminals"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
     },
     "terminal.resize": {
       "description": "PTY 크기를 바꾼다(셸은 SIGWINCH 를 받는다). 끝난 터미널 · 다른 세션이 연 터미널 · 0 인 크기는\ninvalid params 오류.",

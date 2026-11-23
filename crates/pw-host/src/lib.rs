@@ -200,8 +200,16 @@ fn assemble_as(parts: HostParts, flavor: Flavor) -> Assembled {
         cli.app,
         cli.source,
     ));
-    // 내장 터미널(M1-08). 창이 닫히면 그 연결의 터미널 스트림이 버려져 셸의 프로세스 트리가 끝난다.
-    let terminals = Arc::new(pw_run::Terminals::new(Arc::clone(&runtime)));
+    // 내장 터미널(M1-08). Desktop 은 창이 닫히면 그 연결의 터미널 스트림이 버려져 셸의 프로세스 트리가 끝난다. Relay 의 터미널은
+    // Host 의 것이다(18-m7-plan M7-09 ②) — 연결(링크)이 닫혀도 떼어진 터미널로 남아 `terminal.attach { since }` 로 다시 붙는다.
+    let terminals = Arc::new(pw_run::Terminals::with_lifetime(
+        Arc::clone(&runtime),
+        match flavor {
+            Flavor::Desktop => pw_run::Lifetime::Connection,
+            Flavor::Relay => pw_run::Lifetime::host(),
+        },
+    ));
+    let terminals_trust = Arc::clone(&terminals);
     let terminal_methods = Arc::clone(&terminals);
     let terminals_activity = Arc::clone(&terminals);
     // 실행 구성(`run.config.*`, M6-01). `.pitwall/run/*.toml` 을 읽고 쓴다.
@@ -486,6 +494,13 @@ fn assemble_as(parts: HostParts, flavor: Flavor) -> Assembled {
                 pw_db::session::subscribe_config(host.bus()),
                 db_sessions,
             ));
+            // 신뢰를 거둔 프로젝트의 떼어진 터미널(Relay)은 끝낸다.
+            if flavor == Flavor::Relay {
+                runtime_handle.spawn(terminals_trust.follow_trust(
+                    pw_run::Terminals::subscribe_trust(host.bus()),
+                    projects.clone(),
+                ));
+            }
             trust.attach(projects.clone());
             runtime_handle.spawn(trust::follow(
                 trust::subscribe(host.bus()),

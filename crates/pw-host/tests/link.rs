@@ -48,7 +48,21 @@ struct Linked {
 
 /// 조립한 Host(프로젝트 하나)를 Relay 로 두고, `paired` role 로 페어링한(또는 하지 않은) Desktop 을 붙인다.
 async fn linked(base: &std::path::Path, paired: Option<Role>) -> (Linked, Result<(), DialError>) {
-    let assembled = common::assemble(
+    linked_as(base, paired, false).await
+}
+
+/// `relay` 면 Relay 의 조립(`assemble_relay` — Host 수명 터미널)을 링크 너머에 둔다.
+async fn linked_as(
+    base: &std::path::Path,
+    paired: Option<Role>,
+    relay: bool,
+) -> (Linked, Result<(), DialError>) {
+    let assemble = if relay {
+        common::assemble_relay
+    } else {
+        common::assemble
+    };
+    let assembled = assemble(
         &base.join("relay"),
         Arc::new(MemorySecretStore::new()),
         tokio::runtime::Handle::current(),
@@ -240,7 +254,8 @@ async fn an_unproven_link_gets_no_owner_scope_and_cannot_answer_approvals() {
     );
 }
 
-/// 채널을 닫으면 그 연결로 연 터미널의 셸이 끝난다(Host 의 연결 수명 — 18-m7-plan M7-03 시험 ②).
+/// 채널을 닫으면 그 연결로 연 터미널의 셸이 끝난다(Host 의 연결 수명 — 18-m7-plan M7-03 시험 ②). Desktop 의 조립이다 — Relay 의
+/// 조립은 아래 시험(Host 수명).
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn closing_the_channel_ends_the_terminal_shell_on_the_host() {
@@ -286,6 +301,104 @@ async fn closing_the_channel_ends_the_terminal_shell_on_the_host() {
         );
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
+}
+
+/// 스트림의 첫 항목 `kind` 가 나올 때까지 받아 그 항목을 준다.
+async fn stream_item(window: &mut Connection, kind: &str) -> serde_json::Value {
+    loop {
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(20), window.source.recv())
+            .await
+            .unwrap_or_else(|_| panic!("no {kind} item"))
+            .expect("connection closed");
+        if frame["method"] == "stream.chunk" && frame["params"]["data"]["kind"] == kind {
+            return frame["params"]["data"].clone();
+        }
+    }
+}
+
+/// Relay 의 조립에서는 채널(연결)이 닫혀도 터미널의 셸이 살고, 새 채널이 `terminal.attach` 로 다시 붙어 입력 · 출력이 이어진다
+/// (18-m7-plan M7-09 ② ③ — Relay 조립의 터미널을 연결 수명으로 되돌리면 실패).
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_relay_terminal_outlives_the_channel_and_a_new_channel_attaches() {
+    let (_tmp, base) = base();
+    let (linked, attached) = linked_as(&base, Some(Role::Owner), true).await;
+    attached.unwrap();
+    let mut window = linked
+        .remote
+        .connect(project_window(&linked.project))
+        .await
+        .unwrap();
+    let opened = common::call(
+        &mut window,
+        1,
+        "terminal.create",
+        json!({"projectId": linked.project, "cols": 80, "rows": 24}),
+    )
+    .await
+    .unwrap();
+    window.sink.send(
+        json!({"jsonrpc": "2.0", "method": "stream.credit", "params": {"streamId": opened["streamId"], "credit": 1000}}),
+    );
+    let started = stream_item(&mut window, "started").await;
+    let pid = started["pid"].as_u64().unwrap() as u32;
+    let terminal = started["terminalId"].clone();
+    drop(window);
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert!(alive(pid), "the relay's shell died with its channel");
+
+    let mut window = linked
+        .remote
+        .connect(project_window(&linked.project))
+        .await
+        .unwrap();
+    let listed = common::call(
+        &mut window,
+        1,
+        "terminal.list",
+        json!({"projectId": linked.project}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(listed["terminals"][0]["terminalId"], terminal);
+    assert_eq!(listed["terminals"][0]["attached"], false);
+    let opened = common::call(
+        &mut window,
+        2,
+        "terminal.attach",
+        json!({"terminalId": terminal, "since": 0}),
+    )
+    .await
+    .unwrap();
+    window.sink.send(
+        json!({"jsonrpc": "2.0", "method": "stream.credit", "params": {"streamId": opened["streamId"], "credit": 1000}}),
+    );
+    stream_item(&mut window, "attached").await;
+    common::call(
+        &mut window,
+        3,
+        "terminal.input",
+        json!({"terminalId": terminal, "data": "echo AGAIN-$((6*7))\n"}),
+    )
+    .await
+    .unwrap();
+    let mut text = String::new();
+    while !text.contains("AGAIN-42") {
+        let output = stream_item(&mut window, "output").await;
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(output["data"].as_str().unwrap())
+            .unwrap();
+        text.push_str(&String::from_utf8_lossy(&bytes));
+    }
+    common::call(
+        &mut window,
+        4,
+        "terminal.close",
+        json!({"terminalId": terminal}),
+    )
+    .await
+    .unwrap();
 }
 
 #[cfg(unix)]

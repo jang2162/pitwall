@@ -9,18 +9,23 @@
 //! - `integration`(유닉스): 셸의 시작 파일 뒤에 런타임 제공자의 PATH 를 다시 앞에 둔다.
 //! - [`pty`]: PTY 하나 — 상한 있는 출력 버퍼, 순서 지키는 입력, 크기, 끝내기.
 //! - [`methods`]: `terminal.*` RPC.
+//! - [`hosted`]: Host 수명 터미널(원격 Host — 18-m7-plan M7-09 ②). 떼기 · 다시 붙기 · 목록.
 //! - [`runs`]: 실행 관리자(M6-02) — Host 범위의 실행 · 로그 링 버퍼 · 프로세스 트리 끝내기, `run.*` RPC.
 //!
-//! 터미널은 그것을 연 `terminal.create` 스트림과 수명이 같다. 스트림이 어떻게 끝나든(셸 종료, `terminal.close`, `stream.cancel`,
+//! **로컬 Host 의 터미널**([`Lifetime::Connection`])은 그것을 연 `terminal.create` 스트림과 수명이 같다. 스트림이 어떻게 끝나든(셸 종료, `terminal.close`, `stream.cancel`,
 //! 연결이 닫혀 세션이 스트림을 버림) 셸의 세션에 든 프로세스를 모두 끝낸다. 앱이 끝날 때는 Drop 이 돌지 않으므로(Tauri 는
 //! `std::process::exit` 로 끝난다) 앱이 [`shutdown`] 을 부른다.
 //!
 //! `terminalId` 는 그 터미널을 연 RPC 세션(연결) 안에서만 유효하다 — 다른 창 · 다른 연결이 같은 번호로 부르면 없는 터미널이다
 //! (03-architecture.md 「RPC 설계」).
+//!
+//! **원격 Host(Relay)의 터미널**([`Lifetime::Host`])은 실행처럼 Host 의 것이다 — 연결이 닫혀도 떼어진 터미널로 남고
+//! `terminal.attach { terminalId, since }` 로 다시 붙는다. `terminalId` 는 Host 안에서 유일하고 그 프로젝트의 창만 쓴다([`hosted`]).
 
 pub mod config;
 pub mod detect;
 pub mod env;
+pub mod hosted;
 #[cfg(unix)]
 pub mod integration;
 pub mod methods;
@@ -47,7 +52,12 @@ use pw_core::registry::{Project, Registry as Projects, RegistryError};
 use pw_rpc::{ConnectionScope, RpcError, SessionId, StreamSink, code};
 use pw_runtime::Runtime;
 
-use crate::methods::{TerminalCreateParams, TerminalEvent, TerminalId};
+pub use crate::hosted::{DETACHED_LIMIT, Lifetime, TERMINAL_LOG};
+use crate::hosted::{Hosted, Hosting};
+use crate::methods::{
+    TerminalAttachEvent, TerminalAttachParams, TerminalCreateParams, TerminalDetached,
+    TerminalEvent, TerminalId, TerminalInfo,
+};
 use crate::pty::{CHUNK, Pty, Spec};
 
 /// 이 프로세스가 띄운 모든 터미널의 셸 · 실행([`runs`])과 그 세션의 프로세스를 끝낸다(SIGHUP · SIGHUP 을 무시하면 300 ms 뒤
@@ -58,7 +68,7 @@ pub fn shutdown() {
 }
 
 /// 셸이 끝난 뒤 남은 출력을 기다리는 시간. 셸이 띄운 백그라운드 프로세스가 PTY 를 쥐고 있으면 EOF 가 오지 않는다.
-const DRAIN_AFTER_EXIT: Duration = Duration::from_millis(200);
+pub(crate) const DRAIN_AFTER_EXIT: Duration = Duration::from_millis(200);
 
 /// Host 를 만든 뒤에 붙이는 것(Host 의 메서드는 Host 를 만드는 중에 붙으므로).
 #[derive(Clone)]
@@ -77,16 +87,38 @@ pub struct Terminals {
     host: OnceLock<HostParts>,
     sessions: Arc<Sessions>,
     next_id: AtomicU32,
+    lifetime: Lifetime,
+    hosting: Arc<Hosting>,
 }
 
 impl Terminals {
+    /// 로컬 Host 의 터미널([`Lifetime::Connection`] — 연결이 닫히면 끝난다).
     pub fn new(runtime: Arc<Runtime>) -> Self {
+        Self::with_lifetime(runtime, Lifetime::Connection)
+    }
+
+    /// 수명을 고른다. 원격 Host(Relay)는 [`Lifetime::host`].
+    pub fn with_lifetime(runtime: Arc<Runtime>, lifetime: Lifetime) -> Self {
+        let max_detached = match lifetime {
+            Lifetime::Connection => 0,
+            Lifetime::Host { max_detached } => max_detached,
+        };
         Self {
             runtime,
             host: OnceLock::new(),
             sessions: Arc::default(),
             next_id: AtomicU32::new(1),
+            lifetime,
+            hosting: Arc::new(Hosting::new(max_detached)),
         }
+    }
+
+    pub fn lifetime(&self) -> Lifetime {
+        self.lifetime
+    }
+
+    fn hosted_mode(&self) -> bool {
+        matches!(self.lifetime, Lifetime::Host { .. })
     }
 
     /// 두 번째부터는 무시한다.
@@ -144,6 +176,191 @@ impl Terminals {
         }
     }
 
+    /// `terminal.input`. Host 수명이면 그 프로젝트의 창만(세션과 상관없이 — 다시 붙은 창도 쓴다), 로컬이면 그 터미널을 연 세션만.
+    pub fn input_from(
+        &self,
+        owner: SessionId,
+        scope: &ConnectionScope,
+        id: TerminalId,
+        data: Vec<u8>,
+    ) -> Result<(), RpcError> {
+        if !self.hosted_mode() {
+            return self.input(owner, id, data);
+        }
+        if self.hosting.find(scope, id)?.pty().write(data) {
+            Ok(())
+        } else {
+            Err(RpcError::invalid_params(format!(
+                "terminal {id} is not running"
+            )))
+        }
+    }
+
+    /// `terminal.resize`([`Self::input_from`] 과 같은 판정).
+    pub fn resize_from(
+        &self,
+        owner: SessionId,
+        scope: &ConnectionScope,
+        id: TerminalId,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), RpcError> {
+        if !self.hosted_mode() {
+            return self.resize(owner, id, cols, rows);
+        }
+        check_size(cols, rows)?;
+        self.hosting
+            .find(scope, id)?
+            .pty()
+            .resize(cols, rows)
+            .map_err(RpcError::internal)
+    }
+
+    /// `terminal.close`. Host 수명이면 그 프로젝트 창이 아닌 범위는 `PERMISSION_DENIED`, 없는 터미널(다른 프로젝트의 것 포함)은
+    /// 아무것도 하지 않는다.
+    pub fn close_from(
+        &self,
+        owner: SessionId,
+        scope: &ConnectionScope,
+        id: TerminalId,
+    ) -> Result<(), RpcError> {
+        if !self.hosted_mode() {
+            self.close(owner, id);
+            return Ok(());
+        }
+        match self.hosting.find(scope, id) {
+            Ok(hosted) => {
+                self.hosting.close(&hosted);
+                Ok(())
+            }
+            Err(e) if e.code == code::PERMISSION_DENIED => Err(e),
+            Err(_) => Ok(()),
+        }
+    }
+
+    /// `terminal.detach`: 이 연결의 스트림을 떼고 셸은 둔다([`hosted`]). 로컬 Host 는 떼지 않는다(invalid params).
+    pub fn detach(
+        &self,
+        owner: SessionId,
+        scope: &ConnectionScope,
+        id: TerminalId,
+        end_oldest: bool,
+    ) -> Result<TerminalDetached, RpcError> {
+        hosted::window_project(scope)?;
+        if !self.hosted_mode() {
+            return Err(RpcError::invalid_params(
+                "terminals on this machine end with their window",
+            ));
+        }
+        let hosted = self.hosting.find(scope, id)?;
+        let ended = self.hosting.detach(&hosted, owner, end_oldest)?;
+        Ok(TerminalDetached { ended })
+    }
+
+    /// `terminal.list`: 그 프로젝트의 Host 수명 터미널. 그 프로젝트의 창만(아니면 `PERMISSION_DENIED`). 로컬 Host 는 늘 비었다.
+    pub fn list(
+        &self,
+        scope: &ConnectionScope,
+        project_id: &str,
+    ) -> Result<Vec<TerminalInfo>, RpcError> {
+        if !pw_core::registry::state::scope_may_write(scope, project_id) {
+            return Err(RpcError::new(
+                code::PERMISSION_DENIED,
+                "only the project's own window may list its terminals",
+            )
+            .with_data(serde_json::json!({ "projectId": project_id })));
+        }
+        Ok(self.hosting.list(project_id))
+    }
+
+    /// `terminal.attach` 스트림 본체: 떼어진(또는 다른 창이 붙은) 터미널에 붙어 `since` 부터 출력을 받는다.
+    pub async fn attach_stream(
+        self: Arc<Self>,
+        owner: SessionId,
+        scope: &ConnectionScope,
+        params: TerminalAttachParams,
+        sink: StreamSink<TerminalAttachEvent>,
+    ) -> Result<(), RpcError> {
+        let hosted = self.hosting.find(scope, params.terminal_id)?;
+        let since = params.since.unwrap_or(0);
+        let attachment = self.hosting.attach(&hosted, owner);
+        let from = hosted.first_from(since);
+        sink.send(TerminalAttachEvent::Attached {
+            terminal: Box::new(hosted.info()),
+            from,
+            dropped: from.saturating_sub(since),
+        })
+        .await?;
+        let delivered = hosted::follow(
+            &hosted,
+            from,
+            &sink,
+            attachment.cancel(),
+            |offset, data| TerminalAttachEvent::Output { offset, data },
+            |code| TerminalAttachEvent::Exited { code },
+        )
+        .await?;
+        if delivered {
+            self.hosting.finished(hosted.id);
+        }
+        Ok(())
+    }
+
+    /// 떼어진 터미널의 수(시험 · 진단).
+    pub fn detached_count(&self) -> usize {
+        self.hosting.detached_count()
+    }
+
+    /// [`Self::follow_trust`] 가 받는 구독(레지스트리 변경). Host 를 만든 직후에 연다.
+    pub fn subscribe_trust(bus: &pw_core::EventBus) -> pw_core::bus::Subscription {
+        bus.subscribe(
+            pw_core::Filter::all()
+                .scope(pw_core::Scope::Host)
+                .topics([pw_core::registry::TOPIC_CHANGED]),
+        )
+    }
+
+    /// 신뢰가 바뀔 때마다(`project.changed` 의 `trust`) 신뢰를 잃은 프로젝트의 떼어진 터미널을 끝낸다(18-m7-plan M7-09 ②). 그
+    /// 신뢰를 쓰는 프로젝트(워크트리 프로젝트 포함 — `Registry::trust_followers`)를 함께 본다. 이벤트를 놓치면(`Lagged`) 떼어진
+    /// 터미널이 있는 프로젝트를 모두 다시 본다. 구독이 닫히면 끝난다.
+    pub async fn follow_trust(
+        self: Arc<Self>,
+        mut events: pw_core::bus::Subscription,
+        registry: Projects,
+    ) {
+        use pw_core::bus::Received;
+        use pw_core::registry::{ChangeKind, ProjectChanged};
+        while let Some(received) = events.recv().await {
+            let changed: Option<String> = match received {
+                Received::Event(event) => match serde_json::from_value(event.payload.clone()) {
+                    Ok(ProjectChanged {
+                        kind: ChangeKind::Trust,
+                        project_id,
+                    }) => Some(project_id),
+                    _ => continue,
+                },
+                Received::Lagged(_) => None,
+            };
+            let (this, registry) = (Arc::clone(&self), registry.clone());
+            let done = tokio::task::spawn_blocking(move || {
+                let candidates = match changed {
+                    Some(project) => registry
+                        .trust_followers(&project)
+                        .unwrap_or_else(|_| this.hosting.detached_projects()),
+                    None => this.hosting.detached_projects(),
+                };
+                let untrusted: Vec<String> = candidates
+                    .into_iter()
+                    .filter(|p| !registry.is_trusted(p))
+                    .collect();
+                this.hosting.end_detached_of(&untrusted);
+            });
+            if let Err(e) = done.await {
+                tracing::warn!(target: "pw_run", %e, "terminal trust handler failed");
+            }
+        }
+    }
+
     /// 열린 터미널의 수. Relay 데몬의 유휴 판정이 본다(18-m7-plan M7-04 ④).
     pub fn count(&self) -> usize {
         lock(&self.sessions).len()
@@ -170,15 +387,63 @@ impl Terminals {
         check_size(params.cols, params.rows)?;
         // 레지스트리 읽기 · 로그인 셸 기다리기 · 띄우기는 블로킹이다. 스트림이 그사이 버려지면 결과(`Live`)도 버려져 띄운 셸이 끝난다.
         let this = Arc::clone(&self);
+        let start_params = params.clone();
         let (live, started) =
-            tokio::task::spawn_blocking(move || this.start(owner, &grant, &params))
+            tokio::task::spawn_blocking(move || this.start(owner, &grant, &start_params))
                 .await
                 .map_err(|e| RpcError::internal(e.to_string()))??;
+        if self.hosted_mode() {
+            return self.run_hosted(owner, &params, live, started, sink).await;
+        }
         sink.send(started).await?;
         pump(&live.pty, &sink).await?;
         let code = live.pty.exited().await;
         tracing::info!(target: "pw_run", terminal = live.id, ?code, "terminal exited");
         sink.send(TerminalEvent::Exited { code }).await
+    }
+
+    /// Host 수명 터미널의 `terminal.create`: 셸을 Host 의 것으로 두고(출력은 링으로) 이 스트림을 그 첫 붙기로 한다. 스트림이 끝나도
+    /// (취소 · 연결이 닫힘) 셸은 떼어진 터미널로 남는다.
+    async fn run_hosted(
+        &self,
+        owner: SessionId,
+        params: &TerminalCreateParams,
+        live: Live,
+        started: TerminalEvent,
+        sink: StreamSink<TerminalEvent>,
+    ) -> Result<(), RpcError> {
+        let (shell, cwd) = match &started {
+            TerminalEvent::Started { shell, cwd, .. } => (shell.clone(), cwd.clone()),
+            _ => (Vec::new(), String::new()),
+        };
+        let hosted = Arc::new(Hosted::new(
+            live,
+            params.project_id.clone(),
+            params.worktree.clone(),
+            shell,
+            cwd,
+        ));
+        let id = hosted.id;
+        self.hosting.insert(Arc::clone(&hosted));
+        let attachment = self.hosting.attach(&hosted, owner);
+        tokio::spawn(hosted::pump(Arc::clone(&hosted)));
+        sink.send(started).await?;
+        let delivered = hosted::follow(
+            &hosted,
+            0,
+            &sink,
+            attachment.cancel(),
+            |offset, data| TerminalEvent::Output {
+                data,
+                offset: Some(offset),
+            },
+            |code| TerminalEvent::Exited { code },
+        )
+        .await?;
+        if delivered {
+            self.hosting.finished(id);
+        }
+        Ok(())
     }
 
     fn start(
@@ -303,6 +568,7 @@ async fn pump(pty: &Pty, sink: &StreamSink<TerminalEvent>) -> Result<(), RpcErro
         // 보낸 뒤에 버퍼에서 뺀다 — credit 을 기다리는 청크도 버퍼 상한에 든다.
         sink.send(TerminalEvent::Output {
             data: STANDARD.encode(&bytes),
+            offset: None,
         })
         .await?;
         pty.consume(bytes.len());
@@ -310,9 +576,9 @@ async fn pump(pty: &Pty, sink: &StreamSink<TerminalEvent>) -> Result<(), RpcErro
 }
 
 /// 살아 있는 터미널. 버려지면(스트림이 끝나거나 버려짐) 목록에서 빼고 프로세스 트리를 끝낸다.
-struct Live {
-    id: TerminalId,
-    pty: Arc<Pty>,
+pub(crate) struct Live {
+    pub(crate) id: TerminalId,
+    pub(crate) pty: Arc<Pty>,
     sessions: Arc<Sessions>,
     /// 셸이 시작 파일을 읽는 동안 있어야 하는 임시 폴더(integration.rs). 터미널이 끝나면 지운다.
     #[cfg(unix)]
@@ -381,7 +647,7 @@ fn registry_error(e: RegistryError) -> RpcError {
     }
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 

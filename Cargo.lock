@@ -5743,6 +5743,7 @@ dependencies = [
 name = "pw-host"
 version = "0.0.0"
 dependencies = [
+ "base64 0.23.1",
  "pw-core",
  "pw-db",
  "pw-db-driver",

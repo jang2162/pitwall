@@ -16,7 +16,20 @@ pub fn assemble(
     secrets: Arc<dyn SecretStore>,
     tokio: tokio::runtime::Handle,
 ) -> Assembled {
-    pw_host::assemble(HostParts {
+    pw_host::assemble(parts(dir, secrets, tokio))
+}
+
+/// [`assemble`] 과 같되 Relay 의 Host(`pw_host::assemble_relay`).
+pub fn assemble_relay(
+    dir: &Path,
+    secrets: Arc<dyn SecretStore>,
+    tokio: tokio::runtime::Handle,
+) -> Assembled {
+    pw_host::assemble_relay(parts(dir, secrets, tokio))
+}
+
+fn parts(dir: &Path, secrets: Arc<dyn SecretStore>, tokio: tokio::runtime::Handle) -> HostParts {
+    HostParts {
         id: "local".into(),
         paths: AppPaths::under(dir),
         diagnostics: Arc::new(pw_diag::Diagnostics::new(dir.join("logs"), "0.0.0")),
@@ -35,7 +48,7 @@ pub fn assemble(
         },
         settings_window: Arc::new(|_: &str| false),
         tokio,
-    })
+    }
 }
 
 /// 응답 하나를 기다린다(사이의 알림은 건너뛴다). 성공이면 `Ok(result)`, 오류면 `Err(error)`.
