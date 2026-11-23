@@ -116,6 +116,36 @@ describe("sendCommits", () => {
     expect(mini.repo.branches.has("feat")).toBe(false);
   });
 
+  it("names the incoming ref after the source machine in the engine's name rule when receiving from it", async () => {
+    const { local, mini } = machines();
+    mini.repo.branches.set("fix", "c0");
+    commit(mini.repo, "fix", "m1");
+    const log: string[] = [];
+    const target = connect(local, { kind: "project", projectId: "p1" }, log);
+    void (async () => {
+      for await (const e of target.stream("git.prompts", { projectId: "p1" }))
+        if (e.kind === "open")
+          await target.call("git.prompt.answer", {
+            projectId: "p1",
+            promptId: e.prompt.promptId,
+            answer: { kind: "proceed" },
+          });
+    })();
+    const result = await sendCommits({
+      source: {
+        client: connect(mini, { kind: "project", projectId: "r1" }, log),
+        projectId: "r1",
+        machine: MINI,
+        worktree: null,
+      },
+      target: { client: target, projectId: "p1", machine: "local", worktree: null },
+      branch: "fix",
+      commit: "m1",
+    });
+    expect(result.incomingRef).toBe("refs/pitwall/incoming/sha256-mini-_fingerprint/fix");
+    expect(local.repo.branches.get("fix")).toBe("m1");
+  });
+
   it("stops without touching a diverged target branch", async () => {
     const { local, mini } = machines();
     commit(mini.repo, "feat", "x9");

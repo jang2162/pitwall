@@ -4,6 +4,7 @@
 // - 쓰기(`git.send.receive.*` · `git.send.apply` · `git.reset`)는 그 프로젝트 창의 연결만(`pw_core::registry::state::scope_may_write` —
 //   `Project(id)` 이고 id 가 그 프로젝트). 다른 범위면 `-32001`.
 // - 그 머신에 없는 프로젝트 id 면 `-32602`(레지스트리 `NotFound` 가 invalid params 로 나간다).
+// - `receive.begin` 의 `sourceMachine` 은 엔진의 이름 규칙(`[A-Za-z0-9._-]` 1~128자, `.` 시작 · `.lock` 끝 없음)을 지켜야 한다.
 // - 받기(`uploadId`)는 연 연결의 것이다(`UploadOwner`) — 다른 연결의 청크 · finish 는 not found.
 // - 경로가 바뀌는 `apply` 는 그 프로젝트의 `git.prompts` 를 듣는 연결에 미저장 확인을 묻는다. 듣는 연결이 없으면 `2006`(NO_WINDOW),
 //   `cancel` 이면 `-32002` 로 아무것도 하지 않는다(crates/pw-git/src/write/mod.rs).
@@ -298,6 +299,16 @@ export function createGitHost(repo: FakeRepo): FakeGitHost {
           return true;
         }
         case "git.send.receive.begin": {
+          // crates/pw-git/src/send 의 머신 이름 규칙.
+          const source = String(params.sourceMachine);
+          if (
+            !/^[A-Za-z0-9._-]{1,128}$/.test(source) ||
+            source.startsWith(".") ||
+            source.endsWith(".lock")
+          ) {
+            fail(error(-32602, "bad source machine name"));
+            return true;
+          }
           const uploadId = nextUpload++;
           uploads.set(uploadId, {
             owner: conn,

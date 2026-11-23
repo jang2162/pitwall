@@ -393,7 +393,13 @@ it("names both real machines in the confirmation and writes only through the tar
   expect(fake.setLast).toEqual([
     { bundleId: "b-1", source: "local", target: { machine: MINI, worktree: null } },
   ]);
-  await vi.waitFor(() => expect(toastWith("mini 에 만들고 체크아웃했다")).toBeDefined());
+  const done = await vi.waitFor(() => {
+    const found = toastWith("mini 에 만들고 체크아웃했다");
+    expect(found).toBeDefined();
+    return found!;
+  });
+  // 만든 브랜치는 움직인 ref 가 없다 — [되돌리기] 가 없다.
+  expect(done.textContent).not.toContain("되돌리기");
 });
 
 it("stops on a diverged target, shows git's text and says the target is unchanged", async () => {
