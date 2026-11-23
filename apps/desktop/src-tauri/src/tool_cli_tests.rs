@@ -154,6 +154,47 @@ fn input_reads_json_or_stdin_and_must_be_an_object() {
 
 // ---- 스키마 → 플래그 표 ----
 
+/// `--checkout <machine>:<path>`(18-m7-plan M7-18 ⑥ — D61 의 꼴): 세션이 스키마에 더한 `checkout` 객체로 읽는다. 머신 id 의 `:` 는
+/// 경로의 시작이 아니다. 경로는 그 머신의 것이라 펼치지 않는다.
+#[test]
+fn the_checkout_flag_takes_machine_and_path() {
+    let mut schema = json!({
+        "type": "object",
+        "properties": { "projectId": { "type": "string" }, "worktree": { "type": ["string", "null"] } }
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    schema = pw_mcp::checkout::with_checkout(schema);
+    let read = |raw: &str| {
+        arguments(
+            "run_start",
+            &schema,
+            None,
+            &[("checkout".to_owned(), raw.to_owned())],
+        )
+        .map(|a| a["checkout"].clone())
+    };
+    assert_eq!(
+        read("mini:~/work/pitwall").unwrap(),
+        json!({"machine": "mini", "worktree": "~/work/pitwall"})
+    );
+    assert_eq!(
+        read("mini").unwrap(),
+        json!({"machine": "mini", "worktree": null})
+    );
+    assert_eq!(
+        read("SHA256:abc:/srv/app").unwrap(),
+        json!({"machine": "SHA256:abc", "worktree": "/srv/app"})
+    );
+    assert_eq!(
+        read(r#"{"machine":"mini","worktree":"/w"}"#).unwrap(),
+        json!({"machine": "mini", "worktree": "/w"})
+    );
+    assert!(read(":/w").is_err());
+    assert!(read("{nope").is_err());
+}
+
 #[test]
 fn flag_names_are_kebab_case() {
     for (field, flag) in [

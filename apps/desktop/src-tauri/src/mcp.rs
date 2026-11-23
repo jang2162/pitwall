@@ -26,6 +26,9 @@ use tracing_subscriber::{Layer, fmt};
 
 #[cfg(unix)]
 pub mod handover;
+/// 다른 머신을 겨누는 부품. 소켓이 있는 곳에서만 앱 세션이 있다(Windows 는 늘 헤드리스 — 05 「로컬 소켓과 헤드리스」).
+#[cfg(unix)]
+pub mod machines;
 
 /// 로그 파일의 구성요소 이름(`mcp.<날짜>.log`). 앱의 `core` 와 나눈다 — 여러 `pitwall mcp` 가 앱과 함께 돌 수 있다.
 pub const LOG_COMPONENT: &str = "mcp";
@@ -292,6 +295,18 @@ pub fn services(
     host_kind: HostKind,
     sessions: Sessions,
 ) -> Arc<Services> {
+    services_with(host, paths, transport, host_kind, sessions, None)
+}
+
+/// [`services`] 에 다른 머신 부품(`machines` — 앱만, 18-m7-plan M7-18)을 꽂은 것.
+pub fn services_with(
+    host: &Arc<LocalHost>,
+    paths: &AppPaths,
+    transport: &'static str,
+    host_kind: HostKind,
+    sessions: Sessions,
+    machines: Option<Arc<dyn pw_mcp::checkout::Machines>>,
+) -> Arc<Services> {
     let router = Arc::new(HostRouter::new());
     router
         .add_host(host.clone())
@@ -314,13 +329,20 @@ pub fn services(
         transport,
         host_kind,
         sessions,
-        machines: None,
+        machines,
     })
 }
 
 /// 앱 쪽: 단일 인스턴스 키의 소켓을 열고 세션을 받는다. 열지 못해도 앱은 뜬다(그때 `pitwall mcp` 는 헤드리스로 돈다).
 #[cfg(unix)]
-pub fn serve_socket(host: Arc<LocalHost>, paths: AppPaths, key: String, sessions: Sessions) {
+/// `machines` 는 다른 머신을 겨누는 호출의 부품(묶음 · 별명 · 링크 — [`machines::DesktopMachines`]).
+pub fn serve_socket(
+    host: Arc<LocalHost>,
+    paths: AppPaths,
+    key: String,
+    sessions: Sessions,
+    machines: Option<Arc<dyn pw_mcp::checkout::Machines>>,
+) {
     use pw_mcp::socket;
 
     tauri::async_runtime::spawn(async move {
@@ -335,7 +357,7 @@ pub fn serve_socket(host: Arc<LocalHost>, paths: AppPaths, key: String, sessions
             }
         };
         tracing::info!(socket = %listener.path().display(), "mcp socket listening");
-        let services = services(&host, &paths, "socket", HostKind::App, sessions);
+        let services = services_with(&host, &paths, "socket", HostKind::App, sessions, machines);
         socket::accept_loop(
             listener,
             services,

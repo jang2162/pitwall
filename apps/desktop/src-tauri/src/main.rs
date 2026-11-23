@@ -403,6 +403,16 @@ fn main() {
     // 원격 셸의 `pitwall <파일>` 이 고를 「마지막 사람 입력」(remote_open.rs — M7-15).
     let last_input = Arc::new(remote_open::LastInput::default());
     let follow_router = Arc::clone(&router);
+    // MCP 세션이 다른 머신을 겨누는 부품: 묶음 · 별명은 레지스트리, 링크는 원격 호스트 관리자, 연결은 이 라우터(M7-18).
+    #[cfg(unix)]
+    let mcp_machines: Option<Arc<dyn pw_mcp::checkout::Machines>> =
+        host.registry().cloned().map(|registry| {
+            Arc::new(mcp::machines::DesktopMachines::new(
+                registry,
+                remote.clone(),
+                Arc::clone(&router),
+            )) as Arc<dyn pw_mcp::checkout::Machines>
+        });
 
     let mut context = context();
     let identifier = single_instance_key(&context.config().identifier, &paths);
@@ -472,6 +482,7 @@ fn main() {
                 paths.clone(),
                 identifier.clone(),
                 mcp_sessions.clone(),
+                mcp_machines.clone(),
             );
             // askpass 소켓도 주 인스턴스만 연다.
             #[cfg(unix)]

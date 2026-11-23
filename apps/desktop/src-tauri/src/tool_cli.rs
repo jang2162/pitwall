@@ -79,7 +79,8 @@ Calls a Pitwall MCP tool from the command line: the same tools, inputs and check
 Each top-level field of the tool's input is a flag (`maxCount` is `--max-count`); strings are taken
 as they are, numbers, booleans, arrays and objects as JSON. `--input` gives the whole input object
 (`-` reads it from stdin); flags override its fields. `--project` picks the project (default: the
-current directory). The result is one JSON document on stdout; errors go to stderr.
+current directory). `--checkout <machine>:<path>` targets that machine's checkout of the project
+(tools that take a worktree, with the Pitwall app running). The result is one JSON document on stdout; errors go to stderr.
 
 exit codes: 0 ok, 1 tool error or lost connection, 2 usage error, 3 denied, 130 interrupted";
 
@@ -461,7 +462,12 @@ pub fn arguments(
         let flag = known.iter().find(|f| f.name == *name).ok_or_else(|| {
             format!("`{tool}` has no flag --{name}; `pitwall tool {tool} --help` lists its flags")
         })?;
-        args.insert(flag.field.clone(), flag.read(raw)?);
+        let value = if flag.field == pw_mcp::checkout::CHECKOUT {
+            checkout_flag(raw)?
+        } else {
+            flag.read(raw)?
+        };
+        args.insert(flag.field.clone(), value);
     }
     if let Some(missing) = known
         .iter()
@@ -474,6 +480,34 @@ pub fn arguments(
         ));
     }
     Ok(args)
+}
+
+/// `--checkout <machine>:<path>` · `--checkout <machine>`(그 머신의 메인 체크아웃) · JSON 객체(18-m7-plan M7-18 ⑥ — D61 의 꼴).
+/// 머신 id 에는 `:` 가 든다(`SHA256:…`) — 경로는 `:` 뒤가 `/` 나 `~` 로 시작하는 첫 자리부터다. 경로는 그 머신의 것이라 이 머신에서
+/// 펼치지 않는다(`~` 도 그대로 보낸다).
+fn checkout_flag(raw: &str) -> Result<Value, String> {
+    if raw.trim_start().starts_with('{') {
+        return serde_json::from_str::<Value>(raw)
+            .ok()
+            .filter(Value::is_object)
+            .ok_or_else(|| {
+                format!("--checkout expects <machine>:<path> or a JSON object, not `{raw}`")
+            });
+    }
+    let split = raw
+        .match_indices(':')
+        .map(|(i, _)| i)
+        .find(|&i| matches!(raw[i + 1..].chars().next(), Some('/' | '~')));
+    let (machine, worktree) = match split {
+        Some(i) => (&raw[..i], Some(&raw[i + 1..])),
+        None => (raw, None),
+    };
+    if machine.is_empty() {
+        return Err(format!(
+            "--checkout needs a machine name before the path, not `{raw}`"
+        ));
+    }
+    Ok(serde_json::json!({ "machine": machine, "worktree": worktree }))
 }
 
 /// 등급 이름(`read` · `write` · `exec` · `dangerous`).
