@@ -6,12 +6,16 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 
+#[cfg(unix)]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::direct::{http_body, peer_address, tailscale_peers};
+#[cfg(unix)]
+use crate::direct::http_body;
+use crate::direct::{peer_address, tailscale_peers};
 use crate::{RemoteDiscovered, RemoteDiscovery, RemoteDiscoverySource};
 
 /// 로컬 Tailscale API 의 유닉스 소켓(Linux · macOS 의 오픈 소스 tailscaled).
+#[cfg(unix)]
 const TAILSCALE_SOCKETS: &[&str] = &[
     "/var/run/tailscale/tailscaled.sock",
     "/var/run/tailscaled.socket",
@@ -66,6 +70,8 @@ pub async fn run() -> RemoteDiscovery {
 }
 
 async fn tailscale_status() -> Result<Vec<u8>, String> {
+    // 로컬 API 의 유닉스 소켓(Windows 는 소켓 대신 CLI — Windows 의 Tailscale 은 명명 파이프다).
+    #[cfg(unix)]
     for path in TAILSCALE_SOCKETS {
         let Ok(Ok(mut stream)) =
             tokio::time::timeout(TAILSCALE_TIMEOUT, tokio::net::UnixStream::connect(path)).await
