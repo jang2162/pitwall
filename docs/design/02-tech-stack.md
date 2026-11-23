@@ -174,6 +174,7 @@ pitwall/
 │  ├─ pw-index/          # tree-sitter 심볼 인덱스
 │  ├─ pw-link/           # 기기 키 · 페어링 · Noise 세션 · 전송(QUIC/SSH) · Tailscale 검색
 │  ├─ pw-relay/          # Relay 데몬, 기기별 권한, SSH 설치 부트스트랩
+│  ├─ pw-remote/         # Desktop 의 원격 호스트 목록 · 연결 상태 기계 · 연결 로그 · `remote.*` RPC(실제 SSH 는 기능 `ssh` — 앱만)
 │  ├─ pw-ext/            # 확장 로더, 매니페스트, wasmtime 호스트, 기여 레지스트리
 │  ├─ pw-i18n/           # Fluent 리소스 로딩
 │  ├─ pw-platform/       # OS별 통합 (macOS 우선)
