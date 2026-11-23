@@ -116,6 +116,7 @@ welcome-remote-status-by-user = 끊음
 # $stage: 지금 단계 이름
 welcome-remote-status-connecting = 붙는 중 — { $stage }
 welcome-remote-status-connected = 연결됨
+welcome-remote-status-resuming = 잠깐 끊김 — 이어 붙는 중
 # $seconds: 다음 시도까지 초, $attempt: 몇 번째 시도
 welcome-remote-status-reconnecting = 다시 붙는 중 — { $seconds }초 뒤 ({ $attempt }번째)
 # $expected: 기억한 머신 id, $found: 지금 답한 머신 id

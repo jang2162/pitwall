@@ -1494,7 +1494,7 @@ export type UnaryMethods = {
 	"terminal.close": { params: TerminalCloseParams; result: null };
 	/**
 	 * 원격 Host 의 터미널에서 이 연결의 스트림을 떼고 셸은 둔다([두고 닫기] — 18-m7-plan M7-09 ②). 떼어진 터미널은 머신당 16개까지
-	 * — 넘으면 `endOldest` 가 아닐 때 conflict 오류(`data.wouldEnd`)로 아무것도 하지 않고, `endOldest` 면 가장 오래 떼어진 것부터
+	 * — 넘으면 `endOldest` 가 아닐 때 conflict 오류(`data.wouldEnd` · `data.otherProjects`)로 아무것도 하지 않고, `endOldest` 면 가장 오래 떼어진 것부터
 	 * 끝낸다. 로컬 Host 는 invalid params(창이 닫히면 끝난다), 프로젝트 창이 아니면 permission denied, 다른 프로젝트의 번호는 없는
 	 * 터미널(invalid params).
 	 */
@@ -1987,7 +1987,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"terminal.attach": {"name":"terminal.attach","kind":"stream","tier":"exec","roles":["owner"],"params":"TerminalAttachParams","output":"TerminalAttachEvent","doc":" 원격 Host 의 터미널에 다시 붙어 `since` 오프셋부터 출력을 받는다(`attached` 하나 → `output` 여럿 → 끝났으면 `exited`). 스트림을\n 끊어도 셸은 돈다. 그 프로젝트의 창 · owner 만 — 다른 범위는 permission denied, 다른 프로젝트의 번호 · 없는 터미널은 invalid\n params.\n","mcp":null,"fileScope":false},
 	"terminal.close": {"name":"terminal.close","kind":"unary","tier":"exec","roles":["owner"],"params":"TerminalCloseParams","output":"()","doc":" 셸과 그 세션의 프로세스를 끝낸다(SIGHUP, 남으면 SIGKILL). 스트림은 남은 출력과 `exited` 를 보내고 끝난다. 이미 끝난\n 터미널 · 다른 세션이 연 터미널이면 아무것도 하지 않는다. 원격 Host 에서는 그 프로젝트의 창이면 떼어진 터미널도 끝낸다(다른\n 범위는 permission denied).\n","mcp":null,"fileScope":false},
 	"terminal.create": {"name":"terminal.create","kind":"stream","tier":"exec","roles":["owner"],"params":"TerminalCreateParams","output":"TerminalEvent","doc":" 프로젝트의 디렉터리에서 셸을 PTY 로 띄운다(결정 M1-D14: `$SHELL -l`, 전역 설정 `[terminal] shell` 로 덮기). 환경은 그\n 디렉터리의 런타임 환경 + `TERM=xterm-256color` · `COLORTERM=truecolor` · `TERM_PROGRAM=Pitwall`. 출력은 credit 스트림(청크는 16 KiB\n 이하)이고, 소비자가 읽지 않으면 Host 버퍼(512 KiB)가 찬 뒤 셸이 쓰기에서 멈춘다 — 기본 window(32)면 내보낸 청크와 합쳐\n 1 MiB 를 넘지 않는다. `terminalId` 는 이 세션(연결) 안에서만 유효하다. 없는 프로젝트 · 프로젝트 밖이거나 없는\n `cwd` · 0 인 크기면 스트림이 invalid params 오류로, 그 프로젝트의 창이 아닌 연결(웰컴 · 설정 · 다른 프로젝트 창)이면 permission\n denied 오류로, 셸을 띄우지 못하면 internal 오류로 끝난다(`started` 없이).\n","mcp":null,"fileScope":false},
-	"terminal.detach": {"name":"terminal.detach","kind":"unary","tier":"exec","roles":["owner"],"params":"TerminalDetachParams","output":"TerminalDetached","doc":" 원격 Host 의 터미널에서 이 연결의 스트림을 떼고 셸은 둔다([두고 닫기] — 18-m7-plan M7-09 ②). 떼어진 터미널은 머신당 16개까지\n — 넘으면 `endOldest` 가 아닐 때 conflict 오류(`data.wouldEnd`)로 아무것도 하지 않고, `endOldest` 면 가장 오래 떼어진 것부터\n 끝낸다. 로컬 Host 는 invalid params(창이 닫히면 끝난다), 프로젝트 창이 아니면 permission denied, 다른 프로젝트의 번호는 없는\n 터미널(invalid params).\n","mcp":null,"fileScope":false},
+	"terminal.detach": {"name":"terminal.detach","kind":"unary","tier":"exec","roles":["owner"],"params":"TerminalDetachParams","output":"TerminalDetached","doc":" 원격 Host 의 터미널에서 이 연결의 스트림을 떼고 셸은 둔다([두고 닫기] — 18-m7-plan M7-09 ②). 떼어진 터미널은 머신당 16개까지\n — 넘으면 `endOldest` 가 아닐 때 conflict 오류(`data.wouldEnd` · `data.otherProjects`)로 아무것도 하지 않고, `endOldest` 면 가장 오래 떼어진 것부터\n 끝낸다. 로컬 Host 는 invalid params(창이 닫히면 끝난다), 프로젝트 창이 아니면 permission denied, 다른 프로젝트의 번호는 없는\n 터미널(invalid params).\n","mcp":null,"fileScope":false},
 	"terminal.input": {"name":"terminal.input","kind":"unary","tier":"exec","roles":["owner"],"params":"TerminalInputParams","output":"()","doc":" 셸에 입력을 보낸다. 끝난 터미널 · 다른 세션이 연 터미널이면 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"terminal.list": {"name":"terminal.list","kind":"unary","tier":"read","roles":["owner"],"params":"TerminalListParams","output":"TerminalList","doc":" 그 프로젝트의 원격 Host 터미널(붙음 · 떼어짐 · 떼어진 채 끝남). 다시 붙은 창이 읽어 체크아웃마다 다시 연다. 그 프로젝트의\n 창만(아니면 permission denied). 로컬 Host 는 늘 비었다.\n","mcp":null,"fileScope":false},
 	"terminal.resize": {"name":"terminal.resize","kind":"unary","tier":"write","roles":["owner"],"params":"TerminalResizeParams","output":"()","doc":" PTY 크기를 바꾼다(셸은 SIGWINCH 를 받는다). 끝난 터미널 · 다른 세션이 연 터미널 · 0 인 크기는\n invalid params 오류.\n","mcp":null,"fileScope":false},
@@ -9495,6 +9495,12 @@ export type RemoteStatus =
 { state: "connecting"; stage: RemoteStage } | 
 /**  붙었다. `machine` 은 증명된 머신 id(Relay 기기 공개키 지문). */
 { state: "connected"; machine: string } | 
+/**
+ *  링크가 잠깐 끊겨 이어 붙는 중이다(18-m7-plan M7-09 ① — 링크 상태 `Reconnecting`). 채널 · 스트림 · 그 머신의 연결은 그대로
+ *  살아 있고, 이어 붙으면 `connected` 로 돌아간다. 이어 붙기 시한이 지나면 링크가 닫혀 `reconnecting`(새로 붙기)이 된다.
+ *  창은 이 동안 그 머신의 탭을 읽기 전용으로 보인다(M7-14).
+ */
+{ state: "resuming"; machine: string } | 
 /**  끊긴 뒤 다시 붙기를 기다린다(지수 백오프). `attempt` 는 1부터. */
 { state: "reconnecting"; attempt: number; retryInMs: number; error: RemoteFailure } | 
 /**
@@ -11313,7 +11319,7 @@ export type TerminalDetachParams = {
 	terminalId: number,
 	/**
 	 *  떼어진 터미널이 상한을 넘으면 가장 오래 떼어진 것부터 끝낸다(사람이 확인했다). 거짓이면 넘을 때 아무것도 하지 않고 conflict
-	 *  오류(`data.wouldEnd` — 끝낼 번호)를 준다.
+	 *  오류(`data.wouldEnd` — 끝낼 이 프로젝트의 번호, `data.otherProjects` — 끝낼 다른 프로젝트 터미널의 수)를 준다.
 	 */
 	endOldest?: boolean,
 };

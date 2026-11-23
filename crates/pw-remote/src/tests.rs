@@ -15,6 +15,8 @@ const MINI: &str = "SHA256:mini";
 struct FakeLink {
     closed_by_us: AtomicBool,
     drop_tx: Mutex<Option<oneshot::Sender<String>>>,
+    /// 링크가 이어 붙는 중인가(M7-09 ① — 진짜 링크의 `LinkState::Reconnecting`).
+    resuming: tokio::sync::watch::Sender<bool>,
 }
 
 impl FakeLink {
@@ -101,6 +103,7 @@ impl Backend for Fake {
                     let link = Arc::new(FakeLink {
                         closed_by_us: AtomicBool::new(false),
                         drop_tx: Mutex::new(Some(tx)),
+                        resuming: tokio::sync::watch::Sender::new(false),
                     });
                     lock(&self.links).push(Arc::clone(&link));
                     let closer = Arc::clone(&link);
@@ -113,6 +116,7 @@ impl Backend for Fake {
                         closed: Box::pin(
                             async move { rx.await.unwrap_or_else(|_| "closed".into()) },
                         ),
+                        resuming: Some(link.resuming.subscribe()),
                         close: Box::new(move || {
                             closer.closed_by_us.store(true, Ordering::SeqCst);
                             closer.drop_link();
@@ -195,6 +199,31 @@ async fn until(remote: &RemoteHosts, pred: impl Fn(&RemoteStatus) -> bool) -> Re
 
 fn connected(s: &RemoteStatus) -> bool {
     matches!(s, RemoteStatus::Connected { .. })
+}
+
+// 18-m7-plan M7-14: 링크가 이어 붙는 동안(M7-09 ①)은 상태가 `resuming` 이고 그 머신은 라우터에 남는다 — 창이 그 머신 탭을 읽기
+// 전용으로 보이고 연결을 닫지 않는다. 이어 붙으면 `connected` 로 돌아간다. 새로 붙지 않는다(다이얼 1번).
+#[tokio::test(start_paused = true)]
+async fn a_resuming_link_reports_resuming_and_keeps_the_machine_routed() {
+    let s = setup();
+    let _use = s.remote.hold("mini").unwrap();
+    until(&s.remote, connected).await;
+    s.fake.last_link().resuming.send_replace(true);
+    let st = until(&s.remote, |st| matches!(st, RemoteStatus::Resuming { .. })).await;
+    assert_eq!(
+        st,
+        RemoteStatus::Resuming {
+            machine: MINI.into()
+        }
+    );
+    assert!(
+        s.router.host(MINI).is_ok(),
+        "the resuming machine left the router"
+    );
+    s.fake.last_link().resuming.send_replace(false);
+    until(&s.remote, connected).await;
+    assert!(s.router.host(MINI).is_ok());
+    assert_eq!(s.fake.connects.load(Ordering::SeqCst), 1);
 }
 
 fn fail(kind: RemoteFailureKind, detail: Option<&str>) -> ConnectError {

@@ -48,6 +48,7 @@ export function stageMarks(status: RemoteStatus): Record<RemoteStage, StageMark>
     case "connecting":
       return marks(STAGES.indexOf(status.stage), "active");
     case "connected":
+    case "resuming":
       return marks(STAGES.length, "done");
     case "reconnecting":
       return marks(STAGES.indexOf(status.error.stage), "failed");
@@ -71,6 +72,8 @@ export function statusText(status: RemoteStatus, T: WelcomeStrings["remote"]): s
       return T.status.connecting(T.stage[status.stage]);
     case "connected":
       return T.status.connected;
+    case "resuming":
+      return T.status.resuming;
     case "reconnecting":
       return T.status.reconnecting(Math.ceil(status.retryInMs / 1000), status.attempt);
     case "machineChanged":

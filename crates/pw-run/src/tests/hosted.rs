@@ -260,6 +260,7 @@ async fn detached_terminals_are_capped_per_machine() {
     let (code_, data) = refused(&mut c, "terminal.detach", json!({"terminalId": t.terminal})).await;
     assert_eq!(code_, code::CONFLICT);
     assert_eq!(data["wouldEnd"], json!([opened[1].terminal]));
+    assert_eq!(data["otherProjects"], 0);
     assert!(alive(opened[1].pid), "a refused detach ended a terminal");
     let detached = c
         .call(
@@ -274,6 +275,36 @@ async fn detached_terminals_are_capped_per_machine() {
     assert_gone_within_a_second(&[opened[1].pid], Instant::now()).await;
     assert!(alive(t.pid) && alive(opened[2].pid));
     assert_eq!(f.terminals.detached_count(), 2);
+}
+
+/// 18-m7-plan M7-14(M7-09 리뷰 권고 4): 상한에 걸려 끝날 것이 다른 프로젝트의 터미널이면 그 번호를 주지 않고 수만 준다 — 창은
+/// 「다른 프로젝트의 터미널 N개」 로 묻는다. 이 프로젝트의 것은 번호로 준다.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_detach_conflict_names_only_this_projects_terminals() {
+    let f = Fixture::hosted(2);
+    let other = other_project(&f);
+    let mut o = f.client_in(ConnectionScope::Project(other.clone()));
+    let elsewhere = o
+        .open(json!({"projectId": other, "cols": 80, "rows": 24}))
+        .await;
+    o.session.close();
+    drop(o);
+    let mut c = f.client();
+    let mine = c.open(f.create_params(80, 24)).await;
+    c.session.close();
+    drop(c);
+    until("the terminals were not detached", || {
+        f.terminals.detached_count() == 2
+    })
+    .await;
+    // 붙은 셋째를 떼면 가장 오래 떼어진 것(다른 프로젝트의 것)이 끝나야 한다.
+    let mut c = f.client();
+    let t = c.open(f.create_params(80, 24)).await;
+    let (code_, data) = refused(&mut c, "terminal.detach", json!({"terminalId": t.terminal})).await;
+    assert_eq!(code_, code::CONFLICT);
+    assert_eq!(data["wouldEnd"], json!([]), "{data}");
+    assert_eq!(data["otherProjects"], 1, "{data}");
+    assert!(alive(elsewhere.pid) && alive(mine.pid));
 }
 
 /// 완료 기준 ⑦: 떼어진 터미널의 붙기 · 목록 · 입력은 그 프로젝트의 창(`Project` 범위) · owner 만 — `Agent` · `Host` 범위와 `readonly`

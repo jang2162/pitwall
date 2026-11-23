@@ -115,6 +115,7 @@ welcome-remote-status-idle = Disconnected
 welcome-remote-status-by-user = Disconnected by you
 welcome-remote-status-connecting = Connecting — { $stage }
 welcome-remote-status-connected = Connected
+welcome-remote-status-resuming = Briefly cut off — resuming the link
 welcome-remote-status-reconnecting = Reconnecting in { $seconds } s (attempt { $attempt })
 welcome-remote-status-machine-changed = Another machine answered — remembered { $expected }, now { $found }. This is like a changed SSH host key — trust it only if it is the right machine.
 welcome-remote-failed = Failed at { $stage }

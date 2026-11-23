@@ -108,7 +108,7 @@ pub struct TerminalCloseParams {
 pub struct TerminalDetachParams {
     pub terminal_id: TerminalId,
     /// 떼어진 터미널이 상한을 넘으면 가장 오래 떼어진 것부터 끝낸다(사람이 확인했다). 거짓이면 넘을 때 아무것도 하지 않고 conflict
-    /// 오류(`data.wouldEnd` — 끝낼 번호)를 준다.
+    /// 오류(`data.wouldEnd` — 끝낼 이 프로젝트의 번호, `data.otherProjects` — 끝낼 다른 프로젝트 터미널의 수)를 준다.
     #[serde(default)]
     pub end_oldest: bool,
 }
@@ -241,7 +241,7 @@ rpc_method! {
     }
 
     /// 원격 Host 의 터미널에서 이 연결의 스트림을 떼고 셸은 둔다([두고 닫기] — 18-m7-plan M7-09 ②). 떼어진 터미널은 머신당 16개까지
-    /// — 넘으면 `endOldest` 가 아닐 때 conflict 오류(`data.wouldEnd`)로 아무것도 하지 않고, `endOldest` 면 가장 오래 떼어진 것부터
+    /// — 넘으면 `endOldest` 가 아닐 때 conflict 오류(`data.wouldEnd` · `data.otherProjects`)로 아무것도 하지 않고, `endOldest` 면 가장 오래 떼어진 것부터
     /// 끝낸다. 로컬 Host 는 invalid params(창이 닫히면 끝난다), 프로젝트 창이 아니면 permission denied, 다른 프로젝트의 번호는 없는
     /// 터미널(invalid params).
     pub TerminalDetach: "terminal.detach" {

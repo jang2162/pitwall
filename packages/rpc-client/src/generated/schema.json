@@ -44745,6 +44745,23 @@
             "type": "object"
           },
           {
+            "description": "링크가 잠깐 끊겨 이어 붙는 중이다(18-m7-plan M7-09 ① — 링크 상태 `Reconnecting`). 채널 · 스트림 · 그 머신의 연결은 그대로\n살아 있고, 이어 붙으면 `connected` 로 돌아간다. 이어 붙기 시한이 지나면 링크가 닫혀 `reconnecting`(새로 붙기)이 된다.\n창은 이 동안 그 머신의 탭을 읽기 전용으로 보인다(M7-14).",
+            "properties": {
+              "machine": {
+                "type": "string"
+              },
+              "state": {
+                "const": "resuming",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "machine"
+            ],
+            "type": "object"
+          },
+          {
             "description": "끊긴 뒤 다시 붙기를 기다린다(지수 백오프). `attempt` 는 1부터.",
             "properties": {
               "attempt": {
@@ -45190,6 +45207,23 @@
                   },
                   "state": {
                     "const": "connected",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "machine"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "링크가 잠깐 끊겨 이어 붙는 중이다(18-m7-plan M7-09 ① — 링크 상태 `Reconnecting`). 채널 · 스트림 · 그 머신의 연결은 그대로\n살아 있고, 이어 붙으면 `connected` 로 돌아간다. 이어 붙기 시한이 지나면 링크가 닫혀 `reconnecting`(새로 붙기)이 된다.\n창은 이 동안 그 머신의 탭을 읽기 전용으로 보인다(M7-14).",
+                "properties": {
+                  "machine": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "const": "resuming",
                     "type": "string"
                   }
                 },
@@ -54616,14 +54650,14 @@
       "tier": "exec"
     },
     "terminal.detach": {
-      "description": "원격 Host 의 터미널에서 이 연결의 스트림을 떼고 셸은 둔다([두고 닫기] — 18-m7-plan M7-09 ②). 떼어진 터미널은 머신당 16개까지\n— 넘으면 `endOldest` 가 아닐 때 conflict 오류(`data.wouldEnd`)로 아무것도 하지 않고, `endOldest` 면 가장 오래 떼어진 것부터\n끝낸다. 로컬 Host 는 invalid params(창이 닫히면 끝난다), 프로젝트 창이 아니면 permission denied, 다른 프로젝트의 번호는 없는\n터미널(invalid params).",
+      "description": "원격 Host 의 터미널에서 이 연결의 스트림을 떼고 셸은 둔다([두고 닫기] — 18-m7-plan M7-09 ②). 떼어진 터미널은 머신당 16개까지\n— 넘으면 `endOldest` 가 아닐 때 conflict 오류(`data.wouldEnd` · `data.otherProjects`)로 아무것도 하지 않고, `endOldest` 면 가장 오래 떼어진 것부터\n끝낸다. 로컬 Host 는 invalid params(창이 닫히면 끝난다), 프로젝트 창이 아니면 permission denied, 다른 프로젝트의 번호는 없는\n터미널(invalid params).",
       "kind": "unary",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "endOldest": {
             "default": false,
-            "description": "떼어진 터미널이 상한을 넘으면 가장 오래 떼어진 것부터 끝낸다(사람이 확인했다). 거짓이면 넘을 때 아무것도 하지 않고 conflict\n오류(`data.wouldEnd` — 끝낼 번호)를 준다.",
+            "description": "떼어진 터미널이 상한을 넘으면 가장 오래 떼어진 것부터 끝낸다(사람이 확인했다). 거짓이면 넘을 때 아무것도 하지 않고 conflict\n오류(`data.wouldEnd` — 끝낼 이 프로젝트의 번호, `data.otherProjects` — 끝낼 다른 프로젝트 터미널의 수)를 준다.",
             "type": "boolean"
           },
           "terminalId": {

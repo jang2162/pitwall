@@ -134,6 +134,8 @@ pub struct Link {
     pub machine: String,
     /// 링크가 닫히면 끝난다(까닭).
     pub closed: BoxFuture<'static, String>,
+    /// 링크가 이어 붙는 중인가(18-m7-plan M7-09 ① — 참이면 상태를 `resuming` 으로 낸다). 없으면 늘 붙어 있는 것으로 본다.
+    pub resuming: Option<tokio::sync::watch::Receiver<bool>>,
     /// 링크를 닫는다.
     pub close: Box<dyn FnOnce() + Send>,
 }
@@ -984,6 +986,7 @@ impl RemoteHosts {
             host,
             machine,
             closed,
+            resuming,
             close,
         } = link;
         // 처음 본 id 는 검사(다른 호스트 이름이 이미 그 id 를 기억하는가)와 같은 트랜잭션으로 기억한다(리뷰 F-b). 다른 이름이
@@ -1059,6 +1062,37 @@ impl RemoteHosts {
             RemoteLogLevel::Info,
             &format!("connected to machine {machine}"),
         );
+        // 링크가 이어 붙는 동안은 `resuming`, 이어 붙으면 다시 `connected` 다(M7-14 — 창이 그 머신 탭을 읽기 전용으로 보인다).
+        let closed: BoxFuture<'static, String> = match resuming {
+            None => closed,
+            Some(mut resuming) => {
+                let hosts = self.clone();
+                let name = name.to_owned();
+                let watched = machine.clone();
+                Box::pin(async move {
+                    let mut closed = closed;
+                    loop {
+                        tokio::select! {
+                            reason = &mut closed => return reason,
+                            changed = resuming.changed() => {
+                                if changed.is_err() {
+                                    return closed.await;
+                                }
+                                let now = *resuming.borrow_and_update();
+                                let machine = watched.clone();
+                                hosts.update(&name, generation, |_| {
+                                    Some(if now {
+                                        RemoteStatus::Resuming { machine }
+                                    } else {
+                                        RemoteStatus::Connected { machine }
+                                    })
+                                });
+                            }
+                        }
+                    }
+                })
+            }
+        };
         Ok(Some((closed, machine)))
     }
 

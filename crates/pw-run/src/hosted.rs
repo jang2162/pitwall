@@ -459,11 +459,12 @@ impl Hosting {
             let already = detached.iter().any(|(_, t)| t.id == hosted.id);
             let after = detached.len() + usize::from(!already);
             if after > self.max_detached {
-                let would_end: Vec<TerminalId> = detached
-                    .iter()
-                    .take(after - self.max_detached)
-                    .map(|(_, t)| t.id)
-                    .collect();
+                // 상한은 머신 하나의 것이라 다른 프로젝트의 터미널도 끝날 수 있다. 번호는 이 프로젝트 것만 주고, 다른 프로젝트 것은
+                // 수만 준다(M7-09 리뷰 권고 4 — 다른 프로젝트의 번호는 없는 터미널과 같은 판정, 창은 「다른 프로젝트의 터미널 N개」로 묻는다).
+                let ending = detached.iter().take(after - self.max_detached);
+                let (mine, others): (Vec<_>, Vec<_>) =
+                    ending.partition(|(_, t)| t.project == hosted.project);
+                let would_end: Vec<TerminalId> = mine.iter().map(|(_, t)| t.id).collect();
                 return Err(RpcError::new(
                     code::CONFLICT,
                     format!(
@@ -471,7 +472,11 @@ impl Hosting {
                         self.max_detached
                     ),
                 )
-                .with_data(json!({ "wouldEnd": would_end, "limit": self.max_detached })));
+                .with_data(json!({
+                    "wouldEnd": would_end,
+                    "otherProjects": others.len(),
+                    "limit": self.max_detached,
+                })));
             }
         }
         let became_detached = {

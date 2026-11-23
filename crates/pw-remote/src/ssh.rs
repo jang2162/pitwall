@@ -286,11 +286,27 @@ impl SshBackend {
         let machine = remote
             .link()
             .map_or(machine, |link| link.machine().as_str().to_owned());
+        // 링크 상태의 이어 붙기(M7-09 ①)를 상태 `resuming` 으로 낸다(M7-14).
+        let (resuming_tx, resuming) = tokio::sync::watch::channel(false);
+        let mut watched = remote.state();
+        tokio::spawn(async move {
+            loop {
+                let now = matches!(*watched.borrow_and_update(), LinkState::Reconnecting);
+                resuming_tx.send_if_modified(|was| std::mem::replace(was, now) != now);
+                if matches!(*watched.borrow(), LinkState::Disconnected { .. })
+                    || watched.changed().await.is_err()
+                    || resuming_tx.is_closed()
+                {
+                    return;
+                }
+            }
+        });
         let closer = Arc::clone(&remote);
         Ok(Link {
             host: remote,
             machine,
             closed,
+            resuming: Some(resuming),
             close: Box::new(move || closer.detach()),
         })
     }

@@ -420,3 +420,56 @@ fn alive(pid: u32) -> bool {
         .status()
         .is_ok_and(|s| s.success())
 }
+
+/// 18-m7-plan M7-14: 다른 머신 체크아웃의 `run.start` 는 **그 머신의** 신뢰 · 구성으로 돈다 — 미신뢰 프로젝트면 그 머신이 링크 너머로
+/// `untrusted` 를 낸다(Desktop 쪽 판정이 아니다). 신뢰한 뒤 사람이 화면에서 확인하고 띄우면(첫 실행 확인 7001 → 해시) 「사람이 본
+/// 구성」 기록이 그 머신(Relay)의 `state.db` 에 남는다(M6-11 — 다음 에이전트 실행이 그 머신에서 그 기록을 본다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_remote_run_starts_under_that_machines_trust_and_is_recorded_there() {
+    let (_tmp, base) = base();
+    let (linked, attached) = linked_as(&base, Some(Role::Owner), true).await;
+    attached.unwrap();
+    let registry = linked.host.inner.registry().unwrap().clone();
+    let dir = linked.root.join(".pitwall/run");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("dev.toml"),
+        "schema = 1\nname = \"dev\"\ntype = \"shell\"\ncommand = \"sleep 30\"\n",
+    )
+    .unwrap();
+    registry.set_trust(&linked.project, false).unwrap();
+    let mut window = linked
+        .remote
+        .connect(project_window(&linked.project))
+        .await
+        .unwrap();
+    let start = |confirmed: serde_json::Value| json!({ "projectId": linked.project, "configId": "dev", "confirmed": confirmed });
+
+    let refused = common::call(&mut window, 1, "run.start", start(json!(null)))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused["code"],
+        json!(pw_rpc::code::PERMISSION_DENIED),
+        "{refused}"
+    );
+    assert_eq!(refused["data"]["reason"], "untrusted", "{refused}");
+    assert_eq!(registry.run_seen(&linked.project, "dev").unwrap(), None);
+
+    // 그 머신에서 신뢰한 뒤: 처음은 확인을 묻고(7001), 본 해시를 실어 띄우면 그 머신에 기록이 남는다.
+    registry.set_trust(&linked.project, true).unwrap();
+    let asked = common::call(&mut window, 2, "run.start", start(json!(null)))
+        .await
+        .unwrap_err();
+    assert_eq!(asked["code"], json!(7001), "{asked}");
+    let hash = asked["data"]["hash"].clone();
+    let run = common::call(&mut window, 3, "run.start", start(hash))
+        .await
+        .unwrap();
+    assert!(
+        registry.run_seen(&linked.project, "dev").unwrap().is_some(),
+        "the person's run was not recorded on that machine"
+    );
+    let stopped = common::call(&mut window, 4, "run.stop", json!({ "runId": run["runId"] })).await;
+    assert!(stopped.is_ok(), "{stopped:?}");
+}

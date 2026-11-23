@@ -98,6 +98,10 @@ pub enum RemoteStatus {
     Connecting { stage: RemoteStage },
     /// 붙었다. `machine` 은 증명된 머신 id(Relay 기기 공개키 지문).
     Connected { machine: String },
+    /// 링크가 잠깐 끊겨 이어 붙는 중이다(18-m7-plan M7-09 ① — 링크 상태 `Reconnecting`). 채널 · 스트림 · 그 머신의 연결은 그대로
+    /// 살아 있고, 이어 붙으면 `connected` 로 돌아간다. 이어 붙기 시한이 지나면 링크가 닫혀 `reconnecting`(새로 붙기)이 된다.
+    /// 창은 이 동안 그 머신의 탭을 읽기 전용으로 보인다(M7-14).
+    Resuming { machine: String },
     /// 끊긴 뒤 다시 붙기를 기다린다(지수 백오프). `attempt` 는 1부터.
     Reconnecting {
         attempt: u32,

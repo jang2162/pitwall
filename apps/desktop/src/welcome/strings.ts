@@ -120,6 +120,7 @@ export function welcomeStrings(t: Translate) {
         byUser: t("welcome-remote-status-by-user"),
         connecting: (stage: string) => t("welcome-remote-status-connecting", { stage }),
         connected: t("welcome-remote-status-connected"),
+        resuming: t("welcome-remote-status-resuming"),
         reconnecting: (seconds: number, attempt: number) =>
           t("welcome-remote-status-reconnecting", { seconds, attempt }),
         machineChanged: (expected: string, found: string) =>
