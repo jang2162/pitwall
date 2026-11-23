@@ -57,9 +57,40 @@ run-port-open = { $url } 열기
 run-port-all-addresses = 모든 주소
 # 다른 머신에서 도는 실행의 포트 — 그 머신의 포트라 이 컴퓨터의 브라우저로 열지 않는다. $port: 포트, $machine: 머신 이름
 run-port-remote = { $machine } 의 포트 { $port } — 이 컴퓨터에서는 열리지 않는다(로컬로 포워딩해야 한다)
-# 다른 머신의 포트를 로컬로 포워딩하는 단추(아직 없다 — 자리만)
+# 다른 머신의 포트를 로컬로 포워딩하는 단추(18-m7-plan M7-22)
 run-port-forward = 로컬로 포워딩
-run-port-forward-soon = 로컬로 포워딩은 아직 없다
+# 포워딩을 여는 중
+run-port-forward-opening = 포워딩하는 중…
+# 포워딩한 포트 — 칩이 이 컴퓨터의 루프백 주소를 연다. $url: http://localhost:<로컬 포트>
+run-port-forwarded = 포워딩함 — { $url } 열기
+run-port-forward-stop = 포워딩 멈추기
+# 이 컴퓨터에서 그 로컬 포트를 이미 쓴다. $port: 포트 번호
+run-port-forward-in-use = 이 컴퓨터에서 포트 { $port } 를 이미 쓰고 있다 — 다른 포트를 고른다
+# 다른 로컬 포트를 넣는 칸(비우면 빈 포트를 골라 준다)
+run-port-forward-other = 로컬 포트
+run-port-forward-other-hint = 이 컴퓨터의 빈 포트(비우면 골라 준다)
+run-port-forward-retry = 포워딩
+# $message: Host 의 오류(영어)
+run-port-forward-failed = 포워딩하지 못했다: { $message }
+
+## 포트 포워딩 목록(상태바 · 원격 호스트 시트, src/run/forward-list.tsx)
+
+run-forwards-title = 포트 포워딩
+run-forwards-empty = 포트 포워딩이 없다
+# 포워딩 하나. $local: 이 컴퓨터의 주소, $remote: 원격 머신의 주소, $host: 원격 호스트 이름
+run-forwards-row = { $local } → { $host } 의 { $remote }
+run-forwards-origin-settings = 설정
+run-forwards-origin-run = 실행
+run-forwards-off = 끄기
+# 열지 않은 설정의 포워딩. $host: 설정의 local_host
+run-forwards-not-loopback = 열지 않음: 포워딩은 127.0.0.1 · ::1 에서만 듣는다(local_host 가 { $host })
+# $port: 로컬 포트
+run-forwards-port-in-use = 열지 않음: 로컬 포트 { $port } 를 이미 쓰고 있다
+# $message: 오류(영어)
+run-forwards-failed = 열지 않음: { $message }
+# 상태바 항목. $count: 포워딩 수
+run-forwards-status = 포워딩 { $count }
+run-forwards-status-hint = 포트 포워딩 { $count }개 — 목록 보기
 
 ## 상태바
 

@@ -10,6 +10,7 @@
 //   조사한 머신 id)를 `remote.stopOld` 에 싣는다 — 그사이 바뀌었으면 Host 가 끝내지 않고 새 수를 보인다. 다른 Desktop 이 그 옛 판에
 //   붙어 있으면 그 수와 「그 연결도 끊긴다」 를 보이고 단추 글도 다르다. 원격의 `pitwall` 명령 링크(`~/.local/bin/pitwall`)는 사람이
 //   고를 때만 둔다(`remote.linkCommand` — 메인 판정 M7-P12).
+// - 호스트 줄마다 그 호스트의 포트 포워딩 목록 · [끄기](`ForwardList` — 18-m7-plan M7-22 ⑤).
 // - ssh 의 질문(호스트 키 확인 · 암호)은 `RemotePrompts` 가 `remote.prompts` 로 듣고 git 과 같은 askpass 다이얼로그로 묻는다 —
 //   호스트 키 질문은 [취소](처음 포커스) · [예](`yes`)다(git-prompts.tsx).
 
@@ -31,6 +32,7 @@ import { useI18n } from "../i18n/i18n-provider";
 import { useHost, useRpcQuery } from "../rpc/host";
 import { connectEventInvalidation } from "../rpc/invalidation";
 import { rpcQueryKey } from "../rpc/queries";
+import { ForwardList } from "../run/forward-list";
 import { type WelcomeStrings, useWelcomeStrings } from "./strings";
 
 const LOG = "[remote]";
@@ -272,6 +274,7 @@ function HostRow({
   onAddCheckout?(machine: string): void;
 }) {
   const T = useWelcomeStrings().remote;
+  const connection = useHost();
   const addLabel = useAppStrings().checkoutAdd.action;
   const { locales } = useI18n();
   const when = (at: number) =>
@@ -340,6 +343,8 @@ function HostRow({
       )}
       <Stages status={status} T={T} />
       {using && status.state === "connected" && <Relays name={host.name} T={T} onError={onError} />}
+      {/* 그 호스트의 포트 포워딩 · [끄기](18-m7-plan M7-22 ⑤) — 설정의 것은 붙을 때 열리고, 실행 탭의 것은 그 창이 연다. */}
+      <ForwardList connection={connection} name={host.name} />
       {host.lastLink && !using && (
         <span className="text-[11px] text-ui-muted-foreground">
           {T.last[host.lastLink.state](when(host.lastLink.at))}

@@ -54,7 +54,31 @@ export function runStrings(t: Translate) {
       remote: (port: number, machine: string) =>
         t("run-port-remote", { port: String(port), machine }),
       forward: t("run-port-forward"),
-      forwardSoon: t("run-port-forward-soon"),
+      forwardOpening: t("run-port-forward-opening"),
+      forwarded: (url: string) => t("run-port-forwarded", { url }),
+      forwardStop: t("run-port-forward-stop"),
+      forwardInUse: (port: number) => t("run-port-forward-in-use", { port: String(port) }),
+      forwardOther: t("run-port-forward-other"),
+      forwardOtherHint: t("run-port-forward-other-hint"),
+      forwardRetry: t("run-port-forward-retry"),
+      forwardFailed: (message: string) => t("run-port-forward-failed", { message }),
+    },
+    /** 포트 포워딩 목록(상태바 · 원격 호스트 시트 — forward-list.tsx). */
+    forwards: {
+      title: t("run-forwards-title"),
+      empty: t("run-forwards-empty"),
+      row: (local: string, remote: string, host: string) =>
+        t("run-forwards-row", { local, remote, host }),
+      origin: {
+        settings: t("run-forwards-origin-settings"),
+        run: t("run-forwards-origin-run"),
+      },
+      off: t("run-forwards-off"),
+      notLoopback: (host: string) => t("run-forwards-not-loopback", { host }),
+      portInUse: (port: number) => t("run-forwards-port-in-use", { port: String(port) }),
+      failed: (message: string) => t("run-forwards-failed", { message }),
+      status: (count: number) => t("run-forwards-status", { count }),
+      statusHint: (count: number) => t("run-forwards-status-hint", { count }),
     },
     status: {
       label: (count: number) => t("run-status-label", { count }),

@@ -29,6 +29,7 @@ import { ThemeStoreProvider } from "../theme/theme-switcher";
 import { parseTheme } from "../theme/tokens";
 import { runTarget } from "./run-picker";
 import { resetWindowRunConfigs } from "./run-configs";
+import { windowForwards } from "./port-forwards";
 import { windowRuns } from "./run-tabs";
 
 declare global {
@@ -83,6 +84,15 @@ const fake = vi.hoisted(() => ({
   frames: new Map<string, unknown[]>(),
   /** 구독(연결 · 번호 · 토픽 · 프로젝트). */
   subs: [] as { conn: number; id: number; topics: string[]; projectId: string | undefined }[],
+  /** 열린 `remote.forward.open` 스트림(18-m7-plan M7-22). */
+  forwards: [] as {
+    conn: number;
+    streamId: number;
+    params: Record<string, unknown>;
+    cancelled: boolean;
+  }[],
+  /** 이 컴퓨터에서 이미 쓰이는 로컬 포트(`remote.forward.open` 이 `conflict` · `portInUse` 로 답한다). */
+  inUse: new Set<number>(),
 }));
 
 vi.mock("@tauri-apps/api/webview", () => ({
@@ -231,8 +241,38 @@ vi.mock("../tauri-transport", async () => {
             reply({ streamId });
             return link.send(fake.status as object);
           }
+          case "remote.forward.open": {
+            // 실제 Host 처럼: 원격 쪽은 늘 localhost, 로컬은 루프백, 쓰이는 로컬 포트는 덮지 않고 거절한다.
+            const remotePort = Number(params.remotePort);
+            const asked =
+              params.localPort === null || params.localPort === undefined
+                ? remotePort
+                : Number(params.localPort);
+            if (fake.inUse.has(asked))
+              return fail(-32004, `local port ${asked} is already in use on this computer`, {
+                reason: "portInUse",
+                port: asked,
+              });
+            const streamId = next++;
+            fake.forwards.push({ conn, streamId, params, cancelled: false });
+            reply({ streamId });
+            return chunk(streamId, {
+              id: fake.forwards.length,
+              name: params.name,
+              origin: "run",
+              localHost: "127.0.0.1",
+              localPort: asked === 0 ? 49152 : asked,
+              remoteHost: "localhost",
+              remotePort,
+              state: { state: "listening" },
+            });
+          }
+          case "remote.forwards.list":
+            return reply([]);
           case "stream.cancel": {
             const { streamId } = params as { streamId: number };
+            for (const f of fake.forwards)
+              if (f.conn === conn && f.streamId === streamId) f.cancelled = true;
             fake.links = fake.links.filter((l) => !(l.streamId === streamId));
             // 셸 스트림을 끊으면: 이 머신은 셸을 끝내고, 다른 머신은 떼어 둔다(신뢰한 프로젝트).
             for (const shell of shells().values())
@@ -557,6 +597,8 @@ beforeEach(() => {
   fake.sqlConfirm = false;
   fake.limit = 16;
   fake.status = { state: "connected", machine: MINI };
+  fake.forwards = [];
+  fake.inUse = new Set();
   activeWorktreeStore.setState({ top: undefined });
   terminalTarget().setState({ chosen: undefined });
   runTarget().setState({ chosen: undefined });
@@ -584,6 +626,7 @@ afterEach(async () => {
   await reactAct(async () => root?.unmount());
   await reactAct(async () => windowTerminals().disposeAll());
   await reactAct(async () => windowRuns().disposeAll());
+  await reactAct(async () => windowForwards().disposeAll());
   root = undefined;
   dock = undefined;
   closeGuard = undefined;
@@ -1031,12 +1074,82 @@ it("shows a remote run's port as that machine's port and never opens it on this 
   expect(chip.dataset.machine).toBe(MINI);
   expect(chip.title).toContain("mini");
   expect(chip.tagName).toBe("SPAN");
-  const forward = document.querySelector<HTMLButtonElement>("[data-testid=run-port-forward]")!;
-  expect(forward.disabled).toBe(true);
   const spy = vi.spyOn(windowRuns(), "openUrl").mockImplementation((url) => void opened.push(url));
   await click(chip);
   expect(opened).toEqual([]);
+
+  // 「로컬로 포워딩」(18-m7-plan M7-22): 창의 Host 범위 연결로 그 호스트 이름 · 그 포트를 청한다(원격 쪽 호스트는 싣지 않는다 —
+  // Host 가 늘 localhost). 가짜 Host 는 `remote.*` 를 Host 범위 연결로만 받는다.
+  const forward = await vi.waitFor(() => {
+    const b = document.querySelector<HTMLButtonElement>("[data-testid=run-port-forward]");
+    expect(b?.disabled).toBe(false);
+    return b!;
+  });
+  await click(forward);
+  expect(calls("local", "remote.forward.open").map((c) => c.params)).toEqual([
+    { name: "mini", remotePort: 5173, localPort: null },
+  ]);
+  expect(calls(MINI, "remote.forward.open")).toHaveLength(0);
+  // 포워딩한 칩은 이 컴퓨터의 루프백 주소를 연다.
+  const forwarded = await vi.waitFor(() => {
+    const b = document.querySelector<HTMLElement>("[data-testid=run-port-forwarded]");
+    expect(b).not.toBeNull();
+    return b!;
+  });
+  expect(forwarded.dataset.localPort).toBe("5173");
+  await click(forwarded);
+  expect(opened).toEqual(["http://localhost:5173"]);
   spy.mockRestore();
+  // [멈추기] 는 스트림을 닫는다 — Host 가 포워딩을 닫는다.
+  await click(document.querySelector("[data-testid=run-port-forward-stop]"));
+  await vi.waitFor(() => expect(fake.forwards[0]!.cancelled).toBe(true));
+  expect(document.querySelector("[data-testid=run-port-forwarded]")).toBeNull();
+});
+
+it("shows a local port in use, forwards on the port the human picks and stops when the run ends", async () => {
+  fake.runs.get(MINI)!.push(RUN(MINI, "r1", null));
+  fake.inUse.add(5173);
+  await mount();
+  await act(async () => projectOpenInbox.push({ worktree: REMOTE_MAIN }));
+  await settle();
+  await vi.waitFor(() => expect(windowRuns().store.getState().tabs).toHaveLength(1));
+  const forward = await vi.waitFor(() => {
+    const b = document.querySelector<HTMLButtonElement>("[data-testid=run-port-forward]");
+    expect(b?.disabled).toBe(false);
+    return b!;
+  });
+  await click(forward);
+  // 덮지 않는다 — 그 사실과 그 번호를 보이고 다른 포트를 고르게 한다.
+  const inUse = await vi.waitFor(() => {
+    const e = document.querySelector<HTMLElement>("[data-testid=run-port-forward-in-use]");
+    expect(e).not.toBeNull();
+    return e!;
+  });
+  expect(inUse.textContent).toContain("5173");
+  expect(fake.forwards).toHaveLength(0);
+  const field = document.querySelector<HTMLInputElement>("[data-testid=run-port-forward-port]")!;
+  await act(async () => {
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    set.call(field, "15173");
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await click(document.querySelector("[data-testid=run-port-forward-other]"));
+  expect(calls("local", "remote.forward.open").map((c) => c.params)).toEqual([
+    { name: "mini", remotePort: 5173, localPort: null },
+    { name: "mini", remotePort: 5173, localPort: 15173 },
+  ]);
+  await vi.waitFor(() =>
+    expect(
+      document.querySelector<HTMLElement>("[data-testid=run-port-forwarded]")?.dataset.localPort,
+    ).toBe("15173"),
+  );
+  // 그 실행이 끝나면 포워딩도 끝난다(그 실행이 사는 동안).
+  const tab = windowRuns()
+    .store.getState()
+    .tabs.find((t) => t.machine === MINI)!;
+  await act(async () => windowRuns().stop(tab.key));
+  await settle();
+  await vi.waitFor(() => expect(fake.forwards[0]!.cancelled).toBe(true));
 });
 
 it("refuses the checkout actions without a checkout or with a machine this window does not know", async () => {

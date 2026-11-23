@@ -23,6 +23,7 @@ import { useTheme } from "../theme/theme-switcher";
 import { terminalTheme } from "../terminal/terminal-theme";
 import { useRiskConfirm } from "../db/safety/risk-confirm";
 import { RunChainNotices } from "./run-chain";
+import { ForwardsStatusItem } from "./forward-list";
 import { RunStatusPorts } from "./run-ports";
 import { linkPaused } from "../terminal/terminal-tabs";
 import { isLive, type RunTabs, windowRuns } from "./run-tabs";
@@ -132,6 +133,7 @@ export function RunFeature({
   }, [tabs, theme, appearance]);
 
   useStatusBarItem({ id: "run", ...STATUS_SLOTS.run, component: RunStatusItem });
+  useStatusBarItem({ id: "forwards", ...STATUS_SLOTS.forwards, component: ForwardsStatusItem });
   return (
     <>
       {machines.map((machine) => (

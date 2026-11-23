@@ -58,7 +58,41 @@ run-port-all-addresses = all addresses
 # A run's port on another machine — it is that machine's port, so this computer's browser does not open it
 run-port-remote = Port { $port } on { $machine } — not reachable from this computer (forward it first)
 run-port-forward = Forward to Local
-run-port-forward-soon = Forwarding to local is not available yet
+# While the forward is being opened
+run-port-forward-opening = Forwarding…
+# A forwarded port: the chip opens this computer's loopback address. $url: http://localhost:<local port>
+run-port-forwarded = Forwarded — open { $url }
+run-port-forward-stop = Stop forwarding
+# The local port is taken on this computer. $port: port number
+run-port-forward-in-use = Port { $port } is already in use on this computer — choose another
+# Number field for another local port (empty: let the system pick a free port)
+run-port-forward-other = Local port
+run-port-forward-other-hint = A free port on this computer (empty: pick one for me)
+run-port-forward-retry = Forward
+# $message: the error from the host (English)
+run-port-forward-failed = Could not forward: { $message }
+
+## Port forward list (status bar and the remote host sheet, src/run/forward-list.tsx)
+
+run-forwards-title = Port forwards
+run-forwards-empty = No port forwards
+# One forward. $local: the address on this computer, $remote: the address on the remote machine, $host: remote host name
+run-forwards-row = { $local } → { $remote } on { $host }
+run-forwards-origin-settings = settings
+run-forwards-origin-run = run
+run-forwards-off = Turn off
+# A forward from the settings that was not opened. $host: the configured local_host
+run-forwards-not-loopback = Not opened: forwards listen only on 127.0.0.1 or ::1 (local_host is { $host })
+# $port: the local port
+run-forwards-port-in-use = Not opened: local port { $port } is already in use
+# $message: the error (English)
+run-forwards-failed = Not opened: { $message }
+# Status bar item. $count: number of forwards
+run-forwards-status = { $count } forwarded
+run-forwards-status-hint = { $count ->
+    [one] One port forward — show it
+   *[other] { $count } port forwards — show them
+}
 
 ## Status bar
 

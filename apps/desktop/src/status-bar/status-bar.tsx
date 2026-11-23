@@ -62,6 +62,8 @@ export const STATUS_SLOTS = {
   /** 이 프로젝트에서 도는 실행 수 「▶ 실행 2」 — 0 이면 없다. 누르면 「실행」 툴 윈도우(17-m6-plan M6-06 ⑦, src/run/run-feature.tsx).
    * 포트(M6-08)는 이 항목 안에 그린다(src/run/run-ports.tsx). 백그라운드 작업 앞. */
   run: { side: "right", order: 90 },
+  /** 포트 포워딩 수 「포워딩 2」 — 0 이면 없다. 누르면 목록 · [끄기](18-m7-plan M7-22 ⑤, src/run/forward-list.tsx). */
+  forwards: { side: "right", order: 92 },
   /** 커밋 보내기 · 가져오기의 진행(18-m7-plan M7-17, src/git/send/send-feature.tsx). 백그라운드 작업 앞. */
   gitSend: { side: "right", order: 95 },
   /** 백그라운드 작업(F11-5). */
