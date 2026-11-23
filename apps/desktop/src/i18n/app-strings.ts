@@ -148,6 +148,7 @@ export function appStrings(t: Translate) {
       changed: t("checkout-add-changed"),
       timedOut: (seconds: number) => t("checkout-add-timed-out", { seconds }),
       cancelled: t("checkout-add-cancelled"),
+      cancelledButAdded: t("checkout-add-cancelled-added"),
       unavailable: t("checkout-add-unavailable"),
       failed: (message: string) => t("checkout-add-failed", { message }),
     },

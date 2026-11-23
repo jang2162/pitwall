@@ -113,6 +113,23 @@ export function machineChoices(
   return out;
 }
 
+/**
+ * 취소한 더하기가 그래도 붙었는가: 더하기 전 묶음(`before`)의 멤버를 모두 가진 지금 묶음에 그 머신의 멤버가 있으면 그 묶음. 암묵
+ * 묶음은 붙으면 id 가 바뀌므로 id 가 아니라 멤버로 찾는다.
+ */
+export function joinedAnyway(
+  bundles: readonly ProjectBundle[],
+  before: ProjectBundle,
+  machine: string,
+): ProjectBundle | undefined {
+  return bundles.find(
+    (b) =>
+      before.members.every((m) =>
+        b.members.some((n) => n.machine === m.machine && n.projectId === m.projectId),
+      ) && b.members.some((n) => n.machine === machine),
+  );
+}
+
 /** 대화상자가 떠 있는 동안 그 호스트의 링크를 쥔다(`remote.connect`). 상태를 돌려준다. StrictMode 의 열기 · 닫기는 짝이다. */
 function useHeldLink(client: RpcClient | undefined, name: string | undefined) {
   const [status, setStatus] = useState<RemoteStatus>();
@@ -195,8 +212,15 @@ export function AddCheckoutDialog({
         (error: unknown) => ({ error }),
       );
     if (!alive.current) return;
+    let shown = addOutcomeText(done, T, name);
+    // 붙이기 단계(3/3)에 든 뒤의 취소는 요청만 끝낸다 — 멤버는 붙는다(M7-11). 그때 「취소했다」 라고만 말하지 않는다(리뷰 R1).
+    if (shown.kind === "refused" && shown.text === T.cancelled && bundle) {
+      const now = await client.call("bundle.list", null).catch(() => undefined);
+      if (!alive.current) return;
+      if (now && joinedAnyway(now, bundle, machine))
+        shown = { kind: "refused", text: T.cancelledButAdded };
+    }
     setRunning(undefined);
-    const shown = addOutcomeText(done, T, name);
     if (shown.kind === "added") onAdded(shown.bundle);
     else setResult(shown);
   }

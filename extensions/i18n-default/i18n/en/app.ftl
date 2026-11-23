@@ -445,6 +445,7 @@ checkout-add-changed = The project's checkouts changed while checking — add it
 # $seconds: the time limit in seconds
 checkout-add-timed-out = Stopped: Pitwall could not tell within { $seconds } seconds whether it is the same repository. The history is very large or the machine is slow — try again
 checkout-add-cancelled = Adding was cancelled
+checkout-add-cancelled-added = Cancelled, but it was already attaching — the checkout was added (the branch popup lists it)
 checkout-add-unavailable = Pitwall is not connected to that machine — connect from Remote Hosts and try again
 # $message: why it failed
 checkout-add-failed = Could not add the checkout: { $message }

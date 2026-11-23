@@ -52,6 +52,8 @@ interface Fake {
   judging: Map<number, (answer: object) => void>;
   /** 판정의 답. 없으면 걸어 둔다. */
   judge?: (params: AddBundleMemberParams) => object | undefined;
+  /** `bundle.list` 의 답. 없으면 그 메서드가 없다. */
+  bundles?: ProjectBundle[];
 }
 
 function fakeHost(fake: Fake): RpcClient {
@@ -65,6 +67,7 @@ function fakeHost(fake: Fake): RpcClient {
       fake.judging.delete(id);
       return;
     }
+    if (m.method === "bundle.list" && fake.bundles) return send({ id: m.id, result: fake.bundles });
     if (m.method !== "bundle.addMember")
       return send({ id: m.id, error: { code: ERROR_CODE.METHOD_NOT_FOUND, message: m.method } });
     const params = m.params as AddBundleMemberParams;
@@ -205,6 +208,25 @@ describe("AddCheckoutDialog", () => {
     expect(fake.cancels).toEqual([fake.calls[0]!.id]);
     expect(fake.judging.size).toBe(0);
     expect(added).toEqual([]);
+  });
+
+  // 리뷰 R1: 붙이기 단계에 든 뒤의 취소는 요청만 끝낸다 — 그때 묶음에 그 머신이 붙었으면 「취소했다」 만 말하지 않는다.
+  it("says the checkout was added anyway when the cancel came after it attached", async () => {
+    const fake = newFake();
+    await show(fake);
+    await typePath("/home/me/web-console");
+    await click(button(T.submit));
+    fake.bundles = [
+      {
+        ...BUNDLE,
+        id: "b-9",
+        implicit: false,
+        members: [...BUNDLE.members, { machine: MINI, projectId: "r1", lastTarget: null }],
+      },
+    ];
+    await click(button(T.cancel));
+    expect(fake.cancels).toHaveLength(1);
+    expect(result()).toBe(T.cancelledButAdded);
   });
 
   it("puts the time limit refusal in words a person reads", async () => {

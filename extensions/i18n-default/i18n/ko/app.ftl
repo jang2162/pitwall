@@ -442,6 +442,7 @@ checkout-add-changed = 확인하는 사이 프로젝트의 체크아웃이 바�
 # $seconds: 시간 상한(초)
 checkout-add-timed-out = { $seconds }초 안에 같은 저장소인지 확인하지 못해 멈췄다. 역사가 아주 크거나 그 머신이 느리다 — 다시 해 본다
 checkout-add-cancelled = 추가를 취소했다
+checkout-add-cancelled-added = 취소했지만 이미 붙이는 단계였다 — 체크아웃이 더해졌다(브랜치 팝업에 나온다)
 checkout-add-unavailable = 그 머신에 연결되어 있지 않다 — 원격 호스트에서 연결한 뒤 다시 한다
 # $message: 실패 이유
 checkout-add-failed = 체크아웃을 더하지 못했다: { $message }
