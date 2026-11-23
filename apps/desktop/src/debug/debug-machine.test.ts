@@ -171,7 +171,8 @@ describe("a debug start that outlives a checkout switch", () => {
     sessions.connect(here.client, "p1");
     mini.release();
     await starting;
-    expect(sessions.store.getState().sessions.filter((x) => x.machine !== MINI)).toEqual([]);
+    // 이 창에는 그 세션이 없다 — 새 머신 세션으로도, 이 창이 지금 붙지 않은 머신의 세션으로도(그 머신으로 돌아가면 `run.list`).
+    expect(sessions.store.getState().sessions).toEqual([]);
     await sessions.stop().catch(() => {});
     await sessions.control("stepOver").catch(() => {});
     expect(here.calls("run.stop")).toHaveLength(0);
