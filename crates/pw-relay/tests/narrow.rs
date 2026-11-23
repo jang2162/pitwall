@@ -95,6 +95,7 @@ fn fixture() -> Fixture {
             pairings: pairings.clone(),
             host: Arc::new(assembled.host) as Arc<dyn Host>,
             limits: LinkLimits::default(),
+            resumes: pw_link::Resumes::default(),
         },
         activity: Arc::new(Idle),
         narrow: Arc::new(RelayNarrow::new(askpass, requests, Some(registry))),

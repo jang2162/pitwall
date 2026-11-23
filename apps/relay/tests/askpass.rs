@@ -166,6 +166,7 @@ async fn a_remote_git_password_question_reaches_only_that_project_window() {
             pairings: pairings.clone(),
             host: Arc::new(host) as Arc<dyn Host>,
             limits: LinkLimits::default(),
+            resumes: pw_link::Resumes::default(),
         },
         activity: Arc::new(Idle),
         narrow: Arc::new(RelayNarrow::new(
