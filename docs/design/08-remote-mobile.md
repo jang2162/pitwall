@@ -64,11 +64,12 @@
    - 수동: 릴리스 바이너리를 위 경로 · 이름 규칙으로 직접 배치
    - 페어링: SSH 로 붙을 때마다 `pitwall-relay pair --from-ssh <Desktop 공개키>` 로 그 Desktop 키를 페어링 표에 `owner` 로(없을 때만) 넣고 머신 id 를 받는다 — 데몬 소켓 명령이 아니라 페어링 표 파일에 잠금(`pairings.lock`)을 쥐고 직접 쓴다. 해제는 `pitwall-relay unpair <기기 id>`(18-m7-plan M7-06 ⑧ ⑨)
 5. 상주 서비스 등록(systemd user / launchd) 또는 SSH 세션 기반 데몬으로 기동
-6. 오래된 버전 바이너리 정리 (최근 2개 유지)
+6. 오래된 버전 바이너리 정리 (최근 2개 유지) — 이 Desktop 의 판과, 나머지 가운데 판(semver)이 가장 높은 하나를 남긴다. 원격 `$DATA/relay/` 의 `pitwall-relay-*` 만 보고(같은 폴더의 `state.db` · `device.key` · `pairings.json` 은 건드리지 않는다), 판을 읽을 수 없는 이름은 지우지 않는다. **떠 있는 데몬의 바이너리는 지우지 않는다** — 지우기 직전 원격 셸이 그 바이너리의 `status` 를 불러 데몬이 없다고 답할 때만 지운다. 셸이 끝난 올리기 임시 파일(`.part.<pid>`)도 지운다(18-m7-plan M7-07 ③ — 구현 `pw_link::upgrade`)
 
 ### 연결 · 재연결 (프록시 모드)
 - 연결할 때마다 `pitwall-relay proxy`를 실행 → 데몬이 없으면 띄우고, 있으면 기존 데몬에 붙음
-- 데몬 재사용에 실패하면(버전 불일치, 손상) 새 데몬으로 교체하고 로그 남김
+- 데몬은 (채널, 판)마다 따로다 — 소켓 `$STATE/relay/<채널>-<판>.sock`(구현 `pw_relay::socket::endpoint`), 바이너리 `pitwall-relay-{channel}-{version}`, 핸드셰이크도 판 · 채널을 견준다. Desktop 이 새 판이면 새 판을 깔고 새 판 데몬이 따로 뜬다 — **옛 판 데몬에 붙지 않고 끝내지도 않는다**(18-m7-plan 결정 M7-D6 ①)
+- 옛 판 데몬은 링크 · 실행 · 터미널이 모두 없어지면 유휴 규칙으로 스스로 끝난다. 그동안 Desktop 은 옛 판 바이너리의 `pitwall-relay status`(판에 묶이지 않는 최소 질의 — JSON 한 줄, 칸은 덧붙이기만 한다)로 남은 실행 · 터미널 수를 읽어 「옛 판 Relay 에 n개 남음」 과 [옛 판 끝내기] 를 보인다. 끝내기는 사람이 본 그 데몬(pid · 실행 · 터미널 수)이 그대로일 때만 SIGTERM 을 보내고 — 그사이 바뀌었으면 보내지 않고 새 수를 다시 보인다 — 실행 트리 끝내기는 그 데몬이 한다. 옛 판의 실행은 새 Desktop 에서 보이지 않는다(18-m7-plan M7-07 ② — 구현 `pw_link::upgrade`)
 - Tailscale/LAN 직접 연결(QUIC)이 가능하면 데이터 경로는 직접 연결, 불가하면 SSH 채널 위로 그대로 운영
 
 ### 페어링 (직접 연결용)

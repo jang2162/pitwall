@@ -9,7 +9,7 @@ publish.workspace = true
 [features]
 # Desktop 쪽 SSH 부트스트랩(18-m7-plan M7-06): 시스템 `ssh` 실행(`ssh`) · Relay 설치 · SSH 자동 페어링(`install`). Relay 바이너리는
 # 켜지 않는다 — 받기(reqwest) · 매니페스트 검증(pw-release)이 원격 바이너리에 들지 않게(크기 — 메인 판정 M7-P13).
-bootstrap = ["dep:pw-release", "dep:reqwest", "dep:rustls", "tokio/process"]
+bootstrap = ["dep:pw-release", "dep:reqwest", "dep:rustls", "dep:semver", "tokio/process"]
 # 시험용 가짜 `ssh`(`fake_ssh` — apps/relay 의 설치 시험이 쓴다).
 test-support = ["bootstrap"]
 
@@ -33,6 +33,8 @@ reqwest = { version = "0.13.5", default-features = false, features = [
   "system-proxy",
 ], optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring"], optional = true }
+# 원격 Relay 바이너리의 판 차례(최근 두 판만 남기기 — 18-m7-plan M7-07 ③). 워크스페이스가 이미 쓰는 판이다.
+semver = { version = "1.0.28", optional = true }
 # 링크 틀은 LSP · DAP 와 같은 `Content-Length` 틀이다(메인 판정 M7-P2).
 pw-wire = { path = "../pw-wire" }
 serde = { workspace = true, features = ["derive"] }

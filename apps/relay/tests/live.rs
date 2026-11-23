@@ -14,7 +14,7 @@
 //!
 //! 시나리오: 설치 · RPC 왕복, 다시 붙기(같은 데몬 — SSH 세션이 끝나도 데몬이 남는다), 끊김(컨테이너를 얼려 링크가 조용해짐 → 링크가
 //! 끊겼다고 보고, 풀면 다시 붙어 같은 데몬), 페어링 안 된 기기 거절, 커밋 보내기(이 기기의 Relay 데몬 → 원격 체크아웃, M7-16 RPC).
-//! 판 바꾸기는 M7-07 이 판 둘을 만드는 시나리오로 더한다.
+//! 판 바꾸기(M7-07): 한 바이너리로 판 둘을 만든다 — 개발 채널 빌드는 `PITWALL_RELAY_DEV_VERSION` 을 판으로 쓴다(`pw_relay::version`).
 
 #![cfg(all(unix, pw_live_relay))]
 
@@ -216,6 +216,15 @@ impl Site {
             ),
             &table,
         );
+    }
+
+    /// 판 `version` 을 내세우는 같은 바이너리(`PITWALL_RELAY_DEV_VERSION` — 개발 채널 빌드만, M7-07 판 바꾸기).
+    fn relay_as(&self, version: &str, args: &str) -> String {
+        format!(
+            "env {}={version} {}",
+            pw_relay::DEV_VERSION_ENV,
+            self.relay(args)
+        )
     }
 
     /// 원격 데몬의 `status`(데몬이 없으면 None).
@@ -920,4 +929,84 @@ fn live_relay_sends_a_commit_to_the_remote_checkout() {
             .trim(),
         "/nonexistent/origin.git"
     );
+}
+
+/// 판 바꾸기(18-m7-plan M7-07 `relay-live` · 결정 M7-D6 ①): 판 A 의 링크로 터미널을 연 채로 판 B 로 붙으면 판 B 데몬이 따로 뜨고
+/// 판 A 의 데몬 · 셸은 산다. 판 A 데몬의 `status` 가 남은 터미널을 센다. (실행 대신 터미널 — 실행은 신뢰 · 첫 실행 확인을 거쳐야 해서
+/// 이 시나리오에서는 링크가 붙어 있는 동안 남는 터미널로 「남은 일」 을 만든다.)
+#[test]
+fn live_relay_a_new_version_starts_its_own_daemon_and_the_old_shell_lives() {
+    let site = Site::new("upgrade");
+    site.install();
+    let key = Arc::new(DeviceKey::generate().unwrap());
+    site.configure(&[&key]);
+    let mut next = semver::Version::parse(VERSION).unwrap();
+    next.patch += 1;
+    next.pre = semver::Prerelease::EMPTY;
+    let next = next.to_string();
+    runtime().block_on(async {
+        let old = RemoteHost::new(
+            "old",
+            site.transport(),
+            identity(Arc::clone(&key)),
+            Expect::FirstContact,
+            quick_limits(),
+        );
+        old.attach().await.unwrap();
+        let (id, mut window) = project_window(&old, &format!("{}/work", site.base)).await;
+        let opened = window
+            .call(
+                "terminal.create",
+                json!({"projectId": id, "cols": 80, "rows": 24}),
+            )
+            .await;
+        window.conn.sink.send(json!({"jsonrpc": "2.0", "method": "stream.credit", "params": {"streamId": opened["streamId"], "credit": 1000}}));
+        let shell = loop {
+            let frame = tokio::time::timeout(Duration::from_secs(60), window.conn.source.recv())
+                .await
+                .expect("no terminal output")
+                .expect("closed");
+            if frame["method"] == "stream.chunk" && frame["params"]["data"]["kind"] == "started" {
+                break frame["params"]["data"]["pid"].as_u64().unwrap();
+            }
+        };
+        let old_status = site.status().expect("the old daemon");
+        assert_eq!(old_status["terminals"], 1, "{old_status}");
+
+        let new = RemoteHost::new(
+            "new",
+            Arc::new(SshTransport {
+                remote: site.remote.clone(),
+                command: site.relay_as(&next, "proxy"),
+            }) as Arc<dyn Transport>,
+            Arc::new(DesktopIdentity {
+                key: Arc::clone(&key),
+                versions: pw_link::Versions::new(
+                    next.as_str(),
+                    option_env!("PITWALL_RELEASE_CHANNEL").unwrap_or("dev"),
+                ),
+            }),
+            Expect::FirstContact,
+            quick_limits(),
+        );
+        new.attach()
+            .await
+            .expect("the new version starts its own daemon");
+        let out = site
+            .remote
+            .command(&site.relay_as(&next, "status --json"))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "no new daemon");
+        let new_status: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(new_status["version"], json!(next));
+        assert_ne!(new_status["pid"], old_status["pid"], "two daemons");
+        let still = site.status().expect("the old daemon still runs");
+        assert_eq!(still["pid"], old_status["pid"]);
+        assert_eq!(still["terminals"], 1, "{still}");
+        site.remote.sh(&format!("kill -0 {shell}"));
+        drop(window);
+        new.detach();
+        old.detach();
+    });
 }

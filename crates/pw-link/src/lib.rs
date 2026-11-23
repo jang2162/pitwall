@@ -11,6 +11,7 @@
 //! - [`desktop`]: [`dial`] · [`RemoteHost`](`pw_core::Host` 를 구현해 `HostRouter` 에 붙는다) · 링크 상태.
 //! - [`relay`]: [`serve`] — 증명된 Desktop 의 채널을 이 머신의 Host 연결로 잇고, 호출자를 링크 기기의 role 로 자른다.
 //! - `ssh` · `install`(기능 `bootstrap` — Desktop 만): 시스템 `ssh` 로 원격 명령 · 링크 전송, Relay 설치 · SSH 자동 페어링(M7-06).
+//! - `upgrade`(기능 `bootstrap`): 판 바꾸기 · 정리 — 옛 판 데몬 조사 · [옛 판 끝내기] · 최근 두 판만 남기기(M7-07).
 
 mod claim;
 pub mod desktop;
@@ -30,6 +31,8 @@ pub mod install;
 pub mod remote_hosts;
 #[cfg(feature = "bootstrap")]
 pub mod ssh;
+#[cfg(feature = "bootstrap")]
+pub mod upgrade;
 
 pub use desktop::{DesktopIdentity, DesktopLink, DialError, Expect, LinkState, RemoteHost, dial};
 pub use device::{

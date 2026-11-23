@@ -114,6 +114,8 @@ macro_rules! prelude {
          d=\"$b/relay\"; f=\"$d/pitwall-relay-$1-$2\"; "
     };
 }
+// 판 바꾸기 · 정리 스크립트(`crate::upgrade` — M7-07)도 같은 머리로 `$d` · `$f` 를 푼다.
+pub(crate) use prelude;
 
 /// 파일 하나의 sha256(소문자 16진). 도구가 없으면 `none`. 파일 이름을 출력에 싣지 않게 stdin 으로 넘긴다.
 macro_rules! hash_fn {
@@ -571,7 +573,7 @@ impl Installer {
         args
     }
 
-    async fn run(
+    pub(crate) async fn run(
         &self,
         step: &'static str,
         script: &str,
@@ -724,7 +726,7 @@ impl Installer {
 }
 
 /// stdout 에서 표지 줄 하나의 값(로그인 셸이 뿌린 다른 줄은 무시한다).
-fn marked(stdout: &[u8], prefix: &str) -> Option<String> {
+pub(crate) fn marked(stdout: &[u8], prefix: &str) -> Option<String> {
     String::from_utf8_lossy(stdout)
         .lines()
         .rev()
