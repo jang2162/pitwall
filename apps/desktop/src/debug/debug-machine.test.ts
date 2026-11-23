@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { checkoutKey, LOCAL_MACHINE, qualify } from "../checkout/checkout";
 import { activeWorktreeStore } from "../open-with/active-worktree";
 import { debugDocument, openSavedBreakpoint } from "./debug-feature";
+import { DebugSessions } from "./debug-session";
 
 const MINI = "SHA256:mini/fingerprint";
 const PATH = "/work/demo/src/app.py";
@@ -58,5 +59,55 @@ describe("openSavedBreakpoint", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     await openSavedBreakpoint(client, "r1", MINI, { open } as never, "src/lib.py", 7);
     expect(open).not.toHaveBeenCalled();
+  });
+});
+
+// M7-21 리뷰 B1: 세션은 시작한 머신을 기억한다 — 창의 디버그 연결 머신(`setDeps`)이 그 사이 바뀌어도 그 세션의 프레임 · 멈춘 줄은 그
+// 세션의 머신으로 연다(지금 연결의 머신이 아니다).
+describe("a debug session's machine", () => {
+  it("opens its stopped frame on the machine it started on", async () => {
+    let listener: ((e: unknown) => void) | undefined;
+    const client = {
+      subscribe: vi.fn(async (_p: unknown, l: (e: unknown) => void) => {
+        listener = l;
+        return { unsubscribe: async () => {} };
+      }),
+      call: vi.fn(async (method: string) => {
+        switch (method) {
+          case "run.list":
+            return { runs: [] };
+          case "debug.start":
+            return {
+              run: { runId: "d1", name: "app", worktree: null, state: "running", kind: "debug" },
+              adapter: "debugpy",
+            };
+          case "debug.threads":
+            return { threads: [{ id: 1, name: "main" }] };
+          case "debug.stack":
+            return {
+              frames: [{ id: 1, name: "main", path: PATH, line: 3, column: 1, token: null }],
+              totalFrames: null,
+            };
+          default:
+            return { scopes: [] };
+        }
+      }),
+    } as never;
+    const openFile = vi.fn();
+    const deps = { client, projectId: "r1", openFile, openOutside: vi.fn() };
+    const sessions = new DebugSessions();
+    sessions.setDeps({ ...deps, machine: MINI });
+    sessions.connect(client, "r1");
+    await sessions.start("dev");
+    expect(sessions.store.getState().sessions[0]?.machine).toBe(MINI);
+    // 창이 다른 머신의 연결로 넘어가는 중(다시 붙기 전) — 그 사이 그 세션이 멈췄다.
+    sessions.setDeps({ ...deps, machine: LOCAL_MACHINE });
+    listener!({
+      topic: "debug.stopped",
+      payload: { runId: "d1", threadId: 1, reason: "breakpoint", description: null, session: null },
+    });
+    await vi.waitFor(() => expect(openFile).toHaveBeenCalled());
+    expect(openFile.mock.calls[0]![0]).toMatchObject({ path: PATH, machine: MINI });
+    expect(sessions.current.getState().frame).toEqual({ path: qualify(MINI, PATH), line: 3 });
   });
 });
