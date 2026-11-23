@@ -519,6 +519,11 @@ export type UnaryMethods = {
 	 */
 	"fs.readBytes": { params: FsReadBytesParams; result: FsBytes };
 	/**
+	 * 파일 전체 읽기의 한 조각(내용의 `offset` 부터 `maxBytes` 와이어 바이트 안). 조각마다 그 순간의 파일 전체 `version` 을 싣고,
+	 * `expectedVersion` 이 지금 파일과 다르면 `CONFLICT`. 50 MiB 까지.
+	 */
+	"fs.readChunk": { params: FsReadChunkParams; result: FsReadChunk };
+	/**
 	 * 항목의 이름을 바꾸거나 다른 폴더로 옮긴다(심링크면 링크 자체). 대상 이름이 있으면 덮지 않고 `CONFLICT`. 대소문자만 바꾸는
 	 * 이름(대소문자를 무시하는 볼륨에서 같은 항목)은 바꾼다(macOS · Windows).
 	 */
@@ -536,6 +541,19 @@ export type UnaryMethods = {
 	 * 바꾸지 않고 `CONFLICT`(`data.current` 에 지금 `version`, 파일이 없으면 `null`). 읽기 전용 파일은 거절한다.
 	 */
 	"fs.write": { params: FsWriteParams; result: FsWritten };
+	/**
+	 * 모음을 버린다(파일은 그대로). 없는 모음이면 아무 일도 없다.
+	 */
+	"fs.writeAbort": { params: FsWriteAbortParams; result: null };
+	/**
+	 * 조각 쓰기의 한 조각을 Host 에 모은다(파일은 바꾸지 않는다). 모음은 이 연결 · 그 경로에 묶인다.
+	 */
+	"fs.writeChunk": { params: FsWriteChunkParams; result: FsWriteChunk };
+	/**
+	 * 모은 내용을 `fs.write` 처럼 원자적으로 쓴다(`expectedVersion` 충돌이면 아무것도 바꾸지 않고 `CONFLICT`). 성공 · 실패 모두
+	 * 모음을 닫는다.
+	 */
+	"fs.writeCommit": { params: FsWriteCommitParams; result: FsWritten };
 	/**
 	 * 리비전(또는 index)의 파일 내용 — 전체 또는 범위. 50 MiB 를 넘는 blob 은 풀지 않고 크기만 준다(`tooLarge`).
 	 */
@@ -1779,11 +1797,15 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"fs.list": {"name":"fs.list","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"FsPathParams","output":"FsList","doc":" 폴더 한 단계의 항목(이름 · 종류 · 크기 · mtime · ignore 여부). 파일 트리가 펼칠 때 부른다.\n","mcp":null,"fileScope":false},
 	"fs.read": {"name":"fs.read","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"FsReadParams","output":"FsRead","doc":" 파일 전체 또는 범위를 읽고 판정(텍스트/바이너리 · 인코딩 · 줄바꿈 · BOM · 크기 등급)을 함께 준다. 전체 읽기는 50 MiB 까지,\n 그보다 큰 파일은 범위로 읽는다.\n","mcp":null,"fileScope":true},
 	"fs.readBytes": {"name":"fs.readBytes","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"FsReadBytesParams","output":"FsBytes","doc":" 파일의 바이트 범위(64 KiB 까지)를 판정 없이 읽는다(hex 뷰어의 페이지). 일반 파일만.\n","mcp":null,"fileScope":true},
+	"fs.readChunk": {"name":"fs.readChunk","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"FsReadChunkParams","output":"FsReadChunk","doc":" 파일 전체 읽기의 한 조각(내용의 `offset` 부터 `maxBytes` 와이어 바이트 안). 조각마다 그 순간의 파일 전체 `version` 을 싣고,\n `expectedVersion` 이 지금 파일과 다르면 `CONFLICT`. 50 MiB 까지.\n","mcp":null,"fileScope":true},
 	"fs.rename": {"name":"fs.rename","kind":"unary","tier":"write","roles":["owner"],"params":"FsFromToParams","output":"FsMoved","doc":" 항목의 이름을 바꾸거나 다른 폴더로 옮긴다(심링크면 링크 자체). 대상 이름이 있으면 덮지 않고 `CONFLICT`. 대소문자만 바꾸는\n 이름(대소문자를 무시하는 볼륨에서 같은 항목)은 바꾼다(macOS · Windows).\n","mcp":null,"fileScope":false},
 	"fs.stat": {"name":"fs.stat","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"FsPathParams","output":"FsStat","doc":" 파일 · 폴더 하나의 상태와 파일의 크기 등급. 내용은 읽지 않는다.\n","mcp":null,"fileScope":true},
 	"fs.trash": {"name":"fs.trash","kind":"unary","tier":"write","roles":["owner"],"params":"FsTrashParams","output":"FsTrashed","doc":" 항목들을 OS 휴지통에 넣는다(`permanent` 면 영구히 지운다). 넣지 못한 것은 `failed` 에 이유와 함께.\n","mcp":null,"fileScope":false},
 	"fs.watch": {"name":"fs.watch","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"FsWatchParams","output":"FsWatching","doc":" 창의 루트(활성 워크트리)를 감시한다. 스트림이 열려 있는 동안 바뀐 경로가 프로젝트 범위 이벤트 `fs.changed` 로 나가고, 닫으면\n 감시를 놓는다. 항목은 감시 방식이다 — 첫 항목이 오면 그 뒤의 변경은 놓치지 않는다.\n","mcp":null,"fileScope":true},
 	"fs.write": {"name":"fs.write","kind":"unary","tier":"write","roles":["owner"],"params":"FsWriteParams","output":"FsWritten","doc":" 같은 폴더의 임시 파일에 쓰고 rename 으로 바꿔 끼운다(권한 · 심링크 대상 보존). `expectedVersion` 이 지금 파일과 다르면 아무것도\n 바꾸지 않고 `CONFLICT`(`data.current` 에 지금 `version`, 파일이 없으면 `null`). 읽기 전용 파일은 거절한다.\n","mcp":null,"fileScope":true},
+	"fs.writeAbort": {"name":"fs.writeAbort","kind":"unary","tier":"write","roles":["owner"],"params":"FsWriteAbortParams","output":"()","doc":" 모음을 버린다(파일은 그대로). 없는 모음이면 아무 일도 없다.\n","mcp":null,"fileScope":true},
+	"fs.writeChunk": {"name":"fs.writeChunk","kind":"unary","tier":"write","roles":["owner"],"params":"FsWriteChunkParams","output":"FsWriteChunk","doc":" 조각 쓰기의 한 조각을 Host 에 모은다(파일은 바꾸지 않는다). 모음은 이 연결 · 그 경로에 묶인다.\n","mcp":null,"fileScope":true},
+	"fs.writeCommit": {"name":"fs.writeCommit","kind":"unary","tier":"write","roles":["owner"],"params":"FsWriteCommitParams","output":"FsWritten","doc":" 모은 내용을 `fs.write` 처럼 원자적으로 쓴다(`expectedVersion` 충돌이면 아무것도 바꾸지 않고 `CONFLICT`). 성공 · 실패 모두\n 모음을 닫는다.\n","mcp":null,"fileScope":true},
 	"git.blame": {"name":"git.blame","kind":"stream","tier":"read","roles":["owner"],"params":"GitBlameParams","output":"BlameChunk","doc":" 파일의 줄마다 마지막으로 바꾼 커밋(F4-7 · F5-17). 범위마다 커밋 · 그 커밋에서의 경로(이름 바뀜 추적) · 「이 커밋\n 이전으로」 의 부모와 경로, 커밋마다 작성자 · 시각 · 제목(처음 나올 때 한 번). 첫 청크에 그 리비전의 해시 · 줄 수 · 엔진.\n 작업 트리 · 저장하지 않은 편집은 blame 하지 않는다. 저장소가 없거나 HEAD 가 태어나지 않았거나 그 리비전에 파일이 없으면\n 청크 없이 끝난다. 없는 프로젝트 · 워크트리, 잘못된 경로 · 리비전, 폴더 · 서브모듈 · 50 MiB 넘는 파일은 invalid params(엔진 `gix` 는 이력의 버전이 50 MiB 를 넘어도). 범위의 경로가\n UTF-8 이 아니면 그때까지의 청크를 보낸 뒤 invalid params 로 끝난다(경로를 U+FFFD 로 바꿔 싣지 않는다).\n","mcp":null,"fileScope":false},
 	"git.blob": {"name":"git.blob","kind":"unary","tier":"read","roles":["owner"],"params":"GitBlobParams","output":"GitBlob","doc":" 리비전(또는 index)의 파일 내용 — 전체 또는 범위. 50 MiB 를 넘는 blob 은 풀지 않고 크기만 준다(`tooLarge`).\n","mcp":null,"fileScope":false},
 	"git.branch.create": {"name":"git.branch.create","kind":"unary","tier":"write","roles":["owner"],"params":"GitBranchCreateParams","output":"GitBranchResult","doc":" 브랜치를 만든다(`git branch`, `checkout` 이면 `git switch --create`).\n","mcp":null,"fileScope":false},
@@ -5279,6 +5301,47 @@ export type FsReadBytesParams = {
 	length: number,
 };
 
+export type FsReadChunk = {
+	/**  정규화한 실제 경로. */
+	path: string,
+	/**  파일 전체 크기. */
+	size: number,
+	mtimeMs: number | null,
+	/**  이 조각을 자른 순간의 파일 전체 `version`. 모든 조각이 같아야 그 내용의 `version` 이다(`fs.write` 의 `expectedVersion`). */
+	version: string,
+	/**  파일 전체의 판정(통째 `fs.read` 와 같다). */
+	judgment: Judgment,
+	/**  이 조각의 시작(요청한 `offset`). */
+	offset: number,
+	/**  다음 조각의 `offset`. */
+	next: number,
+	/**  내용 전체의 길이(`offset` 과 같은 단위). */
+	total: number,
+	/**  마지막 조각이다(`next == total`). */
+	eof: boolean,
+	/**
+	 *  이 조각의 내용. 종류(텍스트 · base64)는 통째 `fs.read` 와 같고 모든 조각이 같다. 이어 붙이면 통째 읽기의 내용이다 — base64 는
+	 *  마지막이 아닌 조각이 3바이트 배수라 문자열을 그대로 이어 붙여도 된다.
+	 */
+	content: FsContent,
+};
+
+export type FsReadChunkParams = {
+	projectId: string,
+	worktree?: string | null,
+	/**  Absolute path. */
+	path: string,
+	/**
+	 *  이 조각이 시작하는 내용 안의 자리 — 첫 조각은 0, 다음부터 앞 조각의 `next`. 텍스트면 풀어 낸 텍스트의 UTF-8 바이트 자리,
+	 *  base64 면 파일 바이트 자리다.
+	 */
+	offset?: number,
+	/**  조각 내용(`content` 의 `text` · `data` 문자열)의 직렬화한 JSON 바이트 상한. 16 이상 [`CHUNK_WIRE_MAX`] 이하. */
+	maxBytes: number,
+	/**  첫 조각의 `version`. 지금 파일이 다르면 내용 없이 `CONFLICT`(`data.current`) — 처음부터 다시 읽는다. */
+	expectedVersion?: string | null,
+};
+
 export type FsReadParams = {
 	projectId: string,
 	worktree?: string | null,
@@ -5354,6 +5417,41 @@ export type FsWatchedRoot = {
 /**  `fs.watch` 의 항목: 지금 보는 루트와 방식. 감시를 다 건 뒤 한 번, 방식이 바뀔 때마다(한도 초과 → 폴링) 한 번. */
 export type FsWatching = {
 	roots: FsWatchedRoot[],
+};
+
+export type FsWriteAbortParams = {
+	projectId: string,
+	upload: string,
+};
+
+export type FsWriteChunk = {
+	/**  모음의 id — 다음 조각 · 커밋 · 버리기에 준다. */
+	upload: string,
+	/**  지금까지 모은 바이트. */
+	received: number,
+};
+
+export type FsWriteChunkParams = {
+	projectId: string,
+	worktree?: string | null,
+	/**  절대 경로(`fs.write` 와 같은 판정). 모음의 모든 조각 · 커밋이 같은 경로여야 한다. */
+	path: string,
+	/**  이어 쓸 모음. 없으면 새 모음을 연다. */
+	upload?: string | null,
+	/**  이 조각의 내용(UTF-8 텍스트 조각 또는 그 조각만의 base64). 모음의 모든 조각이 같은 종류여야 한다. */
+	content: FsContent,
+};
+
+export type FsWriteCommitParams = {
+	projectId: string,
+	worktree?: string | null,
+	/**  조각을 보낸 경로. */
+	path: string,
+	upload: string,
+	/**  텍스트 앞에 UTF-8 BOM 을 붙인다(`fs.write` 와 같다). */
+	bom?: boolean,
+	/**  `fs.write` 와 같다 — 지금 파일과 다르면 아무것도 쓰지 않고 `CONFLICT`. 없으면 새 파일. */
+	expectedVersion?: string | null,
 };
 
 export type FsWriteParams = {

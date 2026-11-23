@@ -126,6 +126,15 @@ impl Fixture {
                 json!({"projectId": id, "path": self.path("new.txt"),
                        "content": {"kind": "text", "text": "pwned"}, "expectedVersion": null}),
             ),
+            // 조각 쓰기(M7-13b): 모음을 여는 첫 조각부터 거절한다 — 남의 모음 id 를 대고 커밋해도 범위가 먼저다.
+            (
+                "fs.writeChunk",
+                json!({"projectId": id, "path": a, "content": {"kind": "text", "text": "pwned"}}),
+            ),
+            (
+                "fs.writeCommit",
+                json!({"projectId": id, "path": a, "upload": "u1", "expectedVersion": version}),
+            ),
             (
                 "fs.create",
                 json!({"projectId": id, "path": self.path("new.txt"), "kind": "file"}),
@@ -224,7 +233,7 @@ async fn a_file_window_of_another_file_writes_nothing() {
     let mut conn = f.connect(Caller::file(Role::Owner, f.root.join("other.txt")).scope);
     for (method, params) in f.writes(&version) {
         let e = conn.call(method, params.clone()).await.expect_err(method);
-        let expected = if method == "fs.write" {
+        let expected = if ["fs.write", "fs.writeChunk", "fs.writeCommit"].contains(&method) {
             code::INVALID_PARAMS
         } else {
             code::PERMISSION_DENIED

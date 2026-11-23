@@ -352,6 +352,16 @@ describe("isBusyError", () => {
     expect(isBusyError(error)).toBe(true);
   });
 
+  it("tells a chunked write refused for too many open uploads as busy", () => {
+    // crates/pw-fs 의 `fs.writeChunk`(chunks.rs `busy`)가 보내는 사유.
+    const error = new RpcCallError({
+      code: ERROR_CODE.INTERNAL_ERROR,
+      message: "internal error",
+      data: "chunked write is busy: 4 uploads are already open on this host",
+    });
+    expect(isBusyError(error)).toBe(true);
+  });
+
   it("is false for other errors", () => {
     const internal = (data: unknown) =>
       new RpcCallError({

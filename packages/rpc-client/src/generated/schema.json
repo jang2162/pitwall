@@ -19986,6 +19986,285 @@
       ],
       "tier": "read"
     },
+    "fs.readChunk": {
+      "description": "파일 전체 읽기의 한 조각(내용의 `offset` 부터 `maxBytes` 와이어 바이트 안). 조각마다 그 순간의 파일 전체 `version` 을 싣고,\n`expectedVersion` 이 지금 파일과 다르면 `CONFLICT`. 50 MiB 까지.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "expectedVersion": {
+            "default": null,
+            "description": "첫 조각의 `version`. 지금 파일이 다르면 내용 없이 `CONFLICT`(`data.current`) — 처음부터 다시 읽는다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "maxBytes": {
+            "description": "조각 내용(`content` 의 `text` · `data` 문자열)의 직렬화한 JSON 바이트 상한. 16 이상 [`CHUNK_WIRE_MAX`] 이하.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "description": "이 조각이 시작하는 내용 안의 자리 — 첫 조각은 0, 다음부터 앞 조각의 `next`. 텍스트면 풀어 낸 텍스트의 UTF-8 바이트 자리,\nbase64 면 파일 바이트 자리다.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Absolute path.",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "path",
+          "maxBytes"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Bom": {
+            "enum": [
+              "utf8",
+              "utf16Le",
+              "utf16Be"
+            ],
+            "type": "string"
+          },
+          "FsContent": {
+            "description": "읽거나 쓸 내용.",
+            "oneOf": [
+              {
+                "description": "UTF-8 텍스트. 읽기에서는 파일 앞의 BOM 을 뺀 것이다(`judgment.bom` 이 알린다). 판정의 인코딩이 UTF-8 이 아니면(UTF-16 ·\n짐작한 인코딩) 그 인코딩에서 풀어 낸 것이고 `judgment.editable` 이 거짓이다 — 그 텍스트를 `fs.write` 로 되돌려 쓰면 원래 바이트가\n바뀐다(결정 M1-D12).",
+                "properties": {
+                  "kind": {
+                    "const": "text",
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "text"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "바이트 그대로(BOM 포함), 표준 base64.",
+                "properties": {
+                  "data": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "base64",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "Judgment": {
+            "description": "읽은 내용의 판정.",
+            "properties": {
+              "binary": {
+                "description": "파일 앞 8 KiB 에 NUL 이 있다(UTF-16 BOM 이 있으면 텍스트로 본다).",
+                "type": "boolean"
+              },
+              "bom": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Bom"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "파일 앞의 BOM."
+              },
+              "editable": {
+                "description": "에디터로 편집 · 저장할 수 있다: 텍스트, 유효한 UTF-8(BOM 유무 무관, 결정 M1-D12, `lossy` 아님), 5 MiB 이하.",
+                "type": "boolean"
+              },
+              "encoding": {
+                "description": "읽은 범위의 WHATWG 인코딩 이름(`UTF-8` · `UTF-16LE` · `UTF-16BE` · 짐작한 것). UTF-16 은 BOM 으로, UTF-8 로 읽히지 않는\n텍스트는 `chardetng` 로 짐작한다(예: `EUC-KR` · `Shift_JIS` · `windows-1252`, 결정 M1-D12). 바이너리면 `null`. 거의 UTF-8\n이면(`lossy`) `UTF-8` 이다.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "highlight": {
+                "description": "구문 강조 · 줄바꿈을 켠다: 텍스트, 5 MiB 이하, 1만 자 넘는 줄 없음(결정 M1-D9).",
+                "type": "boolean"
+              },
+              "lineEnding": {
+                "$ref": "#/$defs/LineEnding"
+              },
+              "longLines": {
+                "description": "읽은 범위에 1만 자를 넘는 줄이 있다.",
+                "type": "boolean"
+              },
+              "lossy": {
+                "description": "인코딩이 `UTF-8` 이지만 유효하지 않은 바이트가 있어(쓰는 중인 로그 · 끝이 잘린 파일 등) 그 바이트를 U+FFFD 로 바꿔 풀었다.\n편집하지 않는다 — 저장하면 그 바이트가 U+FFFD 로 바뀐다.",
+                "type": "boolean"
+              },
+              "sizeClass": {
+                "$ref": "#/$defs/SizeClass",
+                "description": "파일 전체 크기의 등급."
+              }
+            },
+            "required": [
+              "binary",
+              "encoding",
+              "lossy",
+              "bom",
+              "lineEnding",
+              "longLines",
+              "sizeClass",
+              "editable",
+              "highlight"
+            ],
+            "type": "object"
+          },
+          "LineEnding": {
+            "description": "읽은 범위의 줄바꿈.",
+            "oneOf": [
+              {
+                "enum": [
+                  "lf",
+                  "crlf",
+                  "cr"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "mixed",
+                "description": "둘 이상이 섞였다.",
+                "type": "string"
+              },
+              {
+                "const": "none",
+                "description": "줄바꿈이 없다(한 줄).",
+                "type": "string"
+              }
+            ]
+          },
+          "SizeClass": {
+            "description": "크기 등급(결정 M1-D9).",
+            "oneOf": [
+              {
+                "const": "editable",
+                "description": "5 MiB 이하: 편집 + 강조.",
+                "type": "string"
+              },
+              {
+                "const": "readOnly",
+                "description": "5 MiB 초과 50 MiB 이하: 읽기 전용, 강조 · 줄바꿈 끔.",
+                "type": "string"
+              },
+              {
+                "const": "tooLarge",
+                "description": "50 MiB 초과: 열지 않는다(앞부분 · hex 는 범위 읽기로).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "content": {
+            "$ref": "#/$defs/FsContent",
+            "description": "이 조각의 내용. 종류(텍스트 · base64)는 통째 `fs.read` 와 같고 모든 조각이 같다. 이어 붙이면 통째 읽기의 내용이다 — base64 는\n마지막이 아닌 조각이 3바이트 배수라 문자열을 그대로 이어 붙여도 된다."
+          },
+          "eof": {
+            "description": "마지막 조각이다(`next == total`).",
+            "type": "boolean"
+          },
+          "judgment": {
+            "$ref": "#/$defs/Judgment",
+            "description": "파일 전체의 판정(통째 `fs.read` 와 같다)."
+          },
+          "mtimeMs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "next": {
+            "description": "다음 조각의 `offset`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "이 조각의 시작(요청한 `offset`).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "정규화한 실제 경로.",
+            "type": "string"
+          },
+          "size": {
+            "description": "파일 전체 크기.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "description": "내용 전체의 길이(`offset` 과 같은 단위).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "description": "이 조각을 자른 순간의 파일 전체 `version`. 모든 조각이 같아야 그 내용의 `version` 이다(`fs.write` 의 `expectedVersion`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "size",
+          "mtimeMs",
+          "version",
+          "judgment",
+          "offset",
+          "next",
+          "total",
+          "eof",
+          "content"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner",
+        "mobile",
+        "readonly"
+      ],
+      "tier": "read"
+    },
     "fs.rename": {
       "description": "항목의 이름을 바꾸거나 다른 폴더로 옮긴다(심링크면 링크 자체). 대상 이름이 있으면 덮지 않고 `CONFLICT`. 대소문자만 바꾸는\n이름(대소문자를 무시하는 볼륨에서 같은 항목)은 바꾼다(macOS · Windows).",
       "kind": "unary",
@@ -20457,6 +20736,221 @@
           "projectId",
           "path",
           "content"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "mtimeMs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "쓴 실제 경로.",
+            "type": "string"
+          },
+          "size": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "description": "쓴 뒤의 `version`. 다음 쓰기의 `expectedVersion`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "size",
+          "mtimeMs",
+          "version"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "fs.writeAbort": {
+      "description": "모음을 버린다(파일은 그대로). 없는 모음이면 아무 일도 없다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "upload": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId",
+          "upload"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "fs.writeChunk": {
+      "description": "조각 쓰기의 한 조각을 Host 에 모은다(파일은 바꾸지 않는다). 모음은 이 연결 · 그 경로에 묶인다.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "FsContent": {
+            "description": "읽거나 쓸 내용.",
+            "oneOf": [
+              {
+                "description": "UTF-8 텍스트. 읽기에서는 파일 앞의 BOM 을 뺀 것이다(`judgment.bom` 이 알린다). 판정의 인코딩이 UTF-8 이 아니면(UTF-16 ·\n짐작한 인코딩) 그 인코딩에서 풀어 낸 것이고 `judgment.editable` 이 거짓이다 — 그 텍스트를 `fs.write` 로 되돌려 쓰면 원래 바이트가\n바뀐다(결정 M1-D12).",
+                "properties": {
+                  "kind": {
+                    "const": "text",
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "text"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "바이트 그대로(BOM 포함), 표준 base64.",
+                "properties": {
+                  "data": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "base64",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "content": {
+            "$ref": "#/$defs/FsContent",
+            "description": "이 조각의 내용(UTF-8 텍스트 조각 또는 그 조각만의 base64). 모음의 모든 조각이 같은 종류여야 한다."
+          },
+          "path": {
+            "description": "절대 경로(`fs.write` 와 같은 판정). 모음의 모든 조각 · 커밋이 같은 경로여야 한다.",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "upload": {
+            "default": null,
+            "description": "이어 쓸 모음. 없으면 새 모음을 연다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "path",
+          "content"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "received": {
+            "description": "지금까지 모은 바이트.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "upload": {
+            "description": "모음의 id — 다음 조각 · 커밋 · 버리기에 준다.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "upload",
+          "received"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "fs.writeCommit": {
+      "description": "모은 내용을 `fs.write` 처럼 원자적으로 쓴다(`expectedVersion` 충돌이면 아무것도 바꾸지 않고 `CONFLICT`). 성공 · 실패 모두\n모음을 닫는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "bom": {
+            "default": false,
+            "description": "텍스트 앞에 UTF-8 BOM 을 붙인다(`fs.write` 와 같다).",
+            "type": "boolean"
+          },
+          "expectedVersion": {
+            "default": null,
+            "description": "`fs.write` 와 같다 — 지금 파일과 다르면 아무것도 쓰지 않고 `CONFLICT`. 없으면 새 파일.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "조각을 보낸 경로.",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "upload": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "path",
+          "upload"
         ],
         "type": "object"
       },

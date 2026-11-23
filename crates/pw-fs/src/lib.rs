@@ -5,6 +5,7 @@
 //! - [`judge`]: 판정(텍스트/바이너리 · 인코딩 짐작 · 줄바꿈 · BOM)과 크기 등급.
 //! - [`list`]: 폴더 한 단계 목록과 ignore 여부.
 //! - [`read`]: 전체 · 범위 읽기와 `version`.
+//! - [`chunks`]: 큰 파일의 조각 읽기 · 쓰기(M7-13b) — 다른 머신의 링크 틀 안에 들게 와이어 바이트로 자른다.
 //! - [`bytes`]: hex 뷰어의 페이지 읽기 `fs.readBytes`(M1-23) — 판정 없이 요청한 범위만.
 //! - [`write`]: 임시 파일 → rename 원자 쓰기.
 //! - [`ops`]: 파일 조작(M1-21) — `fs.create` · `fs.rename` · `fs.copy` · `fs.trash`, Finder 드롭 들여오기.
@@ -14,6 +15,7 @@
 //! - [`index`]: 파일 목록 인덱스와 퍼지 매칭 `search.files`(M1-12).
 
 pub mod bytes;
+pub mod chunks;
 pub mod handle;
 mod ignore_rules;
 pub mod index;
@@ -66,6 +68,8 @@ pub struct Fs {
     /// `expectedVersion` 으로 들어온 두 쓰기가 모두 확인을 통과해 하나가 말없이 사라진다. 이 프로세스 안의 쓰기만 묶는다 —
     /// 다른 프로세스(에이전트)의 쓰기와의 경합은 잠금 없이 막을 수 없다(그 쓰기는 다음 `fs.write` 에서 `CONFLICT` 로 드러난다).
     write_locks: [Mutex<()>; WRITE_LOCKS],
+    /// 열린 조각 쓰기 모음([`chunks`]).
+    uploads: Mutex<chunks::Uploads>,
     /// 시험: 판정 뒤 · 파일을 열기 직전에 부른다(그 사이 경로를 바꿔 읽기 경합을 재현한다).
     #[cfg(test)]
     before_open: Mutex<Option<BeforeOpen>>,
@@ -76,6 +80,7 @@ impl Default for Fs {
         Self {
             projects: OnceLock::new(),
             write_locks: std::array::from_fn(|_| Mutex::new(())),
+            uploads: Mutex::default(),
             #[cfg(test)]
             before_open: Mutex::new(None),
         }
@@ -356,6 +361,26 @@ impl Fs {
                 .decode(data)
                 .map_err(|e| RpcError::invalid_params(format!("content is not base64: {e}")))?,
         };
+        self.replace(
+            &roots,
+            &real,
+            &bytes,
+            params.expected_version.as_deref(),
+            fault,
+        )
+    }
+
+    /// `real`(판정을 지난 쓸 실제 경로)을 `bytes` 로 바꾼다 — `fs.write` 와 조각 쓰기의 마지막(`fs.writeCommit`)이 함께 쓴다. 쓰기
+    /// 잠금 안에서 지금 파일의 `version` 을 `expected` 와 견주고 다르면 아무것도 바꾸지 않고 `CONFLICT`.
+    fn replace(
+        &self,
+        roots: &WriteRoots,
+        real: &Path,
+        bytes: &[u8],
+        expected: Option<&str>,
+        fault: impl Fn(write::Stage) -> io::Result<()>,
+    ) -> Result<FsWritten, RpcError> {
+        let real = real.to_path_buf();
         let _guard = self.write_lock(&real);
         let current = match fs::metadata(&real) {
             Ok(meta) if meta.is_dir() => {
@@ -370,14 +395,14 @@ impl Fs {
                 ));
             }
             Ok(_) => Some(
-                read::read_whole(&real, &|p| self.open(&roots, p))
+                read::read_whole(&real, &|p| self.open(roots, p))
                     .map_err(|e| io_error(&real, e))?,
             ),
             Err(e) if e.kind() == io::ErrorKind::NotFound => None,
             Err(e) => return Err(io_error(&real, e)),
         };
         let current_version = current.as_ref().map(read::Snapshot::version);
-        if current_version != params.expected_version {
+        if current_version.as_deref() != expected {
             return Err(RpcError::new(code::CONFLICT, "conflict").with_data(
                 serde_json::json!({ "path": real.display().to_string(), "current": current_version }),
             ));
@@ -388,13 +413,13 @@ impl Fs {
                 real.display()
             )));
         }
-        write::write_atomic_with(&real, &bytes, fault).map_err(|e| io_error(&real, e))?;
+        write::write_atomic_with(&real, bytes, fault).map_err(|e| io_error(&real, e))?;
         let meta = fs::metadata(&real).map_err(|e| io_error(&real, e))?;
         Ok(FsWritten {
             path: real.display().to_string(),
             size: meta.len(),
             mtime_ms: mtime_ms(&meta),
-            version: read::version(&bytes, &meta),
+            version: read::version(bytes, &meta),
         })
     }
 }

@@ -88,11 +88,15 @@ fs.create Unary Write {Owner}
 fs.list Unary Read {Owner, Mobile, Readonly}
 fs.read Unary Read {Owner, Mobile, Readonly}
 fs.readBytes Unary Read {Owner, Mobile, Readonly}
+fs.readChunk Unary Read {Owner, Mobile, Readonly}
 fs.rename Unary Write {Owner}
 fs.stat Unary Read {Owner, Mobile, Readonly}
 fs.trash Unary Write {Owner}
 fs.watch Stream Read {Owner, Mobile, Readonly}
 fs.write Unary Write {Owner}
+fs.writeAbort Unary Write {Owner}
+fs.writeChunk Unary Write {Owner}
+fs.writeCommit Unary Write {Owner}
 git.blame Stream Read {Owner}
 git.blob Unary Read {Owner}
 git.branch.create Unary Write {Owner}

@@ -18,3 +18,12 @@ pub const LONG_LINE_CHARS: usize = 10_000;
 pub const HEAD_PREVIEW_BYTES: u64 = MIB;
 /// hex 뷰어가 한 번에 읽는 페이지(결정 M1-D10). `fs.readBytes` 한 번의 상한이다.
 pub const HEX_PAGE_BYTES: u64 = 64 * KIB;
+/// 조각 읽기 · 쓰기(M7-13b) 한 조각 내용의 와이어 바이트 상한(직렬화한 JSON 문자열). 링크 틀(64 MiB)보다 넉넉히 작게 — 큰 틀
+/// 하나가 그 머신의 다른 채널(터미널)을 오래 막지 않게.
+pub const CHUNK_WIRE_MAX: u64 = 16 * MIB;
+/// 조각 쓰기 하나가 모을 수 있는 바이트(원격 문서의 상한 — 열 수 있는 가장 큰 파일과 같다).
+pub const UPLOAD_MAX: u64 = READ_ONLY_MAX;
+/// Host 전체에서 동시에 열린 조각 쓰기 모음의 수.
+pub const UPLOADS_MAX: usize = 4;
+/// 한 연결이 동시에 열 수 있는 조각 쓰기 모음의 수.
+pub const UPLOADS_PER_SESSION: usize = 2;
