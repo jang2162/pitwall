@@ -161,3 +161,32 @@ welcome-remote-old-gone = 그 옛 판 Relay 는 이미 끝났다.
 welcome-remote-old-no-answer = 그 옛 판 Relay 가 답하지 않아 끝내지 않았다.
 welcome-remote-command = 원격에서 pitwall 명령 쓰기 (~/.local/bin/pitwall)
 welcome-remote-command-other = ~/.local/bin/pitwall 에 다른 파일이 있어 두지 않는다.
+
+## 기기 칸(18-m7-plan M7-23 ③) — 그 Relay 의 페어링 표
+welcome-remote-devices-show = 기기
+welcome-remote-devices-hide = 기기 닫기
+welcome-remote-devices-title = 이 Relay 에 페어링된 기기
+welcome-remote-devices-unreadable = 기기 목록을 읽지 못했다.
+welcome-remote-devices-unnamed = (이름 없음)
+welcome-remote-devices-you = 이 Desktop
+welcome-remote-devices-role-owner = owner — 전체
+welcome-remote-devices-role-mobile = mobile — 조회 + 허용된 조작
+welcome-remote-devices-role-readonly = readonly — 조회만
+# $when: 페어링한 시각
+welcome-remote-devices-paired-at = 페어링 { $when }
+# $when: 마지막으로 붙은 시각
+welcome-remote-devices-last-seen = 마지막 접속 { $when }
+welcome-remote-devices-unknown = 모름
+welcome-remote-devices-never = 없음
+welcome-remote-devices-unpair = 해제
+welcome-remote-devices-unpair-confirm = 해제한다
+welcome-remote-devices-cancel = 취소
+welcome-remote-devices-confirm-title = 기기 해제 확인
+# $name: 해제할 기기의 이름
+welcome-remote-devices-confirm = { $name } 을 해제하면 그 기기의 연결 · 터미널이 곧바로 끊기고 다시 붙지 못한다.
+welcome-remote-devices-confirm-self = 이 Desktop 을 해제하면 이 연결도 곧바로 끊긴다. 다시 붙으려면 SSH 로 다시 페어링한다.
+welcome-remote-devices-confirm-last-owner = 이 Desktop 은 이 Relay 의 마지막 owner 기기다 — 해제하면 이 Relay 를 관리할 기기가 없고, 다시 닿는 길은 SSH 로 다시 페어링하는 것뿐이다.
+welcome-remote-devices-code-role = 새 기기의 role
+welcome-remote-devices-show-code = 코드 띄우기
+# $until: 코드가 끝나는 시각
+welcome-remote-devices-code-hint = 새 기기에서 이 코드를 입력한다 — { $until } 까지, 세 번 틀리면 끝, 한 번 쓰면 끝. 새 코드를 띄우면 이 코드는 끝난다.

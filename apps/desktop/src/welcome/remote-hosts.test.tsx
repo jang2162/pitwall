@@ -8,6 +8,7 @@ import type {
   HostInfo,
   KeymapFile,
   RemoteHostInfo,
+  RelayDevice,
   RemoteOldRelay,
   RemoteRelays,
   RemoteStatus,
@@ -42,6 +43,8 @@ const host = vi.hoisted(() => ({
   remoteOld: [] as RemoteOldRelay[],
   /** 이 Host 의 포트 포워딩(`remote.forwards.list` — 18-m7-plan M7-22). */
   forwards: [] as RemoteForward[],
+  /** 그 Relay 의 페어링 표(`remote.devices`). */
+  devices: [] as RelayDevice[],
 }));
 
 vi.mock("../tauri-transport", async () => {
@@ -117,6 +120,24 @@ vi.mock("../tauri-transport", async () => {
             return reply(null);
           case "remote.relays":
             return reply(host.relays);
+          case "remote.devices":
+          case "remote.unpairDevice":
+          case "remote.pairCode": {
+            // 실제 Host 의 규칙: 그 호스트가 지금 사람이 본 머신에 붙어 있을 때만.
+            const p = m.params as { machine: string; device?: string };
+            if (p.machine !== "SHA256:abc")
+              return send({
+                id: m.id,
+                error: { code: -32602, message: "not connected to that machine" },
+              });
+            if (m.method === "remote.devices") return reply({ devices: host.devices });
+            if (m.method === "remote.unpairDevice") {
+              const before = host.devices.length;
+              host.devices = host.devices.filter((d) => d.device !== p.device);
+              return reply({ removed: host.devices.length !== before });
+            }
+            return reply({ code: "042917", expiresAtMs: 1_800_000_000_000 });
+          }
           case "remote.stopOld":
           case "remote.linkCommand": {
             // 실제 Host 의 규칙: 그 호스트가 지금 사람이 본 머신에 붙어 있을 때만(`RemoteHosts::linked_to`).
@@ -214,6 +235,7 @@ beforeEach(() => {
   host.relays = null;
   host.remoteOld = [];
   host.forwards = [];
+  host.devices = [];
 });
 
 afterEach(() => {
@@ -614,4 +636,104 @@ it("lists the host's port forwards with the reason a setting was not opened and 
   );
   await click(rows[0]!.querySelector("[data-testid=remote-forward-off]")!);
   expect(host.calls.find((c) => c.method === "remote.forward.close")?.params).toEqual({ id: 1 });
+});
+
+function device(over: Partial<RelayDevice>): RelayDevice {
+  return {
+    device: "SHA256:me",
+    key: "AAAA",
+    name: "mac",
+    role: "owner",
+    pairedAtMs: 1_700_000_000_000,
+    lastSeenMs: null,
+    you: false,
+    ...over,
+  };
+}
+
+async function openDevices() {
+  host.relays = relaysOf([]);
+  await connectMini();
+  await click(button("기기")!);
+  await vi.waitFor(() =>
+    expect(document.querySelector("[data-testid=remote-devices] [data-device]")).not.toBeNull(),
+  );
+}
+
+const unpairs = () =>
+  host.calls.filter((c) => c.method === "remote.unpairDevice").map((c) => c.params);
+
+it("lists the relay's devices with role and times and unpairs one after asking, on the machine seen", async () => {
+  host.devices = [
+    device({ device: "SHA256:me", you: true }),
+    device({ device: "SHA256:tv", name: "tv", role: "readonly", lastSeenMs: 1_700_000_100_000 }),
+  ];
+  await openDevices();
+  const panel = document.querySelector("[data-testid=remote-devices]")!;
+  expect(host.calls.find((c) => c.method === "remote.devices")?.params).toEqual({
+    name: "mini",
+    machine: "SHA256:abc",
+  });
+  const tv = panel.querySelector('[data-device="SHA256:tv"]')!;
+  expect(tv.textContent).toContain("readonly — 조회만");
+  expect(tv.textContent).toContain("마지막 접속");
+  expect(panel.querySelector('[data-device="SHA256:me"]')!.textContent).toContain("이 Desktop");
+  expect(panel.querySelector('[data-device="SHA256:me"]')!.textContent).toContain(
+    "마지막 접속 없음",
+  );
+
+  await click(tv.querySelector("button")!);
+  expect(unpairs()).toHaveLength(0);
+  expect(document.querySelector("[role=alertdialog]")!.textContent).toContain(
+    "tv 을 해제하면 그 기기의 연결 · 터미널이 곧바로 끊기고",
+  );
+  await click(button("해제한다")!);
+  await vi.waitFor(() => expect(unpairs()).toHaveLength(1));
+  expect(unpairs()[0]).toEqual({ name: "mini", machine: "SHA256:abc", device: "SHA256:tv" });
+  await vi.waitFor(() => expect(document.querySelector('[data-device="SHA256:tv"]')).toBeNull());
+});
+
+it("warns before this desktop unpairs itself as the last owner but does not block it", async () => {
+  host.devices = [
+    device({ you: true }),
+    device({ device: "SHA256:tv", name: "tv", role: "readonly" }),
+  ];
+  await openDevices();
+  const me = document.querySelector('[data-device="SHA256:me"]')!;
+  await click(me.querySelector("button")!);
+  const ask = document.querySelector("[role=alertdialog]")!;
+  expect(ask.textContent).toContain("마지막 owner 기기다");
+  expect(ask.textContent).toContain("SSH 로 다시 페어링");
+  // [취소] 가 처음 포커스다.
+  expect(document.activeElement?.textContent).toBe("취소");
+  await click(button("해제한다")!);
+  await vi.waitFor(() => expect(unpairs()).toHaveLength(1));
+});
+
+it("shows a pairing code for the chosen role on screen only", async () => {
+  const logs = [
+    vi.spyOn(console, "log"),
+    vi.spyOn(console, "info"),
+    vi.spyOn(console, "warn"),
+    vi.spyOn(console, "debug"),
+  ];
+  host.devices = [device({ you: true })];
+  await openDevices();
+  const select = document.querySelector<HTMLSelectElement>("[data-testid=remote-devices] select")!;
+  await act(async () => {
+    select.value = "mobile";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await click(button("코드 띄우기")!);
+  await vi.waitFor(() =>
+    expect(document.querySelector("[data-testid=pairing-code]")?.textContent).toContain("042 917"),
+  );
+  expect(host.calls.find((c) => c.method === "remote.pairCode")?.params).toEqual({
+    name: "mini",
+    machine: "SHA256:abc",
+    role: "mobile",
+    deviceName: null,
+  });
+  for (const spy of logs)
+    for (const args of spy.mock.calls) expect(JSON.stringify(args)).not.toContain("042917");
 });

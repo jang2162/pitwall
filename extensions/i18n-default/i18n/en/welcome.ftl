@@ -155,3 +155,32 @@ welcome-remote-old-gone = That old relay had already ended.
 welcome-remote-old-no-answer = That old relay does not answer, so it was not stopped.
 welcome-remote-command = Use the pitwall command on the remote (~/.local/bin/pitwall)
 welcome-remote-command-other = ~/.local/bin/pitwall is another file, so it is left alone.
+
+## Device section (18-m7-plan M7-23 ③) — the relay's pairing table
+welcome-remote-devices-show = Devices
+welcome-remote-devices-hide = Hide devices
+welcome-remote-devices-title = Devices paired with this relay
+welcome-remote-devices-unreadable = Could not read the device list.
+welcome-remote-devices-unnamed = (no name)
+welcome-remote-devices-you = This Desktop
+welcome-remote-devices-role-owner = owner — everything
+welcome-remote-devices-role-mobile = mobile — view and allowed actions
+welcome-remote-devices-role-readonly = readonly — view only
+# $when: when the device was paired
+welcome-remote-devices-paired-at = Paired { $when }
+# $when: when the device last connected
+welcome-remote-devices-last-seen = Last seen { $when }
+welcome-remote-devices-unknown = unknown
+welcome-remote-devices-never = never
+welcome-remote-devices-unpair = Unpair
+welcome-remote-devices-unpair-confirm = Unpair it
+welcome-remote-devices-cancel = Cancel
+welcome-remote-devices-confirm-title = Confirm unpairing
+# $name: the device to unpair
+welcome-remote-devices-confirm = Unpairing { $name } cuts its connections and terminals at once, and it cannot connect again.
+welcome-remote-devices-confirm-self = Unpairing this Desktop cuts this connection at once. To come back, pair again over SSH.
+welcome-remote-devices-confirm-last-owner = This Desktop is the last owner device of this relay — after unpairing, no device manages it, and the only way back is pairing again over SSH.
+welcome-remote-devices-code-role = Role of the new device
+welcome-remote-devices-show-code = Show a code
+# $until: when the code ends
+welcome-remote-devices-code-hint = Enter this code on the new device — until { $until }, three tries, one use. Showing a new code ends this one.

@@ -26,6 +26,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
 import { AddCheckoutDialog, useRefreshBundles } from "../checkout/add-checkout";
+import { RemoteDevices } from "./remote-devices";
 import { type AskpassPrompt, AskpassDialog } from "../git/git-prompts";
 import { useAppStrings } from "../i18n/app-strings";
 import { useI18n } from "../i18n/i18n-provider";
@@ -276,6 +277,7 @@ function HostRow({
   const T = useWelcomeStrings().remote;
   const connection = useHost();
   const addLabel = useAppStrings().checkoutAdd.action;
+  const [devicesOpen, setDevicesOpen] = useState(false);
   const { locales } = useI18n();
   const when = (at: number) =>
     new Intl.DateTimeFormat(locales[0], { dateStyle: "short", timeStyle: "short" }).format(at);
@@ -334,6 +336,16 @@ function HostRow({
             {addLabel}
           </button>
         )}
+        {using && status.state === "connected" && (
+          <button
+            type="button"
+            className={BUTTON}
+            aria-expanded={devicesOpen}
+            onClick={() => setDevicesOpen((open) => !open)}
+          >
+            {devicesOpen ? T.hideDevices : T.showDevices}
+          </button>
+        )}
         <button type="button" className={BUTTON} aria-expanded={logOpen} onClick={onToggleLog}>
           {logOpen ? T.hideLog : T.showLog}
         </button>
@@ -345,6 +357,9 @@ function HostRow({
       {using && status.state === "connected" && <Relays name={host.name} T={T} onError={onError} />}
       {/* 그 호스트의 포트 포워딩 · [끄기](18-m7-plan M7-22 ⑤) — 설정의 것은 붙을 때 열리고, 실행 탭의 것은 그 창이 연다. */}
       <ForwardList connection={connection} name={host.name} />
+      {using && status.state === "connected" && devicesOpen && (
+        <RemoteDevices name={host.name} machine={status.machine} T={T.devices} onError={onError} />
+      )}
       {host.lastLink && !using && (
         <span className="text-[11px] text-ui-muted-foreground">
           {T.last[host.lastLink.state](when(host.lastLink.at))}

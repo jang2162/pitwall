@@ -9,6 +9,7 @@ import type {
   RemoteLastLinkState,
   RemoteStage,
   RemoteStopOutcome,
+  Role,
 } from "@pitwall/rpc-client";
 import { useLocalization } from "@fluent/react";
 import { useMemo } from "react";
@@ -167,6 +168,33 @@ export function welcomeStrings(t: Translate) {
       },
       command: t("welcome-remote-command"),
       commandOther: t("welcome-remote-command-other"),
+      showDevices: t("welcome-remote-devices-show"),
+      hideDevices: t("welcome-remote-devices-hide"),
+      devices: {
+        title: t("welcome-remote-devices-title"),
+        unreadable: t("welcome-remote-devices-unreadable"),
+        unnamed: t("welcome-remote-devices-unnamed"),
+        you: t("welcome-remote-devices-you"),
+        role: {
+          owner: t("welcome-remote-devices-role-owner"),
+          mobile: t("welcome-remote-devices-role-mobile"),
+          readonly: t("welcome-remote-devices-role-readonly"),
+        } satisfies Record<Role, string>,
+        pairedAt: (when: string) => t("welcome-remote-devices-paired-at", { when }),
+        lastSeen: (when: string) => t("welcome-remote-devices-last-seen", { when }),
+        unknown: t("welcome-remote-devices-unknown"),
+        never: t("welcome-remote-devices-never"),
+        unpair: t("welcome-remote-devices-unpair"),
+        unpairConfirm: t("welcome-remote-devices-unpair-confirm"),
+        cancel: t("welcome-remote-devices-cancel"),
+        confirmTitle: t("welcome-remote-devices-confirm-title"),
+        confirm: (name: string) => t("welcome-remote-devices-confirm", { name }),
+        confirmSelf: t("welcome-remote-devices-confirm-self"),
+        confirmLastOwner: t("welcome-remote-devices-confirm-last-owner"),
+        codeRole: t("welcome-remote-devices-code-role"),
+        showCode: t("welcome-remote-devices-show-code"),
+        codeHint: (until: string) => t("welcome-remote-devices-code-hint", { until }),
+      },
     },
     notices: {
       fileNotInProject: (path: string) => t("welcome-notice-file-not-in-project", { path }),
