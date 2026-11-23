@@ -1118,7 +1118,11 @@ function ProjectWindowBody({
                     <Fragment key={active.machine}>
                       {/* 다른 머신 체크아웃의 신뢰 묻기(그 머신 이름을 문장에 — M7-12 ① · M7-11b). 이 머신은 창의 `TrustProvider`. */}
                       {activeProject !== undefined && active.machine !== LOCAL_MACHINE && (
-                        <CheckoutTrustPrompt projectId={activeProject} />
+                        // 대상이 바뀌면 새로 묻는다 — 앞 머신의 떠 있던 질문을 다른 머신 프로젝트로 옮기지 않게(리뷰 R2).
+                        <CheckoutTrustPrompt
+                          key={`${active.machine}:${activeProject}`}
+                          projectId={activeProject}
+                        />
                       )}
                       {activeProject !== undefined && <FileWatch projectId={activeProject} />}
                       {activeProject !== undefined && <GitStatusWatch projectId={activeProject} />}

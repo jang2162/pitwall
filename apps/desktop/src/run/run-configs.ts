@@ -96,13 +96,13 @@ export class RunConfigs {
   /** 창이 Host · 프로젝트 · 활성 워크트리를 정하고 목록을 읽는다. 걷는 함수(이벤트 구독 해제)를 돌려준다. */
   connect(client: RunConfigsClient, projectId: string, worktree: string | null): () => void {
     // 다른 곳(다른 머신의 연결 · 프로젝트 · 워크트리)으로 붙으면 앞 곳의 목록을 곧바로 비운다 — 새 곳의 답이 오기 전 팝업이 앞 머신의
-    // 구성을 보이면서 실행은 새 머신으로 보내지 않게(M7-14 리뷰 권고 2 — 실행 대상 단추로 머신을 바꾼 직후). 앞 곳의 늦은 답도 버린다.
+    // 구성을 보이면서 실행은 새 머신으로 보내지 않게(M7-14 리뷰 권고 2 — 실행 대상 단추로 머신을 바꾼 직후).
     const last = this.last;
     if (
       last &&
       (last.client !== client || last.projectId !== projectId || last.worktree !== worktree)
     ) {
-      this.generation++;
+      // 앞 곳의 늦은 답은 아래 `reload` 가 세대를 올려 버린다.
       this.store.setState({ list: undefined, error: undefined });
     }
     this.where = { client, projectId, worktree };

@@ -631,6 +631,26 @@ it("opens a file sent from another machine's shell in that checkout's tab withou
     path: FILE,
   });
   expect(fake.calls.get("local")!.filter((c) => c.method === "fs.read")).toHaveLength(1);
+
+  // 리뷰 3: 그 머신의 링크드 워크트리 파일이면 그 워크트리(그 머신의 열쇠)의 탭으로 열고 읽기에 그 워크트리를 싣는다.
+  fake.files.get(MINI)!.set("/work/wt-mini/src/lib.rs", "remote worktree text");
+  await push({
+    file: "/work/wt-mini/src/lib.rs",
+    checkout: { machine: MINI, worktree: "/work/wt-mini" },
+  });
+  await vi.waitFor(() => expect(viewWith("remote worktree text")).toBeDefined());
+  expect(activeWorktreeStore.getState().top).toBe("/work/wt1");
+  const tab = dock!.panels.find(
+    (p) => (p.params as { path?: string }).path === qualify(MINI, "/work/wt-mini/src/lib.rs"),
+  );
+  expect((tab?.params as { worktree?: string } | undefined)?.worktree).toBe(
+    checkoutKey({ machine: MINI, worktree: "/work/wt-mini" }),
+  );
+  expect(
+    fake.calls
+      .get(MINI)!
+      .find((c) => c.method === "fs.read" && c.params.path === "/work/wt-mini/src/lib.rs")?.params,
+  ).toMatchObject({ projectId: "r1", worktree: "/work/wt-mini" });
 });
 
 // 18-m7-plan M7-11b ②: 원격만인 묶음 창(`project-b-…` — 로컬 멤버 없음). 처음 활성 체크아웃은 그 묶음 첫 멤버의 메인 체크아웃이고,

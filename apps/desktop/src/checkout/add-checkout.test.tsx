@@ -188,6 +188,25 @@ describe("AddCheckoutDialog", () => {
     expect(closed).not.toHaveBeenCalled();
   });
 
+  // 리뷰 2: 진행 중에 Esc(Radix 의 닫기)로 닫아도 그 요청을 취소한다 — 닫은 뒤 판정이 끝나 멤버가 붙지 않게.
+  it("cancels the running request when the dialog is closed with Esc", async () => {
+    const fake = newFake();
+    const { added, closed } = await show(fake);
+    await typePath("/home/me/web-console");
+    await click(button(T.submit));
+    expect(fake.judging.size).toBe(1);
+    await act(async () => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }),
+      );
+    });
+    await settle();
+    expect(closed).toHaveBeenCalled();
+    expect(fake.cancels).toEqual([fake.calls[0]!.id]);
+    expect(fake.judging.size).toBe(0);
+    expect(added).toEqual([]);
+  });
+
   it("puts the time limit refusal in words a person reads", async () => {
     const fake = newFake(() => ({
       error: {
