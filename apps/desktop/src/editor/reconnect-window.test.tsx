@@ -17,6 +17,7 @@ import defaultTheme from "../../../../extensions/theme-default/themes/default.js
 import { App } from "../App";
 import { checkoutKey, qualify } from "../checkout/checkout";
 import { openTab } from "./editor-tabs";
+import { REMOTE_WHOLE_READ } from "./link-limits";
 import { resetWindowFileTree } from "../file-tree/project-view";
 import type { KeymapNative } from "../keymap/native";
 import { activeWorktreeStore } from "../open-with/active-worktree";
@@ -57,6 +58,8 @@ const fake = vi.hoisted(() => ({
   clock: 10,
   /** 머신 → (경로 → 보고할 크기). 없으면 내용의 길이(큰 파일을 내용 없이 흉내 낸다). */
   sizes: new Map<string, Map<string, number>>(),
+  /** 틀 상한을 넘는 메시지로 닫힌 연결. */
+  dropped: [] as Conn[],
 }));
 
 vi.mock("../tauri-transport", async () => {
@@ -74,8 +77,14 @@ vi.mock("../tauri-transport", async () => {
       const [client, server] = pair();
       let next = 1;
       const streams = new Map<number, () => void>();
+      // 링크 틀(pw-link `mux.rs` `send_msg`): 다른 머신의 메시지가 틀 상한을 넘으면 그 채널 — 이 멤버 연결 — 을 닫는다.
+      const overFrame = (text: string) =>
+        machine !== "local" && new TextEncoder().encode(text).length > 64 * 1024 * 1024;
       const send = (m: object) => {
-        if (!conn.closed) server.send(JSON.stringify({ jsonrpc: "2.0", ...m }));
+        if (conn.closed) return;
+        const text = JSON.stringify({ jsonrpc: "2.0", ...m });
+        if (overFrame(text)) return void dropChannel();
+        server.send(text);
       };
       const conn: Conn = {
         machine,
@@ -90,6 +99,7 @@ vi.mock("../tauri-transport", async () => {
       };
       fake.conns.push(conn);
       server.onMessage((text) => {
+        if (overFrame(text)) return void dropChannel();
         const m = JSON.parse(text) as { id?: number; method: string; params: never };
         const reply = (result: unknown) => send({ id: m.id, result });
         const deny = (message: string) =>
@@ -103,7 +113,8 @@ vi.mock("../tauri-transport", async () => {
         if ("projectId" in params && !hostScope && params.projectId !== project)
           return deny(`this connection is scoped to ${project}`);
         const path = String(params.path ?? "");
-        const version = (p: string) => `${files.get(p)!.mtime}:${files.get(p)!.text}`;
+        // 시각 · 길이로 정한다(내용을 이어 붙이면 큰 글의 시험이 응답마다 내용을 한 벌 더 싣는다). 시험의 쓰기는 늘 시각을 바꾼다.
+        const version = (p: string) => `${files.get(p)!.mtime}:${files.get(p)!.text.length}`;
         const size = (p: string) => fake.sizes.get(machine)?.get(p) ?? files.get(p)!.text.length;
         switch (m.method) {
           case "i18n.get":
@@ -277,6 +288,12 @@ vi.mock("../tauri-transport", async () => {
         if (m.id !== undefined)
           send({ id: m.id, error: { code: -32601, message: `no ${m.method} on ${machine}` } });
       });
+      function dropChannel() {
+        conn.closed = true;
+        fake.dropped.push(conn);
+        for (const end of streams.values()) end();
+        client.close();
+      }
       return {
         transport: client,
         close: async () => {
@@ -337,6 +354,7 @@ beforeEach(() => {
   fake.conns = [];
   fake.links = new Set();
   fake.watches = [];
+  fake.dropped = [];
   fake.sizes = new Map([
     ["local", new Map()],
     [MINI, new Map()],
@@ -652,7 +670,9 @@ it("saves a reconnected tab only to its own machine's new connection after the a
 
 // 링크 틀 상한(메인 판정 — editor/link-limits.ts): 틀을 넘는 메시지는 그 머신의 채널을 닫는다. 다른 머신 파일은 통째로 읽기 ·
 // 쓰기 전에 크기를 보고 막는다 — 이 머신 파일은 그대로 연다.
-const BIG = 30 * 1024 * 1024;
+const BIG = REMOTE_WHOLE_READ + 1;
+/** 제어 문자 63 개 + 줄바꿈 줄로 채운 `bytes` 바이트의 글. JSON 에서 거의 6배(`\u0001`)가 된다 — 바이너리가 아니다(NUL 없음). */
+const controlText = (bytes: number) => `${"\u0001".repeat(63)}\n`.repeat(bytes / 64);
 const wholeReads = (machine: string, path: string) =>
   fake.calls
     .get(machine)!
@@ -693,15 +713,94 @@ it("does not read a remote document again once it grew past the link limit", asy
   expect(viewWith("remote text")).toBeDefined();
 });
 
-it("refuses to send a remote save too large for the link and keeps the edit", async () => {
+// 리뷰 F1: 파일 바이트로는 작아도 JSON 에서 6배가 되는 글(제어 문자)이 틀을 넘겨 그 머신의 채널을 죽이지 않는다.
+it("does not open an 11 MiB control-character remote file, which would be 66 MiB over the link", async () => {
+  await mount();
+  const MIB = 1024 * 1024;
+  fake.files.get(MINI)!.set("/work/demo/ctl.log", { text: controlText(11 * MIB), mtime: 1 });
+  await act(
+    async () =>
+      void openTab(dock!, { path: qualify(MINI, "/work/demo/ctl.log"), worktree: REMOTE_MAIN }),
+  );
+  await vi.waitFor(() => expect(document.body.textContent).toContain("링크로는 열지 않는다"));
+  expect(wholeReads(MINI, "/work/demo/ctl.log")).toHaveLength(0);
+  expect(fake.dropped).toHaveLength(0);
+  expect(member().closed).toBe(false);
+});
+
+it("opens a control-character remote file at the read limit without dropping the machine", async () => {
+  await mount();
+  fake.files
+    .get(MINI)!
+    .set("/work/demo/ctl.log", { text: controlText(REMOTE_WHOLE_READ), mtime: 1 });
+  await act(
+    async () =>
+      void openTab(dock!, { path: qualify(MINI, "/work/demo/ctl.log"), worktree: REMOTE_MAIN }),
+  );
+  await vi.waitFor(() => expect(wholeReads(MINI, "/work/demo/ctl.log")).toHaveLength(1));
+  // 열렸다 — 「열지 않음」 안내가 아니다(큰 글은 뷰어가 고른다).
+  await settle();
+  expect(document.body.textContent).not.toContain("링크로는 열지 않는다");
+  expect(fake.dropped).toHaveLength(0);
+  expect(member().closed).toBe(false);
+});
+
+it("measures the request it would send: refuses a remote save over the frame, sends one under it, and saves this machine's file of the same size", async () => {
+  const MIB = 1024 * 1024;
   const remote = await openBoth();
-  // 따옴표는 JSON 에서 두 바이트다 — 25 MiB 의 따옴표는 보낼 때 50 MiB 로, 쓰기 상한(48 MiB)을 넘는다.
-  await type(remote, '"'.repeat(25 * 1024 * 1024));
+  const replace = async (view: EditorView, text: string) => {
+    await act(async () =>
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: text },
+        userEvent: "input.type",
+      }),
+    );
+    await settle();
+  };
+  // 따옴표는 JSON 에서 두 바이트다(`\"`) — 33 MiB 의 글은 파일로는 틀보다 작지만 요청으로는 66 MiB 다. 보내지 않는다.
+  // (제어 문자는 6배지만 happy-dom 의 CodeMirror 가 글자마다 표시를 그려 메모리가 넘친다 — 읽기 시험이 제어 문자를 본다.)
+  await replace(remote, '"'.repeat(33 * MIB));
   await saveActive();
   expect(writes(MINI)).toHaveLength(0);
-  expect(writes("local")).toHaveLength(0);
   expect(document.body.textContent).toContain("보내지 않았다");
+  expect(fake.dropped).toHaveLength(0);
   expect(member().closed).toBe(false);
+
+  // 31 MiB(요청 ~62 MiB)는 틀 안이다 — 보내고 그 머신에 쓴다.
+  await replace(remote, '"'.repeat(31 * MIB));
+  await saveActive();
+  expect(writes(MINI)).toHaveLength(1);
+  expect(fake.files.get(MINI)!.get(FILE)!.text.length).toBe(31 * MIB);
+  expect(fake.dropped).toHaveLength(0);
+
+  // 리뷰 R-b: 이 머신의 탭은 링크를 지나지 않는다 — 같은 33 MiB 글도 쓴다.
+  await replace(await viewOf("main.rs", false), '"'.repeat(33 * MIB));
+  await saveActive();
+  expect(writes("local")).toHaveLength(1);
+  expect(fake.files.get("local")!.get(FILE)!.text.length).toBe(33 * MIB);
+});
+
+// 리뷰 R-a: 원격 Markdown 의 상대 이미지는 그 머신의 루트(머신을 붙인 것)로 풀어 그 머신에서 읽는다.
+it("reads a remote Markdown document's relative image on that machine", async () => {
+  await mount();
+  fake.files
+    .get(MINI)!
+    .set("/work/demo/README.md", { text: "# hi\n\n![logo](logo.png)\n", mtime: 1 });
+  fake.files.get(MINI)!.set("/work/demo/logo.png", { text: "PNGDATA", mtime: 1 });
+  await act(
+    async () =>
+      void openTab(dock!, { path: qualify(MINI, "/work/demo/README.md"), worktree: REMOTE_MAIN }),
+  );
+  await vi.waitFor(() =>
+    expect(
+      fake.calls
+        .get(MINI)!
+        .some((c) => c.method === "fs.read" && c.params.path === "/work/demo/logo.png"),
+    ).toBe(true),
+  );
+  expect(
+    fake.calls.get("local")!.filter((c) => c.params.path === "/work/demo/logo.png"),
+  ).toHaveLength(0);
 });
 
 it("reads a remote tab's image on that machine and none on this one", async () => {

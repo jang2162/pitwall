@@ -15,11 +15,26 @@ import { type MouseEvent, useEffect, useRef, useState } from "react";
 import { useProjectStrings } from "../layout/strings";
 import { useEditorWorkspace } from "./editor-workspace";
 import { formatBytes, ToolbarToggle } from "./image-viewer";
+import { qualify, unqualify } from "../checkout/checkout";
 import { classifyLink, IMAGE_SOURCE_ATTR, renderMarkdown, resolveLocal } from "./markdown";
 import { imageMime, MAX_PREVIEW_BYTES, PreviewTooLarge, usePreviewHost } from "./preview-host";
 import { TextViewer } from "./text-viewer";
 import "./preview.css";
 import type { ViewerProps } from "./viewers";
+
+/**
+ * 다른 머신 문서(18-m7-plan M7-13)의 경로와 루트는 머신이 붙은 꼴이다(`pitwall-remote://<머신>/…` — checkout/checkout.ts). 풀기 규칙
+ * (markdown.ts)은 그 `//` 의 빈 마디를 루트 밖으로 본다 — 머신을 떼고 그 머신의 경로로 푼 뒤 다시 붙인다. 이 머신 경로는 그대로다.
+ */
+function onItsMachine(
+  path: string,
+  root: string,
+  resolve: (from: string, root: string) => string | undefined,
+): string | undefined {
+  const { machine, path: from } = unqualify(path);
+  const resolved = resolve(from, unqualify(root).path);
+  return resolved === undefined ? undefined : qualify(machine, resolved);
+}
 
 /** 편집이 멈춘 뒤 미리보기를 다시 그리기까지. */
 export const PREVIEW_DEBOUNCE_MS = 150;
@@ -117,7 +132,7 @@ function MarkdownPreview({
     let current = true;
     for (const img of el.querySelectorAll<HTMLImageElement>(`img[${IMAGE_SOURCE_ATTR}]`)) {
       const src = img.getAttribute(IMAGE_SOURCE_ATTR) ?? "";
-      const target = resolveLocal(src, path, root);
+      const target = onItsMachine(path, root, (from, top) => resolveLocal(src, from, top));
       const type = target === undefined ? undefined : imageMime(target);
       const blocked = (why?: string) => {
         const alt = document.createElement("span");
@@ -170,7 +185,14 @@ function MarkdownPreview({
     if (!anchor) return;
     event.preventDefault();
     if (event.type !== "click") return;
-    const target = classifyLink(anchor.getAttribute("href") ?? "", path, root);
+    const { machine } = unqualify(path);
+    const link = classifyLink(
+      anchor.getAttribute("href") ?? "",
+      unqualify(path).path,
+      root && unqualify(root).path,
+    );
+    // 파일 링크도 그 머신의 경로다 — 머신을 다시 붙이고 열기 요청에 머신을 싣는다(M7-11 델타 리뷰 B3).
+    const target = link.kind === "file" ? { ...link, path: qualify(machine, link.path) } : link;
     switch (target.kind) {
       case "external":
         host
@@ -178,7 +200,7 @@ function MarkdownPreview({
           .catch((e: unknown) => console.warn("[markdown] could not open the link", e));
         return;
       case "file":
-        void workspace.open({ path: target.path, worktree });
+        void workspace.open({ path: target.path, worktree, machine });
         return;
       case "anchor": {
         const id = slug(target.id);

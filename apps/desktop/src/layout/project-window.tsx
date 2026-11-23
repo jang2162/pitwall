@@ -44,7 +44,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Toaster } from "sonner";
 
 import { createDocumentStore, FS_CHANGED_TOPIC, type FsChangedEvent } from "../editor/documents";
-import { REMOTE_WHOLE_READ, REMOTE_WHOLE_WRITE, wireBytes } from "../editor/link-limits";
+import { REMOTE_MESSAGE_LIMIT, REMOTE_WHOLE_READ, requestBytes } from "../editor/link-limits";
 import { startMachineDocumentSync } from "../editor/machine-documents";
 import { formatMiB } from "../editor/viewers";
 import { editorActions } from "../editor/editor-actions";
@@ -622,14 +622,15 @@ function useWindowEditor(
         write: async (params, worktree) => {
           const r = await route(params.path, worktree);
           // 틀을 넘는 요청은 그 머신의 채널을 닫는다 — 보내기 전에 막는다(그 머신의 다른 탭 · 터미널까지 끊지 않게).
-          if (r.machine !== LOCAL_MACHINE && wireBytes(params.content) > REMOTE_WHOLE_WRITE)
+          const request = { ...r.base, ...params, path: r.path };
+          if (
+            r.machine !== LOCAL_MACHINE &&
+            requestBytes("fs.write", request) > REMOTE_MESSAGE_LIMIT
+          )
             throw new Error(
-              latest.current.strings.saveTooLargeForLink(formatMiB(REMOTE_WHOLE_WRITE)),
+              latest.current.strings.saveTooLargeForLink(formatMiB(REMOTE_MESSAGE_LIMIT)),
             );
-          return back(
-            r.machine,
-            await r.client.call("fs.write", { ...r.base, ...params, path: r.path }),
-          );
+          return back(r.machine, await r.client.call("fs.write", request));
         },
         detect: async (path, head, worktree) => {
           const r = await route(path, worktree);

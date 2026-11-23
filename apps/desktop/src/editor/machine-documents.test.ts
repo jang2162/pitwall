@@ -66,7 +66,7 @@ describe("startMachineDocumentSync", () => {
     const stop = startMachineDocumentSync(hosts, documents, watch);
     store.setState({ remote: { [MINI]: { client, status: CONNECTED } } });
     expect(documents.disconnect).not.toHaveBeenCalled();
-    // 처음 붙은 것에는 맞추지 않는다.
+    // 처음 본 때 이미 붙어 있으면 맞추지 않는다(실앱의 `retain` 은 연결 없이 먼저 알려 끊김 → 다시 붙기를 지난다 — 머리 주석).
     expect(documents.reconnect).not.toHaveBeenCalled();
     expect(watch).toHaveBeenCalledTimes(1);
 

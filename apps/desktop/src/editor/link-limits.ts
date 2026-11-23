@@ -5,20 +5,31 @@
 
 const MIB = 1024 * 1024;
 
-/**
- * 다른 머신 파일을 통째로 읽는 상한(파일 바이트). 응답은 JSON 이다 — 텍스트는 이스케이프로 늘어나고(`"` · `\` · 줄바꿈 · 탭이
- * 두 글자가 된다 — 흔한 최악 2배), 바이트로 오면 base64 로 4/3 배다. 24 MiB × 2 = 48 MiB 에 응답 머리 · 판정을 더해도 64 MiB
- * 틀 안에 든다. 제어 문자투성이(`\u00XX` 6배)는 바이너리로 판정돼 통째로 읽지 않는다(hex 뷰어 — 페이지 읽기).
- */
-export const REMOTE_WHOLE_READ = 24 * MIB;
+/** 링크 틀 본문의 상한(`pw_wire::MAX_BODY_BYTES`). */
+export const LINK_FRAME_BYTES = 64 * MIB;
+/** 틀 머리(`pw_link::LinkFrame` 의 채널 · 종류 칸)와 JSON-RPC 봉투(`jsonrpc` · `id` · 응답의 `path` · 판정 · `version`)의 몫. */
+const FRAME_HEADROOM = 64 * 1024;
 
 /**
- * 다른 머신에 쓰는 내용의 상한(JSON 으로 보낼 내용의 UTF-8 바이트 — 보내기 전에 잰다). 읽을 수 있던 파일(`REMOTE_WHOLE_READ` 의
- * 흔한 최악 2배)은 그대로 다시 쓸 수 있게 48 MiB 이고, 요청 머리를 더해도 64 MiB 틀 안이다.
+ * 다른 머신 파일을 통째로 읽는 상한(파일 바이트 — 받기 전에는 응답 크기를 잴 수 없어 파일 크기로 막는다). 응답 JSON 은 파일
+ * 바이트보다 **최대 6배** 커진다: 바이너리 판정은 앞 8 KiB 의 NUL 하나뿐이라(crates/pw-fs/src/judge.rs) NUL 이 없는 제어 문자
+ * (0x01 등)나 8 KiB 뒤에만 NUL 이 있는 파일도 텍스트로 오고, U+0000 ~ U+001F 는 JSON 에서 `\u00XX` 6바이트가 된다(serde_json).
+ * 다른 꼴은 더 작다 — 짐작한 인코딩으로 푼 글 · U+FFFD 로 푼 깨진 바이트는 3배까지, base64 는 4/3 배.
+ * 10 MiB × 6 = 60 MiB 에 머리(`FRAME_HEADROOM`)를 더해도 64 MiB 틀 안이다.
  */
-export const REMOTE_WHOLE_WRITE = 48 * MIB;
+export const REMOTE_WHOLE_READ = 10 * MIB;
 
-/** 내용을 요청에 실었을 때의 바이트(JSON 이스케이프 포함). */
-export function wireBytes(content: unknown): number {
-  return new TextEncoder().encode(JSON.stringify(content)).length;
+/**
+ * 다른 머신에 보내는 요청 하나의 상한(보낼 JSON-RPC 요청의 UTF-8 바이트 — 보내기 직전에 [`requestBytes`] 로 잰다). 틀 상한에서 틀
+ * 머리 몫만 뺀다. 통째로 읽을 수 있던 파일(`REMOTE_WHOLE_READ` × 최악 6배)은 그대로 다시 쓸 수 있다.
+ */
+export const REMOTE_MESSAGE_LIMIT = LINK_FRAME_BYTES - FRAME_HEADROOM;
+
+/**
+ * `method` 요청을 `params` 로 보낼 때의 바이트 — RpcClient 가 보내는 꼴(`{ jsonrpc, id, method, params }`)을 그대로 직렬화해 잰다.
+ * `id` 는 가장 긴 자리 수로 둔다.
+ */
+export function requestBytes(method: string, params: unknown): number {
+  const request = { jsonrpc: "2.0", id: Number.MAX_SAFE_INTEGER, method, params };
+  return new TextEncoder().encode(JSON.stringify(request)).length;
 }
