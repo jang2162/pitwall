@@ -212,12 +212,22 @@ fn relay_binaries_are_uploaded_only_by_publishing_runs() {
         all.contains("PITWALL_RELEASE_CHANNEL: ${{ needs.plan.outputs.channel }}"),
         "{all}"
     );
-    for target in [
-        "x86_64-unknown-linux-musl",
-        "aarch64-unknown-linux-musl",
-        "universal-apple-darwin",
-    ] {
-        assert!(all.contains(&format!("target: {target}")), "{target}");
+    // 매트릭스는 자산 표(`pw_release::relay::PLATFORMS`)와 같다 — 플랫폼 · 타깃 짝이 하나씩.
+    let platforms = body
+        .iter()
+        .filter(|l| l.trim_start().starts_with("- platform:"))
+        .count();
+    assert_eq!(platforms, pw_release::relay::PLATFORMS.len(), "{all}");
+    for platform in &pw_release::relay::PLATFORMS {
+        let pair = format!("- platform: {}\n", platform.asset);
+        let at = all
+            .find(&pair)
+            .unwrap_or_else(|| panic!("no relay matrix entry for {}", platform.asset));
+        let entry: String = all[at..].lines().take(3).collect::<Vec<_>>().join("\n");
+        assert!(
+            entry.contains(&format!("target: {}", platform.rust_target)),
+            "{entry}"
+        );
     }
 }
 

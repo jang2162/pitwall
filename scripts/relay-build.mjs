@@ -3,14 +3,14 @@
 //
 //   node scripts/relay-build.mjs [--target <타깃>]… [--out <폴더>] [--complete]
 //
-// 타깃: x86_64-unknown-linux-musl · aarch64-unknown-linux-musl · universal-apple-darwin(두 Apple 타깃을 빌드해 lipo 로 묶는다).
-// 없으면 이 기기의 플랫폼 하나(macOS 는 유니버설, Linux 는 같은 아키텍처의 musl). 타깃마다:
+// 타깃: x86_64-unknown-linux-musl · aarch64-unknown-linux-musl · aarch64-apple-darwin · x86_64-apple-darwin(macOS 는 아키텍처별 —
+// 결정 M7-D4 2026-11-23 바뀜). 없으면 이 기기의 플랫폼 하나(Linux 는 같은 아키텍처의 musl). 타깃마다:
 //   1. `cargo build --profile relay -p pitwall-relay --target <타깃>` — `relay` 프로필은 워크스페이스 Cargo.toml(크기를 줄이는 설정).
-//   2. `<out>/pitwall-relay-<판>-<플랫폼>` 으로 복사하고 `file` 결과를 적는다. Linux 는 정적 링크와 아키텍처, macOS 는 두
-//      아키텍처가 다 들었는지 본다 — 아니면 실패한다(checkFile).
+//   2. `<out>/pitwall-relay-<판>-<플랫폼>` 으로 복사하고 `file` 결과를 적는다. Linux 는 정적 링크와 아키텍처, macOS 는 그
+//      아키텍처 하나의 Mach-O(유니버설 아님)인지 본다 — 아니면 실패한다(checkFile).
 //   3. `pw-release relay-describe` 로 항목(`<out>/entries/<플랫폼>.json` — 이름 · sha256 · 크기)을 쓴다. **크기가 상한(M7-P13 —
 //      `pw_release::relay::MAX_BINARY_BYTES`)을 넘으면 실패한다.** 크기는 빌드마다 출력에 남는다.
-// 끝에 `pw-release relay-manifest` 로 `<out>/relay-manifest.json`(서명 없음)을 쓴다. `--complete` 는 세 플랫폼이 다 있어야 한다
+// 끝에 `pw-release relay-manifest` 로 `<out>/relay-manifest.json`(서명 없음)을 쓴다. `--complete` 는 네 플랫폼이 다 있어야 한다
 // (릴리스). 서명은 이 스크립트가 하지 않는다 — 릴리스의 `sign-updater` 잡만 운영 키로 한다.
 //
 // 개발 Desktop(debug)은 `<out>`(기본 `target/relay-dist/` — `pw_release::relay::DEV_DIST_DIR`)의 바이너리와 서명 없는 매니페스트를
@@ -30,14 +30,14 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 export const TARGETS = {
   "x86_64-unknown-linux-musl": { platform: "linux-x86_64", os: "linux", arch: "x86-64" },
   "aarch64-unknown-linux-musl": { platform: "linux-aarch64", os: "linux", arch: "aarch64" },
-  "universal-apple-darwin": { platform: "macos-universal", os: "macos" },
+  "aarch64-apple-darwin": { platform: "macos-aarch64", os: "macos", arch: "arm64" },
+  "x86_64-apple-darwin": { platform: "macos-x86_64", os: "macos", arch: "x86_64" },
 };
-
-const APPLE = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
 
 /** 이 기기의 기본 타깃. */
 export function hostTarget(platform, arch) {
-  if (platform === "darwin") return "universal-apple-darwin";
+  if (platform === "darwin" && arch === "arm64") return "aarch64-apple-darwin";
+  if (platform === "darwin" && arch === "x64") return "x86_64-apple-darwin";
   if (platform === "linux" && arch === "x64") return "x86_64-unknown-linux-musl";
   if (platform === "linux" && arch === "arm64") return "aarch64-unknown-linux-musl";
   throw new Error(
@@ -64,7 +64,8 @@ export function parseArgs(argv, host) {
 
 /**
  * `file` 의 한 줄이 그 타깃의 배포물인가. Linux: ELF · 그 아키텍처 · 정적 링크(`statically linked` 또는 `static-pie linked` —
- * 동적 로더가 없어야 glibc 판과 무관하다). macOS: Mach-O 유니버설에 arm64 · x86_64 가 다 있다. 아니면 까닭 글, 맞으면 null.
+ * 동적 로더가 없어야 glibc 판과 무관하다). macOS: 그 아키텍처 하나의 Mach-O 실행 파일(유니버설이면 거절 — 원격에 두 아키텍처를
+ * 올리지 않는다). 아니면 까닭 글, 맞으면 null.
  */
 export function checkFile(target, output) {
   const spec = TARGETS[target];
@@ -76,9 +77,9 @@ export function checkFile(target, output) {
     if (/interpreter/.test(output)) return `has a dynamic loader: ${output}`;
     return null;
   }
-  if (!output.includes("Mach-O universal binary")) return `not a universal Mach-O: ${output}`;
-  if (!/arm64/.test(output) || !/x86_64/.test(output))
-    return `the universal binary lacks an arch: ${output}`;
+  if (output.includes("universal")) return `a universal binary, not one arch: ${output}`;
+  if (!output.startsWith("Mach-O 64-bit executable")) return `not a Mach-O executable: ${output}`;
+  if (!output.trim().endsWith(spec.arch)) return `not ${spec.arch}: ${output}`;
   return null;
 }
 
@@ -118,15 +119,7 @@ function version() {
 
 function buildOne(target, out) {
   const spec = TARGETS[target];
-  let binary;
-  if (target === "universal-apple-darwin") {
-    const parts = APPLE.map(cargoBuild);
-    binary = join(root, "target", "universal-apple-darwin", "relay", "pitwall-relay");
-    mkdirSync(join(root, "target", "universal-apple-darwin", "relay"), { recursive: true });
-    run("lipo", ["-create", "-output", binary, ...parts]);
-  } else {
-    binary = cargoBuild(target);
-  }
+  const binary = cargoBuild(target);
   const name = `pitwall-relay-${version()}-${spec.platform}`;
   const dest = join(out, name);
   copyFileSync(binary, dest);

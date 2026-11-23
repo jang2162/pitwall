@@ -40,8 +40,9 @@ pub const DEV_DIST_ENV: &str = "PITWALL_RELAY_DEV_DIST";
 /// `mise run relay-build` 가 쓰는 폴더(워크스페이스 기준). debug Desktop 의 기본 개발 빌드 자리다.
 pub const DEV_DIST_DIR: &str = "target/relay-dist";
 
-/// 내는 바이너리 하나: 자산 이름의 끝 조각, Rust 타깃, 그 바이너리가 도는 (OS, 아키텍처)들(결정 M7-D4). macOS 는 유니버설 하나가
-/// 두 아키텍처를 덮는다. OS · 아키텍처 이름은 원격 `uname -sm` 을 읽는 쪽(M7-06)이 이 값으로 바꿔 [`Manifest::asset`] 에 넘긴다.
+/// 내는 바이너리 하나: 자산 이름의 끝 조각, Rust 타깃, 그 바이너리가 도는 (OS, 아키텍처)들(결정 M7-D4 — macOS 도 아키텍처별로
+/// 따로 낸다(2026-11-23 바뀜): 유니버설은 상한을 넘고 원격에는 한 아키텍처만 든다). **자산 목록은 이 표 하나다** —
+/// scripts/relay-build.mjs 의 `TARGETS` 와 release.yml 의 relay 매트릭스는 이 표와 같아야 한다(시험이 견준다). OS · 아키텍처 이름은 원격 `uname -sm` 을 읽는 쪽(M7-06)이 이 값으로 바꿔 [`Manifest::asset`] 에 넘긴다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Platform {
     pub asset: &'static str,
@@ -49,7 +50,7 @@ pub struct Platform {
     pub runs_on: &'static [(&'static str, &'static str)],
 }
 
-pub const PLATFORMS: [Platform; 3] = [
+pub const PLATFORMS: [Platform; 4] = [
     Platform {
         asset: "linux-x86_64",
         rust_target: "x86_64-unknown-linux-musl",
@@ -61,9 +62,14 @@ pub const PLATFORMS: [Platform; 3] = [
         runs_on: &[("linux", "aarch64")],
     },
     Platform {
-        asset: "macos-universal",
-        rust_target: "universal-apple-darwin",
-        runs_on: &[("macos", "aarch64"), ("macos", "x86_64")],
+        asset: "macos-aarch64",
+        rust_target: "aarch64-apple-darwin",
+        runs_on: &[("macos", "aarch64")],
+    },
+    Platform {
+        asset: "macos-x86_64",
+        rust_target: "x86_64-apple-darwin",
+        runs_on: &[("macos", "x86_64")],
     },
 ];
 
@@ -82,7 +88,7 @@ pub struct Entry {
     pub size: u64,
 }
 
-/// 매니페스트의 한 줄 — (OS, 아키텍처)마다 하나. 유니버설 바이너리는 두 줄이 같은 이름 · 해시를 가리킨다.
+/// 매니페스트의 한 줄 — (OS, 아키텍처)마다 하나.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Asset {

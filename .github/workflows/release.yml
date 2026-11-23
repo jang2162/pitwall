@@ -9,7 +9,7 @@
 #   sign-updater 잡이 산출물을 운영 키로 다시 서명한다. **운영 updater 키 Secret 을 참조하는 잡은 sign-updater 하나뿐이고,
 #   그 잡은 저장소 코드를 checkout 하지도 빌드하지도 않는다** — PR 코드가 도는 runner 에 그 Secret 이 내려가지 않게.
 #   잡 순서: 공개 build → sign-updater → manifest → publish, dry-run build → manifest.
-# - Relay(18-m7-plan M7-05 ①): relay 잡이 Linux x86_64 · aarch64 musl 정적과 macOS 유니버설 바이너리를 `relay` 프로필로 만들고
+# - Relay(18-m7-plan M7-05 ①): relay 잡이 Linux x86_64 · aarch64 musl 정적과 macOS aarch64 · x86_64 바이너리를 `relay` 프로필로 만들고
 #   (scripts/relay-build.mjs — `file` 로 정적 링크 · 아키텍처를 보고, 크기 상한(M7-P13)을 넘으면 실패), relay-manifest 잡이 그
 #   항목(이름 · sha256 · 크기)으로 `relay-manifest.json` 을 만든다. 공개 실행에서는 sign-updater 가 그 매니페스트도 운영 updater 키로
 #   서명하고(`--app-version` — 서명에 판이 실린다) publish 가 바이너리 · 매니페스트 · `.sig` 를 같은 Release 에 붙인다. Desktop 은
@@ -313,7 +313,9 @@ jobs:
           security delete-keychain "$RUNNER_TEMP/pitwall-signing.keychain-db" 2> /dev/null || true
           rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP"/AuthKey_*.p8
 
-  # Relay 바이너리 넷(Linux 둘 · macOS 유니버설 하나가 두 아키텍처). musl 은 같은 아키텍처 runner 에서 musl-gcc 로 C 코드를 컴파일한다.
+  # Relay 바이너리 넷(Linux 둘 · macOS 둘 — 아키텍처별, 결정 M7-D4 2026-11-23 바뀜: 유니버설은 상한을 넘고 원격에는 한 아키텍처만
+  # 든다). 목록의 정본은 `pw_release::relay::PLATFORMS` 다(crates/pw-release/tests/workflow.rs 가 이 매트릭스와 견준다). musl 은 같은
+  # 아키텍처 runner 에서 musl-gcc 로 C 코드를 컴파일한다. macOS x86_64 는 arm64 runner 에서 교차 빌드한다(Apple clang 이 두 아키텍처를 낸다).
   # 서명 · 공증은 하지 않는다 — 원격 macOS 에는 SSH 로 올라가 격리 속성(quarantine)이 붙지 않는다(링커의 ad-hoc 서명만 있다).
   # 채널은 바이너리에 박힌다(`PITWALL_RELEASE_CHANNEL` — 링크 핸드셰이크가 Desktop 의 채널과 견준다).
   relay:
@@ -329,9 +331,12 @@ jobs:
           - platform: linux-aarch64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
-          - platform: macos-universal
+          - platform: macos-aarch64
             os: macos-latest
-            target: universal-apple-darwin
+            target: aarch64-apple-darwin
+          - platform: macos-x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
@@ -345,9 +350,9 @@ jobs:
       - name: Rust toolchain
         run: |
           env -u RUSTUP_TOOLCHAIN rustup toolchain install --no-self-update
-          if [ "${{ matrix.platform }}" = macos-universal ]; then
-            rustup target add aarch64-apple-darwin x86_64-apple-darwin
-          fi
+          case "${{ matrix.target }}" in
+            *-apple-darwin) rustup target add "${{ matrix.target }}" ;;
+          esac
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -390,7 +395,7 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  # Relay 매니페스트(서명 전). 세 플랫폼의 항목이 다 있어야 만든다. 공개 실행은 올릴 바이너리를 다시 해시해 항목과 견준다 — 서명하는
+  # Relay 매니페스트(서명 전). 네 플랫폼의 항목이 다 있어야 만든다. 공개 실행은 올릴 바이너리를 다시 해시해 항목과 견준다 — 서명하는
   # 바이트가 Release 에 붙는 바이트의 해시다. 서명은 sign-updater 가 한다(이 잡에는 키가 없다).
   relay-manifest:
     name: relay manifest

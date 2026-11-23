@@ -5,5 +5,5 @@ channel = "1.99.0"
 # 로컬이 같은 파일을 쓴다. rust-analyzer 자체는 컴포넌트가 아니라 설치기로 받는다(서버 판을 registry 고정과 맞춘다 — M4-04).
 components = ["rustfmt", "clippy", "rust-src"]
 # Relay 의 Linux 배포물(musl 정적 — 18-m7-plan M7-05 ①, 결정 M7-D4). 표준 라이브러리만 받는다 — C 코드를 musl 로 컴파일하는
-# musl-gcc 는 Linux 에서 따로 깐다(scripts/relay-build.mjs). macOS 유니버설의 두 Apple 타깃은 그 빌드를 하는 잡이 더한다.
+# musl-gcc 는 Linux 에서 따로 깐다(scripts/relay-build.mjs). macOS 의 Apple 타깃(아키텍처별)은 그 빌드를 하는 잡이 더한다.
 targets = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"]

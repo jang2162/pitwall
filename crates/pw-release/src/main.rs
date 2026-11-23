@@ -7,11 +7,11 @@
 //!     `--on-main` 은 이 커밋이 origin/main 의 조상인지(`git merge-base --is-ancestor`).
 //! pw-release manifest --ref <GITHUB_REF> --event <GITHUB_EVENT_NAME> --on-main <true|false> --repo <owner/name> --dir <산출물 폴더> --date <RFC 3339> --out <파일> [--notes <글>]
 //!     updater 매니페스트(latest.json)를 쓴다.
-//! pw-release relay-describe --file <바이너리> --platform <linux-x86_64|linux-aarch64|macos-universal> --out <항목.json>
+//! pw-release relay-describe --file <바이너리> --platform <linux-x86_64|linux-aarch64|macos-aarch64|macos-x86_64> --out <항목.json>
 //!     Relay 바이너리 하나의 항목(자산 이름 · sha256 · 크기)을 쓴다. 크기가 상한(`relay::MAX_BINARY_BYTES` — 18-m7-plan
 //!     M7-P13)을 넘으면 실패한다. 크기는 stdout 에도 한 줄로 낸다(빌드마다 적는 기록).
 //! pw-release relay-manifest --entries <항목 폴더> --out <relay-manifest.json> --complete <true|false> [--check <바이너리 폴더>]
-//!     항목(`*.json`)들로 Relay 매니페스트를 쓴다. `--complete true`(릴리스)는 세 플랫폼이 다 있어야 한다. `--check` 를 주면 그
+//!     항목(`*.json`)들로 Relay 매니페스트를 쓴다. `--complete true`(릴리스)는 네 플랫폼이 다 있어야 한다. `--check` 를 주면 그
 //!     폴더의 같은 이름 바이너리가 항목의 해시 · 크기와 같은지 다시 본다(공개 실행 — 올릴 바이트가 매니페스트의 바이트다).
 //! ```
 

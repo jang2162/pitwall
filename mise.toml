@@ -98,7 +98,7 @@ run = "node scripts/dap-live.mjs"
 
 # Relay 바이너리를 `relay` 프로필로 만들어 `target/relay-dist/` 에 둔다(18-m7-plan M7-05 ② — 개발 Desktop(debug)이 원격에 올리는
 # 것, 결정 M7-D5). 이름 · 정적 링크 · 크기 상한(M7-P13) · 서명 없는 매니페스트까지 — scripts/relay-build.mjs 머리 주석. 인자 예:
-# `mise run relay-build -- --target x86_64-unknown-linux-musl`(Linux 에서, musl-tools 필요). 없으면 이 기기의 플랫폼(macOS 는 유니버설).
+# `mise run relay-build -- --target x86_64-unknown-linux-musl`(Linux 에서, musl-tools 필요). 없으면 이 기기의 플랫폼(macOS 는 그 아키텍처).
 [tasks.relay-build]
 description = "Relay 개발 빌드(relay 프로필 · 크기 상한 · 서명 없는 매니페스트 → target/relay-dist/)"
 run = "node scripts/relay-build.mjs"

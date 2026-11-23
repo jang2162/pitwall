@@ -118,7 +118,7 @@ DBX 도 MCP 서버(`dbx-mcp`)와 CLI 를 같은 코어 위에 둔다 — Pitwall
 | **macOS** (Apple Silicon 우선, x64) | **Tier 1** | 개발 · QA 기준 플랫폼. 서명 · 공증(notarization), Homebrew cask(M0 이후), 유니버설 바이너리 |
 | Linux (x64/arm64, AppImage/deb/rpm) | Tier 2 | CI 빌드 + 스모크 테스트, WebKitGTK 성능 검증 |
 | Windows (x64/arm64, msi) | Tier 2 | CI 빌드 + 스모크 테스트, WebView2 |
-| Relay (원격) | Linux x64/arm64(musl 정적) Tier 1, macOS Tier 1, Windows 원격은 이후(08 「제약」, 18-m7-plan 결정 M7-D4) | 원격 서버는 대부분 Linux이므로 Relay는 Linux도 1급 |
+| Relay (원격) | Linux x64/arm64(musl 정적) Tier 1, macOS Tier 1(arm64 · x64 아키텍처별 바이너리 — 유니버설 아님, 18-m7-plan 결정 M7-D4), Windows 원격은 이후(08 「제약」, 18-m7-plan 결정 M7-D4) | 원격 서버는 대부분 Linux이므로 Relay는 Linux도 1급 |
 | 모바일 | 보류 | |
 
 macOS 우선 항목:

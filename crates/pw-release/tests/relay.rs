@@ -46,11 +46,16 @@ fn a_signed_manifest_verifies_and_names_a_binary_per_os_and_arch() {
     assert_eq!(manifest.version, VERSION);
     let linux = manifest.asset("linux", "x86_64").unwrap();
     assert_eq!(linux.name, "pitwall-relay-1.2.3-linux-x86_64");
+    // macOS 는 아키텍처별 바이너리다(결정 M7-D4, 2026-11-23 바뀜 — 유니버설을 내지 않는다).
     assert_eq!(
         manifest.asset("macos", "aarch64").unwrap().name,
-        manifest.asset("macos", "x86_64").unwrap().name,
-        "one universal macOS binary serves both arches"
+        "pitwall-relay-1.2.3-macos-aarch64"
     );
+    assert_eq!(
+        manifest.asset("macos", "x86_64").unwrap().name,
+        "pitwall-relay-1.2.3-macos-x86_64"
+    );
+    assert_eq!(manifest.assets.len(), 4);
     assert!(manifest.asset("windows", "x86_64").is_none());
 }
 
@@ -248,15 +253,11 @@ fn a_release_manifest_needs_every_platform_once() {
         .map(|p| entry(&relay::asset_name(&version, p)))
         .collect();
     let manifest = relay::assemble(&version, &all, true).unwrap();
-    assert_eq!(
-        manifest.assets.len(),
-        4,
-        "linux x2 + macOS universal for two arches"
-    );
+    assert_eq!(manifest.assets.len(), 4, "linux and macOS, two arches each");
     let e = relay::assemble(&version, &all[..2], true).unwrap_err();
     assert!(
         e.to_string()
-            .contains("no entry for pitwall-relay-1.2.3-macos-universal"),
+            .contains("no entry for pitwall-relay-1.2.3-macos-aarch64"),
         "{e}"
     );
     // 개발 빌드는 만든 것만.
@@ -383,7 +384,7 @@ fn the_cli_describes_binaries_and_assembles_the_manifest() {
         "{out:?}"
     );
     // 플랫폼 하나가 빠진 릴리스 매니페스트는 만들지 않는다.
-    std::fs::remove_file(entries.join("macos-universal.json")).unwrap();
+    std::fs::remove_file(entries.join("macos-x86_64.json")).unwrap();
     let out = assemble(None);
     assert!(!out.status.success());
     // 모르는 플랫폼.

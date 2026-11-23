@@ -366,10 +366,10 @@ MIT 프로젝트라 의존성은 허용형 라이선스만 쓴다(`docs/design/0
 - 이 워크플로가 main 에 들어간 뒤로는 아무 브랜치로나 부른다: Actions → Release → Run workflow, 또는 `gh workflow run release.yml --ref <브랜치>`. `workflow_dispatch` 는 기본 브랜치에 파일이 있어야 다른 브랜치로 부를 수 있다. 태그를 골라 불러도 dry-run 이다 — 공개는 plan 이 이벤트(`push`)까지 보고 한 곳에서 판정한다(`crates/pw-release` 의 `plan`).
 - 볼 것: macOS 잡의 「Verify signing and notarization」 단계(codesign · `lipo` 두 아키텍처 · `stapler validate` · `spctl` 이 「Notarized Developer ID」, `report-macos` 에도 남는다), `release-manifest` 의 `latest.json`(플랫폼 키 4개).
 
-**Relay 배포물(18-m7-plan M7-05).** 같은 태그로 Relay 바이너리 넷 — `pitwall-relay-<판>-linux-x86_64` · `-linux-aarch64`(musl 정적) · `-macos-universal`(두 아키텍처) — 과 `relay-manifest.json`(이름 · sha256 · 크기, (OS, 아키텍처)마다 한 줄) · `relay-manifest.json.sig` 가 Release 에 붙는다.
+**Relay 배포물(18-m7-plan M7-05).** 같은 태그로 Relay 바이너리 넷 — `pitwall-relay-<판>-linux-x86_64` · `-linux-aarch64`(musl 정적) · `-macos-aarch64` · `-macos-x86_64`(아키텍처별 — 유니버설은 내지 않는다) — 과 `relay-manifest.json`(이름 · sha256 · 크기, (OS, 아키텍처)마다 한 줄) · `relay-manifest.json.sig` 가 Release 에 붙는다.
 
-- `relay` 잡이 `node scripts/relay-build.mjs --target <타깃>` 으로 만든다 — `relay` 프로필(워크스페이스 `Cargo.toml`), `file` 결과가 정적 링크 · 아키텍처(macOS 는 두 아키텍처)가 아니거나 크기가 상한(`pw_release::relay::MAX_BINARY_BYTES` — 메인 판정 M7-P13)을 넘으면 실패한다. 채널은 `PITWALL_RELEASE_CHANNEL` 로 바이너리에 박힌다.
-- `relay-manifest` 잡이 세 플랫폼 항목으로 매니페스트를 만들고(공개 실행은 올릴 바이너리를 다시 해시해 견준다), **공개 실행에서만 `sign-updater` 가 그 매니페스트를 updater 운영 키로 서명한다**(`--app-version` — 서명에 판이 실린다). 운영 키를 참조하는 잡은 여전히 `sign-updater` 하나다.
+- `relay` 잡이 `node scripts/relay-build.mjs --target <타깃>` 으로 만든다 — `relay` 프로필(워크스페이스 `Cargo.toml`), `file` 결과가 정적 링크 · 아키텍처(macOS 는 그 아키텍처 하나)가 아니거나 크기가 상한(`pw_release::relay::MAX_BINARY_BYTES` — 메인 판정 M7-P13)을 넘으면 실패한다. 채널은 `PITWALL_RELEASE_CHANNEL` 로 바이너리에 박힌다.
+- `relay-manifest` 잡이 네 플랫폼 항목으로 매니페스트를 만들고(공개 실행은 올릴 바이너리를 다시 해시해 견준다), **공개 실행에서만 `sign-updater` 가 그 매니페스트를 updater 운영 키로 서명한다**(`--app-version` — 서명에 판이 실린다). 운영 키를 참조하는 잡은 여전히 `sign-updater` 하나다.
 - dry-run 은 Relay 바이너리를 올리지 않는다 — `report-relay-<플랫폼>`(항목 · `file` 결과 · 체크섬)과 서명 없는 `relay-manifest` 만 남는다.
 - Desktop(M7-06)은 받은 매니페스트를 앱의 updater 공개키로 검증하고(`pw_release::relay::verify` — 서명 · 서명에 실린 판 · 매니페스트의 판이 모두 이 앱의 판), 올릴 바이너리가 그 (OS, 아키텍처)의 해시와 같을 때만 올린다(`Manifest::check_binary`). **개발 Desktop(debug)은 릴리스 대신 `mise run relay-build` 결과(`target/relay-dist/` — `PITWALL_RELAY_DEV_DIST` 로 바꾼다)를 올린다. release 빌드는 그 변수가 있어도 서명 매니페스트만 쓴다**(`pw_release::relay::source`). 그래서 워크트리에서 만든 release 번들은 Relay 를 깔지 못한다 — 실기는 CI 가 낸 preview 번들로 한다.
 

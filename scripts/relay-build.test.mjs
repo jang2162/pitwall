@@ -30,19 +30,12 @@ test("linux binaries must be static and of their arch", () => {
   );
 });
 
-test("the macOS binary must be universal with both arches", () => {
-  assert.equal(checkFile("universal-apple-darwin", UNIVERSAL), null);
-  assert.match(
-    checkFile("universal-apple-darwin", "Mach-O 64-bit executable arm64"),
-    /not a universal/,
-  );
-  assert.match(
-    checkFile(
-      "universal-apple-darwin",
-      "Mach-O universal binary with 1 architecture: [arm64:Mach-O 64-bit executable arm64]",
-    ),
-    /lacks an arch/,
-  );
+test("macOS binaries must be one arch, not universal", () => {
+  assert.equal(checkFile("aarch64-apple-darwin", "Mach-O 64-bit executable arm64"), null);
+  assert.equal(checkFile("x86_64-apple-darwin", "Mach-O 64-bit executable x86_64"), null);
+  assert.match(checkFile("aarch64-apple-darwin", UNIVERSAL), /universal/);
+  assert.match(checkFile("x86_64-apple-darwin", "Mach-O 64-bit executable arm64"), /not x86_64/);
+  assert.match(checkFile("aarch64-apple-darwin", STATIC_X86), /not a Mach-O/);
 });
 
 test("the target table matches pw_release::relay::PLATFORMS", () => {
@@ -54,7 +47,7 @@ test("the target table matches pw_release::relay::PLATFORMS", () => {
     m[2],
     m[1],
   ]);
-  assert.equal(rust.length, 3);
+  assert.equal(rust.length, 4);
   assert.deepEqual(
     rust.sort(),
     Object.entries(TARGETS)
@@ -64,7 +57,8 @@ test("the target table matches pw_release::relay::PLATFORMS", () => {
 });
 
 test("the host target and arguments", () => {
-  assert.equal(hostTarget("darwin", "arm64"), "universal-apple-darwin");
+  assert.equal(hostTarget("darwin", "arm64"), "aarch64-apple-darwin");
+  assert.equal(hostTarget("darwin", "x64"), "x86_64-apple-darwin");
   assert.equal(hostTarget("linux", "x64"), "x86_64-unknown-linux-musl");
   assert.equal(hostTarget("linux", "arm64"), "aarch64-unknown-linux-musl");
   assert.throws(() => hostTarget("win32", "x64"), /no relay target/);

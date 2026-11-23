@@ -19,16 +19,16 @@
     {
       "os": "macos",
       "arch": "aarch64",
-      "name": "pitwall-relay-1.2.3-macos-universal",
-      "sha256": "09a6a6f605940bc9e21ee8b3c6374bfcbeef55528a64747b49c037bdb04b5f29",
-      "size": 34
+      "name": "pitwall-relay-1.2.3-macos-aarch64",
+      "sha256": "6d28ba4ef58e0abfe0ca0d491e3162bcf4033827ab62107909fe9b7553c84dcb",
+      "size": 32
     },
     {
       "os": "macos",
       "arch": "x86_64",
-      "name": "pitwall-relay-1.2.3-macos-universal",
-      "sha256": "09a6a6f605940bc9e21ee8b3c6374bfcbeef55528a64747b49c037bdb04b5f29",
-      "size": 34
+      "name": "pitwall-relay-1.2.3-macos-x86_64",
+      "sha256": "9ab295634eb8e0fb88ff43bc35292ca986b1937729070aad547db197d974463f",
+      "size": 31
     }
   ]
 }
