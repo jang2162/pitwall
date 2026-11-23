@@ -481,11 +481,10 @@ impl RemoteHosts {
             return;
         }
         let had_link = self.stop(name, slot);
-        let keep = match &*slot.status.borrow() {
-            RemoteStatus::MachineChanged { .. } => true,
-            RemoteStatus::Disconnected { .. } => true,
-            _ => false,
-        };
+        let keep = matches!(
+            &*slot.status.borrow(),
+            RemoteStatus::MachineChanged { .. } | RemoteStatus::Disconnected { .. }
+        );
         if !keep {
             self.set_status(name, slot, RemoteStatus::idle());
         }
@@ -912,10 +911,11 @@ impl RemoteHosts {
             }
             return Ok(None);
         }
-        if first && let Some(registry) = self.registry() {
-            if let Err(e) = registry.remember_remote_machine(name, &machine) {
-                tracing::warn!(target: "pw_remote", host = name, %e, "cannot remember the machine id");
-            }
+        if first
+            && let Some(registry) = self.registry()
+            && let Err(e) = registry.remember_remote_machine(name, &machine)
+        {
+            tracing::warn!(target: "pw_remote", host = name, %e, "cannot remember the machine id");
         }
         self.mark(name, LinkMark::Connected);
         self.note(
