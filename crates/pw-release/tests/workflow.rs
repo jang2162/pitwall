@@ -255,3 +255,33 @@ fn the_relay_manifest_is_complete_checked_signed_and_published() {
     let publish = text(&job("publish"));
     assert!(publish.contains("name: relay-manifest"), "{publish}");
 }
+
+/// 워크플로 전체에서 Relay 바이너리(`pitwall-relay-*` 또는 relay 바이너리 아티팩트)를 올리는 업로드는 모두 공개하는 실행에서만이다 — 새 잡이
+/// 바이너리를 조건 없이 올리면 실패한다(M7-05 리뷰 권고 5).
+#[test]
+fn every_relay_binary_upload_is_for_publishing_runs_only() {
+    let mut seen = 0;
+    for (name, body) in jobs() {
+        for (i, line) in body.iter().enumerate() {
+            if !line.contains("actions/upload-artifact") {
+                continue;
+            }
+            let end = body[i + 1..]
+                .iter()
+                .position(|l| l.trim_start().starts_with("- "))
+                .map_or(body.len(), |n| i + 1 + n);
+            let step = text(&body[i..end]);
+            let binaries = step.contains("pitwall-relay-")
+                || step.contains("name: release-relay-")
+                || step.contains("path: binaries");
+            if binaries {
+                seen += 1;
+                assert!(
+                    step.contains("if: needs.plan.outputs.binaries == 'true'"),
+                    "{name}: {step}"
+                );
+            }
+        }
+    }
+    assert!(seen >= 1, "no relay binary upload found");
+}

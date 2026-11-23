@@ -3,7 +3,8 @@
 //! - `updater.pub` — **시험 전용** minisign 공개키(Tauri 서명 도구의 꼴). 비밀키는 저장소에 없다(만들고 버렸다). 운영 키가 아니다.
 //! - `relay-manifest.json` — 판 1.2.3 의 매니페스트. 해시는 `bin/` 의 가짜 바이너리(글 한 줄)의 것이다.
 //! - `relay-manifest.json.sig` — 그 키로 `tauri signer sign --app-version 1.2.3` 한 서명. `other-key.sig` 는 다른 키,
-//!   `other-version.sig` 는 `--app-version 1.2.4`, `no-version.sig` 는 `--app-version` 없이 서명했다.
+//!   `other-version.sig` 는 `--app-version 1.2.4`, `no-version.sig` 는 `--app-version` 없이 서명했다. `other-file.sig` 는 같은 바이트를
+//!   `latest.json` 이라는 이름으로 서명했다(trusted comment 의 `file:` 이 다르다 — updater 산출물의 서명을 내미는 경우).
 //!
 //! 다시 만드는 법(매니페스트를 바꾸면 서명도 다시): `pnpm --filter @pitwall/desktop exec tauri signer generate --ci -p <암호> -w
 //! <임시>/a.key` 로 키를 만들고 `a.key.pub` 를 `updater.pub` 로, `tauri signer sign -k "$(cat a.key)" -p <암호> --app-version
@@ -13,8 +14,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use base64::Engine;
+#[cfg(debug_assertions)]
+use pw_release::relay::DEV_DIST_DIR;
 use pw_release::relay::{
-    self, DEV_DIST_DIR, Entry, MANIFEST_FILE, MAX_BINARY_BYTES, PLATFORMS, Source,
+    self, DEV_DIST_ENV, Entry, MANIFEST_FILE, MAX_BINARY_BYTES, PLATFORMS, Source,
 };
 use semver::Version;
 
@@ -117,6 +120,13 @@ fn changing_any_byte_of_the_manifest_is_refused() {
     }
 }
 
+/// 같은 키 · 같은 판으로 서명했어도 다른 파일 이름의 서명(updater 산출물의 `.sig` 등)은 매니페스트의 서명이 아니다.
+#[test]
+fn a_signature_for_another_file_is_refused() {
+    let e = verify_with(&manifest_bytes(), &read("other-file.sig")).unwrap_err();
+    assert!(e.to_string().contains("another file"), "{e}");
+}
+
 #[test]
 fn a_signature_by_another_key_is_refused() {
     let e = verify_with(&manifest_bytes(), &read("other-key.sig")).unwrap_err();
@@ -184,57 +194,88 @@ fn a_binary_must_carry_the_manifest_hash_of_its_os_and_arch() {
     assert!(manifest.check_binary("windows", "x86_64", &linux).is_err());
 }
 
+/// `relay::source()` 에 개발 빌드 폴더를 환경 변수로 준다. nextest 는 시험마다 프로세스가 따로라 다른 시험에 새지 않는다.
+fn set_dev_dist(dir: &Path) {
+    // SAFETY: 이 시험 프로세스의 다른 스레드는 환경을 읽거나 쓰지 않는다(nextest — 시험마다 프로세스 하나).
+    unsafe { std::env::set_var(DEV_DIST_ENV, dir) };
+}
+
 /// 서명은 맞는데 꼴이 틀린 매니페스트는 없다(서명하는 쪽이 [`relay::assemble`] 만 쓴다). 꼴 검사는 그래도 읽는 쪽에 있다 — 개발 빌드
-/// 매니페스트(서명 없음)가 같은 검사를 지난다.
+/// 매니페스트(서명 없음)가 같은 검사를 지난다. 이 시험은 debug 빌드에서만 뜻이 있다(release 에는 개발 갈래가 없다).
 #[test]
-fn a_dev_manifest_is_read_only_from_the_dev_source_and_checked_for_its_version() {
+#[cfg(debug_assertions)]
+fn a_dev_manifest_is_read_only_from_the_dev_source_and_checked_for_its_shape() {
     let dir = tempfile::tempdir().unwrap();
-    let Source::Dev(dist) = relay::source_for(true, Some(dir.path().as_os_str()), Path::new("/ws"))
-    else {
-        panic!("debug with the variable is a dev build");
+    set_dev_dist(dir.path());
+    let Source::Dev(dist) = relay::source() else {
+        panic!("a debug build with the variable is a dev build");
     };
     assert_eq!(dist.dir(), dir.path());
     assert!(
         relay::read_dev_manifest(&dist, VERSION).is_err(),
         "no manifest yet"
     );
-    std::fs::write(dir.path().join(MANIFEST_FILE), manifest_bytes()).unwrap();
+    let write = |manifest: &relay::Manifest| {
+        std::fs::write(dir.path().join(MANIFEST_FILE), manifest.to_bytes()).unwrap();
+    };
+    write(&verified());
     assert_eq!(
         relay::read_dev_manifest(&dist, VERSION).unwrap(),
         verified()
     );
     let e = relay::read_dev_manifest(&dist, "1.2.4").unwrap_err();
     assert!(e.to_string().contains("not 1.2.4"), "{e}");
-    let mut twice = verified();
-    twice.assets.push(twice.assets[0].clone());
-    std::fs::write(dir.path().join(MANIFEST_FILE), twice.to_bytes()).unwrap();
-    let e = relay::read_dev_manifest(&dist, VERSION).unwrap_err();
-    assert!(e.to_string().contains("twice"), "{e}");
+    // 꼴이 틀린 줄 — 하나씩.
+    let refused = |edit: &dyn Fn(&mut relay::Manifest), why: &str| {
+        let mut manifest = verified();
+        edit(&mut manifest);
+        write(&manifest);
+        let e = relay::read_dev_manifest(&dist, VERSION).unwrap_err();
+        assert!(e.to_string().contains(why), "{why}: {e}");
+    };
+    refused(&|m| m.assets.push(m.assets[0].clone()), "twice");
+    refused(&|m| m.schema = 2, "schema 2");
+    refused(
+        &|m| m.assets[0].name = "../pitwall-relay-1.2.3-linux-x86_64".into(),
+        "bad name",
+    );
+    // 표에 있는 다른 플랫폼의 자산 이름 · 다른 판의 이름도 거절(그 (OS, 아키텍처)의 이름 그대로여야 한다).
+    refused(
+        &|m| m.assets[0].name = "pitwall-relay-1.2.3-linux-aarch64".into(),
+        "bad name",
+    );
+    refused(
+        &|m| m.assets[0].name = "pitwall-relay-1.2.2-linux-x86_64".into(),
+        "bad name",
+    );
+    refused(&|m| m.assets[0].os = "windows".into(), "unknown platform");
+    refused(&|m| m.assets[0].sha256 = "AB".repeat(32), "bad sha256");
+    refused(&|m| m.assets[0].sha256 = "ab".repeat(31), "bad sha256");
 }
 
-/// **release 빌드는 환경 변수가 있어도 개발 빌드 갈래로 가지 않는다**(완료 기준 ② — `instance.rs` 의 `TEST_KEY_ENV` 와 같은 꼴).
-/// 판정은 `source_for` 에 있고 `source` 는 `cfg!(debug_assertions)` 를 넘긴다 — 이 시험 바이너리(debug)에서는 개발 갈래다.
+/// debug 빌드(이 시험 바이너리)에서 `source()` 는 개발 갈래다 — 변수가 없으면 이 워크스페이스의 `target/relay-dist`.
 #[test]
-fn a_release_build_never_takes_the_dev_build_branch() {
-    let ws = Path::new("/ws");
-    let dir = Path::new("/elsewhere/relay-dist");
-    assert_eq!(
-        relay::source_for(false, Some(dir.as_os_str()), ws),
-        Source::Signed
-    );
-    assert_eq!(relay::source_for(false, None, ws), Source::Signed);
-    let Source::Dev(dist) = relay::source_for(true, Some(dir.as_os_str()), ws) else {
-        panic!("debug follows the variable");
+#[cfg(debug_assertions)]
+fn a_debug_build_takes_the_workspace_dev_build() {
+    let Source::Dev(dist) = relay::source() else {
+        panic!("debug is a dev build");
     };
-    assert_eq!(dist.dir(), dir);
-    let Source::Dev(dist) = relay::source_for(true, Some("".as_ref()), ws) else {
-        panic!("an empty variable is unset");
-    };
-    assert_eq!(dist.dir(), ws.join(DEV_DIST_DIR));
-    assert_eq!(
-        matches!(relay::source(), Source::Dev(_)),
-        cfg!(debug_assertions)
+    assert!(
+        dist.dir().ends_with(DEV_DIST_DIR),
+        "{}",
+        dist.dir().display()
     );
+}
+
+/// **release 빌드는 환경 변수가 있어도 개발 빌드 갈래로 가지 않는다**(완료 기준 ② — F7). release 로만 뜻이 있어
+/// `mise run test-release` 가 돌린다(debug 에서는 무시). `source()` 가 넘기는 값을 `true` 로 바꾸면 여기서 실패한다.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only — mise run test-release")]
+fn a_release_build_ignores_the_dev_build_variable() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(MANIFEST_FILE), manifest_bytes()).unwrap();
+    set_dev_dist(dir.path());
+    assert_eq!(relay::source(), Source::Signed);
 }
 
 fn entry(name: &str) -> Entry {

@@ -254,14 +254,28 @@ impl Manifest {
                 self.version
             )));
         }
+        let parsed = Version::parse(&self.version)
+            .map_err(|e| error(format!("the relay manifest version is not semver: {e}")))?;
         for (i, asset) in self.assets.iter().enumerate() {
-            let plain = |s: &str| {
-                !s.is_empty()
-                    && s.bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
-            };
-            if !plain(&asset.name) || !plain(&asset.os) || !plain(&asset.arch) {
-                return Err(error(format!("relay manifest line {i} has a bad name")));
+            // 이름은 그 (OS, 아키텍처)의 자산 이름 그대로여야 한다 — 읽는 쪽(M7-06)이 캐시 파일 이름으로 쓰므로 `..` · `/` 같은 글자가
+            // 들어올 자리를 남기지 않는다. 표에 없는 (OS, 아키텍처)도 거절이다.
+            let platform = PLATFORMS
+                .iter()
+                .find(|p| {
+                    p.runs_on
+                        .contains(&(asset.os.as_str(), asset.arch.as_str()))
+                })
+                .ok_or_else(|| {
+                    error(format!(
+                        "relay manifest line {i} is for an unknown platform {:?} {:?}",
+                        asset.os, asset.arch
+                    ))
+                })?;
+            if asset.name != asset_name(&parsed, platform) {
+                return Err(error(format!(
+                    "relay manifest line {i} has a bad name {:?}",
+                    asset.name
+                )));
             }
             if !plain_sha256(&asset.sha256) {
                 return Err(error(format!("relay manifest line {i} has a bad sha256")));
@@ -307,10 +321,21 @@ pub fn verify(
     public_key
         .verify(manifest, &signature, false)
         .map_err(|e| error(format!("the relay manifest signature does not verify: {e}")))?;
-    let signed = signature
-        .trusted_comment()
-        .split('\t')
-        .find_map(|field| field.strip_prefix("version:"))
+    let field = |key: &str| {
+        signature
+            .trusted_comment()
+            .split('\t')
+            .find_map(|field| field.strip_prefix(key))
+    };
+    // 같은 운영 키 · 같은 판으로 서명한 updater 산출물의 `.sig` 를 매니페스트의 서명으로 내밀지 못하게 — 서명 도구가 적는 파일 이름이
+    // 매니페스트의 것이어야 한다.
+    if field("file:") != Some(MANIFEST_FILE) {
+        return Err(error(format!(
+            "the relay manifest signature is for another file ({:?})",
+            field("file:").unwrap_or("")
+        )));
+    }
+    let signed = field("version:")
         .ok_or_else(|| error("the relay manifest signature carries no version"))?;
     if signed != version {
         return Err(error(format!(
@@ -323,7 +348,8 @@ pub fn verify(
     Ok(parsed)
 }
 
-/// 개발 빌드의 매니페스트(서명 없음)를 읽는다. [`DevDist`] 는 [`source`] 만 만들므로 release 빌드에서는 부를 길이 없다.
+/// 개발 빌드의 매니페스트(서명 없음)를 읽는다. [`DevDist`] 는 [`source`] 만 만들고 `source` 는 release 빌드에서 늘
+/// [`Source::Signed`] 이므로 release 빌드에서는 부를 길이 없다(판정 `source_for` 는 이 모듈 밖에 공개하지 않는다).
 pub fn read_dev_manifest(dist: &DevDist, version: &str) -> Result<Manifest, Error> {
     let path = dist.0.join(MANIFEST_FILE);
     let bytes = std::fs::read(&path).map_err(|e| {
@@ -362,14 +388,19 @@ pub enum Source {
 /// 이 워크스페이스의 [`DEV_DIST_DIR`].
 pub fn source() -> Source {
     source_for(
-        cfg!(debug_assertions),
+        DEV_BUILDS,
         std::env::var_os(DEV_DIST_ENV).as_deref(),
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."),
     )
 }
 
-/// [`source`] 의 판정. `debug` 는 부르는 빌드가 debug 인가.
-pub fn source_for(debug: bool, env: Option<&OsStr>, workspace: &Path) -> Source {
+/// 이 빌드에 개발 빌드 갈래가 있는가 — debug 빌드만. release 빌드에서 이 값이 참이 되면 `relay` 통합 시험의
+/// `a_release_build_ignores_the_dev_build_variable` 이 `mise run test-release` 에서 실패한다.
+const DEV_BUILDS: bool = cfg!(debug_assertions);
+
+/// [`source`] 의 판정. `debug` 는 부르는 빌드가 debug 인가. 모듈 밖에 공개하지 않는다 — `debug = true` 를 넘겨 release 빌드에서
+/// [`DevDist`] 를 얻는 길이 없게.
+fn source_for(debug: bool, env: Option<&OsStr>, workspace: &Path) -> Source {
     if !debug {
         return Source::Signed;
     }
@@ -378,4 +409,28 @@ pub fn source_for(debug: bool, env: Option<&OsStr>, workspace: &Path) -> Source 
         None => workspace.join(DEV_DIST_DIR),
     };
     Source::Dev(DevDist(dir))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **release 판정은 환경 변수가 있어도 개발 빌드 갈래로 가지 않는다**(M7-05 ② — desktop `instance.rs` 의 `TEST_KEY_ENV` 와 같은
+    /// 꼴). `source` 가 넘기는 값([`DEV_BUILDS`])은 release 로 도는 통합 시험이 본다.
+    #[test]
+    fn the_release_branch_never_takes_the_dev_build() {
+        let ws = Path::new("/ws");
+        let dir = Path::new("/elsewhere/relay-dist");
+        assert_eq!(source_for(false, Some(dir.as_os_str()), ws), Source::Signed);
+        assert_eq!(source_for(false, None, ws), Source::Signed);
+        let Source::Dev(dist) = source_for(true, Some(dir.as_os_str()), ws) else {
+            panic!("debug follows the variable");
+        };
+        assert_eq!(dist.dir(), dir);
+        let Source::Dev(dist) = source_for(true, Some("".as_ref()), ws) else {
+            panic!("an empty variable is unset");
+        };
+        assert_eq!(dist.dir(), ws.join(DEV_DIST_DIR));
+        assert_eq!(DEV_BUILDS, cfg!(debug_assertions));
+    }
 }
