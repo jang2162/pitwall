@@ -322,3 +322,71 @@ async fn forward_methods_are_for_the_owner_only() {
     assert!(s.remote.forwards(None).is_empty());
     assert_eq!(s.fake.connects.load(Ordering::SeqCst), 0);
 }
+
+/// 이 컴퓨터의 다른 소켓이 와일드카드(`0.0.0.0`)로 쥔 포트는 덮지 않는다 — 실행 탭은 그 번호를 실은 `PortInUse`(창이 「포트 n 은
+/// 이미 쓰는 중」 을 보인다), 설정의 것은 `failed{portInUse}` 로 남는다(리뷰 F1).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_port_another_program_holds_on_every_address_is_not_covered() {
+    let s = setup();
+    let echo = echo_server().await;
+    let holder = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+    let held = holder.local_addr().unwrap().port();
+    *lock(&s.fake.port_forwards) = vec![ForwardSetting {
+        local_port: held,
+        remote_port: echo,
+        remote_host: None,
+        local_host: None,
+    }];
+    let _use = s.remote.hold("mini").unwrap();
+    until(&s.remote, connected).await;
+    let list = forwards_until(&s.remote, |f| f.len() == 1).await;
+    assert!(
+        matches!(
+            &list[0].state,
+            RemoteForwardState::Failed { error } if error.kind == RemoteForwardFailureKind::PortInUse
+        ),
+        "{:?}",
+        list[0]
+    );
+    let err = s
+        .remote
+        .open_forward("mini", held, None)
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(err, ForwardOpenError::PortInUse(held));
+    assert!(
+        err.to_string()
+            .contains(&format!("port {held} is already in use"))
+    );
+    drop(holder);
+}
+
+/// 설정에서 포워딩 하나를 지우면(`config.changed`) 그 하나만 닫히고 같은 호스트의 다른 포워딩은 그대로 듣는다(리뷰 F3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn removing_one_forward_from_the_settings_closes_only_that_one() {
+    let s = setup();
+    let echo = echo_server().await;
+    let (kept, removed) = (free_port().await, free_port().await);
+    let setting = |local_port| ForwardSetting {
+        local_port,
+        remote_port: echo,
+        remote_host: None,
+        local_host: None,
+    };
+    *lock(&s.fake.port_forwards) = vec![setting(kept), setting(removed)];
+    let _use = s.remote.hold("mini").unwrap();
+    until(&s.remote, connected).await;
+    forwards_until(&s.remote, |f| f.len() == 2).await;
+    *lock(&s.fake.port_forwards) = vec![setting(kept)];
+    s.bus
+        .publish(Scope::Host, pw_core::config::TOPIC_CHANGED, &"settings")
+        .unwrap();
+    let left = forwards_until(&s.remote, |f| f.len() == 1).await;
+    assert_eq!(left[0].local_port, kept);
+    assert_eq!(round_trip(kept, b"still").await, b"still");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    TcpListener::bind(("127.0.0.1", removed))
+        .await
+        .expect("the removed forward still listens");
+}
