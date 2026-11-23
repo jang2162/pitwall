@@ -117,10 +117,10 @@ async fn the_relay_methods_are_the_desktop_methods_without_desktop_only_ones() {
         })
         .map(str::to_owned)
         .collect();
-    // 빼는 갈래는 이 셋이고, 셋 다 Desktop 목록에 있다(이름이 바뀌어 아무것도 빼지 않게 되면 실패한다).
+    // 빼는 갈래는 이 넷이고(`remote.` — M7-08), 넷 다 Desktop 목록에 있다(이름이 바뀌어 아무것도 빼지 않게 되면 실패한다).
     assert_eq!(
         pw_host::RELAY_EXCLUDED_PREFIXES,
-        ["bundle.", "cli.", "openWith."]
+        ["bundle.", "cli.", "openWith.", "remote."]
     );
     for prefix in pw_host::RELAY_EXCLUDED_PREFIXES {
         assert!(snapshot.lines().any(|l| l.starts_with(prefix)), "{prefix}");
