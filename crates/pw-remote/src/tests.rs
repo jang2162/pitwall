@@ -1134,6 +1134,19 @@ async fn the_device_screen_calls_the_relay_only_on_the_linked_machine() {
 
     let _use = s.remote.hold("mini").unwrap();
     until(&s.remote, connected).await;
+    // 다른 호스트 이름으로 붙은 다른 머신이 라우터에 있다 — 사람이 본 머신이 `mini` 의 링크가 아니면 그 머신도 부르지 않는다.
+    let other_devices = Arc::new(FakeDevices::default());
+    {
+        let slot = pw_link::devices::Devices::default();
+        slot.attach(Arc::clone(&other_devices) as Arc<dyn pw_link::devices::DeviceAdmin>);
+        s.router
+            .add_host(Arc::new(LinkedRelay {
+                inner: LocalHost::builder("SHA256:other")
+                    .methods(move |r| pw_link::devices::register(r, &slot))
+                    .build(),
+            }))
+            .unwrap();
+    }
     let other = s
         .remote
         .relay_call::<pw_link::devices::RelayUnpairResult>(
