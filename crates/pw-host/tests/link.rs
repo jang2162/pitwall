@@ -305,6 +305,7 @@ async fn closing_the_channel_ends_the_terminal_shell_on_the_host() {
 }
 
 /// 스트림의 첫 항목 `kind` 가 나올 때까지 받아 그 항목을 준다.
+#[cfg(unix)]
 async fn stream_item(window: &mut Connection, kind: &str) -> serde_json::Value {
     loop {
         let frame = tokio::time::timeout(std::time::Duration::from_secs(20), window.source.recv())
