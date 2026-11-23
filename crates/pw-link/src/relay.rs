@@ -123,6 +123,21 @@ impl Resumes {
         Some((h.mux.clone(), next))
     }
 
+    /// 링크를 모두 닫고 상대에게 `bye` 가 나갈 때까지(링크마다 1초 남짓까지) 기다린다 — 데몬이 끝날 때 부른다. 그러지 않으면
+    /// Desktop 이 끊김으로 보고 이어 붙기를 되풀이하며, 그 전송(ssh 의 proxy)이 끝난 데몬을 다시 띄운다.
+    pub async fn close_all(&self) {
+        let muxes: Vec<Mux> = self.lock().iter().map(|h| h.mux.clone()).collect();
+        for mux in &muxes {
+            mux.shutdown(CloseReason::Local);
+        }
+        let all = async {
+            for mux in &muxes {
+                mux.drained().await;
+            }
+        };
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), all).await;
+    }
+
     /// 이어 붙기를 기다리는 링크의 수(시험 · 진단).
     pub fn len(&self) -> usize {
         self.lock().len()

@@ -387,3 +387,26 @@ async fn a_suspended_link_of_an_unpaired_device_does_not_resume() {
     .await;
     assert_eq!(fx.relay_host.connects(), 1);
 }
+
+/// 데몬이 끝날 때(`Resumes::close_all`) 링크마다 `bye` 를 보낸다 — Desktop 은 끊김으로 보지 않고 곧바로 닫으며 다시 붙지 않는다(다시
+/// 붙으면 ssh 의 proxy 가 끝난 데몬을 다시 띄운다).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_relay_that_closes_its_links_says_bye_and_the_desktop_does_not_resume() {
+    let fx = resumable(quick());
+    fx.remote.attach().await.unwrap();
+    let state = fx.remote.state();
+    fx.resumes.close_all().await;
+    let closed = wait_state(state, |s| matches!(s, LinkState::Disconnected { .. })).await;
+    assert_eq!(
+        closed,
+        LinkState::Disconnected {
+            reason: CloseReason::PeerClosed
+        }
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        fx.transport.opens.load(Ordering::SeqCst),
+        1,
+        "the desktop tried to resume"
+    );
+}

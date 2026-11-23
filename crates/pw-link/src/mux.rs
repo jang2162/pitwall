@@ -229,6 +229,8 @@ struct Shared {
     /// 다중화가 다루지 않는 틀(채널 열기 응답 등)을 받는 쪽 — 전송이 바뀌어도 같다.
     inbox: mpsc::UnboundedSender<LinkFrame>,
     phase: watch::Sender<Phase>,
+    /// 닫은 뒤 `bye` 를 보냈거나(보내 봤거나) 보낼 전송이 없다.
+    drained: CancellationToken,
 }
 
 /// 링크의 단계.
@@ -332,6 +334,7 @@ impl Mux {
             rx_gate: Mutex::new(()),
             inbox: inbox_tx,
             phase: watch::Sender::new(Phase::Live),
+            drained: CancellationToken::new(),
         });
         let mux = Self { shared };
         mux.spawn_transport(framed, 0, stop);
@@ -477,6 +480,10 @@ impl Mux {
         let channels = {
             let mut state = lock(&self.shared.state);
             state.shut = true;
+            if state.suspended {
+                // 보낼 전송이 없다.
+                self.shared.drained.cancel();
+            }
             state.control.clear();
             state.control_bytes = 0;
             state.ready.clear();
@@ -856,11 +863,16 @@ impl Mux {
 
     /// 링크를 닫았다 — 상대가 이어 붙기를 기다리지 않게 `bye` 를 보낸다(전송이 막혔으면 잠깐만 기다린다).
     async fn bye(&self, write: &mut FramedWrite, stop: &CancellationToken) {
-        if stop.is_cancelled() {
-            return;
+        if !stop.is_cancelled() {
+            let bye = LinkFrame::control(Kind::Bye, Value::Null).encode();
+            let _ = tokio::time::timeout(Duration::from_secs(1), write.write_encoded(&bye)).await;
         }
-        let bye = LinkFrame::control(Kind::Bye, Value::Null).encode();
-        let _ = tokio::time::timeout(Duration::from_secs(1), write.write_encoded(&bye)).await;
+        self.shared.drained.cancel();
+    }
+
+    /// 닫은 뒤 `bye` 를 보낼 때까지(전송이 막혔으면 1초 남짓) 기다린다. 프로세스가 끝나기 전에(데몬의 끝) 부른다.
+    pub(crate) async fn drained(&self) {
+        self.shared.drained.cancelled().await;
     }
 
     async fn reader(self, mut read: FramedRead, generation: u64, stop: CancellationToken) {

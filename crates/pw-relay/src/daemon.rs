@@ -203,11 +203,14 @@ impl Daemon {
 
     /// 소켓에서 받다가 유휴 시한이 지나거나 `shutdown` 이 취소되면 끝난다.
     pub async fn run(&self, listener: Listener, shutdown: CancellationToken) -> Ended {
-        tokio::select! {
+        let ended = tokio::select! {
             () = shutdown.cancelled() => Ended::Shutdown,
             () = self.wait_idle() => Ended::Idle,
             () = self.accept_loop(&listener) => Ended::Shutdown,
-        }
+        };
+        // 붙은 링크에 `bye` 를 보낸다 — Desktop 이 끊김으로 보고 이어 붙기를 되풀이하지 않게(18-m7-plan M7-09 ①).
+        self.shared.parts.link.resumes.close_all().await;
+        ended
     }
 
     async fn accept_loop(&self, listener: &Listener) {
