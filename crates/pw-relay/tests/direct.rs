@@ -324,7 +324,6 @@ async fn full_direct_slots_leave_the_ssh_socket_free() {
             held.push(slot);
         }
     }
-    assert_eq!(held.len(), pw_relay::daemon::MAX_DIRECT_UNPROVEN);
     // SSH proxy 자리(데몬 소켓 — 메모리 전송으로 `accept` 에 넘긴다).
     let (transport, acceptor) = pw_link::transport::memory(256 * 1024);
     {
@@ -349,6 +348,7 @@ async fn full_direct_slots_leave_the_ssh_socket_free() {
         .await
         .expect("the ssh link did not stand while direct slots were full")
         .unwrap();
+    assert_eq!(held.len(), pw_relay::daemon::MAX_DIRECT_UNPROVEN);
     drop(held);
 }
 
