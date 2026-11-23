@@ -1244,7 +1244,8 @@ impl Session {
         let (Some(machines), false) = (machines, self.headless()) else {
             return Err(unavailable(
                 "this session cannot target another checkout: only a session of the running Pitwall desktop app \
-                 can (open the Pitwall app; a headless session serves this computer only)"
+                 can (open the Pitwall app; a headless session, or a session on a remote machine's Pitwall relay, \
+                 serves its own computer only)"
                     .to_owned(),
             ));
         };
