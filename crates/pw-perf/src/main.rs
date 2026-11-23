@@ -901,6 +901,7 @@ mod measure {
         let (launcher, started, t0) = (launch.pid, launch.started, launch.t0);
         let read_marks = || marks::parse(&std::fs::read_to_string(&dir.marks).unwrap_or_default());
         let mut launcher_exit = None;
+        let mut launcher_gone: Option<Instant> = None;
         let mut locked = false;
         let mut next_lock_check = Instant::now();
         let frame: Mark = loop {
@@ -911,14 +912,19 @@ mod measure {
             }
             if launcher_exit.is_none() {
                 launcher_exit = macos::try_wait(launcher).map_err(|e| e.to_string())?;
+                if launcher_exit.is_some() {
+                    launcher_gone = Some(Instant::now());
+                }
             }
             let all = read_marks();
             if let Some(frame) = marks::first(&all, "first_frame", None) {
                 break frame.clone();
             }
-            // 떼어 띄운 앱도 같은 표시 파일에 `main` 을 남긴다. 띄운 프로세스가 끝났는데 그런 프로세스가 없거나 모두
-            // 끝났으면 인자가 다른 인스턴스로 넘어갔거나(단일 인스턴스) 앱이 죽은 것이다.
-            if launcher_exit.is_some() && started.elapsed() > Duration::from_secs(2) {
+            // 떼어 띄운 앱도 같은 표시 파일에 `main` 을 남긴다. 띄운 프로세스가 끝나고 2초가 지났는데 그런 프로세스가 없거나
+            // 모두 끝났으면 인자가 다른 인스턴스로 넘어갔거나(단일 인스턴스) 앱이 죽은 것이다. 2초는 띄운 때가 아니라 띄운
+            // 프로세스가 끝난 때부터 센다 — 자식은 부모가 떼고 끝난 뒤에 `main` 을 남기므로, 떼기까지 2초를 넘긴 첫 실행(CI 의
+            // 워밍업)은 띄운 때부터 세면 자식의 `main` 수십 ms 앞에서 판정된다.
+            if launcher_gone.is_some_and(|t| t.elapsed() > Duration::from_secs(2)) {
                 let apps = marked_pids(&all, launcher);
                 if apps.is_empty() {
                     return Err(format!(
