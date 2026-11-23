@@ -14,6 +14,7 @@
 //!
 //! 시나리오: 설치 · RPC 왕복, 다시 붙기(같은 데몬 — SSH 세션이 끝나도 데몬이 남는다), 끊김(컨테이너를 얼려 링크가 조용해짐 → 링크가
 //! 끊겼다고 보고, 풀면 다시 붙어 같은 데몬), 페어링 안 된 기기 거절, 커밋 보내기(이 기기의 Relay 데몬 → 원격 체크아웃, M7-16 RPC).
+//! 포트 포워딩(M7-22): 컨테이너 루프백의 http 서버를 이 기기 루프백 소켓으로 받는다.
 //! 판 바꾸기(M7-07): 한 바이너리로 판 둘을 만든다 — 개발 채널 빌드는 `PITWALL_RELAY_DEV_VERSION` 을 판으로 쓴다(`pw_relay::version`).
 
 #![cfg(all(unix, pw_live_relay))]
@@ -1008,5 +1009,58 @@ fn live_relay_a_new_version_starts_its_own_daemon_and_the_old_shell_lives() {
         drop(window);
         new.detach();
         old.detach();
+    });
+}
+
+/// 포트 포워딩(18-m7-plan M7-22): 컨테이너의 루프백에 듣는 http 서버(busybox `nc` 한 번 답)를 이 기기의 루프백 소켓 하나로 받는다 —
+/// 실제 ssh · 실제 Relay 바이너리의 `forward` 채널. 원격 쪽 대상은 `localhost`(Relay 가 그 머신의 127.0.0.1 · ::1 로 잇는다).
+#[test]
+fn live_relay_forwards_a_container_http_server() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let site = Site::new("forward");
+    site.install();
+    let key = Arc::new(DeviceKey::generate().unwrap());
+    site.configure(&[&key]);
+    // 한 번 답하는 http 서버(그 머신 안에서만 — 포트는 컨테이너 밖에 내지 않았다).
+    site.remote.sh(
+        "(printf 'HTTP/1.0 200 OK\\r\\nContent-Length: 13\\r\\n\\r\\nhello-forward' | nohup nc -l -p 18080 >/dev/null 2>&1 &); sleep 1",
+    );
+    runtime().block_on(async {
+        let host = RemoteHost::new(
+            "live",
+            site.transport(),
+            identity(key),
+            Expect::FirstContact,
+            LinkLimits::default(),
+        );
+        host.attach().await.unwrap();
+        let listener = pw_link::forward::bind(pw_link::forward::local_addr(None, 0).unwrap())
+            .await
+            .unwrap();
+        let mut client = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (accepted, _) = listener.accept().await.unwrap();
+        let forwarding = host.forward(
+            pw_link::forward::ForwardTo::new("localhost", 18080),
+            accepted,
+        );
+        let forwarding = tokio::spawn(forwarding);
+        client.write_all(b"GET / HTTP/1.0\r\n\r\n").await.unwrap();
+        client.shutdown().await.unwrap();
+        let mut got = Vec::new();
+        tokio::time::timeout(Duration::from_secs(30), client.read_to_end(&mut got))
+            .await
+            .expect("no answer through the forward")
+            .unwrap();
+        let text = String::from_utf8_lossy(&got);
+        assert!(text.contains("hello-forward"), "{text}");
+        tokio::time::timeout(Duration::from_secs(30), forwarding)
+            .await
+            .expect("the forward did not end")
+            .unwrap()
+            .unwrap();
+        host.detach();
     });
 }
