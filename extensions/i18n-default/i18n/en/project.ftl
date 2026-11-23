@@ -45,8 +45,6 @@ editor-read-failed = Could not read the file: { $message }
 editor-too-large = Not opened: the file is larger than 50 MiB ({ $size })
 # Not a regular file (FIFO · device · socket): opening it blocks or never ends
 editor-special-file = Not opened: this is not a regular file (FIFO, device or socket)
-# Another machine's file is too large to read over the link at once. $size: the file size, $limit: the limit (with units)
-editor-too-large-for-link = Not opened: the file on the other machine is larger than { $limit }, too large to open over the link ({ $size })
 # $size: the size to show, with unit (e.g. 1.0 MiB)
 editor-show-head = Show the first { $size }
 editor-show-hex = View as Hex
@@ -117,7 +115,7 @@ editor-tab-unsaved = Unsaved changes
 editor-save-failed = Could not save { $path }
 # Body of the save failure notice: while you edited, the file on disk stopped being UTF-8 or lost its write permission.
 editor-save-read-only = The file is now read-only, so it was not written. Your changes are still in the tab.
-# Body of the save-failed notice: what to write to another machine is too large to send over the link at once. $limit: the limit (with units)
+# Body of the save-failed notice: what to write to another machine is larger than a chunked write takes. $limit: the limit (with units)
 editor-save-too-large-for-link = Not written: the content for the other machine is larger than { $limit }, too large to send over the link. Your changes are still in the tab.
 # Body of the save-failed notice: a document of another machine whose link dropped.
 editor-save-offline = The file's machine is disconnected, so it was not written. Your changes are still in the tab; save again once it reconnects.

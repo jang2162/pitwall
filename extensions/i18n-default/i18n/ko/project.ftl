@@ -45,8 +45,6 @@ editor-read-failed = 파일을 읽지 못했다: { $message }
 editor-too-large = 50 MiB 를 넘는 파일이라 열지 않는다({ $size })
 # 일반 파일이 아닌 것(FIFO · 장치 · 소켓)은 열면 멈추거나 끝이 없다
 editor-special-file = 일반 파일이 아니어서(FIFO · 장치 · 소켓) 열지 않는다
-# 다른 머신 파일이 링크로 한 번에 읽기에 크다. $size: 파일 크기, $limit: 상한(단위 포함)
-editor-too-large-for-link = 다른 머신의 파일이 { $limit } 를 넘어 링크로는 열지 않는다({ $size })
 # $size: 보일 크기(단위 포함, 예: 1.0 MiB)
 editor-show-head = 앞부분 { $size } 보기
 editor-show-hex = hex 로 보기
@@ -117,7 +115,7 @@ editor-tab-unsaved = 저장하지 않은 편집
 editor-save-failed = 저장하지 못했다: { $path }
 # 저장하지 못한 알림의 본문: 편집하는 사이 디스크의 파일이 UTF-8 이 아니게 됐거나 쓰기 권한이 없어졌다.
 editor-save-read-only = 이 파일은 이제 읽기 전용이라 쓰지 않았다. 편집은 탭에 남아 있다.
-# 저장하지 못한 알림의 본문: 다른 머신에 쓸 내용이 링크 한 번에 보내기에 크다. $limit: 상한(단위 포함)
+# 저장하지 못한 알림의 본문: 다른 머신에 쓸 내용이 조각 쓰기의 상한보다 크다. $limit: 상한(단위 포함)
 editor-save-too-large-for-link = 다른 머신에 쓸 내용이 { $limit } 를 넘어 보내지 않았다. 편집은 탭에 남아 있다.
 # 저장하지 못한 알림의 본문: 다른 머신의 문서인데 그 머신과 링크가 끊겼다.
 editor-save-offline = 이 파일의 머신과 연결이 끊겨 쓰지 않았다. 편집은 탭에 남아 있고, 다시 붙은 뒤에 저장할 수 있다.

@@ -84,10 +84,7 @@ export function projectStrings(t: Translate) {
       failed: (message: string) => t("editor-read-failed", { message }),
       /** `size`: 「12.3 MiB」 처럼 단위까지 붙인 크기. */
       tooLarge: (size: string) => t("editor-too-large", { size }),
-      /** 다른 머신 파일이 링크로 통째로 읽기에 크다(M7-13). `size` · `limit`: 단위까지 붙인 크기 · 상한. */
-      tooLargeForLink: (size: string, limit: string) =>
-        t("editor-too-large-for-link", { size, limit }),
-      /** 다른 머신에 쓸 내용이 링크 한 번에 보내기에 크다(`saveFailed` 알림의 본문, M7-13). */
+      /** 다른 머신에 쓸 내용이 조각 쓰기의 상한(`UPLOAD_MAX`)보다 크다(`saveFailed` 알림의 본문, M7-13 · M7-13b). */
       saveTooLargeForLink: (limit: string) => t("editor-save-too-large-for-link", { limit }),
       /** 일반 파일이 아니어서(FIFO · 장치 · 소켓) 열지 않았다. */
       special: t("editor-special-file"),

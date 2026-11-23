@@ -17,7 +17,11 @@ const RUST = join(
 function rustConstants(source: string): Map<string, number> {
   const values = new Map<string, number>();
   for (const [, name = "", expr = ""] of source.matchAll(/const (\w+): \w+ = ([^;]+);/g)) {
-    const factors = expr.split("*").map((f) => f.trim().replaceAll("_", ""));
+    // 수의 `_` 만 뗀다(`10_000`) — 이름(`READ_ONLY_MAX`)의 `_` 는 그대로.
+    const factors = expr
+      .split("*")
+      .map((f) => f.trim())
+      .map((f) => (/^[\d_]+$/.test(f) ? f.replaceAll("_", "") : f));
     values.set(
       name,
       factors.reduce((product, f) => {
@@ -34,7 +38,13 @@ it("matches every threshold in crates/pw-fs/src/limits.rs", () => {
   const rust = rustConstants(readFileSync(RUST, "utf8"));
   const exported = Object.entries(limits).filter(([, v]) => typeof v === "number");
   const shared = ["SNIFF_BYTES", "EDITABLE_MAX", "READ_ONLY_MAX", "LONG_LINE_CHARS"];
-  for (const name of [...shared, "HEAD_PREVIEW_BYTES", "HEX_PAGE_BYTES"])
+  for (const name of [
+    ...shared,
+    "HEAD_PREVIEW_BYTES",
+    "HEX_PAGE_BYTES",
+    "CHUNK_WIRE_MAX",
+    "UPLOAD_MAX",
+  ])
     expect(limits[name as keyof typeof limits], name).toBe(rust.get(name));
   // 이쪽에만 있는 수 상수가 없다.
   for (const [name] of exported) expect(rust.has(name), name).toBe(true);

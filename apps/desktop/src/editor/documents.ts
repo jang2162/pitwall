@@ -95,10 +95,10 @@ export type DocumentState =
   | { status: "loading" }
   | { status: "failed"; message: string }
   /**
-   * 열지 않는다: 50 MiB 초과(`size`, 결정 M1-D9), 일반 파일이 아니다(`special`), 다른 머신 파일이 링크로 통째로 읽기에 크다(`link`,
-   * `DocumentSource.wholeReadLimit` — M7-13). 내용을 읽지 않았다.
+   * 열지 않는다: 50 MiB 초과(`size`, 결정 M1-D9 — 다른 머신 파일도 같다, 조각으로 읽는다 M7-13b), 일반 파일이 아니다(`special`).
+   * 내용을 읽지 않았다.
    */
-  | { status: "tooLarge"; reason: "size" | "special" | "link"; size: number }
+  | { status: "tooLarge"; reason: "size" | "special"; size: number }
   /** 내용 없이 뷰어가 직접 읽는 문서(이미지 · hex). */
   | { status: "external"; kind: ViewerKind; stat: FsStat }
   | {
@@ -141,11 +141,6 @@ export interface DocumentSource {
     params: Pick<FsWriteParams, "path" | "content" | "bom" | "expectedVersion">,
     worktree: string | undefined,
   ): Promise<FsWritten>;
-  /**
-   * 그 파일을 통째로 읽는 상한(바이트). 넘으면 열지 않는다(`tooLarge` 의 `link`). 다른 머신 파일은 링크 틀에 실리므로 창이 준다
-   * (editor/link-limits.ts). 없으면 Host 의 상한(50 MiB)뿐이다.
-   */
-  wholeReadLimit?(path: string, worktree: string | undefined): number | undefined;
   /** 언어. 없으면 늘 플레인 텍스트다. */
   detect?(path: string, head: string, worktree: string | undefined): Promise<string | null>;
 }
@@ -293,9 +288,6 @@ async function loadDocument(
   const byName = viewerKindByName(stat.path);
   if (byName && VIEWER_READS[byName] === "self") return { status: "external", kind: byName, stat };
   if (stat.sizeClass === "tooLarge") return { status: "tooLarge", reason: "size", size: stat.size };
-  const limit = source.wholeReadLimit?.(stat.path, worktree);
-  if (limit !== undefined && stat.size > limit)
-    return { status: "tooLarge", reason: "link", size: stat.size };
   if (stat.size > SNIFF_ABOVE) {
     const head = await source.read({ path: stat.path, offset: 0, length: SNIFF_BYTES }, worktree);
     if (head.judgment.binary) return { status: "external", kind: "hex", stat };

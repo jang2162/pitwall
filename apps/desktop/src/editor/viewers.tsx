@@ -11,7 +11,6 @@
 // [앞부분 1 MiB 보기](「텍스트로 열기」 와 같다) · [hex 로 보기] · 외부 도구, 일반 파일이 아닌 것(FIFO · 장치)은 외부 도구만.
 
 import type { IDockviewPanelProps } from "dockview-react";
-import { REMOTE_WHOLE_READ } from "./link-limits";
 import type { ComponentType } from "react";
 
 import { useProjectStrings } from "../layout/strings";
@@ -87,11 +86,7 @@ function TooLargeViewer(props: UnreadViewerProps) {
     );
   return (
     <EditorNotice
-      text={
-        doc.reason === "link"
-          ? T.tooLargeForLink(formatMiB(doc.size), formatMiB(REMOTE_WHOLE_READ))
-          : T.tooLarge(formatMiB(doc.size))
-      }
+      text={T.tooLarge(formatMiB(doc.size))}
       actions={[
         {
           name: "head",

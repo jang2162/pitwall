@@ -19,6 +19,10 @@ export const LONG_LINE_CHARS = 10_000;
 export const HEAD_PREVIEW_BYTES = MIB;
 /** hex 뷰어가 한 번에 읽는 페이지(`fs.readBytes` 한 번의 상한). */
 export const HEX_PAGE_BYTES = 64 * KIB;
+/** 조각 읽기 · 쓰기(`fs.readChunk` · `fs.writeChunk`) 한 조각 내용의 와이어 바이트 상한(직렬화한 JSON 문자열). */
+export const CHUNK_WIRE_MAX = 16 * MIB;
+/** 조각 쓰기 하나가 모을 수 있는 바이트(다른 머신 문서의 저장 상한). */
+export const UPLOAD_MAX = READ_ONLY_MAX;
 
 /** UTF-8 바이트 수. `limit` 를 넘는 것이 확실해지면 그 자리에서 멈춘다. */
 function utf8Bytes(text: Text, limit: number): number {

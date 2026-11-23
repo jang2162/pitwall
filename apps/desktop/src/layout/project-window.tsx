@@ -44,7 +44,9 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Toaster } from "sonner";
 
 import { createDocumentStore, FS_CHANGED_TOPIC, type FsChangedEvent } from "../editor/documents";
-import { REMOTE_MESSAGE_LIMIT, REMOTE_WHOLE_READ, requestBytes } from "../editor/link-limits";
+import { readInChunks, writeInChunks } from "../editor/link-chunks";
+import { requestBytes } from "../editor/link-limits";
+import { CHUNK_WIRE_MAX, UPLOAD_MAX } from "../editor/limits";
 import { startMachineDocumentSync } from "../editor/machine-documents";
 import { formatMiB } from "../editor/viewers";
 import { editorActions } from "../editor/editor-actions";
@@ -596,26 +598,22 @@ function useWindowEditor(
     return createEditorWorkspace({
       documents: createDocumentStore({
         stat,
-        // 다른 머신 파일은 링크 틀에 실린다 — 통째로 읽기 · 쓰기에 상한(editor/link-limits.ts, 메인 판정 — 조각은 M7-13b).
-        wholeReadLimit: (path, worktree) =>
-          machineOf(path, worktree) === LOCAL_MACHINE ? undefined : REMOTE_WHOLE_READ,
+        // 다른 머신 파일은 링크 틀(64 MiB)에 실린다 — 통째 읽기는 늘, 큰 쓰기는 조각으로(editor/link-chunks.ts, M7-13b). 조각은
+        // 와이어 바이트로 잘라 제어 문자투성이 글도 틀을 넘지 않고, 상한은 이 머신과 같은 50 MiB 다(`READ_ONLY_MAX` · `UPLOAD_MAX`).
         read: async (params, worktree) => {
           const r = await route(params.path, worktree);
-          // 문서 모델의 다른 통째 읽기(맞추기 · 이름 바뀜 찾기 · 충돌 뒤 읽기)도 같은 상한을 지난다 — 열 때 본 크기는 그사이 바뀐다.
+          // 문서 모델의 통째 읽기 전부(열기 · 맞추기 · 이름 바뀜 찾기 · 충돌 뒤 읽기)가 여기를 지난다.
           if (
             r.machine !== LOCAL_MACHINE &&
             params.offset === undefined &&
             params.length === undefined
-          ) {
-            const { size } = await r.client.call("fs.stat", { ...r.base, path: r.path });
-            if (size > REMOTE_WHOLE_READ)
-              throw new Error(
-                latest.current.strings.tooLargeForLink(
-                  formatMiB(size),
-                  formatMiB(REMOTE_WHOLE_READ),
-                ),
-              );
-          }
+          )
+            return back(
+              r.machine,
+              await readInChunks((chunk) =>
+                r.client.call("fs.readChunk", { ...r.base, path: r.path, ...chunk }),
+              ),
+            );
           return back(
             r.machine,
             await r.client.call("fs.read", { ...r.base, ...params, path: r.path }),
@@ -623,16 +621,35 @@ function useWindowEditor(
         },
         write: async (params, worktree) => {
           const r = await route(params.path, worktree);
-          // 틀을 넘는 요청은 그 머신의 채널을 닫는다 — 보내기 전에 막는다(그 머신의 다른 탭 · 터미널까지 끊지 않게).
+          // 틀을 넘는 요청은 그 머신의 채널을 닫는다 — 한 조각보다 큰 요청은 조각으로 보낸다(그 머신의 다른 탭 · 터미널까지
+          // 끊지 않게). 조각 쓰기의 상한을 넘으면 보내지 않는다(Host 도 거절한다).
           const request = { ...r.base, ...params, path: r.path };
-          if (
-            r.machine !== LOCAL_MACHINE &&
-            requestBytes("fs.write", request) > REMOTE_MESSAGE_LIMIT
-          )
-            throw new Error(
-              latest.current.strings.saveTooLargeForLink(formatMiB(REMOTE_MESSAGE_LIMIT)),
-            );
-          return back(r.machine, await r.client.call("fs.write", request));
+          const bytes = r.machine === LOCAL_MACHINE ? 0 : requestBytes("fs.write", request);
+          if (bytes <= CHUNK_WIRE_MAX)
+            return back(r.machine, await r.client.call("fs.write", request));
+          const { content } = params;
+          const size =
+            content.kind === "text"
+              ? new TextEncoder().encode(content.text).length
+              : Math.floor((content.data.length * 3) / 4);
+          if (size > UPLOAD_MAX)
+            throw new Error(latest.current.strings.saveTooLargeForLink(formatMiB(UPLOAD_MAX)));
+          const where = { ...r.base, path: r.path };
+          return back(
+            r.machine,
+            await writeInChunks(
+              {
+                chunk: (piece) => r.client.call("fs.writeChunk", { ...where, ...piece }),
+                commit: (done) => r.client.call("fs.writeCommit", { ...where, ...done }),
+                abort: async (upload) => {
+                  await r.client.call("fs.writeAbort", { projectId: r.base.projectId, upload });
+                },
+              },
+              content,
+              params.bom ?? false,
+              params.expectedVersion ?? null,
+            ),
+          );
         },
         detect: async (path, head, worktree) => {
           const r = await route(path, worktree);
