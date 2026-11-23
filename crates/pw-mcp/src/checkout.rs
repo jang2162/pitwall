@@ -37,6 +37,36 @@ pub trait Machines: Send + Sync {
     fn machine_name(&self, machine: &str) -> Option<String>;
     /// 그 머신 Host 에 `Agent` 범위 연결을 연다. 링크가 없으면 사람에게 묻지 않고 붙을 수 있을 때만 붙인다.
     fn connect<'a>(&'a self, machine: &'a str) -> BoxFuture<'a, Result<MachineLink, MachineError>>;
+    /// 그 머신의 연결 상태 — 링크를 열지 않는 가벼운 확인(`checkout_list` — 18-m7-plan M7-19). 기본은 모른다.
+    fn link_state<'a>(&'a self, _machine: &'a str) -> BoxFuture<'a, LinkState> {
+        Box::pin(async { LinkState::Unknown })
+    }
+}
+
+/// 다른 머신의 연결 상태([`Machines::link_state`]). 와이어 이름은 `checkout_list` 의 `state` 다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkState {
+    /// 링크가 붙어 있다.
+    Connected,
+    /// 누가 붙는 중이다(그 붙기가 사람에게 묻는 중일 수 있다).
+    Connecting,
+    /// 붙어 있지 않지만 사람에게 묻지 않고 열 수 있다(ssh 공유 연결이 살아 있다).
+    Available,
+    /// 붙어 있지 않고 열려면 사람이 Pitwall 에서 먼저 붙여야 한다.
+    Disconnected,
+    Unknown,
+}
+
+impl LinkState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LinkState::Connected => "connected",
+            LinkState::Connecting => "connecting",
+            LinkState::Available => "available",
+            LinkState::Disconnected => "disconnected",
+            LinkState::Unknown => "unknown",
+        }
+    }
 }
 
 /// 열린 다른 머신 연결. `hold` 를 버리면 그 링크를 놓는다(세션이 끝날 때).

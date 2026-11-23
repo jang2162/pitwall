@@ -29,6 +29,8 @@
 //!
 //! 결과는 모두 `_meta` 에 결과 표지([`crate::marker`])를 단다.
 
+mod checkout_tools;
+
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -506,6 +508,10 @@ impl Session {
             .catalog
             .tools()
             .iter()
+            // 세션 툴은 다른 머신을 아는 앱 세션에만(카탈로그가 이미 그렇게 만든다 — 한 번 더 막는다).
+            .filter(|t| {
+                !t.is_session() || (self.inner.services.machines.is_some() && !self.headless())
+            })
             .filter(|t| exposure.enabled(t))
             .collect()
     }
@@ -575,6 +581,10 @@ impl Session {
                 Some(Value::Object(Mark::denied(Reason::NotExposed).to_map())),
             ));
         };
+        // 세션 툴(`checkout_list` · `checkout_send`)은 Host 메서드가 아니다 — 세션이 처리한다(18-m7-plan M7-19).
+        if tool.is_session() {
+            return Ok(self.session_tool(&tool, args, started, &cancel).await);
+        }
         // `checkout` 은 세션의 입력이다 — Host 로 가지 않는다(D57 ④).
         let checkout = checkout::take(&mut args);
         if tool.project_scoped()

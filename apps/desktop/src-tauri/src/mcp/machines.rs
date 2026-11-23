@@ -18,7 +18,7 @@ use std::time::Duration;
 use pw_core::registry::bundle::{LOCAL_MACHINE, ProjectBundle, is_bundle_row_id};
 use pw_core::registry::{Registry, RegistryError};
 use pw_core::{BoxFuture, HostRouter, Target};
-use pw_mcp::checkout::{MachineError, MachineLink, Machines};
+use pw_mcp::checkout::{LinkState, MachineError, MachineLink, Machines};
 use pw_remote::{RemoteHosts, RemoteStatus};
 use pw_rpc::{Caller, Role};
 
@@ -180,6 +180,34 @@ impl Machines for DesktopMachines {
 
     fn machine_name(&self, machine: &str) -> Option<String> {
         self.host_of(machine)
+    }
+
+    /// 링크를 열지 않는다: 지금 상태를 읽고, 붙어 있지 않으면 ssh 공유 연결이 살아 있는지만 본다(`remote.hosts.check` 와 같은
+    /// 가벼운 확인 — 18-m7-plan M7-19 ①).
+    fn link_state<'a>(&'a self, machine: &'a str) -> BoxFuture<'a, LinkState> {
+        Box::pin(async move {
+            let (Some(remote), Some(name)) = (&self.remote, self.host_of(machine)) else {
+                return LinkState::Disconnected;
+            };
+            match remote.status(&name) {
+                RemoteStatus::Connected { machine: m } | RemoteStatus::Resuming { machine: m }
+                    if m == machine =>
+                {
+                    LinkState::Connected
+                }
+                RemoteStatus::Connecting { .. } | RemoteStatus::Reconnecting { .. } => {
+                    LinkState::Connecting
+                }
+                RemoteStatus::Disconnected { by_user: false, .. } => {
+                    match remote.check(&name).await {
+                        Ok(check) if check.master == Some(true) => LinkState::Available,
+                        Ok(_) => LinkState::Disconnected,
+                        Err(_) => LinkState::Unknown,
+                    }
+                }
+                _ => LinkState::Disconnected,
+            }
+        })
     }
 
     fn connect<'a>(&'a self, machine: &'a str) -> BoxFuture<'a, Result<MachineLink, MachineError>> {

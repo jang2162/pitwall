@@ -323,8 +323,18 @@ pub fn services_with(
         global,
         bus: host.bus().clone(),
         audit: Arc::new(AuditLog::under_state(&paths.state)),
-        // 실행 파일에 링크된 선언 중 이 Host 가 실제로 처리하는 것만. 헤드리스는 코어 메서드만 등록한다.
-        catalog: Arc::new(Catalog::linked().routed_by(host.router())),
+        // 실행 파일에 링크된 선언 중 이 Host 가 실제로 처리하는 것만. 헤드리스는 코어 메서드만 등록한다. 세션 툴(`checkout_list` ·
+        // `checkout_send` — 18-m7-plan M7-19)은 다른 머신을 아는 앱 세션에만 있다.
+        catalog: Arc::new({
+            let catalog = Catalog::linked().routed_by(host.router());
+            if machines.is_some() && host_kind == HostKind::App {
+                catalog
+                    .with_session_tools()
+                    .unwrap_or_else(|e| panic!("MCP tool catalog: {e}"))
+            } else {
+                catalog
+            }
+        }),
         approval: Approval::for_host(host_kind, &sessions),
         transport,
         host_kind,

@@ -31,7 +31,17 @@ pub const PROJECT_ID: &str = "projectId";
 
 /// 툴의 그룹(`docs/design/05-mcp.md` 「툴 노출 설정」 의 그룹 행). 노출 설정 `[mcp.groups]` 의 키도 이것만 받는다.
 /// 확장별 그룹(`<ext-id>`)은 확장 툴(v1.x)과 함께 온다.
-pub const GROUPS: [&str; 7] = ["project", "run", "debug", "db", "git", "code", "open_with"];
+/// `checkout` 은 세션 툴(`crate::session_tools` — 18-m7-plan M7-19)의 그룹이다.
+pub const GROUPS: [&str; 8] = [
+    "project",
+    "run",
+    "debug",
+    "db",
+    "git",
+    "code",
+    "open_with",
+    "checkout",
+];
 
 /// 계획 등급을 선언 등급보다 **낮게** 낼 수 있는 툴과 그 등급(17-m6-plan M6-10 — 결정 M6-P9). 세션은 승인을 계획 등급으로
 /// 판정하므로 낮춤은 `auto_approve` · 세션 허용을 선언보다 낮은 등급으로 닿게 한다. 그래서 낮춤은 여기 적힌 툴 · 등급만 받는다
@@ -73,6 +83,36 @@ pub struct Tool {
 }
 
 impl Tool {
+    /// 세션 툴(`crate::session_tools`) 하나 — Host 메서드가 아니라 세션이 처리한다. `write` 이상은 세션이 계획을 세운다(`planned`).
+    pub(crate) fn session(
+        name: &str,
+        method: &'static str,
+        group: &'static str,
+        tier: Tier,
+        description: &str,
+        input_schema: Map<String, Value>,
+        output_schema: Option<Map<String, Value>>,
+    ) -> Self {
+        debug_assert!(GROUPS.contains(&group) && valid_name(name));
+        Self {
+            name: name.to_owned(),
+            method,
+            group,
+            tier,
+            description: description.to_owned(),
+            unit_params: false,
+            planned: tier != Tier::Read,
+            lowered: Vec::new(),
+            input_schema,
+            output_schema: output_schema.map(Arc::new),
+        }
+    }
+
+    /// 세션이 처리하는 툴인가(Host 메서드가 없다 — `crate::session_tools::METHODS`).
+    pub fn is_session(&self) -> bool {
+        crate::session_tools::METHODS.contains(&self.method)
+    }
+
     /// 입력에 [`PROJECT_ID`] 가 있는가.
     pub fn project_scoped(&self) -> bool {
         self.input_schema
@@ -196,6 +236,23 @@ impl Catalog {
             .unwrap_or_else(|e| panic!("MCP tool catalog: {e}"))
     }
 
+    /// 세션 툴(`crate::session_tools`)을 더한다 — 다른 머신을 아는 앱 세션(`Services::machines`)의 카탈로그만. [`Self::linked`] 에는
+    /// 없다(헤드리스 · 원격 머신 Relay 의 세션은 더하지 않는다). 선언의 툴과 이름이 겹치면 [`CatalogError::Duplicate`].
+    pub fn with_session_tools(mut self) -> Result<Self, CatalogError> {
+        for tool in crate::session_tools::tools() {
+            if let Some(first) = self.tools.iter().find(|t| t.name == tool.name) {
+                return Err(CatalogError::Duplicate {
+                    name: tool.name,
+                    first: first.method,
+                    second: tool.method,
+                });
+            }
+            self.tools.push(tool);
+        }
+        self.tools.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(self)
+    }
+
     /// 낮춤 목록을 `table` 로 **바꾼다**(앞의 것을 지운다). [`Self::linked`] 가 [`LOWERED_PLAN_TIERS`] 로 부른다. 앱은 그 목록
     /// 말고 쓰지 않는다 — 다른 목록은 가짜 툴 메서드를 쓰는 시험의 자리다. 카탈로그에 없는 이름은 무시하고, 선언 이상의 등급은
     /// [`CatalogError::NotLower`].
@@ -255,7 +312,9 @@ impl Catalog {
     #[must_use]
     pub fn routed_by(mut self, router: &pw_rpc::Router) -> Self {
         let routed: Vec<&str> = router.methods().iter().map(|m| m.name).collect();
-        self.tools.retain(|t| routed.contains(&t.method));
+        // 세션 툴은 Host 메서드가 아니다 — 라우터와 무관하게 남긴다.
+        self.tools
+            .retain(|t| t.is_session() || routed.contains(&t.method));
         self
     }
 
@@ -352,6 +411,16 @@ fn tool(info: &MethodInfo, decl: McpTool) -> Result<Tool, CatalogError> {
         input_schema,
         output_schema,
     })
+}
+
+/// Rust 타입의 입력 스키마(세션 툴 — 선언의 입력과 같은 펼침).
+pub(crate) fn schema_of<T: schemars::JsonSchema>() -> Map<String, Value> {
+    root_schema(|g| g.subschema_for::<T>())
+}
+
+/// Rust 타입의 결과 스키마(세션 툴 — 선언의 결과와 같은 펼침).
+pub(crate) fn schema_of_output<T: schemars::JsonSchema>() -> Map<String, Value> {
+    root_schema(|g| g.subschema_for::<T>())
 }
 
 /// 스키마 하나를 루트로 펼친다. 루트가 `$ref` 면 그 정의를 루트에 놓고, 나머지 정의는 `$defs` 로 둔다.

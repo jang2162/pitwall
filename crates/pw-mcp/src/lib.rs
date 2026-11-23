@@ -83,6 +83,7 @@ pub mod methods;
 pub mod policy;
 pub mod proxy;
 pub mod server;
+pub mod session_tools;
 pub mod sessions;
 pub mod settings;
 #[cfg(unix)]

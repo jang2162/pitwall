@@ -1,7 +1,8 @@
 //! Host 연결 위의 작은 JSON-RPC 클라이언트: 요청을 보내고 같은 id 의 응답을 기다린다.
 //!
-//! 스트림 · 구독은 다루지 않는다(지금 툴은 모두 unary). 응답이 아닌 프레임(이벤트 · 스트림 청크)은 버린다.
-//! 연결이 닫히면 기다리던 요청은 모두 [`CallError::Closed`] 로 끝난다.
+//! 구독은 다루지 않는다 — 이벤트 프레임은 버린다. 스트림은 [`HostClient::stream`] 으로 받는다(세션 툴 `checkout_send` 가 원본의
+//! `git.send.prepare` 를 받는다 — 18-m7-plan M7-19): 청크 하나를 꺼낼 때마다 credit 을 하나 더 준다(한 번에 하나만 와 있다).
+//! 연결이 닫히면 기다리던 요청 · 스트림은 모두 [`CallError::Closed`] 로 끝난다.
 //!
 //! **취소**: 응답을 받기 전에 호출이 끝나면 — 넘긴 취소 토큰이 취소됐거나([`HostClient::call_until`]) 호출 future 가 버려졌으면 —
 //! 그 요청 id 로 `request.cancel`(`pw_rpc::protocol`) 알림을 보낸다. Host 는 그 핸들러 future 를 버린다. MCP 의 취소 ·
@@ -22,14 +23,24 @@ use std::time::Duration;
 
 use pw_core::{Connection, FrameSink};
 use pw_rpc::code as rpc_code;
-use pw_rpc::protocol::REQUEST_CANCEL;
+use pw_rpc::protocol::{
+    REQUEST_CANCEL, STREAM_CANCEL, STREAM_CHUNK, STREAM_CREDIT, STREAM_END, StreamOutcome,
+};
 use serde_json::{Value, json};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 /// 받은 응답과 그 차례(펌프가 받은 순서 — 1부터).
 type Delivery = (u64, Result<Value, CallError>);
 type Pending = Arc<Mutex<Option<HashMap<u64, oneshot::Sender<Delivery>>>>>;
+/// 열린 스트림(`streamId` → 청크 · 끝을 받는 쪽). 연결이 닫히면 `None` 으로 걷는다 — 받는 쪽은 [`CallError::Closed`] 로 끝난다.
+type Streams = Arc<Mutex<Option<HashMap<u64, mpsc::UnboundedSender<StreamFrame>>>>>;
+
+/// 스트림 하나에 온 것.
+enum StreamFrame {
+    Chunk(Value),
+    End(StreamOutcome),
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CallError {
@@ -85,6 +96,7 @@ pub enum Settled {
 pub struct HostClient {
     sink: Box<dyn FrameSink>,
     pending: Pending,
+    streams: Streams,
     next_id: AtomicU64,
     pump: tokio::task::JoinHandle<()>,
 }
@@ -93,17 +105,22 @@ impl HostClient {
     /// 받는 쪽을 펌프 태스크로 옮긴다. tokio 런타임 안에서 부른다.
     pub fn new(conn: Connection) -> Self {
         let pending: Pending = Arc::new(Mutex::new(Some(HashMap::new())));
+        let streams: Streams = Arc::new(Mutex::new(Some(HashMap::new())));
         let mut source = conn.source;
         let table = Arc::clone(&pending);
+        let open_streams = Arc::clone(&streams);
         let pump = tokio::spawn(async move {
             let mut seq = 0u64;
             while let Some(frame) = source.recv().await {
+                if let Some(method) = frame.get("method").and_then(Value::as_str) {
+                    if frame.get("id").is_none() {
+                        route_stream(&open_streams, method, &frame);
+                    }
+                    continue;
+                }
                 let Some(id) = frame.get("id").and_then(Value::as_u64) else {
                     continue;
                 };
-                if frame.get("method").is_some() {
-                    continue;
-                }
                 seq += 1;
                 let waiter = lock(&table).as_mut().and_then(|t| t.remove(&id));
                 if let Some(waiter) = waiter {
@@ -111,6 +128,7 @@ impl HostClient {
                 }
             }
             // 닫혔다. 기다리던 쪽을 모두 깨우고 이후 요청은 바로 실패하게 표를 걷는다.
+            lock(&open_streams).take();
             if let Some(table) = lock(&table).take() {
                 for (_, waiter) in table {
                     let _ = waiter.send((u64::MAX, Err(CallError::Closed)));
@@ -120,6 +138,7 @@ impl HostClient {
         Self {
             sink: conn.sink,
             pending,
+            streams,
             next_id: AtomicU64::new(1),
             pump,
         }
@@ -240,6 +259,40 @@ impl HostClient {
         }
     }
 
+    /// 스트림 메서드를 연다. 열기의 응답(`streamId`)을 받은 뒤 credit 을 하나 준다 — 청크는 [`HostStream::next`] 로 꺼낸다.
+    /// `cancel` 은 열기까지만 본다(청크를 기다리는 쪽이 따로 거둔다 — 받는 쪽을 버리면 `stream.cancel` 을 보낸다).
+    pub async fn stream(
+        &self,
+        method: &str,
+        params: Value,
+        cancel: &CancellationToken,
+    ) -> Result<HostStream<'_>, CallError> {
+        let opened = self.call_until(method, params, cancel).await?;
+        let Some(stream_id) = opened.get("streamId").and_then(Value::as_u64) else {
+            return Err(CallError::Rpc {
+                code: i64::from(rpc_code::INTERNAL_ERROR),
+                message: format!("`{method}` did not open a stream"),
+                data: None,
+            });
+        };
+        let (tx, rx) = mpsc::unbounded_channel();
+        match lock(&self.streams).as_mut() {
+            Some(table) => {
+                table.insert(stream_id, tx);
+            }
+            None => return Err(CallError::Closed),
+        }
+        let stream = HostStream {
+            client: self,
+            stream_id,
+            rx,
+            done: false,
+        };
+        // 초기 credit 은 0 이다 — 표에 넣은 뒤에 주므로 청크가 표보다 먼저 오지 않는다.
+        stream.credit();
+        Ok(stream)
+    }
+
     fn send_cancel(&self, id: u64) {
         self.sink.send(json!({
             "jsonrpc": "2.0",
@@ -264,6 +317,108 @@ impl HostClient {
             id: ack_id,
             rx: Mutex::new(rx),
         })
+    }
+}
+
+/// 스트림 알림(`stream.chunk` · `stream.end`)을 그 스트림의 받는 쪽으로.
+fn route_stream(streams: &Streams, method: &str, frame: &Value) {
+    let params = frame.get("params");
+    let Some(stream_id) = params
+        .and_then(|p| p.get("streamId"))
+        .and_then(Value::as_u64)
+    else {
+        return;
+    };
+    let mut table = lock(streams);
+    let Some(table) = table.as_mut() else {
+        return;
+    };
+    match method {
+        STREAM_CHUNK => {
+            let data = params
+                .and_then(|p| p.get("data"))
+                .cloned()
+                .unwrap_or(Value::Null);
+            if let Some(tx) = table.get(&stream_id) {
+                let _ = tx.send(StreamFrame::Chunk(data));
+            }
+        }
+        STREAM_END => {
+            let outcome = params
+                .cloned()
+                .and_then(|p| serde_json::from_value::<StreamOutcome>(p).ok())
+                .unwrap_or(StreamOutcome::Cancelled);
+            if let Some(tx) = table.remove(&stream_id) {
+                let _ = tx.send(StreamFrame::End(outcome));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 열린 스트림 하나([`HostClient::stream`]). 끝까지 받기 전에 버리면 `stream.cancel` 을 보낸다.
+pub struct HostStream<'a> {
+    client: &'a HostClient,
+    stream_id: u64,
+    rx: mpsc::UnboundedReceiver<StreamFrame>,
+    done: bool,
+}
+
+impl HostStream<'_> {
+    /// 다음 청크. 정상으로 끝났으면 `None`, Host 의 실패 · 취소 · 연결 닫힘은 `Some(Err)`.
+    pub async fn next(&mut self) -> Option<Result<Value, CallError>> {
+        if self.done {
+            return None;
+        }
+        let Some(frame) = self.rx.recv().await else {
+            self.done = true;
+            return Some(Err(CallError::Closed));
+        };
+        match frame {
+            StreamFrame::Chunk(data) => {
+                self.credit();
+                Some(Ok(data))
+            }
+            StreamFrame::End(outcome) => {
+                self.done = true;
+                match outcome {
+                    StreamOutcome::Completed => None,
+                    StreamOutcome::Failed { error } => Some(Err(CallError::Rpc {
+                        code: i64::from(error.code),
+                        message: error.message,
+                        data: error.data,
+                    })),
+                    StreamOutcome::Cancelled => Some(Err(CallError::Rpc {
+                        code: i64::from(rpc_code::CANCELLED),
+                        message: "cancelled".into(),
+                        data: None,
+                    })),
+                }
+            }
+        }
+    }
+
+    fn credit(&self) {
+        self.client.sink.send(json!({
+            "jsonrpc": "2.0",
+            "method": STREAM_CREDIT,
+            "params": { "streamId": self.stream_id, "credit": 1 },
+        }));
+    }
+}
+
+impl Drop for HostStream<'_> {
+    fn drop(&mut self) {
+        let open = lock(&self.client.streams)
+            .as_mut()
+            .map(|table| table.remove(&self.stream_id));
+        if !self.done && open.is_some() {
+            self.client.sink.send(json!({
+                "jsonrpc": "2.0",
+                "method": STREAM_CANCEL,
+                "params": { "streamId": self.stream_id },
+            }));
+        }
     }
 }
 

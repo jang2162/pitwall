@@ -29,6 +29,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::mcp;
 
+mod checkout;
 mod code;
 mod db;
 mod debug;
@@ -46,6 +47,8 @@ const APP_TOOLS: &[&str] = &[
     "breakpoint_list",
     "breakpoint_set",
     "breakpoint_set_expr",
+    "checkout_list",
+    "checkout_send",
     "db_connection_list",
     "db_connection_test",
     "db_connection_upsert",
@@ -107,6 +110,55 @@ fn names(catalog: &pw_mcp::Catalog) -> Vec<&str> {
     catalog.tools().iter().map(|t| t.name.as_str()).collect()
 }
 
+/// 세션 툴(`pw_mcp::session_tools` — 18-m7-plan M7-19): Host 메서드가 아니라 세션이 처리한다. 다른 머신을 아는 앱 세션
+/// (`Services::machines` 가 있는 것)에만 있다 — 헤드리스 · 원격 머신 Relay 의 세션 · `machines` 없는 앱 세션에는 없다. [`APP_TOOLS`]
+/// 의 부분집합. 이름순.
+const SESSION_TOOLS: &[&str] = &["checkout_list", "checkout_send"];
+
+/// 다른 머신이 하나도 없는 `Machines`(목록 시험 — 세션 툴이 붙는지만 본다).
+struct NoMachines;
+
+impl pw_mcp::checkout::Machines for NoMachines {
+    fn bundle(
+        &self,
+        _project_id: &str,
+    ) -> Result<Option<pw_core::registry::bundle::ProjectBundle>, String> {
+        Ok(None)
+    }
+    fn bundles(&self) -> Result<Vec<pw_core::registry::bundle::ProjectBundle>, String> {
+        Ok(Vec::new())
+    }
+    fn machine_id(&self, _name: &str) -> Option<String> {
+        None
+    }
+    fn machine_name(&self, _machine: &str) -> Option<String> {
+        None
+    }
+    fn connect<'a>(
+        &'a self,
+        _machine: &'a str,
+    ) -> pw_core::BoxFuture<'a, Result<pw_mcp::checkout::MachineLink, pw_mcp::checkout::MachineError>>
+    {
+        Box::pin(async {
+            Err(pw_mcp::checkout::MachineError::Unreachable(
+                "no machines".into(),
+            ))
+        })
+    }
+}
+
+/// 다른 머신을 아는 앱 세션의 `Services`(세션 툴까지 있는 카탈로그).
+fn with_machines(host: &ToolHost) -> Arc<Services> {
+    mcp::services_with(
+        &host.host,
+        &host.paths,
+        "test",
+        pw_mcp::HostKind::App,
+        Default::default(),
+        Some(Arc::new(NoMachines)),
+    )
+}
+
 /// MCP 툴이 되는 선언은 정확히 [`APP_TOOLS`] 이고, 앱 Host 는 그 전부를, 헤드리스 Host 는 [`HEADLESS_TOOLS`] 만 처리한다.
 /// 헤드리스 목록에 앱 전용 툴을 넣으면 실패한다 — 헤드리스가 목록에 내고 부르면 method-not-found 인 툴이 없게.
 #[test]
@@ -115,14 +167,32 @@ fn mcp_tools_are_exactly_these() {
         HEADLESS_TOOLS.iter().all(|t| APP_TOOLS.contains(t)),
         "헤드리스 목록은 앱 목록의 부분집합이다"
     );
-    let linked = pw_mcp::Catalog::linked();
-    assert_eq!(names(&linked), APP_TOOLS, "`mcp` 선언이 바뀌었다");
+    let linked = pw_mcp::Catalog::linked().with_session_tools().unwrap();
+    assert_eq!(names(&linked), APP_TOOLS, "`mcp` 선언 · 세션 툴이 바뀌었다");
 
     let host = ToolHost::app();
+    let without_session: Vec<&str> = APP_TOOLS
+        .iter()
+        .copied()
+        .filter(|t| !SESSION_TOOLS.contains(t))
+        .collect();
     assert_eq!(
         names(&host.services.catalog),
+        without_session,
+        "앱 Host 가 처리하지 않는 툴이 있다(다른 머신을 모르는 앱 세션에는 세션 툴이 없다)"
+    );
+    let knows_machines = mcp::services_with(
+        &host.host,
+        &host.paths,
+        "test",
+        pw_mcp::HostKind::App,
+        Default::default(),
+        Some(Arc::new(NoMachines)),
+    );
+    assert_eq!(
+        names(&knows_machines.catalog),
         APP_TOOLS,
-        "앱 Host 가 처리하지 않는 툴이 있다"
+        "다른 머신을 아는 앱 세션은 세션 툴까지 낸다"
     );
     let headless = mcp::headless_host(&host.paths);
     assert_eq!(
@@ -138,6 +208,22 @@ fn mcp_tools_are_exactly_these() {
         ),
         HEADLESS_TOOLS,
         "헤드리스 Host 가 처리하는 툴이 목록과 다르다"
+    );
+    // 헤드리스 세션은 `machines` 를 받아도 세션 툴을 내지 않는다.
+    assert_eq!(
+        names(
+            &mcp::services_with(
+                &headless,
+                &host.paths,
+                "test",
+                pw_mcp::HostKind::Headless,
+                Default::default(),
+                Some(Arc::new(NoMachines)),
+            )
+            .catalog
+        ),
+        HEADLESS_TOOLS,
+        "헤드리스 세션에 세션 툴이 붙었다"
     );
 }
 
@@ -356,8 +442,8 @@ fn cli_flag_problems(tool: &pw_mcp::Tool) -> Vec<String> {
 #[test]
 fn tool_inputs_leave_the_cli_flags_free() {
     let host = ToolHost::app();
-    let problems: Vec<(String, Vec<String>)> = host
-        .services
+    // 세션 툴(다른 머신을 아는 앱 세션에만 있다)까지 본다.
+    let problems: Vec<(String, Vec<String>)> = with_machines(&host)
         .catalog
         .tools()
         .iter()
@@ -456,8 +542,8 @@ fn hangul_problems(tool: &pw_mcp::Tool) -> Vec<String> {
 #[test]
 fn tool_descriptions_and_schemas_are_english() {
     let host = ToolHost::app();
-    let problems: Vec<(String, Vec<String>)> = host
-        .services
+    // 세션 툴(다른 머신을 아는 앱 세션에만 있다)까지 본다.
+    let problems: Vec<(String, Vec<String>)> = with_machines(&host)
         .catalog
         .tools()
         .iter()
