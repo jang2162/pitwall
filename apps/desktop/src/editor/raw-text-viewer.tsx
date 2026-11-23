@@ -40,6 +40,7 @@ export function rawTextDocument(read: FsRead): TextDocumentState {
     dirty: false,
     disk: { kind: "same" },
     saving: false,
+    offline: false,
   };
 }
 

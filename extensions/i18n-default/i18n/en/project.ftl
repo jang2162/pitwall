@@ -76,6 +76,8 @@ lsp-outside-failed = Could not open the outside source: { $message }
 # $encoding: the guessed encoding name (e.g. EUC-KR, UTF-16LE)
 editor-read-only-encoding = Read as { $encoding } · opened read-only because it is not UTF-8
 editor-read-only-lossy = Read as UTF-8 · opened read-only because some bytes are invalid (�)
+# A document of another machine whose link dropped (src/editor/text-viewer.tsx). $machine: the machine's name (alias)
+editor-offline = Disconnected from { $machine } · read-only until it reconnects. Your unsaved changes are still in the tab.
 # Hex viewer (M1-23)
 editor-hex-label = Hex · read-only · 16 bytes per row
 editor-hex-goto-title = Go to Offset
@@ -113,6 +115,8 @@ editor-tab-unsaved = Unsaved changes
 editor-save-failed = Could not save { $path }
 # Body of the save failure notice: while you edited, the file on disk stopped being UTF-8 or lost its write permission.
 editor-save-read-only = The file is now read-only, so it was not written. Your changes are still in the tab.
+# Body of the save-failed notice: a document of another machine whose link dropped.
+editor-save-offline = The file's machine is disconnected, so it was not written. Your changes are still in the tab; save again once it reconnects.
 
 ## External change banner (src/editor/disk-banner.tsx). The file on disk no longer matches this tab.
 

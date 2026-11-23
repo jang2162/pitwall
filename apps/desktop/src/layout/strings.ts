@@ -155,6 +155,10 @@ export function projectStrings(t: Translate) {
       saveFailed: (path: string) => t("editor-save-failed", { path }),
       /** 미저장 편집이 있는 문서가 읽기 전용이 됐다(`saveFailed` 알림의 본문). */
       saveReadOnly: t("editor-save-read-only"),
+      /** 미저장 편집이 있는 문서의 머신과 링크가 끊겼다(`saveFailed` 알림의 본문, M7-13). */
+      saveOffline: t("editor-save-offline"),
+      /** 다른 머신의 문서인데 그 머신과 링크가 끊겼다(읽기 전용 안내, M7-13). `machine`: 머신 이름. */
+      offline: (machine: string) => t("editor-offline", { machine }),
       disk: {
         changed: t("editor-disk-changed"),
         take: t("editor-disk-take"),

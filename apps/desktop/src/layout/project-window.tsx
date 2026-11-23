@@ -44,6 +44,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Toaster } from "sonner";
 
 import { createDocumentStore, FS_CHANGED_TOPIC, type FsChangedEvent } from "../editor/documents";
+import { startMachineDocumentSync } from "../editor/machine-documents";
 import { editorActions } from "../editor/editor-actions";
 import { useEditorOperations } from "../editor/editor-operations";
 import { EditorPanel } from "../editor/editor-panel";
@@ -613,6 +614,12 @@ function useWindowEditor(
           title: latest.current.strings.saveFailed(path),
           body: latest.current.strings.saveReadOnly,
         }),
+      onSaveOffline: (path) =>
+        latest.current.notify({
+          level: "error",
+          title: latest.current.strings.saveFailed(path),
+          body: latest.current.strings.saveOffline,
+        }),
       syntax: {
         open: (params) => host().call("syntax.open", params),
         edit: (params) => host().call("syntax.edit", params),
@@ -738,6 +745,18 @@ function useDocumentSync(workspace: EditorWorkspace, projectId: string | undefin
       void unsubscribe?.().catch(() => {});
     };
   }, [client, projectId, workspace]);
+}
+
+/**
+ * 다른 머신 문서의 감시 · 끊김 · 다시 붙기(18-m7-plan M7-13 — editor/machine-documents.ts). 창이 사는 동안 하나다(StrictMode 의
+ * 붙였다 떼기는 시작 · 멈춤의 짝).
+ */
+function useMachineDocumentSync(workspace: EditorWorkspace) {
+  const hosts = useCheckoutHosts();
+  useEffect(
+    () => (hosts ? startMachineDocumentSync(hosts, workspace.documents) : undefined),
+    [hosts, workspace],
+  );
 }
 
 /** 이 창의 프로젝트의 `lsp.status`(서버가 뜸 · 끝남 · 동적 등록)를 LSP 세션에 넘긴다 — 열린 문서의 능력 칸을 다시 묻는다(M4-07). */
@@ -872,6 +891,7 @@ function ProjectWindowBody({
   const projectState = useWindowProjectState(projectId);
   useEffect(() => (api ? workspace.attach(api) : undefined), [api, workspace]);
   useDocumentSync(workspace, projectId);
+  useMachineDocumentSync(workspace);
   useLspStatus(workspace, projectId);
   useDiagnosticsUi(workspace);
   useLspStatusUi(workspace, projectId, api);

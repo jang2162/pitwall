@@ -76,6 +76,8 @@ lsp-outside-failed = 외부 소스를 열지 못했다: { $message }
 # $encoding: 짐작한 인코딩 이름(예: EUC-KR, UTF-16LE)
 editor-read-only-encoding = { $encoding } 로 읽었다 · UTF-8 이 아니라 읽기 전용으로 연다
 editor-read-only-lossy = UTF-8 로 읽었다 · 깨진 바이트가 있어(�) 읽기 전용으로 연다
+# 다른 머신의 문서인데 그 머신과 링크가 끊겼다(src/editor/text-viewer.tsx). $machine: 머신 이름(별명)
+editor-offline = { $machine } 와 연결이 끊겼다 · 다시 붙을 때까지 읽기 전용이다. 저장하지 않은 편집은 탭에 남아 있다.
 # hex 뷰어(M1-23)
 editor-hex-label = hex · 읽기 전용 · 16바이트/줄
 editor-hex-goto-title = 오프셋으로 이동
@@ -113,6 +115,8 @@ editor-tab-unsaved = 저장하지 않은 편집
 editor-save-failed = 저장하지 못했다: { $path }
 # 저장하지 못한 알림의 본문: 편집하는 사이 디스크의 파일이 UTF-8 이 아니게 됐거나 쓰기 권한이 없어졌다.
 editor-save-read-only = 이 파일은 이제 읽기 전용이라 쓰지 않았다. 편집은 탭에 남아 있다.
+# 저장하지 못한 알림의 본문: 다른 머신의 문서인데 그 머신과 링크가 끊겼다.
+editor-save-offline = 이 파일의 머신과 연결이 끊겨 쓰지 않았다. 편집은 탭에 남아 있고, 다시 붙은 뒤에 저장할 수 있다.
 
 ## 외부 변경 배너(src/editor/disk-banner.tsx). 디스크의 파일이 이 탭의 내용과 달라졌을 때.
 

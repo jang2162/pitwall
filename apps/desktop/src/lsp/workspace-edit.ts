@@ -515,7 +515,7 @@ export class EditApplier {
       const doc = textDoc(workspace, real);
       let target: Target;
       if (doc) {
-        if (doc.readOnly) throw new Stop("refused", `${real} is read-only`);
+        if (doc.readOnly || doc.offline) throw new Stop("refused", `${real} is read-only`);
         if (doc.disk.kind !== "same") throw new Stop("stale", `${real} changed on disk`, [real]);
         target = {
           kind: "open",

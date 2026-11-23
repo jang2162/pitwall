@@ -37,6 +37,12 @@
 //
 // 접근 범위: 문서는 처음 잡은 탭의 워크트리(`EditorTabParams.worktree`)로 읽는다. 창의 활성 워크트리는 열기 요청마다 바뀌므로
 // 읽는 순간의 값을 쓰면 다른 워크트리의 요청이 뒤섞인다.
+//
+// 끊긴 머신(18-m7-plan M7-13, 결정 M7-D8 ①): 다른 머신의 링크가 끊기면 창이 `disconnect` 로 그 머신의 문서를 알린다. 문서는
+// 버리지 않고 `offline` 으로 남는다 — 편집을 막고(탭은 읽기 전용) 저장은 `offline` 으로 거절한다(저장할 곳이 없다). 끊기기 전의
+// 미저장 편집은 `LiveText` 에 그대로다(디스크 보관 없음 — 창이 사는 동안만). 다시 붙으면 `reconnect` 가 그 문서마다 디스크와
+// 맞춘다(`reconcile` — 위 「디스크와 맞추기」 규칙 그대로: 끊긴 동안 놓친 `fs.changed` 를 다시 보는 것이다). 끊긴 동안 읽지 못한
+// 문서(`failed`)는 다시 읽는다.
 
 import {
   ERROR_CODE,
@@ -111,6 +117,8 @@ export type DocumentState =
       disk: DiskState;
       /** `fs.write` 를 기다리는 중. */
       saving: boolean;
+      /** 이 문서의 머신과 링크가 끊겼다(`disconnect`) — 편집 · 저장을 막는다. 미저장 편집은 남는다. */
+      offline: boolean;
     };
 
 export type TextDocumentState = Extract<DocumentState, { status: "text" }>;
@@ -146,6 +154,8 @@ export type SaveOutcome =
   | { kind: "saved" }
   /** 쓸 것이 없다(미저장 없음 · 읽기 전용 · 텍스트가 아님). */
   | { kind: "unchanged" }
+  /** 미저장 편집이 있지만 이 문서의 머신과 링크가 끊겨 쓰지 않았다(`offline`). 편집은 문서에 남는다. */
+  | { kind: "offline" }
   /**
    * 미저장 편집이 있지만 문서가 읽기 전용이라 쓰지 않았다 — 편집하는 사이 디스크의 파일이 UTF-8 이 아니게 됐거나 쓰기 권한이 없어졌다.
    * 편집은 문서에 남는다.
@@ -158,6 +168,9 @@ export type SaveOutcome =
 interface DocumentsState {
   docs: Readonly<Record<string, DocumentState>>;
 }
+
+/** 문서가 어느 머신의 것인지 고르는 조건(`disconnect`). `worktree` 는 문서를 처음 잡은 탭의 워크트리다. */
+export type DocumentMatch = (path: string, worktree: string | undefined) => boolean;
 
 /** `DocumentStore.acquire` 가 돌려주는 놓기 함수. `path` 는 지금 잡고 있는 문서의 경로다 — `move` 로 옮기면 따라 바뀐다. */
 export type DocumentHold = (() => void) & { readonly path: string };
@@ -190,6 +203,18 @@ export interface DocumentStore {
   move(from: string, to: string): [string, string][];
   /** 이 앱이 `path`(파일 또는 폴더)를 지웠다(`fs.trash`). 그 아래의 텍스트 문서를 곧바로 「지워짐」 으로 둔다. */
   markDeleted(path: string): void;
+  /** 잡혀 있는 문서와 그 접근 범위(처음 잡은 탭의 워크트리). 창이 문서의 머신마다 감시를 연다. */
+  opened(): { path: string; worktree: string | undefined }[];
+  /**
+   * `id`(머신)의 링크가 끊겼다: `match` 에 드는 문서를 `offline` 으로 둔다 — 지금 열린 것도, 끊긴 동안 다 읽힌 것도. 미저장 편집은
+   * 남는다. 같은 `id` 로 다시 부르면 조건을 바꾼다.
+   */
+  disconnect(id: string, match: DocumentMatch): void;
+  /**
+   * `id` 의 링크가 다시 붙었다: 그 조건에 들던 문서의 `offline` 을 걷고 디스크와 맞춘다(머리 주석 「끊긴 머신」). 끊긴 적이 없으면
+   * 아무것도 하지 않는다. 돌려준 약속은 맞추기가 끝나면 풀린다(시험).
+   */
+  reconnect(id: string): Promise<void>;
   readonly store: StoreApi<DocumentsState>;
 }
 
@@ -278,6 +303,7 @@ async function loadDocument(
     dirty: false,
     disk: { kind: "same" },
     saving: false,
+    offline: false,
   };
 }
 
@@ -299,6 +325,13 @@ export function createDocumentStore(source: DocumentSource): DocumentStore {
   /** `LiveText` 의 미저장 · 바뀜 구독 해제. */
   const unwatch = new Map<string, () => void>();
   const changeListeners = new Map<string, Set<(change: DocumentChange) => void>>();
+  /** 링크가 끊긴 머신의 조건(`disconnect`). */
+  const down = new Map<string, DocumentMatch>();
+  const isDown = (path: string) => {
+    const worktree = worktrees.get(path);
+    for (const match of down.values()) if (match(path, worktree)) return true;
+    return false;
+  };
   const emit = (path: string, change: DocumentChange) => {
     for (const listener of changeListeners.get(path) ?? []) listener(change);
   };
@@ -308,7 +341,12 @@ export function createDocumentStore(source: DocumentSource): DocumentStore {
     const doc = get(path);
     return doc?.status === "text" ? doc : undefined;
   };
-  const set = (path: string, state: DocumentState | undefined) => {
+  const set = (path: string, given: DocumentState | undefined) => {
+    // 끊긴 머신의 문서는 늘 `offline` 이다 — 끊긴 동안 다 읽혔거나 다시 읽힌 것도(그 응답은 끊기기 전에 떠났다).
+    const state =
+      given?.status === "text" && given.offline !== isDown(path)
+        ? { ...given, offline: isDown(path) }
+        : given;
     const before = get(path);
     if (before?.status === "text" && (state?.status !== "text" || state.live !== before.live)) {
       unwatch.get(path)?.();
@@ -462,6 +500,11 @@ export function createDocumentStore(source: DocumentSource): DocumentStore {
   async function save(path: string): Promise<SaveOutcome> {
     const doc = text(path);
     if (!doc) return { kind: "unchanged" };
+    // 끊긴 머신에는 쓰지 않는다 — 창의 다른 연결(활성 체크아웃 · 이 머신)로 돌려 보내지도 않는다.
+    if (doc.offline)
+      return doc.live.dirty || doc.disk.kind !== "same"
+        ? { kind: "offline" }
+        : { kind: "unchanged" };
     if (doc.readOnly) return doc.live.dirty ? { kind: "readOnly" } : { kind: "unchanged" };
     if (!source.write) return { kind: "unchanged" };
     if (!doc.live.dirty && doc.disk.kind === "same") return { kind: "unchanged" };
@@ -594,6 +637,32 @@ export function createDocumentStore(source: DocumentSource): DocumentStore {
       }
       return moved;
     },
+    opened: () => [...counts.keys()].map((path) => ({ path, worktree: worktrees.get(path) })),
+    disconnect(id, match) {
+      down.set(id, match);
+      for (const [path, doc] of Object.entries(store.getState().docs))
+        if (doc.status === "text" && !doc.offline && counts.has(path) && isDown(path))
+          set(path, doc);
+    },
+    async reconnect(id) {
+      const match = down.get(id);
+      if (!match) return;
+      down.delete(id);
+      const back = Object.entries(store.getState().docs).filter(
+        ([path]) => counts.has(path) && match(path, worktrees.get(path)),
+      );
+      for (const [path, doc] of back) if (doc.status === "text" && doc.offline) set(path, doc);
+      await Promise.all(
+        back.map(([path, doc]) =>
+          (doc.status === "failed"
+            ? queue(path, () => reload(path))
+            : queue(path, () => reconcile(path, []))
+          ).catch((e: unknown) =>
+            console.warn("[editor] could not reconcile a document after reconnecting", path, e),
+          ),
+        ),
+      );
+    },
     markDeleted(path) {
       for (const [doc, state] of Object.entries(store.getState().docs))
         if (covers(path, doc) && state.status === "text" && state.disk.kind !== "deleted")
@@ -603,7 +672,8 @@ export function createDocumentStore(source: DocumentSource): DocumentStore {
     takeDisk: (path) =>
       queue(path, async () => {
         const doc = text(path);
-        if (!doc) return;
+        // 끊긴 동안은 디스크를 읽을 길이 없다 — 배너는 다시 붙은 뒤에 고른다.
+        if (!doc || doc.offline) return;
         // 누른 때의 텍스트까지만 버린다 — 디스크를 읽는 동안 친 글자는 남긴다.
         const agreed = doc.live.text;
         const worktree = worktrees.get(path);

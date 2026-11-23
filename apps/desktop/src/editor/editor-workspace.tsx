@@ -146,6 +146,11 @@ export interface EditorWorkspaceDeps {
   onSaveFailed(path: string, message: string): void;
   /** 미저장 편집이 있는 문서가 읽기 전용이 되어 저장하지 않았다(경로). 편집은 탭에 남아 있다. */
   onSaveBlocked(path: string): void;
+  /**
+   * 미저장 편집이 있는 문서의 머신과 링크가 끊겨 저장하지 않았다(경로, 18-m7-plan M7-13). 편집은 탭에 남는다. 없으면
+   * `onSaveBlocked` 로 알린다.
+   */
+  onSaveOffline?(path: string): void;
   /** 닫으면 잃는 미저장 편집이 있다(경로). 창이 대화상자로 묻는다. */
   confirmUnsaved(paths: readonly string[]): Promise<UnsavedAnswer>;
   /** 「저장」 을 골랐는데 다 저장하지 못해 닫지 않았다. */
@@ -271,6 +276,7 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
     const outcome = await deps.documents.save(path);
     if (outcome.kind === "failed") deps.onSaveFailed(path, outcome.message);
     if (outcome.kind === "readOnly") deps.onSaveBlocked(path);
+    if (outcome.kind === "offline") (deps.onSaveOffline ?? deps.onSaveBlocked)(path);
     return outcome.kind === "saved" || outcome.kind === "unchanged";
   }
 

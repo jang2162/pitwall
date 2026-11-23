@@ -24,6 +24,8 @@ import { createPortal } from "react-dom";
 import { debugEditorHost } from "../debug/editor-host";
 import { gitGutterHost } from "../git/gutter/host-store";
 import { type LspDocument, lspEligible } from "../lsp/lsp-sessions";
+import { machineOf } from "../checkout/checkout";
+import { useMachineName } from "../checkout/machine-mark";
 import { useProjectStrings } from "../layout/strings";
 import { useTheme } from "../theme/theme-switcher";
 import { CompareView, DiskBanner } from "./disk-banner";
@@ -80,7 +82,8 @@ function useFeatureContext(
   const lsp = useLspDocument(workspace, fileTab, params, text, language);
   const live = text?.live;
   const judgment = text?.judgment;
-  const readOnly = text?.readOnly;
+  // 끊긴 머신의 문서도 편집을 막는다(18-m7-plan M7-13 ① — 저장할 곳이 없다).
+  const readOnly = text && (text.readOnly || text.offline);
   const gutterHost = gitGutterHost((s) => s.host);
   const git = useMemo(
     () => (gutterHost && live ? { host: gutterHost, live } : undefined),
@@ -127,6 +130,21 @@ function useFeatureContext(
       lsp,
       debug,
     ],
+  );
+}
+
+/** 끊긴 머신의 문서 안내(18-m7-plan M7-13 ①). 그 문서가 끊긴 동안만 그린다 — 머신 이름을 그때만 읽는다. */
+function OfflineNotice({ path, worktree }: { path: string; worktree: string | undefined }) {
+  const T = useProjectStrings().editor;
+  const name = useMachineName();
+  return (
+    <div
+      role="status"
+      data-offline-notice=""
+      className="flex-none border-b border-ui-border bg-ui-panel px-2 py-0.5 text-[12px] text-ui-muted-foreground"
+    >
+      {T.offline(name(machineOf(path, worktree)))}
+    </div>
   );
 }
 
@@ -247,6 +265,7 @@ export function TextViewer({ panel, params, doc }: ViewerProps) {
           {readOnlyNotice}
         </div>
       )}
+      {text?.offline && <OfflineNotice path={path} worktree={params.worktree} />}
       {text && text.disk.kind !== "same" && (
         <DiskBanner
           path={path}
