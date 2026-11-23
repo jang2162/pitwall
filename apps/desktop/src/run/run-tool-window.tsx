@@ -18,7 +18,8 @@ import { useI18n } from "../i18n/i18n-provider";
 import { useNotify, usePanelVisible } from "../notifications/notifications";
 import { TERMINAL_FOCUS } from "../terminal/terminal-keys";
 import { LOCAL_MACHINE } from "../checkout/checkout";
-import { MachineMark } from "../checkout/machine-mark";
+import { MachineMark, useMachineName } from "../checkout/machine-mark";
+import { useProjectStrings } from "../layout/strings";
 import { RunTabPorts } from "./run-ports";
 import { isLive, type RunConsole, type RunTab, type RunTabs, windowRuns } from "./run-tabs";
 import { type RunStrings, useRunStrings } from "./strings";
@@ -233,6 +234,8 @@ function RunTabButton({
   onClose(): void;
 }) {
   const T = useRunStrings();
+  const terminalT = useProjectStrings().terminal;
+  const machineName = useMachineName();
   const locale = useI18n().locales[0];
   const { run } = tab;
   const live = isLive(run);
@@ -243,6 +246,7 @@ function RunTabButton({
       data-testid="run-tab"
       data-run-id={run.runId}
       data-machine-tab={tab.machine}
+      data-read-only={tab.readOnly || undefined}
       data-state={run.state}
       data-launched-by={run.launchedBy.kind}
       title={runTabTitle(run, T, locale)}
@@ -258,6 +262,15 @@ function RunTabButton({
       {/* 다른 머신의 실행은 그 머신 이름을 글로 보인다(M7-11 의 머신 표지). */}
       {tab.machine !== LOCAL_MACHINE && <MachineMark machine={tab.machine} />}
       <RunTabPorts run={run} machine={tab.machine} />
+      {tab.readOnly && live && (
+        <span
+          data-testid="run-tab-read-only"
+          title={terminalT.readOnlyHint(machineName(tab.machine))}
+          className="text-[10px] text-ui-muted-foreground"
+        >
+          {terminalT.readOnly}
+        </span>
+      )}
       {run.exit && (
         <span data-testid="run-tab-exit" className="text-[10px] text-ui-muted-foreground">
           {T.exit(run.exit)}

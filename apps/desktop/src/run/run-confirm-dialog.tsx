@@ -15,7 +15,7 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 import { useKeymapPopup } from "../keymap/keymap-provider";
 import { setRunConfirmAsker } from "./run-confirm";
 import { useRunStrings } from "./strings";
-import { TargetMachineLine } from "../checkout/machine-mark";
+import { TargetMachineLine, TargetMachineProvider } from "../checkout/machine-mark";
 
 const BUTTON = "rounded-sm border border-ui-border px-3 py-1 hover:bg-ui-hover";
 const CODE =
@@ -194,12 +194,13 @@ export function RunConfirmDialog({
 export function RunConfirmHost() {
   const [question, setQuestion] = useState<{
     data: RunConfirmRequired;
+    machine: string;
     answer(run: boolean): void;
   }>();
   // 떠 있는 질문의 답. 이 컴포넌트가 사라지면 취소로 끝낸다 — 기다리는 쪽이 멈추지 않게.
   const open = useRef<(run: boolean) => void>(undefined);
   const ask = useCallback(
-    (data: RunConfirmRequired) =>
+    (data: RunConfirmRequired, machine: string) =>
       new Promise<boolean>((resolve) => {
         if (open.current) {
           resolve(false);
@@ -212,7 +213,7 @@ export function RunConfirmHost() {
           resolve(run);
         };
         open.current = answer;
-        setQuestion({ data, answer });
+        setQuestion({ data, machine, answer });
       }),
     [],
   );
@@ -223,13 +224,16 @@ export function RunConfirmHost() {
       open.current?.(false);
     };
   }, [ask]);
+  // 문장의 머신은 그 실행이 도는 머신이다(요청이 싣는다 — 바깥 문맥의 대상 머신이 아니라).
   return question ? (
-    <RunConfirmDialog
-      shown={question.data.shown}
-      steps={question.data.steps}
-      order={question.data.order}
-      title={question.data.title}
-      onAnswer={question.answer}
-    />
+    <TargetMachineProvider machine={question.machine}>
+      <RunConfirmDialog
+        shown={question.data.shown}
+        steps={question.data.steps}
+        order={question.data.order}
+        title={question.data.title}
+        onAnswer={question.answer}
+      />
+    </TargetMachineProvider>
   ) : null;
 }

@@ -34,14 +34,26 @@ export function runConfirmOf(error: unknown): RunConfirmRequired | undefined {
 /** 사람에게 묻는다 — [실행] 이면 참. */
 export type RunConfirmAsker = (data: RunConfirmRequired) => Promise<boolean>;
 
-let asker: RunConfirmAsker | undefined;
+/** 창의 묻는 쪽 — 그 실행이 도는 머신을 함께 받아 문장에 넣는다(18-m7-plan M7-14 리뷰 B2). */
+export type MachineConfirmAsker = (data: RunConfirmRequired, machine: string) => Promise<boolean>;
+
+let asker: MachineConfirmAsker | undefined;
 
 /** 이 창의 묻는 쪽을 둔다(대화상자를 그리는 컴포넌트가 붙어 있는 동안). 걷는 함수를 돌려준다. */
-export function setRunConfirmAsker(next: RunConfirmAsker): () => void {
+export function setRunConfirmAsker(next: MachineConfirmAsker): () => void {
   asker = next;
   return () => {
     if (asker === next) asker = undefined;
   };
+}
+
+/**
+ * 그 머신에서 도는 실행의 묻는 쪽. 확인 창의 머신은 **그 실행이 실제로 도는 머신**이다 — 실행 선택기의 대상이 아니라 다시 실행하는
+ * 탭의 머신 등. 묻는 쪽이 없으면 `undefined`(띄우지 않는 쪽으로).
+ */
+export function confirmAskerOn(machine: string): RunConfirmAsker | undefined {
+  const current = asker;
+  return current && ((data) => current(data, machine));
 }
 
 /**
@@ -50,7 +62,7 @@ export function setRunConfirmAsker(next: RunConfirmAsker): () => void {
  */
 export async function withRunConfirm<T>(
   call: (confirmed: string | null) => Promise<T>,
-  ask: RunConfirmAsker | undefined = asker,
+  ask: RunConfirmAsker | undefined = confirmAskerOn("local"),
 ): Promise<T | undefined> {
   let confirmed: string | null = null;
   for (let asked = 0; ; asked++) {
@@ -82,7 +94,7 @@ const MAX_CHAIN_ASKS = 32 + 2;
 export async function withRunConfirms<T>(
   call: (confirmed: string | null, sqlConfirmed: Record<string, DbConfirmed> | null) => Promise<T>,
   askSql: SqlStepAsker | undefined,
-  ask: RunConfirmAsker | undefined = asker,
+  ask: RunConfirmAsker | undefined = confirmAskerOn("local"),
 ): Promise<T | undefined> {
   let confirmed: string | null = null;
   const sqlConfirmed: Record<string, DbConfirmed> = {};

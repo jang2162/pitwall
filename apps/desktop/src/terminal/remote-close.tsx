@@ -239,7 +239,7 @@ export function useRemoteWindowClose(
     const answer = await ask({
       title: T.titleWindow(shells.length, remoteRuns.length),
       ...(machines.size === 1 && { machine: [...machines][0]! }),
-      keep: shells.length > 0,
+      // 실행만 돌아도 [두고 닫기] 가 있다 — 실행은 그 머신 Host 에서 그대로 돈다(리뷰 F4).
     });
     if (answer === "cancel") return false;
     if (answer === "end") {

@@ -27,6 +27,7 @@ import { showPanel } from "../layout/project-layout";
 import { useNotify } from "../notifications/notifications";
 import { windowDebug } from "../debug/debug-session";
 import { useCheckoutHost } from "../checkout/checkout-hosts";
+import { activeCheckout } from "../open-with/active-worktree";
 import { TargetMachineProvider } from "../checkout/machine-mark";
 import { useToolConfirm } from "../tools/confirm-dialog";
 import { changeTool, type ToolsCall } from "../tools/install";
@@ -35,7 +36,7 @@ import { SEARCH_ITEM_CLASS, SearchPopup } from "../ui/search-popup";
 import { formOf, formOfEntry, idFromName, newForm } from "./config-form";
 import { openRunConfigEditor, RunConfigEditorHost } from "./config-editor";
 import { runActions } from "./run-actions";
-import { withRunConfirms } from "./run-confirm";
+import { confirmAskerOn, withRunConfirms } from "./run-confirm";
 import { RunConfirmHost } from "./run-confirm-dialog";
 import { errorText, type RunConfigs, windowRunConfigs } from "./run-configs";
 import { isLive, type RunTabs, windowRuns } from "./run-tabs";
@@ -43,6 +44,7 @@ import { sqlRunQuestion, startSqlRun } from "./sql-run";
 import { type RunStrings, useRunStrings } from "./strings";
 import {
   createTargetStore,
+  currentTarget,
   sameCheckout,
   TargetChooser,
   type TargetState,
@@ -88,6 +90,8 @@ function useLauncher(
   tabs: RunTabs,
   api: DockviewApi | undefined,
   machine: string,
+  /** 디버그를 이 창에서 열 수 있는가 — 대상이 활성 체크아웃일 때만(`debugHere` — 툴바 · 키 · 메뉴가 같은 판정). */
+  debugHere: () => boolean,
 ) {
   const T = useRunStrings().picker;
   const toolsT = useToolsStrings();
@@ -134,6 +138,8 @@ function useLauncher(
                 sqlConfirmed,
               }),
             askSql,
+            // 확인 창의 머신은 이 실행이 도는 머신(리뷰 B2).
+            confirmAskerOn(machine),
           );
         }
         if (!run) return;
@@ -152,6 +158,12 @@ function useLauncher(
   // 디버그(M6-18): 그 구성의 `[debug]` 로 디버그 세션을 연다 — 세션 · 툴 윈도우는 디버그 화면(src/debug/debug-session.ts)이 맡는다.
   const debug = useCallback(
     async (entry: RunConfigEntry, profile: string | null) => {
+      // 디버그 세션은 활성 체크아웃의 연결로 열린다(src/debug) — 대상이 다른 체크아웃이면 그 구성을 이 머신에서 디버그하게 된다.
+      // 다른 머신의 디버그(M7-21)가 들어오기 전에는 시작하지 않고 알린다(리뷰 B1 — 툴바 · ⌃D · 메뉴 · 액션 찾기 모두 이 길).
+      if (!debugHere()) {
+        notify({ level: "info", title: T.debugActiveOnly });
+        return;
+      }
       const place = configs.place();
       if (!place) return;
       const call: ToolsCall = (method, params) => place.client.call(method, params);
@@ -168,6 +180,7 @@ function useLauncher(
                 sqlConfirmed,
               }),
             askSql,
+            confirmAskerOn(machine),
           );
         // 어댑터가 없으면 설치 확인 → 설치 → 같은 시작을 한 번 더(src/debug/adapter-install.ts). 취소하면 시작하지 않는다.
         await startOrInstallAdapter(start, async ({ mason }) => {
@@ -182,7 +195,7 @@ function useLauncher(
         notify({ level: "error", title: T.debugFailed(errorText(e)) });
       }
     },
-    [configs, notify, T, toolsT, askSql, toolConfirm.ask],
+    [configs, notify, T, toolsT, askSql, toolConfirm.ask, debugHere, machine],
   );
   return { launch, debug, riskElement: risk.element, toolConfirmElement: toolConfirm.element };
 }
@@ -467,16 +480,22 @@ export function RunPickerFeature({
     host.projectId ?? (target.machine === active.machine ? projectId : undefined);
   const worktree = target.worktree ?? null;
   const [chooser, setChooser] = useState<"select" | "run">();
+  const machines = useWindowMachines();
+  const machinesRef = useRef(machines);
+  machinesRef.current = machines;
+  // 키를 누른 때의 대상이 활성 체크아웃인가 — 디버그의 판정 한 자리.
+  const debugHere = useCallback(
+    () => sameCheckout(currentTarget(windowTarget, machinesRef.current), activeCheckout()),
+    [],
+  );
   const { launch, debug, riskElement, toolConfirmElement } = useLauncher(
     configs,
     tabs,
     api,
     target.machine,
+    debugHere,
   );
   const slot = useTitlebarSlot();
-  const machines = useWindowMachines();
-  const machinesRef = useRef(machines);
-  machinesRef.current = machines;
 
   useEffect(
     () =>
@@ -499,6 +518,7 @@ export function RunPickerFeature({
         runCurrent,
         canDebug: () => {
           const current = configs.current();
+          // 대상이 다른 체크아웃이어도 키는 받는다 — `debug` 가 시작하지 않고 까닭을 알린다(조용히 삼키지 않게).
           return current?.kind === "usable" && Boolean(current.entry.config.debug);
         },
         debugCurrent: () => {

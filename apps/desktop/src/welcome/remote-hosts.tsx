@@ -83,7 +83,8 @@ export function statusText(status: RemoteStatus, T: WelcomeStrings["remote"]): s
 
 /** 끊어도 Relay 가 그 머신의 실행 · 터미널을 쥐고 있는 상태인가(이어 붙기 시한 동안 — [끊기] 아래 안내, M7-09 리뷰 권고 7). */
 export function holdsAfterDisconnect(status: RemoteStatus): boolean {
-  return status.state === "reconnecting";
+  // 이어 붙는 중(`resuming` — M7-14)도 같다: 링크는 아직 살아 있고, 끊으면 Relay 가 이어 붙기 시한 동안 쥔다.
+  return status.state === "reconnecting" || status.state === "resuming";
 }
 
 /** 그 링크에서 본 원격 Relay: 옛 판 데몬과 [옛 판 끝내기], 답하지 않는 옛 판, `pitwall` 명령 링크. */
@@ -274,7 +275,9 @@ function HostRow({
   const live =
     status.state === "connected" ||
     status.state === "connecting" ||
-    status.state === "reconnecting";
+    status.state === "reconnecting" ||
+    // 이어 붙는 동안에도 [끊기] 가 있다(리뷰 F2 — 그 안내는 M7-07b).
+    status.state === "resuming";
   return (
     <li
       data-remote-host={host.name}

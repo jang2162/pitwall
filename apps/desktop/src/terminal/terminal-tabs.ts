@@ -259,15 +259,24 @@ export class TerminalInstance {
   }
 
   /** [끝내기]: 그 머신의 셸을 끝내고 탭을 내린다(다른 머신은 스트림을 끊어도 셸이 남으므로 `terminal.close` 를 부른다). */
-  async end(): Promise<void> {
+  /**
+   * 그 머신에 `terminal.close` 를 보내지 못했으면(연결이 없음 · 끊김) 거짓 — 부르는 쪽이 그 셸을 기억해 두었다가 다시 붙을 때 끝낸다.
+   */
+  async end(): Promise<boolean> {
     const id = this.terminalId;
     const client = this.hosts()?.connection(this.machine).client;
-    if (this.remote && id !== undefined && client) {
-      await client.call("terminal.close", { terminalId: id }).catch((e: unknown) => {
-        console.warn("[terminal] the remote shell was not closed", e);
-      });
+    let closed = !this.remote || id === undefined;
+    if (!closed && client) {
+      closed = await client.call("terminal.close", { terminalId: id! }).then(
+        () => true,
+        (e: unknown) => {
+          console.warn("[terminal] the remote shell was not closed", e);
+          return false;
+        },
+      );
     }
     this.dispose();
+    return closed;
   }
 
   /**
@@ -353,6 +362,8 @@ export class TerminalTabs {
   private readonly seen = new Map<string, unknown>();
   /** 이 창이 [두고 닫기] 한 셸(머신 → 번호) — 다시 붙어도 다시 열지 않는다. */
   private readonly kept = new Map<string, Set<number>>();
+  /** [끝내기] 했지만 연결이 없어 아직 끝내지 못한 셸(머신 → 번호). 그 머신이 붙으면 먼저 끝낸다. */
+  private readonly ending = new Map<string, Set<number>>();
   /** 모두 내릴 때마다 는다 — 그 전에 보낸 목록 요청의 늦은 답이 탭을 다시 열지 않게. */
   private generation = 0;
 
@@ -432,7 +443,13 @@ export class TerminalTabs {
   async end(id: number): Promise<void> {
     const instance = this.instances.get(id);
     if (!instance) return;
-    await instance.end();
+    const terminal = instance.terminalId;
+    // 연결이 없어 끝내지 못한 셸은 그 머신이 다시 붙을 때 끝낸다 — 사람의 [끝내기] 를 다시 열기로 되살리지 않는다(리뷰 F3).
+    if (!(await instance.end()) && terminal !== undefined) {
+      const ending = this.ending.get(instance.machine) ?? new Set();
+      ending.add(terminal);
+      this.ending.set(instance.machine, ending);
+    }
     this.drop(id);
   }
 
@@ -487,8 +504,15 @@ export class TerminalTabs {
     if (!client || host.projectId === undefined) return;
     const projectId = host.projectId;
     const generation = this.generation;
-    void client
-      .call("terminal.list", { projectId })
+    const ending = this.ending.get(machine);
+    const closing = [...(ending ?? [])].map((terminalId) =>
+      client.call("terminal.close", { terminalId }).then(
+        () => ending?.delete(terminalId),
+        (e: unknown) => console.warn("[terminal] the ended shell was not closed", e),
+      ),
+    );
+    void Promise.all(closing)
+      .then(() => client.call("terminal.list", { projectId }))
       .then(({ terminals }) => {
         if (this.generation !== generation || this.seen.get(machine) !== client) return;
         const open = new Set(
@@ -497,8 +521,15 @@ export class TerminalTabs {
             .map((i) => i.terminalId),
         );
         const kept = this.kept.get(machine);
+        const ended = this.ending.get(machine);
         for (const info of terminals) {
-          if (info.attached || open.has(info.terminalId) || kept?.has(info.terminalId)) continue;
+          if (
+            info.attached ||
+            open.has(info.terminalId) ||
+            kept?.has(info.terminalId) ||
+            ended?.has(info.terminalId)
+          )
+            continue;
           const active = this.store.getState().activeId;
           this.open({
             checkout: { machine, ...(info.worktree !== null && { worktree: info.worktree }) },
@@ -520,6 +551,7 @@ export class TerminalTabs {
     for (const id of this.instances.keys()) this.close(id);
     this.seen.clear();
     this.kept.clear();
+    this.ending.clear();
     this.hosts = hosts;
   }
 

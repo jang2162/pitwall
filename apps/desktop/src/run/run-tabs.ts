@@ -28,7 +28,7 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import type { TerminalScreen } from "../terminal/terminal-session";
 import { xtermDeps } from "../terminal/terminal-tabs";
 import { XtermView } from "../terminal/xterm-view";
-import { type SqlStepAsker, withRunConfirms } from "./run-confirm";
+import { confirmAskerOn, type SqlStepAsker, withRunConfirms } from "./run-confirm";
 import { LevelHighlighter } from "./run-levels";
 import { RunStream } from "./run-stream";
 
@@ -46,6 +46,8 @@ export interface RunTab {
   run: RunInfo;
   /** 스크롤 고정(출력이 와도 보는 자리를 움직이지 않는다). */
   scrollLock: boolean;
+  /** 그 머신의 링크가 이어 붙는 중이라 입력을 받지 않는다(18-m7-plan M7-14 ⑤ — 터미널 탭과 같다). */
+  readOnly?: boolean;
 }
 
 export interface RunTabsState {
@@ -79,7 +81,7 @@ export interface RunDeps {
   failedLine(message: string): string;
   log?(message: string): void;
   /** 사슬의 `sql` 단계 위험 확인에 답한다(다시 실행 — run-confirm.ts `withRunConfirms`). 없으면 그 확인은 오류로 끝난다. */
-  askSql?: SqlStepAsker;
+  askSql?(data: Parameters<SqlStepAsker>[0], machine: string): ReturnType<SqlStepAsker>;
 }
 
 /** 지금 도는(끝나지 않은) 실행인가. */
@@ -108,6 +110,13 @@ export class RunConsole {
 
   /** 스트림이 연결과 함께 끊겼다(다른 머신) — 다시 붙으면 받은 끝부터 잇는다. */
   private lost: number | undefined;
+  private readOnly = false;
+
+  /** 그 머신의 링크가 이어 붙는 동안 입력을 버린다. */
+  setReadOnly(on: boolean): void {
+    this.readOnly = on;
+    this.term.options.disableStdin = on;
+  }
 
   constructor(
     private readonly deps: () => RunDeps | undefined,
@@ -144,7 +153,9 @@ export class RunConsole {
     this.term.loadAddon(this.search);
     this.levels = new LevelHighlighter(this.term);
     this.levels.setTheme(theme);
-    this.term.onData((data) => this.stream?.input(data));
+    this.term.onData((data) => {
+      if (!this.readOnly) this.stream?.input(data);
+    });
   }
 
   get term(): Terminal {
@@ -303,6 +314,7 @@ export class RunTabs {
   private readonly chains = new Map<string, string[]>();
   private deps: RunDeps | undefined;
   private theme: ITheme = {};
+  private readonly paused = new Set<string>();
   /** 머신 → 붙은 연결. */
   private readonly connections = new Map<
     string,
@@ -317,6 +329,18 @@ export class RunTabs {
   setTheme(theme: ITheme): void {
     this.theme = theme;
     for (const c of this.consoles.values()) c.setTheme(theme);
+  }
+
+  /** 그 머신의 링크가 멈췄는가(이어 붙는 중 · 새로 붙기 기다림) — 그 머신의 콘솔은 읽기 전용이다. */
+  setPaused(machine: string, paused: boolean): void {
+    if (paused) this.paused.add(machine);
+    else this.paused.delete(machine);
+    for (const c of this.consoles.values()) if (c.machine === machine) c.setReadOnly(paused);
+    const { tabs } = this.store.getState();
+    if (tabs.some((t) => t.machine === machine && Boolean(t.readOnly) !== paused))
+      this.store.setState({
+        tabs: tabs.map((t) => (t.machine === machine ? { ...t, readOnly: paused } : t)),
+      });
   }
 
   /** 그 머신의 연결 · 프로젝트. 이 머신은 붙기 전이면 `setDeps` 의 것. */
@@ -423,11 +447,12 @@ export class RunTabs {
       machine,
     );
     this.consoles.set(key, runConsole);
+    runConsole.setReadOnly(this.paused.has(machine));
     this.chains.set(key, [id]);
     // 사람이 이 창에서 띄운 것은 앞으로, 에이전트가 띄운 것은 활성 탭이 없을 때만.
     const activate = activeKey === undefined || run.launchedBy.kind === "window";
     this.store.setState({
-      tabs: [...tabs, { key, machine, run, scrollLock: false }],
+      tabs: [...tabs, { key, machine, run, scrollLock: false, readOnly: this.paused.has(machine) }],
       activeKey: activate ? key : activeKey,
     });
   }
@@ -489,7 +514,9 @@ export class RunTabs {
     const next = await withRunConfirms(
       (confirmed, sqlConfirmed) =>
         place.client.call("run.restart", { runId, confirmed, sqlConfirmed }),
-      deps.askSql,
+      deps.askSql && ((data) => deps.askSql!(data, tab.machine)),
+      // 확인 창의 머신은 그 탭의 실행이 도는 머신이다 — 실행 선택기의 대상이 아니다(리뷰 B2).
+      confirmAskerOn(tab.machine),
     );
     if (next) this.upsert(next, tab.machine);
   }

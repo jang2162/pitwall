@@ -8,11 +8,12 @@
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Play } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useStore } from "zustand";
 
 import { LOCAL_MACHINE } from "../checkout/checkout";
 import { useCheckoutHost, useLocalHost } from "../checkout/checkout-hosts";
+import { TargetMachineProvider } from "../checkout/machine-mark";
 import { useActiveMachine } from "../open-with/active-worktree";
 import { useEditorWorkspace } from "../editor/editor-workspace";
 import { useKeymap } from "../keymap/keymap-provider";
@@ -23,6 +24,7 @@ import { terminalTheme } from "../terminal/terminal-theme";
 import { useRiskConfirm } from "../db/safety/risk-confirm";
 import { RunChainNotices } from "./run-chain";
 import { RunStatusPorts } from "./run-ports";
+import { linkPaused } from "../terminal/terminal-tabs";
 import { isLive, type RunTabs, windowRuns } from "./run-tabs";
 import { runTarget } from "./run-picker";
 import { useTarget } from "./target";
@@ -55,7 +57,9 @@ export function RunStatusItem() {
 
 /** 머신 하나의 실행을 그 머신 연결로 따라간다(이벤트 · 목록 · 사슬 알림). 그리는 동안 그 머신을 쓴다. */
 function RunMachine({ machine, tabs }: { machine: string; tabs: RunTabs }) {
-  const { client, projectId } = useCheckoutHost(machine);
+  const { client, projectId, status } = useCheckoutHost(machine);
+  const paused = linkPaused(status);
+  useEffect(() => tabs.setPaused(machine, paused), [tabs, machine, paused]);
   useEffect(
     () =>
       client && projectId !== undefined ? tabs.connect(client, projectId, machine) : undefined,
@@ -86,6 +90,8 @@ export function RunFeature({
   const theme = useTheme((s) => s.theme);
   // 다시 실행하는 사슬의 `sql` 단계 위험 확인(M6-21) — SQL 콘솔과 같은 다이얼로그.
   const risk = useRiskConfirm();
+  // 그 확인 창의 머신 — 다시 실행하는 탭의 머신(리뷰 B2). 한 번에 하나만 묻는다.
+  const [riskMachine, setRiskMachine] = useState(LOCAL_MACHINE);
   const appearance = useTheme((s) => s.appearance);
 
   if (client) {
@@ -102,7 +108,8 @@ export function RunFeature({
       failedLine: T.attachFailed,
       linkHint: terminalStrings.linkHint,
       log: (message) => console.info("[run]", message),
-      askSql: async (data) => {
+      askSql: async (data, machine) => {
+        setRiskMachine(machine);
         const answer = await risk.confirm(sqlRunQuestion(data));
         return answer === undefined || answer === "busy" ? undefined : answer;
       },
@@ -130,7 +137,7 @@ export function RunFeature({
       {machines.map((machine) => (
         <RunMachine key={machine} machine={machine} tabs={tabs} />
       ))}
-      {risk.element}
+      <TargetMachineProvider machine={riskMachine}>{risk.element}</TargetMachineProvider>
     </>
   );
 }

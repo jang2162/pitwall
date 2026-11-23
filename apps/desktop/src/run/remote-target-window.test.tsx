@@ -343,6 +343,13 @@ vi.mock("../tauri-transport", async () => {
               chunk(streamId, { kind: "output", offset: since, data: b64(out.log.slice(since)) });
             return;
           }
+          case "run.restart": {
+            const run = fake.runs.get(machine)!.find((r) => r.runId === params.runId);
+            if (!run || run.projectId !== project) return fail(-32602, "no such run");
+            if (fake.confirm && params.confirmed !== (fake.confirm as { hash: string }).hash)
+              return fail(7001, "not seen", fake.confirm);
+            return reply({ ...run, runId: "run-2", restartOf: run.runId });
+          }
           case "run.stop": {
             const run = fake.runs.get(machine)!.find((r) => r.runId === params.runId);
             if (!run || run.projectId !== project) return fail(-32602, "no such run");
@@ -372,7 +379,7 @@ function LIST_OF(machine: string): RunConfigList {
           env: {},
           envFile: [],
           profiles: {},
-          debug: null,
+          debug: { adapter: "debugpy" },
         },
         layers: [{ origin: "shared", path: "/work/demo/.pitwall/run/dev.toml" }],
       },
@@ -1021,4 +1028,140 @@ it("keeps a remote run's console through a resuming link and picks it up with `s
   await vi.waitFor(() => expect(text()).toContain("gamma"));
   expect(text().match(/alpha/g)).toHaveLength(1);
   expect(text()).not.toContain("[");
+});
+
+// 리뷰 B1: 디버그는 활성 체크아웃 연결로 열린다 — 대상이 다른 머신이면 ⌃D · 메뉴 · 액션 찾기(`debug.current`) · 🐞 모두 시작하지
+// 않고 까닭을 알린다(그 머신의 구성 id 로 이 머신에서 디버그로 돌지 않게). 대상이 활성 체크아웃이면 시작한다(대조).
+it("never starts a debug session on this machine for another machine's configuration", async () => {
+  await mount();
+  await choose("run-target", REMOTE_MAIN);
+  await vi.waitFor(() => expect(byTestId("run-picker")?.textContent).toContain("Dev (mini)"));
+  expect((byTestId("run-debug") as HTMLButtonElement).disabled).toBe(true);
+  await click(byTestId("run-debug"));
+  await act(async () => void registry().run("debug.current"));
+  await settle();
+  expect(calls("local", "debug.start")).toHaveLength(0);
+  expect(calls(MINI, "debug.start")).toHaveLength(0);
+  await vi.waitFor(() =>
+    expect(document.body.textContent).toContain("디버그는 활성 체크아웃에서만"),
+  );
+
+  await choose("run-target", "active");
+  await vi.waitFor(() => expect(byTestId("run-picker")?.textContent).toContain("Dev (local)"));
+  expect((byTestId("run-debug") as HTMLButtonElement).disabled).toBe(false);
+  await act(async () => void registry().run("debug.current"));
+  await settle();
+  await vi.waitFor(() => expect(calls("local", "debug.start")).toHaveLength(1));
+});
+
+// 리뷰 B2: 다시 실행의 첫 실행 확인(7001)은 그 탭의 실행이 도는 머신을 문장에 넣는다 — 실행 선택기의 대상(이 머신)이 아니라.
+it("names the tab's machine in the first-run confirmation of a restart", async () => {
+  fake.runs.get(MINI)!.push(RUN(MINI, "r1", null));
+  await mount();
+  await act(async () => projectOpenInbox.push({ worktree: REMOTE_MAIN }));
+  await settle();
+  await vi.waitFor(() => expect(windowRuns().store.getState().tabs).toHaveLength(1));
+  await act(async () => projectOpenInbox.push({ mainCheckout: true }));
+  await settle();
+  const key = windowRuns().store.getState().tabs[0]!.key;
+  fake.confirm = CONFIRM;
+  let restarting!: Promise<void>;
+  await act(async () => {
+    restarting = windowRuns().restart(key);
+  });
+  await settle();
+  const dialog = await vi.waitFor(() => {
+    const d = byTestId("run-confirm-dialog");
+    expect(d).not.toBeNull();
+    return d!;
+  });
+  expect(dialog.querySelector("[data-testid=target-machine]")?.textContent).toContain("mini");
+  await click([...dialog.querySelectorAll("button")].find((b) => b.textContent === "실행"));
+  await act(async () => restarting);
+  expect(calls(MINI, "run.restart").map((c) => c.params.confirmed)).toEqual([null, CONFIRM.hash]);
+  expect(calls("local", "run.restart")).toHaveLength(0);
+});
+
+// 리뷰 F1: 링크가 이어 붙는 동안 그 머신의 실행 콘솔도 읽기 전용이다(입력을 버린다, 탭 머리에 글로).
+it("makes a remote run console read-only while its link resumes", async () => {
+  fake.runs.get(MINI)!.push(RUN(MINI, "r1", null));
+  await mount();
+  await act(async () => projectOpenInbox.push({ worktree: REMOTE_MAIN }));
+  await settle();
+  await vi.waitFor(() => expect(windowRuns().store.getState().tabs).toHaveLength(1));
+  await act(async () => void registry().run("toolWindow.run"));
+  await settle();
+  await vi.waitFor(() => expect(calls(MINI, "run.attach")).toHaveLength(1));
+  const key = windowRuns().store.getState().tabs[0]!.key;
+  const term = windowRuns().console(key)!.term;
+  await act(async () => term.input("x"));
+  await settle();
+  await vi.waitFor(() => expect(calls(MINI, "run.input")).toHaveLength(1));
+  await link({ state: "resuming", machine: MINI });
+  await vi.waitFor(() => expect(byTestId("run-tab-read-only")?.textContent).toBe("읽기 전용"));
+  await act(async () => term.input("y"));
+  await settle();
+  expect(calls(MINI, "run.input")).toHaveLength(1);
+  await link({ state: "connected", machine: MINI });
+  expect(byTestId("run-tab-read-only")).toBeNull();
+  await act(async () => term.input("z"));
+  await vi.waitFor(() => expect(calls(MINI, "run.input")).toHaveLength(2));
+});
+
+// 리뷰 F3: 끊긴 셸에 [끝내기] 를 고르면 그 머신이 다시 붙을 때 끝낸다 — 다시 연결돼도 탭으로 되살아나지 않는다.
+it("ends a disconnected remote shell once its machine reconnects instead of reopening it", async () => {
+  await mount();
+  const id = await openMiniShell();
+  await link({
+    state: "reconnecting",
+    attempt: 1,
+    retryInMs: 1000,
+    error: { stage: "handshake", kind: "link", message: "the link closed" },
+  });
+  await vi.waitFor(() => expect(windowTerminals().instance(id)!.state.kind).toBe("disconnected"));
+  // 탭을 닫으면 그 머신을 놓는다 — 다른 쓰는 것(활성 체크아웃)이 그 머신을 쥐게 둔다.
+  await act(async () => projectOpenInbox.push({ worktree: REMOTE_MAIN }));
+  await settle();
+  await click(
+    terminalTabs()
+      .find((t) => t.dataset.machineTab === MINI)!
+      .querySelector<HTMLElement>("button[aria-label$='닫기']"),
+  );
+  await click(byTestId("remote-close-dialog")!.querySelector("[data-answer=end]"));
+  expect(windowTerminals().instance(id)).toBeUndefined();
+  expect(fake.shells.get(MINI)!.has(1)).toBe(true);
+  await link({ state: "connected", machine: MINI });
+  await vi.waitFor(() =>
+    expect(calls(MINI, "terminal.close").map((c) => c.params)).toEqual([{ terminalId: 1 }]),
+  );
+  await settle();
+  expect(fake.shells.get(MINI)!.has(1)).toBe(false);
+  expect(
+    windowTerminals()
+      .store.getState()
+      .tabs.some((t) => t.machine === MINI),
+  ).toBe(false);
+});
+
+// 리뷰 F4: 다른 머신에서 실행만 돌아도 창 닫기에 [두고 닫기] 가 있다 — 실행은 그 머신에서 그대로 돈다.
+it("offers Keep and Close when only a remote run is left", async () => {
+  fake.runs.get(MINI)!.push(RUN(MINI, "r1", null));
+  await mount();
+  await act(async () => projectOpenInbox.push({ worktree: REMOTE_MAIN }));
+  await settle();
+  await vi.waitFor(() => expect(windowRuns().store.getState().tabs).toHaveLength(1));
+  let closing!: Promise<boolean>;
+  await act(async () => {
+    closing = closeGuard!();
+  });
+  await settle();
+  const dialog = await vi.waitFor(() => {
+    const d = byTestId("remote-close-dialog");
+    expect(d).not.toBeNull();
+    return d!;
+  });
+  expect(dialog.textContent).toContain("실행 1개");
+  await click(dialog.querySelector("[data-answer=keep]"));
+  expect(await closing).toBe(true);
+  expect(calls(MINI, "run.stop")).toHaveLength(0);
 });
