@@ -512,12 +512,6 @@ it("asks about the remote checkout's unsaved document when receiving into it", a
 });
 
 /** 창의 액션 레지스트리를 잡는다(키맵 공급자가 만든 것 — 맨 처음 등록을 받은 것). 마운트 전에 부른다. */
-function captureRegistry(): () => ActionRegistry {
-  // 원래 구현을 그대로 부르는 감시 — 첫 호출의 `this` 가 창의 레지스트리다.
-  const spy = vi.spyOn(ActionRegistry.prototype, "register");
-  return () => spy.mock.contexts[0] as ActionRegistry;
-}
-
 const undoIn = (toast: HTMLElement) =>
   [...toast.querySelectorAll<HTMLButtonElement>("button")].find(
     (b) => b.textContent === "되돌리기",
@@ -584,11 +578,21 @@ it("asks about an unsaved document of the inactive target machine before applyin
 
 // 리뷰 F2: [거기서 실행] · [거기서 터미널] 은 대상 체크아웃(mini)을 싣는다 — 활성 체크아웃(이 머신)이 아니다.
 it("opens Run There and Terminal There on the target checkout", async () => {
-  const registry = captureRegistry();
-  await mount();
+  // 두 액션은 실제로 등록된다(M7-14 — `args: true`). 단추가 그 인자를 실어 레지스트리로 부르는지만 본다 — 부른 것을 적고
+  // 실제 액션(팝업 · 탭 열기)은 돌리지 않는다. 가짜를 `register` 로 심으면 실제 액션이 나중에 다시 등록돼 덮는다.
+  const ids = ["run.chooseIn", "terminal.newTabIn"];
   const calls: unknown[] = [];
-  for (const id of ["run.chooseIn", "terminal.newTabIn"])
-    registry().register({ id, label: id, args: true, run: (a) => void calls.push([id, a]) });
+  const run = ActionRegistry.prototype.run;
+  vi.spyOn(ActionRegistry.prototype, "run").mockImplementation(function (
+    this: ActionRegistry,
+    id: string,
+    args?: unknown,
+  ) {
+    if (!ids.includes(id)) return run.call(this, id, args);
+    calls.push([id, args]);
+    return true;
+  });
+  await mount();
   await sendTo(MINI);
   const toast = await vi.waitFor(() => {
     const found = toastWith("거기서 실행");
