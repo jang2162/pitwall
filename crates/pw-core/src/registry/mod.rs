@@ -25,6 +25,7 @@ pub mod info;
 pub mod methods;
 pub mod path;
 pub mod plan;
+pub mod remote_hosts;
 pub mod resolve;
 pub mod run_seen;
 pub mod slug;

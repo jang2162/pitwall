@@ -36,7 +36,7 @@ thread_local! {
 }
 
 /// 버전 `i` → `i + 1`. 길이가 곧 이 앱이 아는 최신 버전이다.
-pub const MIGRATIONS: &[Migration] = &[v0_to_v1, v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5];
+pub const MIGRATIONS: &[Migration] = &[v0_to_v1, v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5, v5_to_v6];
 
 /// 레지스트리가 읽는 질의. 읽기 전용으로 연 새 스키마 파일을 이 질의로 읽을 수 있는지 열 때 미리 본다(`prepare` 가 열 이름을 검사한다).
 pub const SELECT_PROJECTS: &str =
@@ -150,6 +150,21 @@ fn v4_to_v5(tx: &Transaction<'_>) -> rusqlite::Result<()> {
              last_target_worktree TEXT,
              PRIMARY KEY (bundle_id, machine),
              UNIQUE (machine, project_id)
+         );",
+    )
+}
+
+/// v6: 원격 호스트의 기억(18-m7-plan M7-08 — 메인 판정 M7-P6, [`super::remote_hosts`]). 열쇠는 호스트 항목의 이름(전역
+/// `[[remote_hosts]]` 의 별명 또는 `~/.ssh/config` 의 호스트 이름)이다. `machine` 은 처음 붙을 때 본 Relay 기기 키의 지문(머신 id)
+/// — 같은 이름에서 다른 id 가 오면 붙지 않고 사람에게 보인다. `last_state` · `last_at` 은 마지막 링크 상태(`connected` ·
+/// `disconnected` · `failed`)와 그 시각(ms) — 링크를 열지 않는 가벼운 상태 확인이 읽는다.
+fn v5_to_v6(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    tx.execute_batch(
+        "CREATE TABLE remote_hosts (
+             host       TEXT PRIMARY KEY,
+             machine    TEXT,
+             last_state TEXT,
+             last_at    INTEGER
          );",
     )
 }
