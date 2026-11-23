@@ -59,6 +59,9 @@ struct Fixture {
     work: PathBuf,
     project: String,
     sessions: pw_mcp::sessions::Sessions,
+    /// Streamable HTTP(M7-25) — 설정에 `[mcp.http] enabled` 가 있을 때만 듣는다.
+    http: pw_mcp::http::Http,
+    agents: pw_mcp::Connections,
 }
 
 async fn accept_all(daemon: Daemon, acceptor: MemoryAcceptor) {
@@ -135,6 +138,17 @@ fn fixture(settings: &str) -> Fixture {
     let listener = pw_mcp::socket::bind(&socket, uid).unwrap();
     let connections = pw_mcp::socket::Connections::default();
     daemon.count_agents(connections.clone());
+    // 데몬과 같은 배선(apps/relay `daemon`): HTTP 도 같은 관문 · 같은 세션 수.
+    let presence = daemon.presence();
+    let http = pw_relay::mcp::serve_http(
+        &host,
+        &paths,
+        sessions.clone(),
+        Arc::new(move || presence.has_owner()),
+        connections.clone(),
+        tokio_util::sync::CancellationToken::new(),
+    );
+    let agents = connections.clone();
     tokio::spawn(pw_mcp::socket::accept_loop(
         listener,
         services,
@@ -153,6 +167,8 @@ fn fixture(settings: &str) -> Fixture {
         work,
         project,
         sessions,
+        http,
+        agents,
     }
 }
 
@@ -925,4 +941,227 @@ async fn the_relay_cli_is_judged_like_an_agent_session() {
     let (gone, _, err) = cli(&f, &upsert_flags(&f.project, "first")).await;
     assert_eq!(gone, pw_mcp::cli::exit::DENIED, "{err}");
     assert!(!f.run_file("first").exists());
+}
+
+// ---- Streamable HTTP(18-m7-plan M7-25) — 원격 머신의 에이전트가 그 머신 Relay 의 HTTP 끝점에 붙는다 ----
+
+/// 이 기기에서 비어 있는 포트.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// HTTP 를 켠 Relay(`[mcp.http] enabled` 를 `settings` 앞에 둔다)와 그 포트. 듣기 시작할 때까지 기다린다.
+async fn http_fixture(settings: &str) -> (Fixture, u16) {
+    let port = free_port();
+    let f = fixture(&format!(
+        "[mcp.http]\nenabled = true\nport = {port}\n{settings}"
+    ));
+    f.http.apply().await;
+    assert!(f.http.status().listening, "{:?}", f.http.status());
+    (f, port)
+}
+
+/// 손으로 짠 HTTP/1.1 의 MCP 클라이언트(응답 하나를 `Content-Length` 만큼 읽고 이쪽이 닫는다).
+struct HttpAgent {
+    port: u16,
+    token: String,
+    session: Option<String>,
+}
+
+impl HttpAgent {
+    async fn post(&self, body: &Value) -> (u16, Option<String>, Value) {
+        use tokio::io::AsyncReadExt;
+        let body = body.to_string();
+        let mut head = format!(
+            "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {}\r\n\
+             Content-Type: application/json\r\nAccept: application/json, text/event-stream\r\nContent-Length: {}\r\n",
+            self.port,
+            self.token,
+            body.len()
+        );
+        if let Some(s) = &self.session {
+            head.push_str(&format!("Mcp-Session-Id: {s}\r\n"));
+        }
+        head.push_str("\r\n");
+        head.push_str(&body);
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", self.port))
+            .await
+            .unwrap();
+        stream.write_all(head.as_bytes()).await.unwrap();
+        let mut raw = Vec::new();
+        let mut buf = [0u8; 8192];
+        loop {
+            let text = String::from_utf8_lossy(&raw).into_owned();
+            if let Some((head, rest)) = text.split_once("\r\n\r\n") {
+                let length = head
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|v| v.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                if rest.len() >= length {
+                    let status = head.split(' ').nth(1).unwrap().parse().unwrap();
+                    let session = head.lines().find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .starts_with("mcp-session-id:")
+                            .then(|| l.split_once(':').unwrap().1.trim().to_owned())
+                    });
+                    let json = serde_json::from_str(&rest[..length]).unwrap_or(Value::Null);
+                    return (status, session, json);
+                }
+            }
+            let n = tokio::time::timeout(WAIT, stream.read(&mut buf))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(n > 0, "closed: {text}");
+            raw.extend_from_slice(&buf[..n]);
+        }
+    }
+
+    async fn start(port: u16, token: String) -> Self {
+        let mut agent = Self {
+            port,
+            token,
+            session: None,
+        };
+        let (status, session, _) = agent
+            .post(
+                &json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
+                "protocolVersion": "2025-06-18", "capabilities": {},
+                "clientInfo": {"name": "remote-http-agent", "version": "1"}}}),
+            )
+            .await;
+        assert_eq!(status, 200);
+        agent.session = session;
+        let (status, _, _) = agent
+            .post(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
+            .await;
+        assert_eq!(status, 202);
+        agent
+    }
+
+    async fn call(&self, tool: &str, args: Value) -> Value {
+        let (status, _, reply) = self
+            .post(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {"name": tool, "arguments": args}}))
+            .await;
+        assert_eq!(status, 200, "{reply}");
+        reply["result"].clone()
+    }
+}
+
+fn http_token(f: &Fixture) -> String {
+    f.http.token().unwrap().unwrap().reveal().to_owned()
+}
+
+/// 결정 M7-D10 ④ 가 HTTP 에서도 그대로: 붙은 owner Desktop 이 없으면 `auto_approve = ["write"]` 여도 `write` 는 `headless_write`,
+/// readonly 링크만 붙어도 거절, owner 가 붙으면 그 머신 `auto_approve` 로 돈다(대조), 떠나면 다시 거절. HTTP 세션은 데몬의 유휴
+/// 판정에 든다. 토큰은 Relay 의 `$STATE/relay/mcp/http-token`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn over_http_writes_are_refused_without_an_owner_desktop() {
+    let (f, port) = http_fixture("[mcp]\nauto_approve = [\"write\"]\n").await;
+    assert_eq!(
+        pw_mcp::http::TokenFile::under_state(&f.paths.state).path(),
+        f.paths.state.join("mcp/http-token")
+    );
+    assert!(
+        f.paths.state.ends_with("relay"),
+        "{}",
+        f.paths.state.display()
+    );
+    assert!(f.paths.state.join("mcp/http-token").is_file());
+    let agent = HttpAgent::start(port, http_token(&f)).await;
+    assert_eq!(f.daemon.busy().agents, 1, "HTTP 세션이 데몬을 붙잡는다");
+
+    let read = agent
+        .call("run_config_list", json!({"projectId": f.project}))
+        .await;
+    assert_eq!(outcome(&read), "ok", "{read}");
+    let refused = agent
+        .call("run_config_upsert", upsert_args(&f.project, "alone"))
+        .await;
+    assert_eq!(reason(&refused), Some("headless_write"), "{refused}");
+    assert!(!f.run_file("alone").exists());
+
+    let viewer = f.desktop(Role::Readonly, "viewer").await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let still = agent
+        .call("run_config_upsert", upsert_args(&f.project, "viewer"))
+        .await;
+    assert_eq!(reason(&still), Some("headless_write"), "{still}");
+
+    let owner = f.desktop(Role::Owner, "mac").await;
+    f.owners(1).await;
+    let auto = agent
+        .call("run_config_upsert", upsert_args(&f.project, "auto"))
+        .await;
+    assert_eq!(outcome(&auto), "ok", "{auto}");
+    assert!(f.run_file("auto").exists());
+
+    owner.detach();
+    f.owners(0).await;
+    let gone = agent
+        .call("run_config_upsert", upsert_args(&f.project, "gone"))
+        .await;
+    assert_eq!(reason(&gone), Some("headless_write"), "{gone}");
+    assert!(!f.run_file("gone").exists());
+    drop(viewer);
+    assert_eq!(f.agents.active(), 1);
+}
+
+/// Relay 의 토큰 RPC(`mcp.http.token` · `mcp.http.regenerateToken`)는 증명된 owner 링크의 Host 범위 연결만 받는다 — owner 링크의
+/// 프로젝트 창 · 에이전트 연결, readonly · mobile 링크(role 이 잘린다)는 거절, 페어링하지 않은 기기는 링크가 서지 않는다(표 시험).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn only_a_proven_owner_links_host_connection_reads_the_relay_token() {
+    let (f, _port) = http_fixture("").await;
+    let token = http_token(&f);
+    let owner = f.desktop(Role::Owner, "mac").await;
+    let readonly = f.desktop(Role::Readonly, "viewer").await;
+    let mobile = f.desktop(Role::Mobile, "phone").await;
+    let cases = [
+        (&owner, Caller::new(Role::Owner), true),
+        (&owner, f.project_caller("project-x"), false),
+        (&owner, Caller::agent(Role::Owner), false),
+        (&readonly, Caller::new(Role::Owner), false),
+        (&mobile, Caller::new(Role::Owner), false),
+    ];
+    for (i, (remote, caller, admitted)) in cases.into_iter().enumerate() {
+        let what = format!("case {i}: {caller:?}");
+        let mut rpc = Rpc::open(remote, caller).await;
+        let reply = rpc.call("mcp.http.token", json!(null)).await;
+        assert_eq!(reply["error"].is_null(), admitted, "{what}: {reply}");
+        if admitted {
+            assert_eq!(reply["result"]["token"], json!(token), "{what}");
+        } else {
+            assert!(!reply.to_string().contains(&token), "{what}");
+            let regen = rpc.call("mcp.http.regenerateToken", json!(null)).await;
+            assert!(!regen["error"].is_null(), "{what}: {regen}");
+        }
+    }
+    assert_eq!(http_token(&f), token, "거절된 다시 만들기는 바꾸지 않았다");
+    // 페어링하지 않은 기기: 링크가 서지 않아 어떤 RPC 도 닿지 않는다.
+    let stranger = RemoteHost::new(
+        "mini",
+        Arc::clone(&f.transport) as Arc<dyn Transport>,
+        Arc::new(DesktopIdentity {
+            key: Arc::new(DeviceKey::generate().unwrap()),
+            versions: pw_relay::versions(),
+        }),
+        Expect::Machine(f.relay_key.id()),
+        LinkLimits::default(),
+    );
+    assert!(stranger.attach().await.is_err());
+    // owner 링크의 Host 범위는 새로 만들 수 있다.
+    let mut rpc = Rpc::open(&owner, Caller::new(Role::Owner)).await;
+    let regen = rpc.call("mcp.http.regenerateToken", json!(null)).await;
+    let fresh = regen["result"]["token"].as_str().unwrap().to_owned();
+    assert_ne!(fresh, token);
+    assert_eq!(http_token(&f), fresh);
 }
