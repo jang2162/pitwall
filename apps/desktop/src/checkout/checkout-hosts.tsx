@@ -181,7 +181,10 @@ export function createCheckoutHosts(
           if (running.abort.signal.aborted) return;
           r.status = status;
           if (status.state === "connected") void openMember(machine, r, running);
-          else closeMember(r);
+          // 링크가 이어 붙는 동안(`resuming` — M7-09 ①)은 멤버 연결을 그대로 둔다: 채널 · 스트림은 링크가 이어 붙이면 그대로 산다.
+          // 그 밖(`reconnecting` 은 링크가 이미 닫혀 새로 붙기를 기다리는 백오프다 · 끊김 · 다른 머신)은 닫는다 — 다시 붙으면 새
+          // 연결을 열고 실행 · 터미널은 `since` 로 이어 받는다(18-m7-plan M7-14 ⑤, 메인 판정 2026-11-23).
+          else if (status.state !== "resuming") closeMember(r);
           publish();
         }
       } catch (e) {

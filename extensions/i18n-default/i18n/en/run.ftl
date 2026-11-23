@@ -55,6 +55,10 @@ run-port-label = :{ $port }
 run-port-open = Open { $url }
 # Shown on a port listening on every address (0.0.0.0 or ::), reachable from other machines
 run-port-all-addresses = all addresses
+# A run's port on another machine — it is that machine's port, so this computer's browser does not open it
+run-port-remote = Port { $port } on { $machine } — not reachable from this computer (forward it first)
+run-port-forward = Forward to Local
+run-port-forward-soon = Forwarding to local is not available yet
 
 ## Status bar
 
@@ -85,6 +89,16 @@ run-picker-none = No configurations
 # $name: configuration name, $profile: profile name
 run-picker-with-profile = { $name } · { $profile }
 run-picker-choose = Choose a run configuration
+run-target = Checkout to run in
+# $checkout: the active checkout now
+run-target-active = Follow the active checkout ({ $checkout })
+# $machine: machine name, $worktree: worktree name (main for the main checkout)
+run-target-checkout =
+    { $worktree ->
+        [main] { $machine } · main checkout
+       *[other] { $machine } · { $worktree }
+    }
+run-action-choose-in = Run: Choose and Run in That Checkout
 run-picker-search = Find configurations and tasks
 run-picker-empty = No matching configuration
 run-picker-group-configs = Configurations
@@ -105,6 +119,7 @@ run-picker-read-failed = Could not read the { $detector } tasks: { $message }
 run-picker-run = Run
 run-picker-debug = Debug
 run-picker-debug-none = This configuration has no [debug] section
+run-picker-debug-active-only = Debugging opens in the active checkout only — make that checkout active or follow the active checkout
 # $message: the error text
 run-picker-debug-failed = Could not start debugging: { $message }
 run-picker-stop = Stop

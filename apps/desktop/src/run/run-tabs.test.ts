@@ -72,7 +72,8 @@ describe("file links in a run console", () => {
     expect(links.map((l) => l.text)).toEqual(["src/app.ts:12:5"]);
     links[0]!.activate(click(), links[0]!.text);
     expect(opened).toEqual([
-      { path: "/main/app/src/app.ts", line: 12, column: 5, worktree: "/wt" },
+      // 콘솔의 경로는 그 실행의 머신 것이다 — 이 머신도 `local` 을 싣는다(M7-11 델타 리뷰 B3).
+      { path: "/main/app/src/app.ts", line: 12, column: 5, worktree: "/wt", machine: "local" },
     ]);
     expect(stats).toContainEqual({
       projectId: "p1",

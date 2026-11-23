@@ -503,6 +503,12 @@ terminal-tab-name =
         [1] 로컬
        *[other] 로컬 ({ $index })
     }
+# 다른 머신의 셸 탭(머신 이름은 옆의 표지가 글로 보인다). $index: 탭 번호
+terminal-tab-name-remote =
+    { $index ->
+        [1] 원격
+       *[other] 원격 ({ $index })
+    }
 terminal-tab-exited = 끝남
 terminal-new-tab = 새 터미널 탭
 # $name: 탭 이름
@@ -530,6 +536,34 @@ action-terminal-close-tab = 터미널: 탭 닫기
 action-terminal-rename-tab = 터미널: 탭 이름 바꾸기
 action-terminal-copy = 터미널: 복사
 action-terminal-paste = 터미널: 붙여넣기
+# 고른 체크아웃에서 새 탭(다른 기능이 체크아웃을 실어 부른다 — 키 없음)
+action-terminal-new-tab-in = 터미널: 그 체크아웃에서 새 탭
+# 다른 머신의 링크가 다시 붙는 중일 때 탭 머리의 표지
+terminal-tab-read-only = 읽기 전용
+# $machine: 머신 이름
+terminal-tab-read-only-hint = { $machine } 와의 연결이 다시 붙는 중이라 입력을 받지 않는다
+# 다른 머신의 셸인데 그 머신과의 연결이 끊겼을 때(셸은 그 머신에서 돌 수 있다 — 다시 붙으면 잇는다)
+terminal-tab-disconnected = 끊김
+# $bytes: 다시 붙는 동안 그 머신의 버퍼에서 버려진 앞의 바이트 수
+terminal-dropped = [앞의 { $bytes }바이트는 그 머신의 버퍼에서 버려졌다]
+# 새 탭을 열 체크아웃 고르기(10-ui.md 2.9 「실행 · 터미널의 대상」)
+terminal-target = 새 터미널의 체크아웃
+## 원격에서 도는 것이 있는 탭 · 창을 닫을 때(10-ui.md 2.9 「끊긴 머신」)
+# $name: 탭 이름, $machine: 머신 이름
+remote-close-title-tab = 「{ $name }」 는 { $machine } 에서 돌고 있다
+# $terminals · $runs: 다른 머신에서 도는 터미널 · 실행 수
+remote-close-title-window = 다른 머신에서 도는 것이 있다 — 터미널 { $terminals }개 · 실행 { $runs }개
+remote-close-body = [끝내기] 는 그 머신에서 끝낸다. [두고 닫기] 는 그 머신에 남겨 두고, 다시 붙거나 창을 다시 열면 이어 받는다.
+remote-close-end = 끝내기
+remote-close-keep = 두고 닫기
+remote-close-cancel = 취소
+# $limit: 머신당 떼어 둘 수 있는 터미널 수
+remote-close-limit-title = 떼어 둔 터미널은 머신당 { $limit }개까지다
+# $mine: 끝날 이 프로젝트의 터미널 수, $others: 끝날 다른 프로젝트의 터미널 수
+remote-close-limit-body = 두면 가장 오래 떼어 둔 터미널이 끝난다 — 이 프로젝트 { $mine }개 · 다른 프로젝트 { $others }개.
+remote-close-limit-confirm = 끝내고 두기
+# $message: 그 머신이 알린 이유(미신뢰 프로젝트의 터미널은 둘 수 없다 — 연결과 함께 끝난다)
+remote-close-keep-failed = 그 머신에 두지 못했다: { $message }
 
 ## 전체에서 찾기(src/search). ⌘⇧F 팝업과 「검색 결과」 툴 윈도우.
 

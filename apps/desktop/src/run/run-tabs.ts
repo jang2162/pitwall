@@ -12,8 +12,15 @@
 //
 // 탭과 콘솔(xterm)은 React 바깥의 창별 객체가 쥔다 — 툴 윈도우를 숨겨도 콘솔이 남는다(terminal-tabs.ts 와 같다). 상태바 ·
 // 닫기 확인도 이 객체를 읽으므로 툴 윈도우를 한 번도 열지 않아도 Host 에 붙는다(`RunFeature`, run-feature.tsx).
+//
+// **탭의 머신**(18-m7-plan M7-14): 실행은 그 체크아웃 머신의 Host 것이다. 창은 머신마다 따로 붙고(`connect(client, projectId, machine)`),
+// 탭은 자기 머신을 안다 — 콘솔 · 입력 · 중지 · 다시 실행 · 링크가 모두 그 머신 연결로 간다(활성 체크아웃을 바꿔도 탭이 남고 그 머신
+// 연결을 쓴다). 탭의 열쇠는 이 머신이면 `runId` 그대로, 다른 머신이면 `<머신>/<runId>` 다(두 머신의 같은 번호가 섞이지 않게). 그 머신
+// 연결이 끊겨 콘솔 스트림이 끝나면 다시 붙을 때(`connect` 로 새 클라이언트) `run.attach { since }` 로 받은 끝부터 잇는다.
 
 import type { EventMessage, RpcClient, RunExit, RunInfo } from "@pitwall/rpc-client";
+
+import { LOCAL_MACHINE } from "../checkout/checkout";
 import { SearchAddon } from "@xterm/addon-search";
 import type { ITheme, Terminal } from "@xterm/xterm";
 import { createStore, type StoreApi } from "zustand/vanilla";
@@ -31,8 +38,10 @@ export const TOPIC_EXITED = "run.exited";
 export const TOPIC_PORTS = "run.ports";
 
 export interface RunTab {
-  /** 탭의 열쇠 — 처음 실행의 `runId`. 다시 실행해도 그대로다. */
+  /** 탭의 열쇠 — 처음 실행의 `runId`(다른 머신이면 `<머신>/<runId>`). 다시 실행해도 그대로다. */
   key: string;
+  /** 실행이 도는 머신(`local` 이면 이 머신). */
+  machine: string;
   /** 지금 이 탭이 보이는 실행. */
   run: RunInfo;
   /** 스크롤 고정(출력이 와도 보는 자리를 움직이지 않는다). */
@@ -50,12 +59,19 @@ export type RunClient = Pick<RpcClient, "call" | "stream" | "subscribe">;
 
 /** 탭 · 콘솔이 쓰는 지금 값. 창이 렌더마다 바꿔 넣는다(`setDeps`). */
 export interface RunDeps {
+  /** 이 머신의 연결 · 프로젝트(이 머신에 붙기 전 · 시험). 다른 머신은 `connect` 로 붙은 연결을 쓴다. */
   client: RunClient;
   projectId: string;
   /** 창의 키맵이 이 keydown 을 가져가는가(src/terminal/terminal-keys.ts). */
   takesKey(e: KeyboardEvent): boolean;
   opensLink(e: MouseEvent): boolean;
-  openFile(target: { path: string; worktree?: string; line?: number; column?: number }): void;
+  openFile(target: {
+    path: string;
+    worktree?: string;
+    line?: number;
+    column?: number;
+    machine?: string;
+  }): void;
   openUrl?(url: string): void;
   linkHint?(url: string, differs: boolean): string;
   exitedLine(exit: RunExit): string;
@@ -71,6 +87,17 @@ export function isLive(run: RunInfo): boolean {
   return run.state !== "exited";
 }
 
+/** 탭의 열쇠. 이 머신이면 `runId` 그대로(옛 열쇠 · 저장본이 바뀌지 않게). */
+export function runKey(machine: string, runId: string): string {
+  return machine === LOCAL_MACHINE ? runId : `${machine}/${runId}`;
+}
+
+/** 머신 하나의 연결. */
+export interface RunPlace {
+  client: RunClient;
+  projectId: string;
+}
+
 /** 탭 하나의 콘솔: xterm 화면(터미널과 같은 부품) + 로그 레벨 강조 + 찾기 + `run.attach` 스트림. */
 export class RunConsole {
   readonly view: XtermView;
@@ -79,13 +106,33 @@ export class RunConsole {
   private stream: RunStream | undefined;
   private scrollLock = false;
 
+  /** 스트림이 연결과 함께 끊겼다(다른 머신) — 다시 붙으면 받은 끝부터 잇는다. */
+  private lost: number | undefined;
+
   constructor(
     private readonly deps: () => RunDeps | undefined,
     private run: () => RunInfo,
     theme: ITheme,
+    /** 이 콘솔의 머신 연결(없으면 붙지 않음). */
+    private readonly place: () => RunPlace | undefined = () => {
+      const d = deps();
+      return d && { client: d.client, projectId: d.projectId };
+    },
+    readonly machine: string = LOCAL_MACHINE,
   ) {
     this.view = new XtermView(
-      () => xtermDeps(this.deps()),
+      () => {
+        const d = this.deps();
+        const p = this.place();
+        if (!d || !p) return undefined;
+        // 콘솔의 경로는 그 실행의 머신 것이다(M7-11 `qualifyOpen`).
+        return xtermDeps({
+          ...d,
+          client: p.client,
+          projectId: p.projectId,
+          openFile: (target) => d.openFile({ ...target, machine: this.machine }),
+        });
+      },
       theme,
       {
         // 링크의 상대 경로는 그 실행의 작업 폴더 기준(M6-06 ②) — 셸 터미널이 「처음 뜬 폴더」 를 쓰는 것과 같은 판정.
@@ -112,16 +159,22 @@ export class RunConsole {
   }
 
   /** 받기 시작한다(화면에 붙기 전에도 — 시험 · 미리 받기). 이미 받고 있으면 아무것도 하지 않는다. */
-  start(): void {
+  start(since = 0): void {
     const deps = this.deps();
-    if (!deps || this.stream) return;
+    const place = this.place();
+    if (!deps || !place || this.stream) return;
     const screen = this.screen();
     let failed = false;
-    this.stream = new RunStream({
-      client: deps.client,
+    const remote = this.machine !== LOCAL_MACHINE;
+    let attached = false;
+    const stream: RunStream = new RunStream({
+      client: place.client,
       runId: this.run().runId,
-      since: 0,
+      since,
       screen,
+      onAttached: () => {
+        attached = true;
+      },
       droppedLine: deps.droppedLine,
       onRendered: () => this.levels.scan(),
       onExited: (exit) => {
@@ -131,9 +184,25 @@ export class RunConsole {
       onFailed: (message) => {
         if (failed) return;
         failed = true;
+        // 다른 머신의 실행은 그 머신에서 돈다 — 연결이 끊겨 스트림이 끝났으면 다시 붙을 때 받은 끝부터 잇는다(실패 줄을 쓰지 않는다).
+        // 다시 붙은 뒤의 붙기도 실패하면(실행이 사라짐) 그때 알린다.
+        if (remote && attached && isLive(this.run())) {
+          this.lost = stream.end;
+          if (this.stream === stream) this.stream = undefined;
+          return;
+        }
         screen.write(`\r\n\x1b[2m${deps.failedLine(message)}\x1b[0m\r\n`);
       },
     });
+    this.stream = stream;
+  }
+
+  /** 그 머신 연결이 다시 생겼다: 끊긴 스트림이면 받은 끝부터 다시 받는다. */
+  hostChanged(): void {
+    if (this.lost === undefined || this.stream || !this.view.isOpen) return;
+    const since = this.lost;
+    this.lost = undefined;
+    this.start(since);
   }
 
   /** 다음 실행(다시 실행)으로 바꾼다 — 화면을 비우고 새 실행의 출력을 받는다. */
@@ -228,11 +297,17 @@ export class RunTabs {
   /** 다시 실행으로 이어받힌 앞 실행 — 늦게 온 이벤트로 탭을 다시 만들지 않는다. */
   private readonly superseded = new Set<string>();
   private dismissed = new Set<string>();
+  /** 닫은 이 머신의 실행(저장하는 것). */
+  private localDismissed = new Set<string>();
   /** 탭마다 그 탭이 거친 실행(처음 실행 → 다시 실행 …). 닫을 때 사슬 전부를 닫은 것으로 둔다. */
   private readonly chains = new Map<string, string[]>();
   private deps: RunDeps | undefined;
   private theme: ITheme = {};
-  private connected: { client: RunClient; projectId: string; stop(): void } | undefined;
+  /** 머신 → 붙은 연결. */
+  private readonly connections = new Map<
+    string,
+    { client: RunClient; projectId: string; stop(): void }
+  >();
 
   setDeps(deps: RunDeps): void {
     this.deps = deps;
@@ -244,16 +319,30 @@ export class RunTabs {
     for (const c of this.consoles.values()) c.setTheme(theme);
   }
 
+  /** 그 머신의 연결 · 프로젝트. 이 머신은 붙기 전이면 `setDeps` 의 것. */
+  placeOf(machine: string): RunPlace | undefined {
+    const connected = this.connections.get(machine);
+    if (connected) return { client: connected.client, projectId: connected.projectId };
+    if (machine === LOCAL_MACHINE && this.deps)
+      return { client: this.deps.client, projectId: this.deps.projectId };
+    return undefined;
+  }
+
   /**
-   * 이 창의 프로젝트 실행을 따라가기 시작한다: 이벤트를 듣고 목록을 읽는다. 같은 Host 연결 · 프로젝트면 다시 하지 않는다. 해제
-   * 함수를 돌려준다(이벤트만 떼고 탭은 남긴다).
+   * 그 머신(기본 이 머신)의 프로젝트 실행을 따라가기 시작한다: 이벤트를 듣고 목록을 읽는다. 같은 연결 · 프로젝트면 다시 하지 않는다.
+   * 해제 함수를 돌려준다(이벤트만 떼고 탭은 남긴다). 새 연결이면 그 머신의 끊긴 콘솔이 받은 끝부터 다시 받는다.
    */
-  connect(client: RunClient, projectId: string): () => void {
-    if (this.connected?.client === client && this.connected.projectId === projectId) {
-      return this.connected.stop;
+  connect(client: RunClient, projectId: string, machine: string = LOCAL_MACHINE): () => void {
+    const before = this.connections.get(machine);
+    if (before?.client === client && before.projectId === projectId) {
+      return before.stop;
     }
-    this.connected?.stop();
-    this.dismissed = loadDismissed(projectId);
+    before?.stop();
+    // 닫은 탭의 기억은 이 머신 프로젝트의 것이다(sessionStorage — 다른 머신의 실행 번호는 그 머신에만 뜻이 있다).
+    if (machine === LOCAL_MACHINE) {
+      this.localDismissed = loadDismissed(projectId);
+      for (const id of this.localDismissed) this.dismissed.add(id);
+    }
     let closed = false;
     let unsubscribe: (() => Promise<void>) | undefined;
     const onEvent = (event: EventMessage) => {
@@ -263,7 +352,7 @@ export class RunTabs {
         event.topic === TOPIC_EXITED ||
         event.topic === TOPIC_PORTS
       ) {
-        this.upsert(event.payload as unknown as RunInfo);
+        this.upsert(event.payload as unknown as RunInfo, machine);
       }
     };
     void client
@@ -276,59 +365,69 @@ export class RunTabs {
       .then(() => (closed ? undefined : client.call("run.list", { projectId })))
       .then((list) => {
         if (closed || !list) return;
-        for (const run of list.runs) this.upsert(run);
+        for (const run of list.runs) this.upsert(run, machine);
       })
       .catch((e: unknown) => console.warn("[run] could not list runs", e));
     const stop = () => {
       closed = true;
       void unsubscribe?.().catch(() => {});
-      if (this.connected?.stop === stop) {
-        this.connected = undefined;
-        this.store.setState({ connected: false });
+      if (this.connections.get(machine)?.stop === stop) {
+        this.connections.delete(machine);
+        this.store.setState({ connected: this.connections.has(LOCAL_MACHINE) });
       }
     };
-    this.connected = { client, projectId, stop };
-    this.store.setState({ connected: true });
+    this.connections.set(machine, { client, projectId, stop });
+    if (machine === LOCAL_MACHINE) this.store.setState({ connected: true });
+    for (const c of this.consoles.values()) if (c.machine === machine) c.hostChanged();
     return stop;
   }
 
-  /** 실행 하나의 새 소식(목록 · 이벤트 · `run.start` · `run.restart` 의 결과). 같은 실행이 여러 번 와도 된다. */
-  upsert(run: RunInfo): void {
-    if (this.superseded.has(run.runId) || this.dismissed.has(run.runId)) return;
+  /**
+   * 실행 하나의 새 소식(목록 · 이벤트 · `run.start` · `run.restart` 의 결과)과 그 머신. 같은 실행이 여러 번 와도 된다. 그 머신 프로젝트의
+   * 실행이 아니면 버린다.
+   */
+  upsert(run: RunInfo, machine: string = LOCAL_MACHINE): void {
+    const id = runKey(machine, run.runId);
+    if (this.superseded.has(id) || this.dismissed.has(id)) return;
     // 닫은 탭의 사슬을 잇는 끝난 실행(다시 불러온 목록에서 앞 실행이 먼저 온 경우 등)도 닫은 것이다. 지금 도는 다시 실행은 새 탭으로 보인다.
-    if (run.restartOf && this.dismissed.has(run.restartOf) && !isLive(run)) {
-      this.dismissed.add(run.runId);
+    if (run.restartOf && this.dismissed.has(runKey(machine, run.restartOf)) && !isLive(run)) {
+      this.dismissed.add(id);
       return;
     }
-    if (this.deps && run.projectId !== this.deps.projectId) return;
+    const place = this.placeOf(machine);
+    if (place && run.projectId !== place.projectId) return;
     const { tabs, activeKey } = this.store.getState();
-    const same = tabs.find((t) => t.run.runId === run.runId);
+    const same = tabs.find((t) => t.machine === machine && t.run.runId === run.runId);
     if (same) {
       // 늦게 온 낡은 소식(목록이 이벤트보다 늦게 왔다)이 끝난 실행을 되살리지 않게.
       if (same.run.state === "exited" && run.state !== "exited") return;
       this.update(same.key, { run });
       return;
     }
-    const before = run.restartOf ? tabs.find((t) => t.run.runId === run.restartOf) : undefined;
+    const before = run.restartOf
+      ? tabs.find((t) => t.machine === machine && t.run.runId === run.restartOf)
+      : undefined;
     if (before) {
-      this.superseded.add(before.run.runId);
-      this.chains.get(before.key)?.push(run.runId);
+      this.superseded.add(runKey(machine, before.run.runId));
+      this.chains.get(before.key)?.push(id);
       this.update(before.key, { run });
       this.consoles.get(before.key)?.restarted();
       return;
     }
-    const key = run.runId;
+    const key = id;
     const runConsole = new RunConsole(
       () => this.deps,
       () => this.tab(key)?.run ?? run,
       this.theme,
+      () => this.placeOf(machine),
+      machine,
     );
     this.consoles.set(key, runConsole);
-    this.chains.set(key, [run.runId]);
+    this.chains.set(key, [id]);
     // 사람이 이 창에서 띄운 것은 앞으로, 에이전트가 띄운 것은 활성 탭이 없을 때만.
     const activate = activeKey === undefined || run.launchedBy.kind === "window";
     this.store.setState({
-      tabs: [...tabs, { key, run, scrollLock: false }],
+      tabs: [...tabs, { key, machine, run, scrollLock: false }],
       activeKey: activate ? key : activeKey,
     });
   }
@@ -350,12 +449,18 @@ export class RunTabs {
     if (this.consoles.has(key)) this.store.setState({ activeKey: key });
   }
 
-  /** 아직 도는 실행(상태바 · 닫기 확인). */
-  live(): RunInfo[] {
+  /** 아직 도는 실행(상태바 · 닫기 확인). `machine` 을 주면 그 머신의 것만. */
+  live(machine?: string): RunInfo[] {
     return this.store
       .getState()
-      .tabs.map((t) => t.run)
+      .tabs.filter((t) => machine === undefined || t.machine === machine)
+      .map((t) => t.run)
       .filter(isLive);
+  }
+
+  /** 아직 도는 실행의 탭(머신과 함께). */
+  liveTabs(): RunTab[] {
+    return this.store.getState().tabs.filter((t) => isLive(t.run));
   }
 
   /** 바깥 브라우저로 연다(포트 칩 — run-ports.tsx). 창이 배선하기 전이면 아무것도 하지 않는다. */
@@ -363,26 +468,30 @@ export class RunTabs {
     this.deps?.openUrl?.(url);
   }
 
+  /** 그 탭의 실행을 그 머신에서 멈춘다. 그 머신에 붙지 않았으면 거절한다(다른 머신으로 보내지 않는다). */
   async stop(key: string): Promise<void> {
-    const deps = this.deps;
     const tab = this.tab(key);
-    if (!deps || !tab || !isLive(tab.run)) return;
-    this.upsert(await deps.client.call("run.stop", { runId: tab.run.runId }));
+    if (!tab || !isLive(tab.run)) return;
+    const place = this.placeOf(tab.machine);
+    if (!place) throw new Error(`the machine ${tab.machine} is not connected`);
+    this.upsert(await place.client.call("run.stop", { runId: tab.run.runId }), tab.machine);
   }
 
   async restart(key: string): Promise<void> {
     const deps = this.deps;
     const tab = this.tab(key);
     if (!deps || !tab) return;
+    const place = this.placeOf(tab.machine);
+    if (!place) throw new Error(`the machine ${tab.machine} is not connected`);
     // 구성을 다시 읽어 띄우므로 첫 실행 확인(M6-07 ⑥ — run-confirm.ts)을 지난다. 취소하면 앞 실행은 그대로 돈다.
     const runId = tab.run.runId;
     // 구성이 사슬(`before` · 복합 구성)이면 `sql` 단계의 위험 확인(3001)도 받는다(M6-21).
     const next = await withRunConfirms(
       (confirmed, sqlConfirmed) =>
-        deps.client.call("run.restart", { runId, confirmed, sqlConfirmed }),
+        place.client.call("run.restart", { runId, confirmed, sqlConfirmed }),
       deps.askSql,
     );
-    if (next) this.upsert(next);
+    if (next) this.upsert(next, tab.machine);
   }
 
   setScrollLock(key: string, on: boolean): void {
@@ -397,9 +506,13 @@ export class RunTabs {
     if (!tab || !runConsole || isLive(tab.run)) return;
     this.consoles.delete(key);
     runConsole.dispose();
-    for (const id of this.chains.get(key) ?? [tab.run.runId]) this.dismissed.add(id);
+    const ids = this.chains.get(key) ?? [runKey(tab.machine, tab.run.runId)];
+    for (const id of ids) this.dismissed.add(id);
+    if (tab.machine === LOCAL_MACHINE) for (const id of ids) this.localDismissed.add(id);
     this.chains.delete(key);
-    if (this.deps) saveDismissed(this.deps.projectId, this.dismissed);
+    // 이 머신의 것만 저장한다(다시 불러온 창의 이 머신 목록을 거른다).
+    const local = this.placeOf(LOCAL_MACHINE);
+    if (local) saveDismissed(local.projectId, this.localDismissed);
     const { tabs, activeKey } = this.store.getState();
     const at = tabs.findIndex((t) => t.key === key);
     const rest = tabs.filter((t) => t.key !== key);
@@ -409,11 +522,13 @@ export class RunTabs {
 
   /** 모든 탭을 내린다(시험). 실행은 Host 에서 돈다. */
   disposeAll(): void {
-    this.connected?.stop();
+    // 멈추면 Map 에서 빠진다 — Map 은 돌면서 지운 항목을 건너뛸 뿐 순회가 깨지지 않는다.
+    for (const c of this.connections.values()) c.stop();
     for (const c of this.consoles.values()) c.dispose();
     this.consoles.clear();
     this.superseded.clear();
     this.dismissed.clear();
+    this.localDismissed.clear();
     this.chains.clear();
     this.store.setState({ tabs: [], activeKey: undefined, connected: false });
   }

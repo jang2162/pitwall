@@ -514,6 +514,12 @@ terminal-tab-name =
         [1] Local
        *[other] Local ({ $index })
     }
+# A shell tab on another machine (the machine mark beside it names the machine). $index: tab number
+terminal-tab-name-remote =
+    { $index ->
+        [1] Remote
+       *[other] Remote ({ $index })
+    }
 terminal-tab-exited = exited
 terminal-new-tab = New Terminal Tab
 # $name: tab name
@@ -541,6 +547,31 @@ action-terminal-close-tab = Terminal: Close Tab
 action-terminal-rename-tab = Terminal: Rename Tab
 action-terminal-copy = Terminal: Copy
 action-terminal-paste = Terminal: Paste
+# New tab in the given checkout (other features call it with the checkout — no key)
+action-terminal-new-tab-in = Terminal: New Tab in That Checkout
+terminal-tab-read-only = Read-only
+# $machine: machine name
+terminal-tab-read-only-hint = The link to { $machine } is resuming, so input is not taken
+terminal-tab-disconnected = Disconnected
+# $bytes: bytes dropped from the machine's buffer while away
+terminal-dropped = [The first { $bytes } bytes were dropped from that machine's buffer]
+terminal-target = Checkout for new terminals
+## Closing a tab or window with something running on another machine
+# $name: tab name, $machine: machine name
+remote-close-title-tab = “{ $name }” is running on { $machine }
+# $terminals · $runs: terminals and runs on other machines
+remote-close-title-window = Things are running on other machines — { $terminals } terminals · { $runs } runs
+remote-close-body = [End] ends them on that machine. [Keep and Close] leaves them there; reconnecting or reopening the window picks them up again.
+remote-close-end = End
+remote-close-keep = Keep and Close
+remote-close-cancel = Cancel
+# $limit: detached terminals a machine keeps
+remote-close-limit-title = A machine keeps at most { $limit } detached terminals
+# $mine · $others: terminals of this project · other projects that would end
+remote-close-limit-body = Keeping this ends the oldest detached terminals — { $mine } of this project · { $others } of other projects.
+remote-close-limit-confirm = End Them and Keep
+# $message: why the machine refused
+remote-close-keep-failed = Could not keep it on that machine: { $message }
 
 ## Find in files (src/search). The ⌘⇧F popup and the Search Results tool window.
 

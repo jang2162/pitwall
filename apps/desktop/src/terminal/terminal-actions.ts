@@ -11,6 +11,10 @@ export interface TerminalActionDeps {
   tabs: TerminalTabs;
   /** Host 에 연결돼 프로젝트가 있어 새 셸을 띄울 수 있는가. */
   canOpen(): boolean;
+  /** 새 탭을 대상 체크아웃에서 연다(기본 활성 체크아웃). */
+  open(): void;
+  /** 탭을 닫는다 — 다른 머신에서 셸이 돌면 먼저 묻는다(remote-close.tsx). */
+  close(id: number): void;
   /** 다음 프레임에 활성 터미널에 포커스를 준다(새 탭은 다음 렌더에서 화면에 붙는다). */
   focusActive(): void;
   startRename(id: number): void;
@@ -29,7 +33,7 @@ export function terminalActions(deps: TerminalActionDeps): Action[] {
       keywords: ["New Terminal Tab", "New Session"],
       enabled: deps.canOpen,
       run: () => {
-        tabs.open();
+        deps.open();
         deps.focusActive();
       },
     },
@@ -41,7 +45,7 @@ export function terminalActions(deps: TerminalActionDeps): Action[] {
       run: () => {
         const id = activeId();
         if (id === undefined) return;
-        tabs.close(id);
+        deps.close(id);
         deps.focusActive();
       },
     },

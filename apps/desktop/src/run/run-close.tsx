@@ -15,6 +15,7 @@ import { type ReactNode, useCallback, useRef, useState } from "react";
 import { useKeymapPopup } from "../keymap/keymap-provider";
 import { isLive, type RunClient, type RunTabs } from "./run-tabs";
 import { useRunStrings } from "./strings";
+import { LOCAL_MACHINE } from "../checkout/checkout";
 import { TargetMachineLine } from "../checkout/machine-mark";
 
 const BUTTON = "rounded-sm border border-ui-border px-3 py-1 hover:bg-ui-hover";
@@ -82,13 +83,14 @@ async function liveRuns(
   client: RunClient | undefined,
   projectId: string | undefined,
 ): Promise<RunInfo[]> {
-  if (!client || projectId === undefined) return tabs.live();
+  // 창이 닫히면 끝나는 것은 이 머신의 실행이다 — 다른 머신의 실행은 그 머신 Host 에서 돈다(terminal/remote-close.tsx 가 묻는다).
+  if (!client || projectId === undefined) return tabs.live(LOCAL_MACHINE);
   try {
     const { runs } = await client.call("run.list", { projectId });
     return runs.filter(isLive);
   } catch (e) {
     console.warn("[run] could not list runs before closing", e);
-    return tabs.live();
+    return tabs.live(LOCAL_MACHINE);
   }
 }
 

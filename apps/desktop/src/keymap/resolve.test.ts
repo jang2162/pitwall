@@ -226,6 +226,8 @@ const ACTION_IDS = new Set(
       strings: KO_PROJECT.terminal,
       tabs: new TerminalTabs(),
       canOpen: () => true,
+      open() {},
+      close() {},
       focusActive() {},
       startRename() {},
       writeClipboard: async () => {},

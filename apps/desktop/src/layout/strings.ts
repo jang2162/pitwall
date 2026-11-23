@@ -430,6 +430,7 @@ export function projectStrings(t: Translate) {
     terminal: {
       tabs: t("terminal-tabs-label"),
       tabName: (index: number) => t("terminal-tab-name", { index }),
+      remoteTabName: (index: number) => t("terminal-tab-name-remote", { index }),
       exited: t("terminal-tab-exited"),
       newTab: t("terminal-new-tab"),
       closeTab: (name: string) => t("terminal-close-tab", { name }),
@@ -441,6 +442,25 @@ export function projectStrings(t: Translate) {
       copyFailed: t("terminal-copy-failed"),
       pasteFailed: t("terminal-paste-failed"),
       dropRefused: t("terminal-drop-refused"),
+      readOnly: t("terminal-tab-read-only"),
+      readOnlyHint: (machine: string) => t("terminal-tab-read-only-hint", { machine }),
+      disconnected: t("terminal-tab-disconnected"),
+      droppedLine: (bytes: number) => t("terminal-dropped", { bytes }),
+      target: t("terminal-target"),
+      /** 원격에서 도는 것이 있는 탭 · 창을 닫을 때(10-ui.md 2.9 「끊긴 머신」 — remote-close.tsx). */
+      remoteClose: {
+        titleTab: (name: string, machine: string) => t("remote-close-title-tab", { name, machine }),
+        titleWindow: (terminals: number, runs: number) =>
+          t("remote-close-title-window", { terminals, runs }),
+        body: t("remote-close-body"),
+        end: t("remote-close-end"),
+        keep: t("remote-close-keep"),
+        cancel: t("remote-close-cancel"),
+        limitTitle: (limit: number) => t("remote-close-limit-title", { limit }),
+        limitBody: (mine: number, others: number) => t("remote-close-limit-body", { mine, others }),
+        limitConfirm: t("remote-close-limit-confirm"),
+        keepFailed: (message: string) => t("remote-close-keep-failed", { message }),
+      },
       /** OSC 8 링크의 풍선 도움말 — 터미널 · 실행 콘솔(terminal/xterm-view.ts). */
       linkHint: (url: string, differs: boolean) =>
         t(differs ? "terminal-link-hint-differs" : "terminal-link-hint", { url }),
@@ -450,6 +470,7 @@ export function projectStrings(t: Translate) {
         renameTab: t("action-terminal-rename-tab"),
         copy: t("action-terminal-copy"),
         paste: t("action-terminal-paste"),
+        newTabIn: t("action-terminal-new-tab-in"),
       },
     },
   };

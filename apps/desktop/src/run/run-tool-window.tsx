@@ -17,6 +17,8 @@ import { useStore } from "zustand";
 import { useI18n } from "../i18n/i18n-provider";
 import { useNotify, usePanelVisible } from "../notifications/notifications";
 import { TERMINAL_FOCUS } from "../terminal/terminal-keys";
+import { LOCAL_MACHINE } from "../checkout/checkout";
+import { MachineMark } from "../checkout/machine-mark";
 import { RunTabPorts } from "./run-ports";
 import { isLive, type RunConsole, type RunTab, type RunTabs, windowRuns } from "./run-tabs";
 import { type RunStrings, useRunStrings } from "./strings";
@@ -240,6 +242,7 @@ function RunTabButton({
       aria-selected={active}
       data-testid="run-tab"
       data-run-id={run.runId}
+      data-machine-tab={tab.machine}
       data-state={run.state}
       data-launched-by={run.launchedBy.kind}
       title={runTabTitle(run, T, locale)}
@@ -252,7 +255,9 @@ function RunTabButton({
       <button type="button" onClick={onSelect}>
         {run.name}
       </button>
-      <RunTabPorts run={run} />
+      {/* 다른 머신의 실행은 그 머신 이름을 글로 보인다(M7-11 의 머신 표지). */}
+      {tab.machine !== LOCAL_MACHINE && <MachineMark machine={tab.machine} />}
+      <RunTabPorts run={run} machine={tab.machine} />
       {run.exit && (
         <span data-testid="run-tab-exit" className="text-[10px] text-ui-muted-foreground">
           {T.exit(run.exit)}

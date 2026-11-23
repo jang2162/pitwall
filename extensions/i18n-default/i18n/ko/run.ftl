@@ -55,6 +55,11 @@ run-port-label = :{ $port }
 run-port-open = { $url } 열기
 # 모든 주소(0.0.0.0 · ::)에 듣는 포트 — 다른 기기에서도 닿는다
 run-port-all-addresses = 모든 주소
+# 다른 머신에서 도는 실행의 포트 — 그 머신의 포트라 이 컴퓨터의 브라우저로 열지 않는다. $port: 포트, $machine: 머신 이름
+run-port-remote = { $machine } 의 포트 { $port } — 이 컴퓨터에서는 열리지 않는다(로컬로 포워딩해야 한다)
+# 다른 머신의 포트를 로컬로 포워딩하는 단추(아직 없다 — 자리만)
+run-port-forward = 로컬로 포워딩
+run-port-forward-soon = 로컬로 포워딩은 아직 없다
 
 ## 상태바
 
@@ -81,6 +86,18 @@ run-picker-none = 구성 없음
 # $name: 구성 이름, $profile: 프로필 이름
 run-picker-with-profile = { $name } · { $profile }
 run-picker-choose = 실행 구성 고르기
+# 실행할 체크아웃 고르기(10-ui.md 2.9 「실행 · 터미널의 대상」)
+run-target = 실행할 체크아웃
+# 활성 체크아웃을 따르는 항목. $checkout: 지금 활성 체크아웃
+run-target-active = 활성 체크아웃 따라가기 ({ $checkout })
+# 체크아웃 이름. $machine: 머신 이름, $worktree: 워크트리 이름(메인 체크아웃이면 main)
+run-target-checkout =
+    { $worktree ->
+        [main] { $machine } · 메인 체크아웃
+       *[other] { $machine } · { $worktree }
+    }
+# 고른 체크아웃에서 실행 구성 고르기(다른 기능이 체크아웃을 실어 부른다 — 키 없음)
+run-action-choose-in = 실행: 그 체크아웃에서 구성 골라 실행
 run-picker-search = 구성 · 태스크 찾기
 run-picker-empty = 맞는 구성이 없다
 run-picker-group-configs = 구성
@@ -101,6 +118,8 @@ run-picker-read-failed = { $detector } 태스크를 읽지 못했다: { $message
 run-picker-run = 실행
 run-picker-debug = 디버그
 run-picker-debug-none = 이 구성에는 [debug] 가 없다
+# 실행할 체크아웃이 활성 체크아웃이 아닐 때 — 디버그는 활성 체크아웃에서 열린다
+run-picker-debug-active-only = 디버그는 활성 체크아웃에서만 연다 — 그 체크아웃을 활성으로 두거나 대상을 활성 체크아웃으로 돌린다
 # $message: 오류 원문
 run-picker-debug-failed = 디버그를 시작하지 못했다: { $message }
 run-picker-stop = 중지

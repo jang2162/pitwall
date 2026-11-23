@@ -6,13 +6,17 @@
 //   않는다). gradle · maven · mise 태스크는 「태스크 읽기」 를 누를 때만 읽는다(D70).
 // - 띄우기는 `run.start`(첫 실행 확인 — run-confirm.ts), `sql` 구성은 `run.sql.start`(위험 확인 — sql-run.ts). 띄운 실행은 곧바로
 //   「실행」 툴 윈도우의 탭이 된다(`windowRuns().upsert`, M6-06).
+// - **대상 체크아웃**(18-m7-plan M7-14 ①): 구성 이름 앞의 고르기(run/target.tsx — 기본 활성 체크아웃)가 고른 체크아웃의 머신 연결로
+//   구성 목록을 읽고 `run.start { projectId, worktree }` 를 보낸다 — 그 머신의 실행 구성 · 런타임 환경 · 신뢰로 돈다. 「사람이 본
+//   구성」 기록(M6-11)도 그 머신의 `state.db` 에 남는다(그 머신 Host 가 쓴다). 첫 실행 확인(7001) · 위험 확인의 문장에 그 머신 이름이
+//   든다. 디버그는 활성 체크아웃의 연결로 열리므로(src/debug) 대상이 활성 체크아웃이 아니면 꺼진다 — 다른 머신으로 보내지 않는다.
 
 import type { DockviewApi } from "dockview-react";
 import type { RunConfigEntry, RunInfo, RunSqlConfirmRequired } from "@pitwall/rpc-client";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Command } from "cmdk";
 import { Bug, ChevronDown, Play, Square, TriangleAlert } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useStore } from "zustand";
 
@@ -22,8 +26,8 @@ import { useKeymapPopup, useRegisterActions } from "../keymap/keymap-provider";
 import { showPanel } from "../layout/project-layout";
 import { useNotify } from "../notifications/notifications";
 import { windowDebug } from "../debug/debug-session";
-import { useActiveWorktree } from "../open-with/active-worktree";
-import { useHost } from "../rpc/host";
+import { useCheckoutHost } from "../checkout/checkout-hosts";
+import { TargetMachineProvider } from "../checkout/machine-mark";
 import { useToolConfirm } from "../tools/confirm-dialog";
 import { changeTool, type ToolsCall } from "../tools/install";
 import { useToolsStrings } from "../tools/strings";
@@ -37,6 +41,23 @@ import { errorText, type RunConfigs, windowRunConfigs } from "./run-configs";
 import { isLive, type RunTabs, windowRuns } from "./run-tabs";
 import { sqlRunQuestion, startSqlRun } from "./sql-run";
 import { type RunStrings, useRunStrings } from "./strings";
+import {
+  createTargetStore,
+  sameCheckout,
+  TargetChooser,
+  type TargetState,
+  useActiveCheckout,
+  useTarget,
+  useWindowMachines,
+} from "./target";
+import type { StoreApi } from "zustand/vanilla";
+import { checkoutArg } from "../terminal/terminal-tool-window";
+
+const windowTarget = createTargetStore();
+/** 이 창의 「실행할 체크아웃」(기본 활성 체크아웃 — run/target.tsx). */
+export function runTarget(): StoreApi<TargetState> {
+  return windowTarget;
+}
 
 const TOOL = "flex items-center rounded-sm p-1 hover:bg-ui-hover disabled:opacity-40";
 
@@ -61,13 +82,18 @@ export function runToStop(tabs: RunTabs, configId: string | undefined): string |
   return (live.find((t) => t.run.config === configId) ?? live[0])?.key;
 }
 
-/** 타이틀바 · 팝업 · 액션이 함께 쓰는 띄우기. */
-function useLauncher(configs: RunConfigs, tabs: RunTabs, api: DockviewApi | undefined) {
+/** 타이틀바 · 팝업 · 액션이 함께 쓰는 띄우기. `machine` 은 구성 목록을 읽은(띄울) 체크아웃의 머신. */
+function useLauncher(
+  configs: RunConfigs,
+  tabs: RunTabs,
+  api: DockviewApi | undefined,
+  machine: string,
+) {
   const T = useRunStrings().picker;
   const toolsT = useToolsStrings();
   const notify = useNotify();
   const risk = useRiskConfirm();
-  const { client } = useHost();
+  const { client } = useCheckoutHost(machine);
   const toolsCall = useMemo<ToolsCall | undefined>(
     () => (client ? (method, params) => client.call(method, params) : undefined),
     [client],
@@ -111,7 +137,8 @@ function useLauncher(configs: RunConfigs, tabs: RunTabs, api: DockviewApi | unde
           );
         }
         if (!run) return;
-        tabs.upsert(run);
+        // 그 실행은 구성을 읽은 머신의 것이다 — 탭이 그 머신 연결을 쓴다.
+        tabs.upsert(run, machine);
         if (api) showPanel(api, "run");
       } catch (e) {
         notify({ level: "error", title: T.startFailed(errorText(e)) });
@@ -120,7 +147,7 @@ function useLauncher(configs: RunConfigs, tabs: RunTabs, api: DockviewApi | unde
         void configs.reload();
       }
     },
-    [configs, tabs, api, risk.confirm, notify, T],
+    [configs, tabs, api, risk.confirm, notify, T, machine],
   );
   // 디버그(M6-18): 그 구성의 `[debug]` 로 디버그 세션을 연다 — 세션 · 툴 윈도우는 디버그 화면(src/debug/debug-session.ts)이 맡는다.
   const debug = useCallback(
@@ -325,19 +352,22 @@ export function RunToolbar({
   onChoose,
   onRun,
   onDebug,
+  debugElsewhere = false,
 }: {
   configs: RunConfigs;
   tabs: RunTabs;
   onChoose(): void;
   onRun(entry: RunConfigEntry, profile: string | null): void;
   onDebug(entry: RunConfigEntry, profile: string | null): void;
+  /** 대상이 활성 체크아웃이 아니면 디버그를 끈다(디버그는 활성 체크아웃 연결로 열린다). */
+  debugElsewhere?: boolean;
 }) {
   const T = useRunStrings().picker;
   useStore(configs.store);
   const runTabs = useStore(tabs.store, (s) => s.tabs);
   const current = configs.current();
   const usable = current?.kind === "usable" ? current : undefined;
-  const debuggable = usable?.entry.config.debug ? usable : undefined;
+  const debuggable = usable?.entry.config.debug && !debugElsewhere ? usable : undefined;
   const label = usable
     ? targetLabel(T, usable.entry, usable.profile)
     : current?.kind === "unusable"
@@ -347,6 +377,7 @@ export function RunToolbar({
   const stoppable = runTabs.some((t) => isLive(t.run));
   return (
     <div className="flex items-center gap-0.5 font-normal" data-testid="run-toolbar">
+      <TargetChooser store={windowTarget} label={T.target} testId="run-target" />
       <button
         type="button"
         className="flex max-w-[220px] items-center gap-1 rounded-sm px-1.5 py-0.5 hover:bg-ui-hover"
@@ -379,7 +410,7 @@ export function RunToolbar({
         type="button"
         className={TOOL}
         aria-label={T.debug}
-        title={reason ?? (debuggable ? T.debug : T.debugNone)}
+        title={reason ?? (debuggable ? T.debug : debugElsewhere ? T.debugActiveOnly : T.debugNone)}
         data-testid="run-debug"
         disabled={!debuggable}
         onClick={() => debuggable && onDebug(debuggable.entry, debuggable.profile)}
@@ -427,15 +458,32 @@ export function RunPickerFeature({
   tabs?: RunTabs;
 }) {
   const strings = useRunStrings();
-  const { client } = useHost();
-  const worktree = useActiveWorktree() ?? null;
+  // 대상 체크아웃(기본 활성 체크아웃)의 머신 연결 · 그 머신 프로젝트 · 그 머신의 워크트리로 구성을 읽고 띄운다.
+  const target = useTarget(windowTarget);
+  const active = useActiveCheckout();
+  const host = useCheckoutHost(target.machine);
+  const client = host.client;
+  const targetProject =
+    host.projectId ?? (target.machine === active.machine ? projectId : undefined);
+  const worktree = target.worktree ?? null;
   const [chooser, setChooser] = useState<"select" | "run">();
-  const { launch, debug, riskElement, toolConfirmElement } = useLauncher(configs, tabs, api);
+  const { launch, debug, riskElement, toolConfirmElement } = useLauncher(
+    configs,
+    tabs,
+    api,
+    target.machine,
+  );
   const slot = useTitlebarSlot();
+  const machines = useWindowMachines();
+  const machinesRef = useRef(machines);
+  machinesRef.current = machines;
 
   useEffect(
-    () => (client ? configs.connect(client, projectId, worktree) : undefined),
-    [configs, client, projectId, worktree],
+    () =>
+      client && targetProject !== undefined
+        ? configs.connect(client, targetProject, worktree)
+        : undefined,
+    [configs, client, targetProject, worktree],
   );
 
   const runCurrent = useCallback(() => {
@@ -459,6 +507,16 @@ export function RunPickerFeature({
             void debug(current.entry, current.profile);
         },
         chooseAndRun: () => setChooser("run"),
+        // 그 체크아웃에서 골라 실행(M7-17 의 「거기서 실행」): 대상을 그 체크아웃으로 두고 고르기 팝업을 연다.
+        chooseIn: (args) => {
+          const checkout = checkoutArg(args, machinesRef.current);
+          if (!checkout) {
+            console.warn("[run] chooseIn: not a checkout of this window", args);
+            return;
+          }
+          windowTarget.setState({ chosen: checkout });
+          setChooser("run");
+        },
         canStop: () => runToStop(tabs, configs.current()?.entry.id) !== undefined,
         stop: () => {
           const key = runToStop(tabs, configs.current()?.entry.id);
@@ -496,6 +554,7 @@ export function RunPickerFeature({
             onChoose={() => setChooser("select")}
             onRun={(entry, profile) => void launch(entry, profile)}
             onDebug={(entry, profile) => void debug(entry, profile)}
+            debugElsewhere={!sameCheckout(target, active)}
           />,
           slot,
         )}
@@ -507,10 +566,13 @@ export function RunPickerFeature({
           onRun={(entry, profile) => void launch(entry, profile)}
         />
       )}
-      <RunConfirmHost />
-      <RunConfigEditorHost configs={configs} />
-      {riskElement}
-      {toolConfirmElement}
+      {/* 첫 실행 확인(7001) · 위험 확인은 띄우는 체크아웃의 머신 이름을 문장에 넣는다. */}
+      <TargetMachineProvider machine={target.machine}>
+        <RunConfirmHost />
+        <RunConfigEditorHost configs={configs} />
+        {riskElement}
+        {toolConfirmElement}
+      </TargetMachineProvider>
     </>
   );
 }

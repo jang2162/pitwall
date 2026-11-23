@@ -17,6 +17,7 @@ export const RUN_ACTION_IDS = [
   "run.current",
   "debug.current",
   "run.choose",
+  "run.chooseIn",
   "run.stop",
   "run.editConfigs",
 ] as const;
@@ -30,6 +31,8 @@ export function runActions(deps: {
   canDebug(): boolean;
   debugCurrent(): void;
   chooseAndRun(): void;
+  /** 그 체크아웃(`{ checkout: CheckoutRef }`)에서 골라 실행 — M7-17 이 부른다. */
+  chooseIn(args: unknown): void;
   /** 멈출 실행이 있다. */
   canStop(): boolean;
   stop(): void;
@@ -56,6 +59,14 @@ export function runActions(deps: {
       label: T.choose,
       keywords: ["Run...", "Run Configuration"],
       run: deps.chooseAndRun,
+    },
+    {
+      // 인자가 있어야 돈다(`args`) — 키 · 메뉴 · 액션 찾기에서는 꺼진다. 인자 없는 고르기는 `run.choose`.
+      id: "run.chooseIn",
+      label: T.chooseIn,
+      keywords: ["Run in Checkout"],
+      args: true,
+      run: (args?: unknown) => deps.chooseIn(args),
     },
     {
       id: "run.stop",

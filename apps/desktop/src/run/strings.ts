@@ -50,6 +50,11 @@ export function runStrings(t: Translate) {
       label: (port: number) => t("run-port-label", { port: String(port) }),
       open: (url: string) => t("run-port-open", { url }),
       allAddresses: t("run-port-all-addresses"),
+      /** 다른 머신의 포트(18-m7-plan M7-14 ③ — 이 컴퓨터의 브라우저로 열지 않는다). */
+      remote: (port: number, machine: string) =>
+        t("run-port-remote", { port: String(port), machine }),
+      forward: t("run-port-forward"),
+      forwardSoon: t("run-port-forward-soon"),
     },
     status: {
       label: (count: number) => t("run-status-label", { count }),
@@ -71,6 +76,10 @@ export function runStrings(t: Translate) {
       withProfile: (name: string, profile: string) =>
         t("run-picker-with-profile", { name, profile }),
       choose: t("run-picker-choose"),
+      target: t("run-target"),
+      targetActive: (checkout: string) => t("run-target-active", { checkout }),
+      checkout: (machine: string, worktree: string | undefined) =>
+        t("run-target-checkout", { machine, worktree: worktree ?? "main" }),
       search: t("run-picker-search"),
       empty: t("run-picker-empty"),
       groupConfigs: t("run-picker-group-configs"),
@@ -89,6 +98,7 @@ export function runStrings(t: Translate) {
       run: t("run-picker-run"),
       debug: t("run-picker-debug"),
       debugNone: t("run-picker-debug-none"),
+      debugActiveOnly: t("run-picker-debug-active-only"),
       debugFailed: (message: string) => t("run-picker-debug-failed", { message }),
       stop: t("run-picker-stop"),
       unusable: (reason: string) => t("run-picker-unusable-reason", { reason }),
@@ -106,6 +116,7 @@ export function runStrings(t: Translate) {
       current: t("run-action-current"),
       debug: t("run-action-debug"),
       choose: t("run-action-choose"),
+      chooseIn: t("run-action-choose-in"),
       stop: t("run-action-stop"),
       edit: t("run-action-edit"),
     },

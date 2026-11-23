@@ -149,7 +149,9 @@ import {
   useStatusBarItem,
 } from "../status-bar/status-bar";
 import { TaskProvider, TasksStatusItem, useDemoTaskActions } from "../tasks/tasks";
-import { TerminalToolWindow } from "../terminal/terminal-tool-window";
+import { useRemoteWindowClose } from "../terminal/remote-close";
+import { windowTerminals } from "../terminal/terminal-tabs";
+import { TerminalFeature, TerminalToolWindow } from "../terminal/terminal-tool-window";
 import { ThemeSwitcher, useTheme } from "../theme/theme-switcher";
 import { TrustProvider } from "../trust/trust";
 import {
@@ -911,6 +913,8 @@ function ProjectWindowBody({
   apiRef.current = api;
   const unsaved = useUnsavedPrompt();
   const runClose = useRunClosePrompt(windowRuns(), client, projectId);
+  // 다른 머신에서 도는 셸 · 실행(18-m7-plan M7-14 ⑤ — [끝내기] · [두고 닫기] · [취소]).
+  const remoteClose = useRemoteWindowClose(windowTerminals(), windowRuns());
   const { workspace, stat: statDocument } = useWindowEditor(projectId, log, unsaved.ask);
   const actions = useMemo(
     () =>
@@ -952,16 +956,18 @@ function ProjectWindowBody({
   // 창을 닫기 전(닫기 단추 · ⌘W · 앱 종료) 남은 실행(M6-06 ⑥ — 닫으면 Host 가 끝낸다)과 미저장 편집을 묻고, 닫을 것이면 탭
   // 묶음 · 레이아웃을 마저 쓴다. 실행을 먼저 묻는다 — 거기서 취소하면 미저장 대화상자를 지나지 않는다.
   const confirmRunsClose = runClose.confirm;
+  const confirmRemoteClose = remoteClose.confirm;
   useEffect(
     () =>
       guardClose?.(async () => {
         if (!(await confirmRunsClose())) return false;
+        if (!(await confirmRemoteClose())) return false;
         if (!(await workspace.confirmWindowClose())) return false;
         session.current?.flush();
         await projectState.store.flush(CLOSE_FLUSH_LIMIT_MS);
         return true;
       }),
-    [guardClose, workspace, projectState.store, confirmRunsClose],
+    [guardClose, workspace, projectState.store, confirmRunsClose, confirmRemoteClose],
   );
   useEffect(() => {
     const flush = () => {
@@ -1120,7 +1126,6 @@ function ProjectWindowBody({
                       )}
                       {activeProject !== undefined && <RuntimeStatus projectId={activeProject} />}
                       {activeProject !== undefined && <McpStatus projectId={activeProject} />}
-                      {activeProject !== undefined && <RunFeature projectId={activeProject} />}
                       {activeProject !== undefined && (
                         <RunPickerFeature projectId={activeProject} api={api} />
                       )}
@@ -1142,14 +1147,18 @@ function ProjectWindowBody({
                         />
                       )}
                     </Fragment>
+                    {/* 실행 · 터미널은 머신마다 자기 연결로 붙는다 — 활성 체크아웃이 바뀌어도 다시 그리지 않는다(M7-14). */}
+                    {projectId !== undefined && <RunFeature projectId={projectId} />}
+                    <TerminalFeature api={api} />
                     <StatusBar label={strings.status.label} />
                     {switcher.element}
                     {editorOperations}
                     {unsaved.element}
-                    {/* 창을 닫을 때 끝나는 실행은 이 창의 로컬 프로젝트 것이다(실행의 대상 체크아웃은 M7-14). */}
+                    {/* 창을 닫을 때 끝나는 실행은 이 창의 로컬 프로젝트 것이다 — 다른 머신의 것은 `remoteClose` 가 묻는다. */}
                     <TargetMachineProvider machine={LOCAL_MACHINE}>
                       {runClose.element}
                     </TargetMachineProvider>
+                    {remoteClose.element}
                     {/* 상태바(22px) 위에 띄운다. */}
                     <Toaster
                       theme={appearance}

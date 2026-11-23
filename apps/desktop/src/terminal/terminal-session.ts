@@ -9,24 +9,34 @@
 //   끝나면 한 번에 보낸다 — 순서를 지키고 빠른 타이핑 · 붙여넣기는 묶인다. 셸이 뜨기 전(`started` 전)의 입력도 같이 모인다.
 // - 크기: 바뀔 때마다 보내지 않고 마지막 크기만 보낸다(가는 중이면 끝난 뒤에).
 // - 끝내기: `dispose` 가 스트림을 취소하면 Host 가 셸의 프로세스 트리를 끝낸다. 창이 닫혀 연결이 끊겨도 같다(M1-08).
+// - **다른 머신의 셸**(18-m7-plan M7-14 ⑤ — Relay 의 터미널은 Host 수명, M7-09 ②): 스트림이 `exited` 없이 끝나면(그 머신 연결이
+//   닫힘) 셸은 그 머신에서 아직 돌 수 있다 — 끝남이 아니라 `disconnected` 로 두고, 받은 끝(`received` — 마지막 `output` 의
+//   `offset` + 바이트 수)을 기억한다. 다시 붙으면 `attach` 로 `terminal.attach { terminalId, since: received }` 를 열어 잃은 것 없이
+//   잇는다. 스트림을 취소해도 그 머신은 셸을 끝내지 않고 떼어 둔다 — 끝내려면 `terminal.close` 를 부른다(`close`). 미신뢰 프로젝트는
+//   연결 수명이라 붙기가 거절된다(M7-09 판정) — 그때 세션은 실패로 끝난다.
+// - 읽기 전용(`setReadOnly`): 그 머신의 링크가 이어 붙는 중이면 입력을 버린다 — 탭은 읽기 전용 표시와 함께 남는다.
 
-import type { RpcClient, TerminalEvent } from "@pitwall/rpc-client";
+import type { RpcClient, TerminalAttachEvent, TerminalEvent } from "@pitwall/rpc-client";
 
 /** 세션이 쓰는 xterm 의 부분. 시험은 가짜를 넣는다. */
 export interface TerminalScreen {
   write(data: Uint8Array | string, callback?: () => void): void;
 }
 
+/** 뜬 셸. */
+export interface ShellInfo {
+  terminalId: number;
+  pid: number | null;
+  cwd: string;
+  /** Host 가 띄운 셸의 argv(드롭한 경로의 따옴표 규칙을 고른다). */
+  shell: readonly string[];
+}
+
 export type SessionState =
   | { kind: "starting" }
-  | {
-      kind: "running";
-      terminalId: number;
-      pid: number | null;
-      cwd: string;
-      /** Host 가 띄운 셸의 argv(드롭한 경로의 따옴표 규칙을 고른다). */
-      shell: readonly string[];
-    }
+  | ({ kind: "running" } & ShellInfo)
+  /** 다른 머신의 셸인데 그 머신 연결이 닫혔다 — 셸은 그 머신에서 아직 돌 수 있다(다시 붙으면 `since` 로 잇는다). */
+  | ({ kind: "disconnected" } & ShellInfo)
   | { kind: "exited"; code: number | null }
   | { kind: "failed"; message: string };
 
@@ -43,6 +53,12 @@ export interface SessionOptions {
   onState(state: SessionState): void;
   /** 끝났거나 실패했을 때 화면에 덧붙일 한 줄(UI 언어). */
   describeEnd(state: Extract<SessionState, { kind: "exited" | "failed" }>): string;
+  /** 다른 머신의 셸(Host 수명)인가 — 스트림이 끊겨도 끝난 것으로 보지 않는다. */
+  remote?: boolean;
+  /** 새로 띄우지 않고 그 머신의 셸에 붙는다(`terminal.attach`). */
+  attach?: { terminalId: number; since: number };
+  /** 다시 붙었을 때 링 버퍼에서 버려진 앞의 바이트 수를 알리는 줄(UI 언어). */
+  droppedLine?(bytes: number): string;
 }
 
 /** 그리지 않은 바이트가 이만큼 쌓이면 스트림에서 꺼내기를 멈춘다. */
@@ -66,6 +82,9 @@ export class TerminalSession {
   private sendingSize = false;
   private unrendered = 0;
   private drained: (() => void) | undefined;
+  private readOnly = false;
+  /** 받은 끝 — 다시 붙을 때의 `since`. */
+  private end_ = 0;
   /** 스트림을 다 읽으면 풀린다(시험 · 정리용). */
   readonly finished: Promise<void>;
 
@@ -77,9 +96,27 @@ export class TerminalSession {
     return this.state;
   }
 
-  /** 셸에 보낼 글자(키 입력 · 붙여넣기). 끝난 세션이면 버린다. */
+  /** 받은 끝(다른 머신의 셸 — 다시 붙을 때의 `since`). */
+  get received(): number {
+    return this.end_;
+  }
+
+  /** 그 머신의 링크가 이어 붙는 동안 입력을 버린다. */
+  setReadOnly(on: boolean): void {
+    this.readOnly = on;
+    if (on) this.pendingInput = "";
+    else this.flushInput();
+  }
+
+  /** 셸에 보낼 글자(키 입력 · 붙여넣기). 끝난 세션 · 읽기 전용이면 버린다. */
   input(data: string): void {
-    if (this.state.kind === "exited" || this.state.kind === "failed") return;
+    if (this.readOnly) return;
+    if (
+      this.state.kind === "exited" ||
+      this.state.kind === "failed" ||
+      this.state.kind === "disconnected"
+    )
+      return;
     this.pendingInput += data;
     this.flushInput();
   }
@@ -102,29 +139,51 @@ export class TerminalSession {
   }
 
   private async run(): Promise<void> {
-    const { client, projectId, worktree, cwd, cols, rows } = this.options;
+    const { client, projectId, worktree, cwd, cols, rows, attach } = this.options;
+    if (attach) this.end_ = attach.since;
     try {
-      const stream = client.stream(
-        "terminal.create",
-        { projectId, worktree: worktree ?? null, ...(cwd !== undefined && { cwd }), cols, rows },
-        { signal: this.controller.signal },
-      );
+      const stream: AsyncIterable<TerminalEvent | TerminalAttachEvent> = attach
+        ? client.stream(
+            "terminal.attach",
+            { terminalId: attach.terminalId, since: attach.since },
+            { signal: this.controller.signal },
+          )
+        : client.stream(
+            "terminal.create",
+            {
+              projectId,
+              worktree: worktree ?? null,
+              ...(cwd !== undefined && { cwd }),
+              cols,
+              rows,
+            },
+            { signal: this.controller.signal },
+          );
       for await (const event of stream) {
         this.handle(event);
         if (this.unrendered > HIGH_WATER) await this.drain();
         if (this.controller.signal.aborted) return;
       }
-      // 취소하지 않았는데 `exited` 없이 끝난 스트림(연결이 닫힘 등).
-      if (!this.controller.signal.aborted && this.state.kind !== "exited") {
-        this.end({ kind: "exited", code: null });
-      }
+      if (this.controller.signal.aborted || this.state.kind === "exited") return;
+      // 취소하지 않았는데 `exited` 없이 끝난 스트림(연결이 닫힘 등). 다른 머신의 셸은 그 머신에서 아직 돌 수 있다.
+      if (this.options.remote && this.state.kind === "running") this.lose(this.state);
+      else this.end({ kind: "exited", code: null });
     } catch (e) {
       if (this.controller.signal.aborted) return;
-      this.end({ kind: "failed", message: e instanceof Error ? e.message : String(e) });
+      const { state } = this;
+      // 붙어 있던 다른 머신의 셸이 연결과 함께 끊겼다 — 끝남으로 보지 않는다. 붙기 자체가 거절되면(미신뢰 · 없는 셸) 끝난다.
+      if (this.options.remote && state.kind === "running") this.lose(state);
+      else this.end({ kind: "failed", message: e instanceof Error ? e.message : String(e) });
     }
   }
 
-  private handle(event: TerminalEvent) {
+  private lose(state: ShellInfo) {
+    this.pendingInput = "";
+    const { terminalId, pid, cwd, shell } = state;
+    this.setState({ kind: "disconnected", terminalId, pid, cwd, shell });
+  }
+
+  private handle(event: TerminalEvent | TerminalAttachEvent) {
     switch (event.kind) {
       case "started":
         this.setState({
@@ -137,8 +196,31 @@ export class TerminalSession {
         this.flushInput();
         this.flushSize();
         return;
+      case "attached": {
+        const { terminal } = event;
+        if (event.dropped > 0 && this.options.droppedLine)
+          this.options.screen.write(`\x1b[2m${this.options.droppedLine(event.dropped)}\x1b[0m\r\n`);
+        this.end_ = event.from;
+        this.setState({
+          kind: "running",
+          terminalId: terminal.terminalId,
+          pid: terminal.pid,
+          cwd: terminal.cwd,
+          shell: terminal.shell,
+        });
+        this.flushInput();
+        this.flushSize();
+        return;
+      }
       case "output": {
+        if (typeof event.offset === "number") {
+          if (event.offset > this.end_ && this.options.droppedLine)
+            this.options.screen.write(
+              `\x1b[2m${this.options.droppedLine(event.offset - this.end_)}\x1b[0m\r\n`,
+            );
+        }
         const bytes = decodeBase64(event.data);
+        if (typeof event.offset === "number") this.end_ = event.offset + bytes.length;
         this.unrendered += bytes.length;
         this.options.screen.write(bytes, () => {
           this.unrendered -= bytes.length;
@@ -169,7 +251,8 @@ export class TerminalSession {
 
   private flushInput() {
     const { state } = this;
-    if (this.sendingInput || state.kind !== "running" || this.pendingInput === "") return;
+    if (this.readOnly || this.sendingInput || state.kind !== "running" || this.pendingInput === "")
+      return;
     const data = this.pendingInput;
     this.pendingInput = "";
     this.sendingInput = true;
