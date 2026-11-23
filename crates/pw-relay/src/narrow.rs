@@ -185,4 +185,65 @@ mod tests {
             assert!(prepare(&registry, &body(&refused)).is_err(), "{refused}");
         }
     }
+
+    /// 사람의 답을 기다리는 좁은 명령은 [`MAX_WAITING`] 개까지다 — 그 다음 `askpass` · `open` 은 기다리지 않고 거절된다(홍수 상한,
+    /// M7-15 리뷰 F6). 자리가 나면 다시 받는다.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn at_most_max_waiting_commands_wait_for_a_person() {
+        let dir = tempfile::tempdir().unwrap();
+        let askpass = pw_git::write::Askpass::default();
+        let _through = askpass
+            .serve_through(dir.path().join("r.sock"), Path::new("/bin/true"))
+            .unwrap();
+        let prompts = pw_git::write::Prompts::default();
+        let mut window = prompts.listen("p1");
+        let session = askpass
+            .session("p1", &prompts, std::time::Duration::from_secs(60))
+            .unwrap();
+        let mut env = Vec::new();
+        session.apply(&mut env);
+        let token = env
+            .iter()
+            .find(|(k, _)| k == pw_git::write::askpass::TOKEN_ENV)
+            .map(|(_, v)| v.to_string_lossy().into_owned())
+            .unwrap();
+        let body = pw_git::write::Askpass::request_body(&token, "Password: ", Default::default());
+        let narrow = Arc::new(RelayNarrow::new(
+            askpass.clone(),
+            OpenRequests::default(),
+            None,
+        ));
+        let waiting: Vec<_> = (0..MAX_WAITING)
+            .map(|_| {
+                let (narrow, body) = (Arc::clone(&narrow), body.clone());
+                tokio::spawn(async move { narrow.askpass(body).await })
+            })
+            .collect();
+        for _ in 0..MAX_WAITING {
+            tokio::time::timeout(std::time::Duration::from_secs(10), window.recv())
+                .await
+                .expect("a waiting question did not reach the window")
+                .unwrap();
+        }
+        let quick = std::time::Duration::from_secs(2);
+        let refused = tokio::time::timeout(quick, narrow.askpass(body.clone()))
+            .await
+            .expect("the ninth askpass waited")
+            .unwrap_err();
+        assert!(refused.contains("too many"), "{refused}");
+        let refused = tokio::time::timeout(quick, narrow.open(json!({"path": "/x"})))
+            .await
+            .expect("an open waited while all slots were taken")
+            .unwrap_err();
+        assert!(refused.contains("too many"), "{refused}");
+        for task in &waiting {
+            task.abort();
+        }
+        for task in waiting {
+            let _ = task.await;
+        }
+        // 자리가 났다 — 다시 받는다(레지스트리가 없어 그 까닭으로 끝난다).
+        let after = narrow.open(json!({"path": "/x"})).await.unwrap_err();
+        assert!(!after.contains("too many"), "{after}");
+    }
 }

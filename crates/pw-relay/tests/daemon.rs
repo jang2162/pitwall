@@ -16,6 +16,8 @@ use pw_link::{
     RelayIdentity, RelayParts, RemoteHost, Transport,
 };
 use pw_relay::command::{self, Command, NotYet};
+
+const MAX_UNPROVEN_FOR_TESTS: usize = pw_relay::daemon::MAX_UNPROVEN;
 use pw_relay::config::IdleConfig;
 use pw_relay::daemon::{Activity, Daemon, DaemonParts};
 use pw_rpc::{Caller, Role};
@@ -73,6 +75,14 @@ struct Fixture {
 }
 
 fn fixture(max_unproven: usize, idle: IdleConfig) -> Fixture {
+    fixture_with(max_unproven, idle, Arc::new(NotYet))
+}
+
+fn fixture_with(
+    max_unproven: usize,
+    idle: IdleConfig,
+    narrow: Arc<dyn command::NarrowHandler>,
+) -> Fixture {
     let host = Arc::new(Counting {
         inner: LocalHost::new("local"),
         connects: AtomicUsize::new(0),
@@ -92,7 +102,7 @@ fn fixture(max_unproven: usize, idle: IdleConfig) -> Fixture {
             resumes: pw_link::Resumes::default(),
         },
         activity: Arc::clone(&activity) as Arc<dyn Activity>,
-        narrow: Arc::new(NotYet),
+        narrow,
         idle,
         name: Some("box".into()),
         max_unproven,
@@ -473,4 +483,60 @@ async fn a_connection_without_a_first_frame_is_closed_after_the_timeout() {
         "{waited:?}"
     );
     assert_eq!(fx.daemon.unproven(), 0);
+}
+
+/// 답을 끝내 주지 않는 처리기 — 불렸는가 · 처리가 버려졌는가를 센다.
+#[derive(Default)]
+struct Hanging {
+    started: Arc<AtomicUsize>,
+    dropped: Arc<AtomicUsize>,
+}
+
+struct DropMark(Arc<AtomicUsize>);
+
+impl Drop for DropMark {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+impl command::NarrowHandler for Hanging {
+    fn open(&self, _body: Value) -> command::BoxReply<'_> {
+        Box::pin(std::future::pending())
+    }
+
+    fn askpass(&self, _body: Value) -> command::BoxReply<'_> {
+        self.started.fetch_add(1, Ordering::SeqCst);
+        let mark = DropMark(Arc::clone(&self.dropped));
+        Box::pin(async move {
+            let _mark = mark;
+            std::future::pending().await
+        })
+    }
+}
+
+/// 좁은 명령을 부른 쪽이 답을 받기 전에 끝나면(ssh 가 askpass 도우미를 거둠) 데몬은 그 처리를 버린다 — 창의 다이얼로그가 닫히는
+/// 길이다(03 「보안」 의 git 인증, M7-15 리뷰 F6).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_narrow_command_is_dropped_when_its_caller_goes_away() {
+    let hanging = Arc::new(Hanging::default());
+    let (started, dropped) = (Arc::clone(&hanging.started), Arc::clone(&hanging.dropped));
+    let fx = fixture_with(MAX_UNPROVEN_FOR_TESTS, IdleConfig::default(), hanging);
+    let transport = serve_memory(&fx);
+    let mut framed = Framed::handshake(open(&transport).await);
+    framed
+        .write
+        .write_encoded(&serde_json::to_vec(&json!({"kind": "askpass", "body": {}})).unwrap())
+        .await
+        .unwrap();
+    eventually("the handler was not called", || {
+        started.load(Ordering::SeqCst) == 1
+    })
+    .await;
+    assert_eq!(dropped.load(Ordering::SeqCst), 0);
+    drop(framed);
+    eventually("the handler was kept after its caller left", || {
+        dropped.load(Ordering::SeqCst) == 1
+    })
+    .await;
 }
