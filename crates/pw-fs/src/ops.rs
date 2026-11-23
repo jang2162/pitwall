@@ -632,9 +632,12 @@ fn rename_excl(from: &Path, to: &Path) -> io::Result<()> {
     #[cfg(target_os = "linux")]
     {
         let (f, t) = (c_path(from)?, c_path(to)?);
+        // libc 의 `renameat2` 래퍼가 아니라 시스템 호출로 부른다 — musl(Relay 의 정적 빌드)에는 래퍼가 없어 링크가 실패하고,
+        // glibc 도 2.28 부터다. 호출이 없는 커널은 `ENOSYS` 로 대체 경로에 간다.
         // SAFETY: 두 경로는 NUL 로 끝나는 살아 있는 문자열이고 AT_FDCWD 는 늘 유효하다.
         let rc = unsafe {
-            libc::renameat2(
+            libc::syscall(
+                libc::SYS_renameat2,
                 libc::AT_FDCWD,
                 f.as_ptr(),
                 libc::AT_FDCWD,
