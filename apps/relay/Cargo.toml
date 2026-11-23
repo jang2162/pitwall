@@ -40,6 +40,8 @@ pw-host = { path = "../../crates/pw-host" }
 # 설치 · SSH 자동 페어링 시험(tests/bootstrap.rs — 가짜 ssh 로 이 Relay 를 「원격」 에 올린다, M7-06).
 pw-link = { path = "../../crates/pw-link", features = ["test-support"] }
 pw-release = { path = "../../crates/pw-release" }
+# 원격 askpass 시험(tests/askpass.rs — 진짜 git 쓰기 · 시험 원격 도우미, M7-15).
+pw-git = { path = "../../crates/pw-git", features = ["test-support"] }
 semver = "1.0.28"
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "net", "time"] }
