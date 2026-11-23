@@ -1308,3 +1308,88 @@ async fn an_unauthenticated_connection_lives_briefly() {
         "인증된 연결은 남는다"
     );
 }
+
+/// HTTP 가 붙지 않은 Host(헤드리스 · 붙이기 전)는 `[mcp.http]` 를 쓰지 않는다 — 파일에만 써 다음 기동 때 켜지는 길을 두지 않는다
+/// (델타 리뷰 R1).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_host_without_http_does_not_write_its_settings() {
+    let f = Fixture::new();
+    let file = f.paths.config.join("settings.toml");
+    let before = std::fs::read_to_string(&file).unwrap();
+    let mut settings = Rpc::connect(&f, ConnectionScope::Host).await;
+    for (key, value) in [("httpEnabled", json!(true)), ("httpPort", json!(9999))] {
+        let reply = settings
+            .call("mcp.settings.set", json!({"key": key, "value": value}))
+            .await;
+        assert_eq!(
+            reply["error"]["data"]["reason"],
+            json!("editOnThatMachine"),
+            "{key}: {reply}"
+        );
+    }
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), before, "파일 불변");
+}
+
+/// 인증된 연결의 실패(그 연결이 맞는 토큰을 보인 뒤 틀린 토큰)는 늦추지 않고 401 로 닫는다 — 늦춤 단계가 올라가 있어도(델타 리뷰
+/// R2). 인증 전 연결의 같은 실패는 늦춘다(대조).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failure_on_an_authenticated_connection_is_not_slowed() {
+    let port = free_port();
+    let f = Fixture::with_global(&http_global(true, port));
+    let e = f.endpoint(port, Limits::default()).await;
+    let mut agent = e.client();
+    agent.initialize().await;
+    let wrong = agent.with_token(&"0".repeat(64));
+    let ping = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"});
+    // 늦춤 단계를 올린다(넷째부터 250ms · 500ms).
+    for _ in 0..5 {
+        assert_eq!(wrong.post(&ping).await.status, 401);
+    }
+    let started = Instant::now();
+    assert_eq!(wrong.post(&ping).await.status, 401);
+    assert!(
+        started.elapsed() >= Duration::from_millis(500),
+        "대조: 인증 전 연결은 늦춘다"
+    );
+
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let body = ping.to_string();
+    stream
+        .write_all(&request(
+            "POST",
+            http::PATH,
+            &agent.headers(),
+            body.as_bytes(),
+        ))
+        .await
+        .unwrap();
+    let mut buf = [0u8; 1024];
+    let n = within(stream.read(&mut buf)).await.unwrap();
+    assert!(
+        buf[..n].starts_with(b"HTTP/1.1 200"),
+        "{}",
+        String::from_utf8_lossy(&buf[..n])
+    );
+    let started = Instant::now();
+    stream
+        .write_all(&request(
+            "POST",
+            http::PATH,
+            &wrong.headers(),
+            body.as_bytes(),
+        ))
+        .await
+        .unwrap();
+    let mut raw = Vec::new();
+    within(stream.read_to_end(&mut raw)).await.unwrap();
+    assert!(
+        raw.starts_with(b"HTTP/1.1 401"),
+        "{}",
+        String::from_utf8_lossy(&raw)
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(200),
+        "{:?}",
+        started.elapsed()
+    );
+}
