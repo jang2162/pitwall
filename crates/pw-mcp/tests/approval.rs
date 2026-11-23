@@ -50,6 +50,28 @@ pub struct ToolParams {
     pub key: Option<String>,
 }
 
+/// 받은 입력을 돌려주는 조회 툴의 입력: 그 밖의 키도 모두 받는다(`rest`).
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EchoParams {
+    pub project_id: String,
+    #[serde(default)]
+    pub worktree: Option<String>,
+    #[serde(flatten)]
+    pub rest: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EchoResult {
+    /// 그 Host 의 레지스트리에서 `agent_grant` 가 찾은 프로젝트 이름.
+    pub project: String,
+    pub project_id: String,
+    pub worktree: Option<String>,
+    /// `projectId` · `worktree` 밖에 받은 키.
+    pub keys: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
 pub struct NoProjectParams {
     #[serde(default)]
@@ -76,6 +98,14 @@ rpc_method! {
         result: ToolResult,
         tier: Write,
         mcp: { group: "project", name: "other_write" },
+    }
+
+    /// 받은 입력을 돌려주는 조회 툴(다른 머신의 Host 가 무엇을 받는지 — 18-m7-plan M7-18 ⑦). 실제 툴처럼 `agent_grant` 를 지난다.
+    pub FakeEcho: "approvaltest.echo" {
+        params: EchoParams,
+        result: EchoResult,
+        tier: Read,
+        mcp: { group: "project", name: "fake_echo" },
     }
 
     /// `dangerous` 툴.
@@ -476,6 +506,22 @@ fn register_tools(router: &mut pw_rpc::Router, probe: &Probe) {
             })
         }
     });
+    let echo = probe.clone();
+    router.unary(FakeEcho, move |ctx, p: EchoParams| {
+        let probe = echo.clone();
+        let scope = ctx.scope().clone();
+        async move {
+            let registry = probe.registry.get().expect("registry").clone();
+            let agent = agent_grant(&scope, &registry, &p.project_id)?;
+            probe.runs.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, RpcError>(EchoResult {
+                project: agent.project().name.clone(),
+                project_id: p.project_id,
+                worktree: p.worktree,
+                keys: p.rest.into_keys().collect(),
+            })
+        }
+    });
     let low = probe.clone();
     router.unary(FakeDangerousLow, move |_ctx, p: Planned<ToolParams>| {
         let plan = plan_of(
@@ -490,6 +536,9 @@ fn register_tools(router: &mut pw_rpc::Router, probe: &Probe) {
 
 /// 가짜 툴 가운데 계획 등급을 선언보다 낮게 낼 수 있는 것(`pw_mcp::catalog::LOWERED_PLAN_TIERS` 의 자리). `fake_over_tier` 는
 /// 없다 — 그 툴의 낮춘 계획은 거절된다.
+#[path = "approval/remote.rs"]
+mod remote;
+
 const FAKE_LOWERED: &[(&str, &[Tier])] = &[
     ("fake_dangerous_low", &[Tier::Write]),
     ("fake_run", &[Tier::Read, Tier::Write, Tier::Exec]),
@@ -586,6 +635,14 @@ impl Fixture {
     }
 
     fn services(&self, host_kind: HostKind) -> Arc<Services> {
+        self.services_with(host_kind, None)
+    }
+
+    fn services_with(
+        &self,
+        host_kind: HostKind,
+        machines: Option<Arc<dyn pw_mcp::checkout::Machines>>,
+    ) -> Arc<Services> {
         let router = Arc::new(HostRouter::new());
         router.add_host(self.host.clone()).unwrap();
         Arc::new(Services {
@@ -600,6 +657,7 @@ impl Fixture {
             transport: "test",
             host_kind,
             sessions: self.sessions.clone(),
+            machines,
         })
     }
 
@@ -613,11 +671,15 @@ impl Fixture {
     }
 
     async fn agent_on(&self, client: &str, cwd: &Path, host_kind: HostKind) -> Agent {
+        self.agent_with(client, cwd, self.services(host_kind)).await
+    }
+
+    async fn agent_with(&self, client: &str, cwd: &Path, services: Arc<Services>) -> Agent {
         let (server_io, client_io) = tokio::io::duplex(64 * 1024);
         let (r, w) = tokio::io::split(server_io);
         let cancel = CancellationToken::new();
         tokio::spawn(pw_mcp::serve(
-            self.services(host_kind),
+            services,
             SessionRequest {
                 project: None,
                 cwd: Some(cwd.to_path_buf()),

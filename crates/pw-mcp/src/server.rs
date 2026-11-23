@@ -61,6 +61,7 @@ use crate::approval::{
 };
 use crate::audit::{AuditApproval, AuditLog, Entry, Outcome, summarize};
 use crate::catalog::{Catalog, PROJECT_ID, Tool};
+use crate::checkout::{self, CHECKOUT, CheckoutInput, Machines, RemoteAim};
 use crate::client::{CallError, HostClient, Settled};
 use crate::exposure::{self, Exposure};
 use crate::marker::{Mark, Reason};
@@ -137,6 +138,9 @@ pub struct Services {
     pub host_kind: HostKind,
     /// 열린 세션의 등록부(`mcp.sessions`) — 앱은 `mcp.*` RPC 와 같은 것을, 헤드리스는 자기 것을 넣는다.
     pub sessions: Sessions,
+    /// 다른 머신 · 묶음(`checkout` 입력 — 18-m7-plan M7-18). Desktop 앱만 넣는다. `None`(헤드리스 · 시험)이면 다른 머신을
+    /// 겨누는 호출을 모두 거절하고 스키마에 `checkout` 을 더하지 않는다.
+    pub machines: Option<Arc<dyn Machines>>,
 }
 
 /// 세션을 여는 쪽이 알려 주는 것(`pitwall mcp [--project <path>]` 와 그 cwd).
@@ -290,8 +294,12 @@ struct Inner {
     audit: std::sync::mpsc::Sender<AuditJob>,
     /// 클라이언트가 끊었거나 세션이 끝났다([`WatchEof`] · `cancel` 의 자식). 승인 대기는 이것이 취소되면 거둔다.
     closed: CancellationToken,
-    /// 「이 세션 동안 허용」: (프로젝트, 툴 이름 · 계획의 열쇠).
+    /// 「이 세션 동안 허용」: (프로젝트, 툴 이름 · 계획의 열쇠). 다른 머신 호출의 열쇠에는 그 머신이 든다([`machine_key`]).
     allowed: Mutex<BTreeSet<(Option<String>, Allowance)>>,
+    /// 「이 세션 동안 이 머신 허용」 한 머신 id(18-m7-plan M7-18).
+    machines_allowed: Mutex<BTreeSet<String>>,
+    /// 머신마다의 연결(다른 머신만 — 이 머신은 `client`).
+    pool: checkout::Pool,
 }
 
 /// 승인을 지난 호출의 승인 방식과 계획 해시.
@@ -466,6 +474,8 @@ impl Session {
                 audit,
                 closed: cancel.child_token(),
                 allowed: Mutex::new(BTreeSet::new()),
+                machines_allowed: Mutex::new(BTreeSet::new()),
+                pool: checkout::Pool::default(),
                 cancel,
             }),
         })
@@ -491,7 +501,10 @@ impl Session {
     }
 
     fn to_mcp(&self, tool: &Tool) -> rmcp::model::Tool {
-        let schema = tool.input_schema_for(self.inner.project.is_some());
+        let mut schema = tool.input_schema_for(self.inner.project.is_some());
+        if self.offers_checkout(tool) {
+            schema = checkout::with_checkout(schema);
+        }
         let mut out = rmcp::model::Tool::new(
             tool.name.clone(),
             tool.description.clone(),
@@ -508,6 +521,12 @@ impl Session {
     /// 세션이 헤드리스 Host 에 붙었는가([`HostKind`]).
     fn headless(&self) -> bool {
         self.inner.services.host_kind == HostKind::Headless
+    }
+
+    /// 이 툴의 스키마에 `checkout` 을 더하는가: 다른 머신을 아는 앱 세션이고 툴이 `worktree` 를 받는다(결정 M5-D15 —
+    /// `project_info` 처럼 체크아웃을 보지 않는 툴에는 달지 않는다).
+    fn offers_checkout(&self, tool: &Tool) -> bool {
+        self.inner.services.machines.is_some() && !self.headless() && takes_worktree(tool)
     }
 
     /// `cancel` 은 rmcp 가 그 요청에 건 취소 토큰이다 — 클라이언트의 취소 알림(`notifications/cancelled`)이 오거나 rmcp 의
@@ -546,18 +565,50 @@ impl Session {
                 Some(Value::Object(Mark::denied(Reason::NotExposed).to_map())),
             ));
         };
+        // `checkout` 은 세션의 입력이다 — Host 로 가지 않는다(D57 ④).
+        let checkout = checkout::take(&mut args);
         if tool.project_scoped()
             && !args.contains_key(PROJECT_ID)
             && let Some(project) = &self.inner.project
         {
             args.insert(PROJECT_ID.into(), Value::String(project.id.clone()));
         }
-        let project_id = args
+        let mut project_id = args
             .get(PROJECT_ID)
             .and_then(Value::as_str)
             .map(str::to_owned);
-        self.fill_worktree(&tool, &mut args, project_id.as_deref());
-        if tool.project_scoped()
+        let aimed = match checkout {
+            Ok(checkout) => {
+                self.aim(&tool, checkout, &mut args, &mut project_id, &cancel)
+                    .await
+            }
+            Err(message) => Err(Refusal {
+                message,
+                mark: Mark::error(None),
+            }),
+        };
+        let (remote, explicit) = match aimed {
+            Ok(aimed) => aimed,
+            Err(refusal) => {
+                self.audit(
+                    None,
+                    &name,
+                    &args,
+                    project_id,
+                    refusal.mark.outcome,
+                    Some(refusal.message.clone()),
+                    None,
+                    started,
+                );
+                return Ok(failed(refusal.message, refusal.mark));
+            }
+        };
+        if !explicit {
+            self.fill_worktree(&tool, &mut args, project_id.as_deref());
+        }
+        // 다른 머신의 프로젝트 설정(노출 · 정책)은 그 머신의 것이다 — 이 세션이 읽지 않는다. 승인은 `auto_approve` 없이 묻는다.
+        if remote.is_none()
+            && tool.project_scoped()
             && let Some(target) = project_id.as_deref()
         {
             let refused = match self.target_config_unreadable(target, &cancel).await {
@@ -578,7 +629,8 @@ impl Session {
                 return Ok(failed(refusal.message, refusal.mark));
             }
         }
-        if tool.project_scoped()
+        if remote.is_none()
+            && tool.project_scoped()
             && let Some(target) = project_id.as_deref()
             && self.inner.project.as_ref().is_none_or(|p| p.id != target)
         {
@@ -625,12 +677,20 @@ impl Session {
         }
         if tool.planned {
             return self
-                .planned(&tool, args, project_id, started, &cancel)
+                .planned(&tool, args, project_id, started, &cancel, remote.as_ref())
                 .await;
         }
         // 카탈로그가 `write` 이상을 모두 `planned` 로 만든다 — 여기 오는 것은 계획 없는 `read` 툴뿐이다.
-        self.run(&tool, args, project_id, started, &cancel, None)
-            .await
+        self.run(
+            &tool,
+            args,
+            project_id,
+            started,
+            &cancel,
+            None,
+            remote.as_ref(),
+        )
+        .await
     }
 
     /// 계획을 만드는 툴의 호출(머리 주석의 5단계). 첫 호출은 승인 표 없이 — 툴은 부작용 없이 계획만 만든다.
@@ -641,12 +701,12 @@ impl Session {
         project_id: Option<String>,
         started: Instant,
         cancel: &CancellationToken,
+        remote: Option<&RemoteAim>,
     ) -> Result<CallToolResult, ErrorData> {
         let name = tool.name.clone();
         let first = self
-            .inner
-            .client
-            .call_until(tool.method, Value::Object(args.clone()), cancel)
+            .client_for(remote)
+            .call_until(tool.method, Value::Object(sent(&args)), cancel)
             .await;
         let plan = match first {
             // 이 호출에는 승인을 청하지 않았다(`read` 툴).
@@ -723,10 +783,14 @@ impl Session {
             Approval::Route(route) => Some(route.hold()),
             Approval::Unavailable => None,
         };
-        let approved = match self
-            .approve(tool, &plan, project_id.as_deref(), cancel)
-            .await
-        {
+        let decided = match remote {
+            Some(aim) => self.approve_remote(tool, &plan, aim, cancel).await,
+            None => {
+                self.approve(tool, &plan, project_id.as_deref(), cancel)
+                    .await
+            }
+        };
+        let approved = match decided {
             Ok(mode) => Approved {
                 mode,
                 hash: plan.hash,
@@ -747,8 +811,16 @@ impl Session {
             }
         };
         drop(hold);
-        self.run(tool, args, project_id, started, cancel, Some(approved))
-            .await
+        self.run(
+            tool,
+            args,
+            project_id,
+            started,
+            cancel,
+            Some(approved),
+            remote,
+        )
+        .await
     }
 
     /// 계획 하나의 승인 방식을 정한다: 정책 자동(`policyAuto`) → `auto_approve` → 세션 허용 · CLI 허용 → 창에 묻기. 등급은 계획
@@ -824,6 +896,7 @@ impl Session {
         answers.extend(third);
         let ask = ApprovalAsk {
             project_id: project_id.map(str::to_owned),
+            machine: None,
             session: self.inner.id.clone(),
             client: self.client(),
             cli,
@@ -832,8 +905,41 @@ impl Session {
             plan: plan.clone(),
             answers,
             remember: if cli { key.clone() } else { None },
+            remember_machine: None,
             timeout: policy.approval_timeout,
         };
+        match self
+            .ask_window(route, ask, name, project_id, cancel)
+            .await?
+        {
+            McpApprovalAnswer::Session => {
+                if let Some(key) = key {
+                    self.inner
+                        .allowed
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .insert((project_id.map(str::to_owned), key));
+                }
+                Ok(AuditApproval::Session)
+            }
+            McpApprovalAnswer::Window => Ok(AuditApproval::Window),
+            // 이 머신 호출에는 [이 머신 허용] 을 싣지 않는다 — 허브가 싣지 않은 답을 거절한다(`AnswerError::NotOffered`).
+            McpApprovalAnswer::Once | McpApprovalAnswer::Machine | McpApprovalAnswer::Deny => {
+                Ok(AuditApproval::Once)
+            }
+        }
+    }
+
+    /// 창에 묻고 답을 기다린다. [거절] · 창 없음 · 시한 · 취소는 `Err`. 답과 끊김이 겹치면 돌리지 않는다.
+    async fn ask_window(
+        &self,
+        route: &crate::approval::Approvals,
+        ask: ApprovalAsk,
+        name: &str,
+        project_id: Option<&str>,
+        cancel: &CancellationToken,
+    ) -> Result<McpApprovalAnswer, Refusal> {
+        let timeout = ask.timeout;
         let answered = tokio::select! {
             answered = route.ask(ask) => answered,
             () = cancel.cancelled() => return Err(Refusal::cancelled()),
@@ -852,18 +958,7 @@ impl Session {
                 Reason::ApprovalDenied,
                 format!("the call to `{name}` was denied in Pitwall"),
             )),
-            Ok(McpApprovalAnswer::Once) => Ok(AuditApproval::Once),
-            Ok(McpApprovalAnswer::Session) => {
-                if let Some(key) = key {
-                    self.inner
-                        .allowed
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .insert((project_id.map(str::to_owned), key));
-                }
-                Ok(AuditApproval::Session)
-            }
-            Ok(McpApprovalAnswer::Window) => Ok(AuditApproval::Window),
+            Ok(answer) => Ok(answer),
             Err(AskError::NoWindow) => Err(Refusal::denied(
                 Reason::NeedsApproval,
                 format!(
@@ -880,7 +975,7 @@ impl Session {
                 Reason::ApprovalTimeout,
                 format!(
                     "no one answered the approval request for `{name}` in Pitwall within {} seconds",
-                    policy.approval_timeout.as_secs()
+                    timeout.as_secs()
                 ),
             )),
             Err(AskError::Backlog) => Err(Refusal::denied(
@@ -891,6 +986,373 @@ impl Session {
             )),
             Err(AskError::Shutdown) => Err(Refusal::cancelled()),
         }
+    }
+
+    /// 다른 머신을 겨눈 계획의 승인(05 「다른 머신을 겨누는 호출」 · 결정 M7-D9). `auto_approve` · 정책 자동은 적용하지 않는다 —
+    /// 원격이 낸 계획의 `policyAuto` · `auto_approve` 를 넓히는 데 읽지 않는다(M7-P19). 「이 세션 동안 이 머신 허용」 은 신뢰한
+    /// 대상의 `write` · `exec` 계획 가운데 `auto_approve` 가 닿을 수 있는 것(사람이 띄운 실행처럼 툴이 막은 것은 빼고 — D69)과
+    /// 기억할 수 있는 것에만 닿는다. 미신뢰 대상 · `dangerous` 는 매번, 호출마다 청하는 승인(`read` 계획)은 지금 규칙(그 머신의
+    /// 그 열쇠)대로 묻는다. 묻는 창은 묶음의 로컬 멤버 창이다.
+    async fn approve_remote(
+        &self,
+        tool: &Tool,
+        plan: &ToolPlan,
+        aim: &RemoteAim,
+        cancel: &CancellationToken,
+    ) -> Result<AuditApproval, Refusal> {
+        let name = &tool.name;
+        let Approval::Route(route) = &self.inner.services.approval else {
+            return Err(Refusal::denied(
+                Reason::NeedsApproval,
+                format!(
+                    "`{name}` needs approval in the Pitwall app for this call, and this session has no approval route"
+                ),
+            ));
+        };
+        let tier = plan.tier;
+        let writes = matches!(tier, Tier::Write | Tier::Exec);
+        // 신뢰는 대상 머신의 것이다. 읽지 못하면 미신뢰로 본다(매번 묻는다 — 넓히지 않는 쪽).
+        let trusted = writes && self.remote_trusted(aim, cancel).await?;
+        let by_machine =
+            writes && trusted && plan.rules.auto_approve && plan.rules.remember != Remember::Never;
+        let cli = self.is_cli();
+        let routing = aim.routing.as_str();
+        if by_machine {
+            // 감사의 승인 방식은 `session` 이다 — 이 세션 동안의 허용이고, 대상 머신은 같은 행의 인자 요약(`checkout`)에 있다.
+            // 승인 방식 열의 `CHECK` 를 넓히려면 감사 파일을 새 판으로 옮겨야 한다(audit.rs 「셋째 판」 의 꼴) — 하지 않았다.
+            if self.machine_allows(&aim.machine) {
+                return Ok(AuditApproval::Session);
+            }
+            if cli && route.cli_machine_allowed(routing, &aim.machine) {
+                return Ok(AuditApproval::Window);
+            }
+        }
+        let key = if tier == Tier::Read {
+            match &plan.rules.remember {
+                Remember::Tool => Some(machine_key(name, None, tier, &aim.machine)),
+                Remember::Key { key } => Some(machine_key(name, Some(key), tier, &aim.machine)),
+                Remember::Never => None,
+            }
+        } else {
+            None
+        };
+        if let Some(key) = &key {
+            if self.session_allows(Some(routing), key) {
+                return Ok(AuditApproval::Session);
+            }
+            if cli && route.cli_allowed(routing, key) {
+                return Ok(AuditApproval::Window);
+            }
+        }
+        let mut answers = vec![McpApprovalAnswer::Deny, McpApprovalAnswer::Once];
+        if by_machine {
+            answers.push(McpApprovalAnswer::Machine);
+        }
+        if key.is_some() {
+            answers.push(if cli {
+                McpApprovalAnswer::Window
+            } else {
+                McpApprovalAnswer::Session
+            });
+        }
+        let policy = self.policy_for(Some(routing), cancel).await?;
+        let ask = ApprovalAsk {
+            project_id: Some(routing.to_owned()),
+            machine: Some(aim.machine.clone()),
+            session: self.inner.id.clone(),
+            client: self.client(),
+            cli,
+            tool: name.clone(),
+            tier,
+            plan: plan.clone(),
+            answers,
+            remember: if cli { key.clone() } else { None },
+            remember_machine: (cli && by_machine).then(|| aim.machine.clone()),
+            timeout: policy.approval_timeout,
+        };
+        match self
+            .ask_window(route, ask, name, Some(routing), cancel)
+            .await?
+        {
+            McpApprovalAnswer::Machine => {
+                if !cli {
+                    self.inner
+                        .machines_allowed
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .insert(aim.machine.clone());
+                }
+                Ok(if cli {
+                    AuditApproval::Window
+                } else {
+                    AuditApproval::Session
+                })
+            }
+            McpApprovalAnswer::Session => {
+                if let Some(key) = key {
+                    self.inner
+                        .allowed
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .insert((Some(routing.to_owned()), key));
+                }
+                Ok(AuditApproval::Session)
+            }
+            McpApprovalAnswer::Window => Ok(AuditApproval::Window),
+            McpApprovalAnswer::Once | McpApprovalAnswer::Deny => Ok(AuditApproval::Once),
+        }
+    }
+
+    /// 대상 머신이 그 프로젝트를 신뢰하는가(그 머신의 `project.trust`). 읽지 못하면 `false`. 취소면 거절.
+    async fn remote_trusted(
+        &self,
+        aim: &RemoteAim,
+        cancel: &CancellationToken,
+    ) -> Result<bool, Refusal> {
+        let answer = aim
+            .link
+            .client
+            .call_until(
+                "project.trust",
+                serde_json::json!({ "id": aim.project }),
+                cancel,
+            )
+            .await;
+        match answer {
+            Ok(value) => Ok(
+                serde_json::from_value::<pw_core::registry::trust::ProjectTrust>(value)
+                    .is_ok_and(|t| t.trusted()),
+            ),
+            Err(CallError::Cancelled) => Err(Refusal::cancelled()),
+            Err(e) => {
+                tracing::warn!(%e, machine = aim.machine, "cannot read the trust of another machine's project; asking every time");
+                Ok(false)
+            }
+        }
+    }
+
+    fn machine_allows(&self, machine: &str) -> bool {
+        self.inner
+            .machines_allowed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(machine)
+    }
+
+    /// 호출을 보낼 연결: 다른 머신이면 그 머신 연결, 아니면 이 머신 Host.
+    fn client_for<'a>(&'a self, remote: Option<&'a RemoteAim>) -> &'a HostClient {
+        remote.map_or(&self.inner.client, |r| &r.link.client)
+    }
+
+    /// `checkout` 을 풀어 대상을 정한다(05 「체크아웃」). 돌려주는 것은 (다른 머신 대상, 이 머신 대상을 `checkout` 으로 명시했는가).
+    /// - `checkout` 이 없으면: `projectId` 가 묶음 id 면 그 로컬 멤버로 바꾼다(없으면 거절). 나머지는 지금 그대로.
+    /// - 이 머신을 고르면: 그 묶음의 로컬 멤버와 그 워크트리로 바꾼다.
+    /// - 다른 머신을 고르면: 다른 머신을 아는 앱 세션 · 그 묶음 창이 열려 있음 · 그 머신에 닿음을 차례로 보고, 입력을 그 머신
+    ///   프로젝트 id · 워크트리로 바꾼다. 감사 인자 요약에 남게 `checkout`(머신 id · 워크트리)을 입력에 다시 넣는다 — 보낼 때
+    ///   떼어 낸다([`sent`]). `project_id` 는 승인 · 감사의 프로젝트(묶음의 로컬 멤버)가 된다.
+    async fn aim(
+        &self,
+        tool: &Tool,
+        checkout: Option<CheckoutInput>,
+        args: &mut Map<String, Value>,
+        project_id: &mut Option<String>,
+        cancel: &CancellationToken,
+    ) -> Result<(Option<RemoteAim>, bool), Refusal> {
+        let name = &tool.name;
+        let machines = self.inner.services.machines.as_deref();
+        let Some(checkout) = checkout else {
+            // 묶음 id 를 이 머신 대상으로(체크아웃을 주지 않은 호출).
+            if let (Some(machines), Some(pid)) = (machines, project_id.as_deref())
+                && tool.project_scoped()
+                && pw_core::registry::bundle::is_bundle_row_id(pid)
+            {
+                let bundle = bundle_of(machines, pid)?;
+                let Some(local) = bundle.local_project() else {
+                    return Err(Refusal {
+                        message: format!(
+                            "project `{pid}` has no checkout on this computer; give `checkout` with one of its machines"
+                        ),
+                        mark: Mark::error(None),
+                    });
+                };
+                let local = local.to_owned();
+                args.insert(PROJECT_ID.into(), Value::String(local.clone()));
+                *project_id = Some(local);
+            }
+            return Ok((None, false));
+        };
+        let unavailable = |message: String| Refusal::denied(Reason::MachineUnavailable, message);
+        let (Some(machines), false) = (machines, self.headless()) else {
+            return Err(unavailable(
+                "this session cannot target another checkout: only a session of the running Pitwall desktop app \
+                 can (open the Pitwall app; a headless session serves this computer only)"
+                    .to_owned(),
+            ));
+        };
+        if !takes_worktree(tool) {
+            return Err(Refusal {
+                message: format!("`{name}` does not take `checkout`"),
+                mark: Mark::error(None),
+            });
+        }
+        let Some(pid) = project_id.clone() else {
+            return Err(Refusal {
+                message: format!("`{name}` with `checkout` needs `projectId`"),
+                mark: Mark::error(None),
+            });
+        };
+        let machine = if checkout::is_local(&checkout.machine) {
+            checkout.machine.clone()
+        } else {
+            machines
+                .machine_id(&checkout.machine)
+                .ok_or_else(|| Refusal {
+                    message: format!(
+                        "unknown machine `{}`; project_list shows the machines of each project",
+                        checkout.machine
+                    ),
+                    mark: Mark::error(None),
+                })?
+        };
+        let bundle = bundle_of(machines, &pid)?;
+        let Some(member) = bundle.member(&machine) else {
+            return Err(Refusal {
+                message: format!(
+                    "project `{pid}` has no checkout on machine `{}`; project_list shows its machines",
+                    checkout.machine
+                ),
+                mark: Mark::error(None),
+            });
+        };
+        let given = match args.get(WORKTREE) {
+            Some(Value::String(w)) if !w.is_empty() => Some(w.clone()),
+            _ => None,
+        };
+        let worktree = match (checkout.worktree, given) {
+            (Some(a), Some(b)) if a != b => {
+                return Err(Refusal {
+                    message: "`worktree` and `checkout.worktree` differ; give the worktree in `checkout` only"
+                        .to_owned(),
+                    mark: Mark::error(None),
+                });
+            }
+            (a, b) => a.or(b),
+        };
+        match &worktree {
+            Some(w) => {
+                args.insert(WORKTREE.into(), Value::String(w.clone()));
+            }
+            None => {
+                args.remove(WORKTREE);
+            }
+        }
+        args.insert(PROJECT_ID.into(), Value::String(member.project_id.clone()));
+        if checkout::is_local(&machine) {
+            *project_id = Some(member.project_id.clone());
+            return Ok((None, true));
+        }
+        let shown = machines
+            .machine_name(&machine)
+            .unwrap_or_else(|| machine.clone());
+        // 승인을 물을 자리가 있어야 한다 — 그 묶음 창(로컬 멤버의 창)이 열려 있어야 한다(05 「체크아웃」).
+        let Some(routing) = bundle.local_project().map(str::to_owned) else {
+            return Err(unavailable(format!(
+                "project `{}` has no checkout on this computer, so Pitwall has no window to ask in for `{shown}`",
+                bundle.name
+            )));
+        };
+        let hears = match &self.inner.services.approval {
+            Approval::Route(route) => route.hears(&routing),
+            Approval::Unavailable => false,
+        };
+        if !hears {
+            return Err(unavailable(format!(
+                "targeting machine `{shown}` needs the window of project `{}` open in Pitwall; open it and call again",
+                bundle.name
+            )));
+        }
+        let link = tokio::select! {
+            link = self.inner.pool.get(machines, &machine) => link,
+            () = cancel.cancelled() => return Err(Refusal::cancelled()),
+        }
+        .map_err(|e| unavailable(format!("cannot reach machine `{shown}`: {}", e.message())))?;
+        args.insert(
+            CHECKOUT.into(),
+            checkout::audit_value(&machine, worktree.as_deref()),
+        );
+        *project_id = Some(routing.clone());
+        Ok((
+            Some(RemoteAim {
+                machine,
+                project: member.project_id.clone(),
+                routing,
+                link,
+            }),
+            true,
+        ))
+    }
+
+    /// `project_list` 의 결과에 묶음을 싣는다(05 「체크아웃」 — `project_list` 는 묶음을 낸다): 묶음에 든 프로젝트에 `bundleId` ·
+    /// `checkouts`(머신 id · Pitwall 의 이름 · 워크트리 없음 = 메인 체크아웃)를 더하고, 이 머신 체크아웃이 없는 묶음은 `id` 가 묶음 id 인
+    /// 항목으로 뒤에 붙인다. 다른 머신을 모르는 세션은 그대로다.
+    async fn with_bundles(&self, tool: &Tool, result: Value) -> Value {
+        let Some(machines) = self.inner.services.machines.as_deref() else {
+            return result;
+        };
+        if tool.method != "project.list" {
+            return result;
+        }
+        let Value::Array(mut items) = result else {
+            return result;
+        };
+        let bundles = match machines.bundles() {
+            Ok(bundles) => bundles,
+            Err(e) => {
+                tracing::warn!(%e, "cannot read the bundles for project_list");
+                return Value::Array(items);
+            }
+        };
+        let checkouts = |b: &pw_core::registry::bundle::ProjectBundle| {
+            Value::Array(
+                b.members
+                    .iter()
+                    .map(|m| {
+                        serde_json::json!({
+                            "machine": m.machine,
+                            "name": if checkout::is_local(&m.machine) {
+                                Some(m.machine.clone())
+                            } else {
+                                machines.machine_name(&m.machine)
+                            },
+                        })
+                    })
+                    .collect(),
+            )
+        };
+        for item in &mut items {
+            let Some(object) = item.as_object_mut() else {
+                continue;
+            };
+            let Some(id) = object.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            if let Some(bundle) = bundles
+                .iter()
+                .find(|b| !b.implicit && b.local_project() == Some(id))
+            {
+                object.insert("bundleId".into(), Value::String(bundle.id.clone()));
+                object.insert("checkouts".into(), checkouts(bundle));
+            }
+        }
+        for bundle in bundles.iter().filter(|b| b.local_project().is_none()) {
+            items.push(serde_json::json!({
+                "id": bundle.id,
+                "name": bundle.name,
+                "bundleId": bundle.id,
+                "checkouts": checkouts(bundle),
+            }));
+        }
+        Value::Array(items)
     }
 
     /// 대상 프로젝트의 승인 정책(프로젝트 없는 호출은 전역). 프로젝트를 읽지 못하면 그 오류로 거절한다.
@@ -964,6 +1426,7 @@ impl Session {
     /// 전에 감사 행을 `started` 로 쓰고([`Self::begin`] — 큐를 지나지 않고 기다린다) 못 쓰면 돌리지 않고 거절한다(결정 M5-D11).
     /// 그 뒤 Host RPC(승인을 지났으면 입력의 예약 키에 승인 표를 싣는다), 끝나면 같은 행을 결과 · 상세 · 크기 · 소요로 고친다
     /// (큐로). 승인 방식 · 계획 해시는 그 행에 남는다. 승인을 지나지 않은 `read` 는 끝난 뒤 새 행 하나다(큐로 — 실패는 경고만).
+    #[allow(clippy::too_many_arguments)] // 호출 하나의 대상 · 승인 · 감사 열이다.
     async fn run(
         &self,
         tool: &Tool,
@@ -972,6 +1435,7 @@ impl Session {
         started: Instant,
         cancel: &CancellationToken,
         approved: Option<Approved>,
+        remote: Option<&RemoteAim>,
     ) -> Result<CallToolResult, ErrorData> {
         let name = tool.name.clone();
         // 선기록의 기준: `write` 이상이거나 승인을 지난 호출. 승인을 청하는 `read` 호출(「이 연결 열기」, 프로덕션 `ask` 의
@@ -1008,7 +1472,7 @@ impl Session {
         let params = if tool.unit_params {
             Value::Null
         } else {
-            let mut params = args.clone();
+            let mut params = sent(&args);
             if let Some(approved) = &approved {
                 params.insert(
                     APPROVAL_KEY.to_owned(),
@@ -1028,18 +1492,13 @@ impl Session {
         // 지점」(`pw_rpc::PointOfNoReturn` — `db_execute` 의 커밋)을 넘은 핸들러는 버려지지 않고 끝까지 돌아 답한다. 그 답으로 행을
         // 끝내 감사가 사실과 맞게 한다. 그 결과는 에이전트에게 가지 않을 수 있다 — rmcp 는 취소된 요청의 늦은 응답을 버린다(rmcp 3.9
         // `serve_inner` 의 `local_ct_pool`). 그래서 감사 행이 정본이다.
+        let client = self.client_for(remote);
         let settled = if row.is_some() {
-            self.inner
-                .client
+            client
                 .call_until_settled(tool.method, params, cancel, SETTLE_AFTER_CANCEL)
                 .await
         } else {
-            Settled::Answered(
-                self.inner
-                    .client
-                    .call_until(tool.method, params, cancel)
-                    .await,
-            )
+            Settled::Answered(client.call_until(tool.method, params, cancel).await)
         };
         // 표지 뒤의 꼬리 글은 Host 가 취소를 받은 뒤에 답한 호출에만 — 취소가 닿기 전에 끝난 호출(표지와 무관)은 다른 글이다.
         let after_cancel = match &settled {
@@ -1049,6 +1508,7 @@ impl Session {
         };
         match settled {
             Settled::Answered(Ok(result)) => {
+                let result = self.with_bundles(tool, result).await;
                 Ok(self.finished(row, &name, &args, project_id, tool, result, started, None))
             }
             Settled::Answered(Err(e)) => {
@@ -1755,6 +2215,43 @@ fn exposure_feed(
     }
 }
 
+/// Host 로 보낼 입력: 세션의 입력(`checkout`)을 뗀다 — Host 는 `checkout` 을 모른다(D57 ④).
+fn sent(args: &Map<String, Value>) -> Map<String, Value> {
+    let mut sent = args.clone();
+    sent.remove(CHECKOUT);
+    sent
+}
+
+/// 다른 머신 호출의 세션 허용 열쇠: 머신을 열쇠에 넣어 이 머신 · 다른 머신의 같은 열쇠가 서로 닿지 않게 한다.
+fn machine_key(tool: &str, key: Option<&str>, tier: Tier, machine: &str) -> Allowance {
+    Allowance {
+        tool: tool.to_owned(),
+        key: Some(format!("@{machine}:{}", key.unwrap_or_default())),
+        tier,
+    }
+}
+
+/// Desktop 의 프로젝트 이름의 묶음. 모르는 이름(다른 머신의 프로젝트 id 등)은 거절한다.
+fn bundle_of(
+    machines: &dyn Machines,
+    project_id: &str,
+) -> Result<pw_core::registry::bundle::ProjectBundle, Refusal> {
+    match machines.bundle(project_id) {
+        Ok(Some(bundle)) => Ok(bundle),
+        Ok(None) => Err(Refusal {
+            message: format!(
+                "`{project_id}` is not a project or bundle id of this Pitwall; another machine's project ids are not \
+                 accepted (project_list lists the ids)"
+            ),
+            mark: Mark::error(None),
+        }),
+        Err(e) => Err(Refusal {
+            message: format!("cannot read the projects of this Pitwall: {e}"),
+            mark: Mark::error(None),
+        }),
+    }
+}
+
 /// 입력 스키마에 [`WORKTREE`] 가 있는가.
 fn takes_worktree(tool: &Tool) -> bool {
     tool.input_schema_for(false)
@@ -1945,6 +2442,7 @@ mod tests {
                 transport: "test",
                 host_kind: HostKind::App,
                 sessions,
+                machines: None,
             });
             Session::open(
                 services,
@@ -2004,6 +2502,7 @@ mod tests {
                     mode,
                     hash: hash.to_owned(),
                 }),
+                None,
             )
             .await
             .unwrap()

@@ -39,6 +39,8 @@ const fake = vi.hoisted(() => ({
   targets: [] as unknown[],
   /** 열린 `remote.connect` 스트림 수. */
   linkStreams: 0,
+  /** 열린 `mcp.approvals` 스트림: 스트림 id → (머신, 들은 프로젝트). */
+  approvals: new Map<number, { machine: string; projectId: unknown }>(),
 }));
 
 vi.mock("../tauri-transport", async () => {
@@ -146,9 +148,22 @@ vi.mock("../tauri-transport", async () => {
               params: { streamId, data: { state: "connected", machine: MINI_ID } },
             });
           }
+          case "mcp.approvals": {
+            // 실제 Host 처럼 그 창 연결의 프로젝트만 듣게 한다(`scope_may_write`) — 멤버 연결은 그 머신의 프로젝트 id 다.
+            const project = "member" in target ? "r1" : "p1";
+            if (params.projectId !== project)
+              return send({
+                id: m.id,
+                error: { code: -32001, message: "not this project's window", data: null },
+              });
+            const streamId = next++;
+            fake.approvals.set(streamId, { machine, projectId: params.projectId });
+            return reply({ streamId });
+          }
           case "stream.cancel": {
             const { streamId } = m.params as { streamId: number };
             if (streams.delete(streamId)) fake.linkStreams--;
+            fake.approvals.delete(streamId);
             return;
           }
           case "fs.list": {
@@ -312,6 +327,7 @@ beforeEach(() => {
   ]);
   fake.targets = [];
   fake.linkStreams = 0;
+  fake.approvals = new Map();
   activeWorktreeStore.setState({ top: undefined });
   resetWindowFileTree();
   localStorage.clear();
@@ -434,6 +450,19 @@ it("shows the active machine as text in the title and status bars and unmarks it
   // 떠나는 체크아웃(그 머신)의 탭은 닫히고, 그 머신을 쓰는 것이 없으니 링크 스트림을 닫는다.
   expect(viewWith("remote text")).toBeUndefined();
   await vi.waitFor(() => expect(fake.linkStreams).toBe(0));
+});
+
+// M7-18: Desktop 의 승인 허브는 활성 체크아웃과 무관하게 창의 이 머신 연결 · 이 머신 프로젝트 id 로 듣는다 — 원격이 활성인 동안에도
+// 이 Desktop 세션의 승인 요청(다른 머신을 겨눈 것 포함 — 묶음의 로컬 멤버 id 로 온다)을 받는다.
+it("keeps hearing this Desktop's approvals on this machine's connection while another machine's checkout is active", async () => {
+  await mount();
+  const heard = () => [...fake.approvals.values()];
+  await vi.waitFor(() => expect(heard()).toEqual([{ machine: "local", projectId: "p1" }]));
+  await push({ worktree: REMOTE_MAIN, file: REMOTE_FILE });
+  await vi.waitFor(() => expect(viewWith("remote text")).toBeDefined());
+  expect(document.querySelector("[data-testid=status-machine]")?.textContent).toBe("mini");
+  await settle();
+  expect(heard()).toEqual([{ machine: "local", projectId: "p1" }]);
 });
 
 it("lists the bundle's other machine in the branch popup and makes its checkout the active one", async () => {

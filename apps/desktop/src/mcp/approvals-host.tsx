@@ -6,6 +6,8 @@ import type { McpApprovalRequest, RpcClient } from "@pitwall/rpc-client";
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
 
+import { LOCAL_MACHINE } from "../checkout/checkout";
+import { useCheckoutHost } from "../checkout/checkout-hosts";
 import { useHost } from "../rpc/host";
 import { agentLine } from "./agent-text";
 import { ApprovalDialog } from "./approval-dialog";
@@ -62,6 +64,18 @@ export function McpApprovals({ projectId }: { projectId: string | null }) {
   const { client } = useHost();
   if (!client) return null;
   return <WindowApprovals client={client} projectId={projectId} />;
+}
+
+/**
+ * 프로젝트 창의 승인(18-m7-plan M7-18): Desktop 의 승인 허브는 **늘 창의 이 머신 연결 · 이 머신 프로젝트 id** 로 듣는다 — 활성
+ * 체크아웃이 다른 머신이어도 그렇다. 다른 머신을 겨누는 이 Desktop 세션의 요청도 묶음의 로컬 멤버 id 로 온다. 활성 체크아웃의
+ * 연결로 들으면 원격이 활성인 동안 이 창이 허브를 듣지 않아 요청이 「창 없음」 으로 거절된다. 원격 머신 Relay 의 허브를 듣는 것은
+ * M7-20 이 더한다. 이 머신 체크아웃이 없는 묶음 창(원격만)은 듣지 않는다.
+ */
+export function ProjectWindowApprovals() {
+  const local = useCheckoutHost(LOCAL_MACHINE);
+  if (!local.client || local.projectId === undefined) return null;
+  return <WindowApprovals client={local.client} projectId={local.projectId} />;
 }
 
 /** `McpApprovals` 의 몸통 — 시험은 가짜 클라이언트 · 알림 · 저장소를 넘긴다. */

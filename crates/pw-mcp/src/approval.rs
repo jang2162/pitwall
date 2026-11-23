@@ -50,6 +50,10 @@ pub enum McpApprovalAnswer {
     Session,
     /// CLI 요청의 [이 프로젝트 창이 열려 있는 동안 CLI 허용](결정 M5-D5).
     Window,
+    /// 다른 머신을 겨눈 `write` · `exec` 의 [이 세션 동안 이 머신 허용](18-m7-plan M7-18 — D57 ⑤). 그 세션의 그 머신 `write` ·
+    /// `exec` 에 닿고, 미신뢰 대상 · `dangerous` · 사람이 띄운 실행 · 호출마다 청하는 승인에는 닿지 않는다. CLI 요청이면
+    /// [이 프로젝트 창이 열려 있는 동안 CLI 에 이 머신 허용](D61 의 꼴)이다.
+    Machine,
 }
 
 /// 창에 보이는 승인 요청.
@@ -63,6 +67,9 @@ pub struct McpApprovalRequest {
     pub id: u64,
     /// 대상 프로젝트. 프로젝트 없는 쓰기면 `null`.
     pub project_id: Option<String>,
+    /// 다른 머신을 겨눈 호출이면 그 머신 id(`checkout` 입력 — 18-m7-plan M7-18). 이 머신이면 `null`. 화면은 이 id 를 Desktop 의
+    /// 별명으로 보인다(Relay 가 댄 이름이 아니다 — M7-P19).
+    pub machine: Option<String>,
     /// 이 요청은 받은 창의 프로젝트 것이 아니다(프로젝트 없는 요청 — 가장 최근에 앞에 있던 창에 뜬다. 결정 M5-D29).
     pub not_this_project: bool,
     /// 요청한 MCP 세션(감사 행의 `session`).
@@ -120,6 +127,8 @@ pub struct Allowance {
 #[derive(Debug, Clone)]
 pub struct ApprovalAsk {
     pub project_id: Option<String>,
+    /// 다른 머신을 겨눈 호출이면 그 머신 id([`McpApprovalRequest::machine`]).
+    pub machine: Option<String>,
     pub session: String,
     pub client: Option<String>,
     pub cli: bool,
@@ -129,6 +138,8 @@ pub struct ApprovalAsk {
     pub answers: Vec<McpApprovalAnswer>,
     /// [`McpApprovalAnswer::Window`] 로 답하면 기억할 것.
     pub remember: Option<Allowance>,
+    /// CLI 요청을 [`McpApprovalAnswer::Machine`] 으로 답하면 기억할 머신 id(창이 열려 있는 동안 CLI 에 이 머신 허용).
+    pub remember_machine: Option<String>,
     pub timeout: Duration,
 }
 
@@ -208,6 +219,8 @@ struct State {
     pending: BTreeMap<u64, Pending>,
     /// CLI 허용: (프로젝트, 열쇠).
     cli: BTreeSet<(String, Allowance)>,
+    /// CLI 의 머신 허용: (프로젝트, 머신 id).
+    cli_machines: BTreeSet<(String, String)>,
     closed: bool,
 }
 
@@ -230,6 +243,7 @@ struct Pending {
     request: McpApprovalRequest,
     route: Route,
     remember: Option<Allowance>,
+    remember_machine: Option<String>,
     reply: Option<oneshot::Sender<Result<McpApprovalAnswer, AskError>>>,
 }
 
@@ -343,6 +357,18 @@ impl Approvals {
             .contains(&(project.to_owned(), allowance.clone()))
     }
 
+    /// 그 프로젝트 창이 열려 있는 동안의 CLI 머신 허용이 있는가.
+    pub fn cli_machine_allowed(&self, project: &str, machine: &str) -> bool {
+        self.lock()
+            .cli_machines
+            .contains(&(project.to_owned(), machine.to_owned()))
+    }
+
+    /// 그 프로젝트를 듣는 창이 있는가 — 다른 머신을 겨누는 호출은 묶음 창이 열려 있어야 한다(05 「체크아웃」).
+    pub fn hears(&self, project: &str) -> bool {
+        self.lock().hears(project)
+    }
+
     /// 대기 중인 요청 수.
     pub fn pending(&self) -> usize {
         self.lock().pending.len()
@@ -379,6 +405,7 @@ impl Approvals {
                 id,
                 not_this_project: ask.project_id.is_none(),
                 project_id: ask.project_id,
+                machine: ask.machine,
                 session: ask.session,
                 client: ask.client,
                 cli: ask.cli,
@@ -402,6 +429,7 @@ impl Approvals {
                     request,
                     route,
                     remember: ask.remember,
+                    remember_machine: ask.remember_machine,
                     reply: Some(tx),
                 },
             );
@@ -462,6 +490,12 @@ impl Approvals {
             }
             _ => None,
         };
+        let remember_machine = match (&pending.route, &pending.remember_machine, answer) {
+            (Route::Project(project), Some(machine), McpApprovalAnswer::Machine) => {
+                Some((project.clone(), machine.clone()))
+            }
+            _ => None,
+        };
         let seen = match (&pending.route, answer) {
             (_, McpApprovalAnswer::Deny) => None,
             (Route::Project(project), _) if !pending.request.plan.seen.is_empty() => {
@@ -477,6 +511,9 @@ impl Approvals {
         }
         if let Some(entry) = remember {
             state.cli.insert(entry);
+        }
+        if let Some(entry) = remember_machine {
+            state.cli_machines.insert(entry);
         }
         Ok(seen)
     }
@@ -568,6 +605,7 @@ impl Drop for Listener {
             && !state.hears(project)
         {
             state.cli.retain(|(p, _)| p != project);
+            state.cli_machines.retain(|(p, _)| p != project);
             for pending in state.pending.values_mut() {
                 if pending.route == Route::Project(project.clone())
                     && let Some(reply) = pending.reply.take()
@@ -624,6 +662,8 @@ mod tests {
     fn ask(project: Option<&str>, cli: bool) -> ApprovalAsk {
         ApprovalAsk {
             project_id: project.map(str::to_owned),
+            machine: None,
+            remember_machine: None,
             session: "s1".into(),
             client: Some("agent 1".into()),
             cli,

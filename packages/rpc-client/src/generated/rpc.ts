@@ -8676,7 +8676,13 @@ export type McpApprovalAnswer =
 /**  [이 세션 동안 허용] — 그 세션 · 그 프로젝트 · 그 툴(계획이 열쇠를 정하면 그 툴의 그 열쇠). */
 "session" | 
 /**  CLI 요청의 [이 프로젝트 창이 열려 있는 동안 CLI 허용](결정 M5-D5). */
-"window";
+"window" | 
+/**
+ *  다른 머신을 겨눈 `write` · `exec` 의 [이 세션 동안 이 머신 허용](18-m7-plan M7-18 — D57 ⑤). 그 세션의 그 머신 `write` ·
+ *  `exec` 에 닿고, 미신뢰 대상 · `dangerous` · 사람이 띄운 실행 · 호출마다 청하는 승인에는 닿지 않는다. CLI 요청이면
+ *  [이 프로젝트 창이 열려 있는 동안 CLI 에 이 머신 허용](D61 의 꼴)이다.
+ */
+"machine";
 
 export type McpApprovalAnswerParams = {
 	/**  `mcp.approvals` 가 보낸 요청의 `id`. */
@@ -8698,6 +8704,11 @@ export type McpApprovalRequest = {
 	id: number,
 	/**  대상 프로젝트. 프로젝트 없는 쓰기면 `null`. */
 	projectId: string | null,
+	/**
+	 *  다른 머신을 겨눈 호출이면 그 머신 id(`checkout` 입력 — 18-m7-plan M7-18). 이 머신이면 `null`. 화면은 이 id 를 Desktop 의
+	 *  별명으로 보인다(Relay 가 댄 이름이 아니다 — M7-P19).
+	 */
+	machine: string | null,
 	/**  이 요청은 받은 창의 프로젝트 것이 아니다(프로젝트 없는 요청 — 가장 최근에 앞에 있던 창에 뜬다. 결정 M5-D29). */
 	notThisProject: boolean,
 	/**  요청한 MCP 세션(감사 행의 `session`). */

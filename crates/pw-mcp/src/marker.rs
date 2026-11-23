@@ -69,6 +69,9 @@ pub enum Reason {
     /// 정책을 정할 수 없다 — 전역으로 떨어지지 않고 그 프로젝트를 겨누는 호출을 모두 거절한다(fail-closed, 17-m6-plan M6-01
     /// 리뷰 1 — `pw_core::config::mcp_policy::ProjectConfigUnreadable`, Host 의 `data.reason = "projectConfigUnreadable"`).
     ProjectConfigUnreadable,
+    /// (거절) 다른 머신을 겨눈 호출(`checkout` 입력)을 이 세션이 그 머신으로 보낼 수 없다 — 헤드리스 · 다른 머신을 모르는 세션,
+    /// 그 묶음 창이 열려 있지 않음, 그 머신에 붙으려면 사람이 Pitwall 에서 답할 것이 있음, 닿지 못함(18-m7-plan M7-18).
+    MachineUnavailable,
 }
 
 impl Reason {
@@ -91,6 +94,7 @@ impl Reason {
         Reason::AuditUnavailable,
         Reason::MarkMemoryUnavailable,
         Reason::ProjectConfigUnreadable,
+        Reason::MachineUnavailable,
     ];
 
     /// Host RPC 의 `PERMISSION_DENIED` 오류가 싣는 `data.reason`(camelCase) ↔ 까닭 코드. 거절 까닭을 더하는 행은 [`Reason`] 과 이
@@ -149,6 +153,7 @@ impl Reason {
             Reason::AuditUnavailable => "audit_unavailable",
             Reason::MarkMemoryUnavailable => "mark_memory_unavailable",
             Reason::ProjectConfigUnreadable => "project_config_unreadable",
+            Reason::MachineUnavailable => "machine_unavailable",
         }
     }
 

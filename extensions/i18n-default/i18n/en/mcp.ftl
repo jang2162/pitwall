@@ -96,6 +96,8 @@ mcp-approval-agent = Agent
 mcp-approval-unknown-agent = An agent that did not give its name
 mcp-approval-cli = Called from the CLI (pitwall tool)
 mcp-approval-tool = Tool
+mcp-approval-machine = Machine
+mcp-approval-machine-note = Runs on another machine — auto approve does not apply there
 mcp-approval-tier = Tier
 mcp-approval-tier-read = Read
 mcp-approval-tier-write = Write
@@ -150,6 +152,8 @@ mcp-approval-deny = Deny
 mcp-approval-once = Allow once
 mcp-approval-session = Allow for this session
 mcp-approval-window = Allow the CLI while this window is open
+mcp-approval-allow-machine = Allow { $machine } for this session
+mcp-approval-allow-machine-cli = Allow the CLI on { $machine } while this window is open
 mcp-approval-notify-title = Pitwall approval request
 # $agent: requesting agent ("An agent" if it gave no name), $tool: tool name
 mcp-approval-notify-body = { $agent } is waiting for approval of { $tool }

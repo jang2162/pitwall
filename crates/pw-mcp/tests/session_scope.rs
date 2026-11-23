@@ -93,6 +93,7 @@ impl Fixture {
             // 앱의 Host 에 붙은 세션(시험이 LocalHost 를 앱처럼 띄운다) — 범위는 Host 종류와 무관하다.
             host_kind: HostKind::App,
             sessions: Default::default(),
+            machines: None,
         })
     }
 

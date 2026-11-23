@@ -153,6 +153,7 @@ impl TestApp {
             transport: "socket",
             host_kind: HostKind::App,
             sessions: sessions.clone(),
+            machines: None,
         });
         let uid = socket::current_uid();
         let path = socket::endpoint(

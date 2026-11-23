@@ -144,6 +144,7 @@ fn services(
         transport: "test",
         host_kind: kind,
         sessions,
+        machines: None,
     })
 }
 

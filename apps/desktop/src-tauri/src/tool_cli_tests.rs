@@ -459,6 +459,7 @@ impl Fixture {
             transport: "test",
             host_kind: self.kind,
             sessions: Default::default(),
+            machines: None,
         })
     }
 

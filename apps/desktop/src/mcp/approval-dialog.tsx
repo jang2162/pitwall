@@ -1,6 +1,9 @@
 // MCP 승인 다이얼로그(16-m5-plan M5-14, 10-ui.md 「다이얼로그 · 팝업 목록」 의 MCP 행). 요청 에이전트 · 툴 · 등급 · 바뀔 것을
 // 보이고 [거절] [이번만 허용] [이 세션 동안 허용] 으로 답한다. 무엇을 띄울지 · 답을 보내는 것은 approvals-host.tsx 다.
 //
+// - 다른 머신을 겨눈 요청(`machine` — 18-m7-plan M7-18)은 「머신」 줄에 그 머신의 이름을 보인다. 이름은 Desktop 의 별명이다
+//   (`useMachineName` — Relay 가 댄 이름이 아니다, M7-P19). 그 머신의 `write` · `exec` 에는 [이 세션 동안 <머신> 허용](`machine`,
+//   CLI 면 창이 열려 있는 동안 CLI 에) 단추가 붙는다 — Host 가 `answers` 에 실을 때만.
 // - 셋째 단추: CLI 요청이면 「창이 열려 있는 동안 CLI 허용」(`window`, 결정 M5-D5), 아니면 「이 세션 동안 허용」(`session`).
 //   `dangerous` 와 기억하지 않는 계획(`open_with_upsert` — `rules.remember` 가 `never`, 결정 M5-D31)에는 없다. Host 가 요청에
 //   실은 `answers` 에 없는 답도 그리지 않는다 — 둘 다 맞아야 보인다.
@@ -34,6 +37,7 @@ import type {
 import { Lock, TriangleAlert } from "lucide-react";
 import { memo, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
+import { useMachineName } from "../checkout/machine-mark";
 import { ConnectionMark } from "../db/safety/connection-mark";
 import { ConnectionNameField } from "../db/safety/name-confirm";
 import { useDbSafetyStrings } from "../db/safety/strings";
@@ -65,6 +69,19 @@ export function thirdAnswer(request: McpApprovalRequest): McpApprovalAnswer | un
     return undefined;
   const answer: McpApprovalAnswer = request.cli ? "window" : "session";
   return request.answers.includes(answer) ? answer : undefined;
+}
+
+/**
+ * 머신 id 의 Desktop 이름(별명 — `useMachineName`). 다른 머신을 겨눈 요청에서만 그린다 — 이름을 읽는 쿼리가 이 머신 요청에 돌지 않게.
+ */
+export function MachineName({
+  machine,
+  children = (name) => name,
+}: {
+  machine: string;
+  children?: (name: string) => ReactNode;
+}) {
+  return <>{children(useMachineName()(machine))}</>;
 }
 
 /** 쳐야 하는 연결 이름: 파괴 등급 문장이 든 SQL 변경의 연결(겹치지 않게, 나온 순서). */
@@ -420,6 +437,7 @@ export function ApprovalDialog({
   useKeymapPopup(true);
   const { plan } = request;
   const third = thirdAnswer(request);
+  const machine = request.machine ?? undefined;
   const required = useMemo(() => namesRequired(plan), [plan]);
   const [typed, setTyped] = useState<Record<string, string>>({});
   const namesOk = required.every((name) => typed[name] === name);
@@ -489,6 +507,21 @@ export function ApprovalDialog({
                 <dd>
                   <AgentLine text={request.tool} T={T} testId="mcp-approval-tool" />
                 </dd>
+                {machine !== undefined && (
+                  <>
+                    <dt className="text-[12px] text-ui-muted-foreground">{T.machine}</dt>
+                    <dd className="flex min-w-0 flex-col gap-0.5">
+                      <span
+                        data-testid="mcp-approval-machine"
+                        data-machine={machine}
+                        className="truncate font-semibold"
+                      >
+                        <MachineName machine={machine} />
+                      </span>
+                      <span className="text-[12px] text-ui-muted-foreground">{T.machineNote}</span>
+                    </dd>
+                  </>
+                )}
                 <dt className="text-[12px] text-ui-muted-foreground">{T.tierLabel}</dt>
                 <dd
                   data-testid="mcp-approval-tier"
@@ -573,6 +606,23 @@ export function ApprovalDialog({
               >
                 {!armed && <Lock size={12} aria-hidden data-testid="mcp-approval-lock" />}
                 {third === "window" ? T.window : T.session}
+              </button>
+            )}
+            {machine !== undefined && request.answers.includes("machine") && (
+              <button
+                type="button"
+                data-answer="machine"
+                data-locked={armed ? undefined : "true"}
+                disabled={!armed || !namesOk}
+                title={armed ? undefined : T.locked}
+                className={`${BUTTON} inline-flex items-center gap-1`}
+                onPointerDown={() => press("machine")}
+                onClick={(e) => allow("machine", e)}
+              >
+                {!armed && <Lock size={12} aria-hidden data-testid="mcp-approval-lock" />}
+                <MachineName machine={machine}>
+                  {(name) => (request.cli ? T.allowMachineCli(name) : T.allowMachine(name))}
+                </MachineName>
               </button>
             )}
           </div>

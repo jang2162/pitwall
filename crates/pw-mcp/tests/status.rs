@@ -177,6 +177,7 @@ impl Fixture {
             transport: "test",
             host_kind: HostKind::App,
             sessions: self.sessions.clone(),
+            machines: None,
         })
     }
 

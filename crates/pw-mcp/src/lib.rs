@@ -8,6 +8,7 @@
 //!   `pw_core::registry::plan`(툴 크레이트가 이 크레이트에 의존하지 않는다).
 //! - [`audit`]: 감사 로그(`$STATE/mcp/audit.db`)와 인자 요약 규칙.
 //! - [`server`]: MCP 세션 하나(rmcp). 툴 호출을 Host 의 RPC 로 옮긴다.
+//! - [`checkout`]: 다른 머신을 겨누는 호출 — `checkout` 입력 · 묶음 풀기 · 머신마다의 연결 풀(18-m7-plan M7-18).
 //! - [`sessions`]: 열린 세션의 등록부와 상태 이벤트(`mcp.sessionsChanged` · `mcp.activity`).
 //! - [`methods`]: 사람의 화면이 부르는 `mcp.*` RPC(세션 목록 · 툴 목록 · 감사 로그). 에이전트에게는 열지 않는다.
 //! - [`marker`]: `tools/call` 결과의 `_meta` 에 싣는 결과 표지와 까닭 코드.
@@ -73,6 +74,7 @@
 pub mod approval;
 pub mod audit;
 pub mod catalog;
+pub mod checkout;
 mod client;
 pub mod code;
 pub mod exposure;

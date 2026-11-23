@@ -172,6 +172,7 @@ async fn app() -> App {
         transport: "socket",
         host_kind: pw_mcp::HostKind::App,
         sessions: Default::default(),
+        machines: None,
     });
     let uid = socket::current_uid();
     let path = socket::endpoint("test-key", &paths.state, &base, uid).unwrap();

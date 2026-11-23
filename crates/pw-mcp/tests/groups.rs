@@ -108,6 +108,7 @@ impl Fixture {
             transport: "test",
             host_kind: pw_mcp::HostKind::App,
             sessions: Default::default(),
+            machines: None,
         });
         let (server_io, client_io) = tokio::io::duplex(64 * 1024);
         let cancel = CancellationToken::new();

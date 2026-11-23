@@ -125,6 +125,11 @@ impl HostClient {
         }
     }
 
+    /// 연결이 닫혔는가(펌프가 표를 걷었다) — 세션의 연결 풀이 다시 열지 가른다.
+    pub fn closed(&self) -> bool {
+        lock(&self.pending).is_none()
+    }
+
     /// 응답을 기다린다. 이 future 를 응답 전에 버리면 Host 에 `request.cancel` 을 보낸다.
     pub async fn call(&self, method: &str, params: Value) -> Result<Value, CallError> {
         self.call_until(method, params, &CancellationToken::new())

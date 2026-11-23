@@ -85,6 +85,8 @@ mcp-approval-agent = 에이전트
 mcp-approval-unknown-agent = 이름을 알리지 않은 에이전트
 mcp-approval-cli = CLI(pitwall tool)로 온 호출
 mcp-approval-tool = 툴
+mcp-approval-machine = 머신
+mcp-approval-machine-note = 다른 머신에서 한다 — 자동 승인이 닿지 않는다
 mcp-approval-tier = 등급
 mcp-approval-tier-read = 읽기
 mcp-approval-tier-write = 쓰기
@@ -127,6 +129,8 @@ mcp-approval-deny = 거절
 mcp-approval-once = 이번만 허용
 mcp-approval-session = 이 세션 동안 허용
 mcp-approval-window = 창이 열려 있는 동안 CLI 허용
+mcp-approval-allow-machine = 이 세션 동안 { $machine } 허용
+mcp-approval-allow-machine-cli = 창이 열려 있는 동안 CLI 에 { $machine } 허용
 mcp-approval-notify-title = Pitwall 승인 요청
 # $agent: 요청 에이전트(이름을 알리지 않았으면 「에이전트」), $tool: 툴 이름
 mcp-approval-notify-body = { $agent }가 { $tool } 승인을 기다린다

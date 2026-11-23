@@ -134,7 +134,7 @@ import { createRecentFiles } from "../search-everywhere/recent-files";
 import { SearchResultsToolWindow } from "../search/search-results";
 import { StructureToolWindow } from "../structure/structure-tool-window";
 import { AgentActivityToolWindow } from "../mcp/agent-activity";
-import { McpApprovals } from "../mcp/approvals-host";
+import { ProjectWindowApprovals } from "../mcp/approvals-host";
 import { McpStatus } from "../mcp/mcp-status";
 import { RuntimeStatus } from "../runtime/runtime-status";
 import { useRunClosePrompt } from "../run/run-close";
@@ -1049,6 +1049,8 @@ function ProjectWindowBody({
   return (
     <EditorWorkspaceProvider workspace={workspace}>
       <PreviewHostProvider host={previewHost}>
+        {/* Desktop 의 승인은 활성 체크아웃과 무관하게 창의 이 머신 연결로 듣는다(M7-18). */}
+        <ProjectWindowApprovals />
         <ActiveCheckoutHost>
           {(active) => (
             <TargetMachineProvider machine={active.machine}>
@@ -1089,7 +1091,6 @@ function ProjectWindowBody({
                           machineId={active.machine}
                         />
                       )}
-                      {activeProject !== undefined && <McpApprovals projectId={activeProject} />}
                       {activeProject !== undefined && (
                         <GitDocuments projectId={activeProject} workspace={workspace} />
                       )}

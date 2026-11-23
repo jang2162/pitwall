@@ -339,6 +339,7 @@ mod app {
                 transport: "socket",
                 host_kind: HostKind::App,
                 sessions: Default::default(),
+                machines: None,
             });
             let uid = socket::current_uid();
             let path = socket::endpoint(

@@ -121,6 +121,7 @@ function request(over: Partial<McpApprovalRequest> = {}): McpApprovalRequest {
   return {
     id: 1,
     projectId: "p1",
+    machine: null,
     notThisProject: false,
     session: "s1",
     client: "claude-code 2.1.0",

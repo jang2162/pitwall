@@ -1,5 +1,5 @@
 // 「에이전트 활동」 패널 맨 위의 「승인 대기」 칸(16-m5-plan M5-13 이 자리를 두고 M5-14 가 채웠다): 이 창에 온 승인 요청을 줄마다
-// (에이전트 · 툴 · 등급 · 남은 시한) 보이고, 줄을 누르면 그 다이얼로그를 다시 연다 — `Esc` 로 닫은 요청이 여기 남는다.
+// (에이전트 · 툴 · 다른 머신이면 그 머신 · 등급 · 남은 시한) 보이고, 줄을 누르면 그 다이얼로그를 다시 연다 — `Esc` 로 닫은 요청이 여기 남는다.
 //
 // - 대기 목록은 다이얼로그와 같은 창 단위 저장소(approvals.ts 의 `approvalStore`)를 읽는다. 이 칸이 스트림을 따로 열지 않는다 —
 //   두 벌이 되면 한쪽에서 답한 요청이 다른 쪽에 남는다(M5-13 리뷰 R4). 스트림은 창의 `McpApprovals`(approvals-host.tsx)가 연다.
@@ -14,7 +14,7 @@ import { useId } from "react";
 import { useStore } from "zustand";
 
 import { agentLine } from "./agent-text";
-import { clock } from "./approval-dialog";
+import { clock, MachineName } from "./approval-dialog";
 import { useApprovalClock } from "./approvals-host";
 import { approvalStore, type ApprovalStore, reveal } from "./approvals";
 import { useMcpStrings } from "./strings";
@@ -68,6 +68,14 @@ export function PendingApprovals({
                     {agent}
                   </span>
                   <span className="min-w-0 truncate font-mono">{tool}</span>
+                  {request.machine !== null && (
+                    <span
+                      data-testid="mcp-approval-row-machine"
+                      className="max-w-[120px] truncate rounded-sm border border-ui-border px-1 text-[11px] text-ui-muted-foreground"
+                    >
+                      <MachineName machine={request.machine} />
+                    </span>
+                  )}
                   <span
                     className={request.tier === "dangerous" ? "font-semibold text-ui-accent" : ""}
                   >

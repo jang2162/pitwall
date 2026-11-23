@@ -314,6 +314,7 @@ pub fn services(
         transport,
         host_kind,
         sessions,
+        machines: None,
     })
 }
 

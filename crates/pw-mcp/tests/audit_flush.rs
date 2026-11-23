@@ -43,6 +43,7 @@ async fn serve_returns_only_after_the_session_audit_rows_are_written() {
         transport: "test",
         host_kind: HostKind::Headless,
         sessions: Default::default(),
+        machines: None,
     });
 
     // 감사 DB 를 시험이 먼저 만들고 배타 잠금을 쥔다 — 쓰기 스레드는 파일을 열고 버전을 읽는 자리부터 기다린다.
