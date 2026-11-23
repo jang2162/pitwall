@@ -21,6 +21,7 @@ export function lspEditStrings(t: Translate) {
     codeActionsNone: t("lsp-edit-code-actions-none"),
     codeActionFailed: (message: string) => t("lsp-edit-code-action-failed", { message }),
     stale: t("lsp-edit-stale"),
+    remoteEdits: t("lsp-edit-remote"),
     foreign: (files: string) => t("lsp-edit-foreign", { files }),
     ended: t("lsp-edit-ended"),
     refused: (message: string) => t("lsp-edit-refused", { message }),

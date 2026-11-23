@@ -29,7 +29,7 @@ import type {
 } from "@pitwall/rpc-client";
 
 import { editorContext } from "../editor/extensions/context";
-import { editWindowOf, type EditWindow } from "./edit-window";
+import { editsHere, editWindowOf, type EditWindow } from "./edit-window";
 import type { LspDocument } from "./lsp-sessions";
 import { closePopup, openPopup } from "./popup";
 
@@ -86,6 +86,7 @@ export async function runCodeAction(
   flow = win.applier.begin(),
 ): Promise<void> {
   const T = win.strings();
+  if (!editsHere(doc, win)) return;
   try {
     const resolved = await doc.request("codeAction.resolve", (at, signal) =>
       doc.services.call(
@@ -166,6 +167,8 @@ export async function showCodeActions(
   const doc = view.state.facet(editorContext)?.lsp;
   // 맡을 서버가 없으면(미신뢰 프로젝트 — 결정 M4-D8 · 서버가 뜨는 중) 조용히 아무것도 하지 않는다.
   if (!doc?.capabilities.code_action) return;
+  // 다른 머신 문서의 여러 파일 편집은 받지 않는다(edit-window.ts `editsHere`).
+  if (!editsHere(doc, win)) return;
   const selection = view.state.selection.main;
   const from = request.from ?? selection.from;
   const to = request.to ?? selection.to;

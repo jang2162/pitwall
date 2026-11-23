@@ -796,6 +796,7 @@ lsp-edit-rename-failed = Could not rename: { $message }
 lsp-edit-code-actions = Code actions
 lsp-edit-code-actions-none = No code actions here
 lsp-edit-code-action-failed = Could not apply the code action: { $message }
+lsp-edit-remote = Rename and code actions are not available yet in a tab of another machine
 lsp-edit-stale = Files changed after the language server read them — try again
 lsp-edit-foreign = A file is open in another window — save it there and try again: { $files }
 lsp-edit-ended = The command ended, so its edit was not applied

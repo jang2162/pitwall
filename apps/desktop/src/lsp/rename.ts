@@ -11,7 +11,7 @@ import { StateEffect, StateField } from "@codemirror/state";
 import { EditorView, showTooltip, type Tooltip } from "@codemirror/view";
 
 import { editorContext } from "../editor/extensions/context";
-import type { EditWindow } from "./edit-window";
+import { editsHere, type EditWindow } from "./edit-window";
 import { indexing } from "./server-progress";
 
 interface RenameInput {
@@ -124,6 +124,8 @@ export async function renameAt(view: EditorView, win: EditWindow): Promise<void>
   const doc = view.state.facet(editorContext)?.lsp;
   // 맡을 서버가 없으면(미신뢰 프로젝트 — 결정 M4-D8 · 서버가 뜨는 중 · rename 을 하지 않는 서버) 조용히 아무것도 하지 않는다.
   if (!doc?.capabilities.rename) return;
+  // 다른 머신 문서의 여러 파일 편집은 받지 않는다 — 서버에 묻기 전에 그만둔다(edit-window.ts `editsHere`).
+  if (!editsHere(doc, win)) return;
   const head = view.state.selection.main.head;
   const text = view.state.doc;
   let prepared;

@@ -12,6 +12,7 @@
 
 import type { EventMessage, LspWorkspaceEdit } from "@pitwall/rpc-client";
 
+import { LOCAL_MACHINE } from "../checkout/checkout";
 import type { FsChangedEvent } from "../editor/documents";
 import type { NotificationHandle, NotificationInput } from "../notifications/notifications";
 import type { LspEditStrings } from "./edit-strings";
@@ -76,6 +77,18 @@ export interface EditWindow {
 }
 
 const windows = new WeakMap<LspServices, EditWindow>();
+
+/**
+ * 이 창의 적용기로 이 문서의 여러 파일 편집(rename · 코드 액션 · 그 명령)을 해도 되는가 — 판정 한 자리(18-m7-plan M7-21 리뷰 F1).
+ * 다른 머신 문서는 그 머신의 언어 서버가 그 머신의 경로로 편집을 돌려준다. 적용기는 이 머신 Host 연결의 `fs.*` 로 쓰므로 그 편집을
+ * 받지 않는다(이 머신의 같은 경로 파일에 쓰는 길을 두지 않는다) — 사람에게 「아직 없다」 를 알리고 거짓. 그 머신 연결로 적용하는
+ * 것은 이 행에서 하지 않았다.
+ */
+export function editsHere(doc: LspDocument, win: EditWindow): boolean {
+  if (doc.machine === undefined || doc.machine === LOCAL_MACHINE) return true;
+  win.notify({ level: "info", title: win.strings().remoteEdits });
+  return false;
+}
 
 /** 문서의 창(`doc.services`)의 편집 문맥. 창이 붙지 않았으면(시험 · 파일 창) 없다. */
 export function editWindowOf(services: LspServices): EditWindow | undefined {
