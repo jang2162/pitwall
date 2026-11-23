@@ -120,6 +120,12 @@ pub fn load(path: &Path) -> io::Result<Vec<Pairing>> {
     }
 }
 
+/// 페어링 표의 폴더(`$DATA/relay`)를 0700 으로 만들거나, 있는 폴더가 이 사용자 전용 · 심링크 아님인지 본다(`pitwall-relay pair` 의
+/// 잠금 파일이 이 확인을 지난 폴더에만 생기게 — M7-06).
+pub fn ensure_dir(dir: &Path) -> io::Result<()> {
+    crate::device::private_dir(dir)
+}
+
 /// 페어링 표 파일을 쓴다(같은 폴더의 임시 파일 0600 에 쓰고 이름을 바꾼다 — 읽는 쪽이 반쯤 쓴 파일을 보지 않는다). 폴더는 0700 으로
 /// 만들거나 확인한다. 동시에 쓰는 두 프로세스의 잠금은 부르는 쪽(M7-06 의 `pair`)이 건다.
 pub fn save(path: &Path, pairings: &[Pairing]) -> io::Result<()> {

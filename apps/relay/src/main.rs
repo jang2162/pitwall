@@ -4,6 +4,8 @@
 //! - `pitwall-relay proxy`: SSH 가 띄운다. stdio 를 이 판의 데몬 소켓에 잇고, 데몬이 없으면 띄운다.
 //! - `pitwall-relay daemon`: 데몬(앞에서 돈다 — `proxy` 가 `setsid` 로 띄운다). 한 판에 하나.
 //! - `pitwall-relay status`: 떠 있는 데몬의 상태(JSON 한 줄).
+//! - `pitwall-relay pair --from-ssh <키> [<이름>]` · `unpair <기기 id>`: 페어링 표 파일에 직접 쓴다(데몬 소켓 명령이 아니다 — M7-06).
+//! - `pitwall-relay --verify <파일> <sha256>`: 원격에 해시 도구가 없을 때 설치기가 올린 파일을 본다(M7-06).
 //!
 //! 몸통은 `crates/pw-relay` 다. 하위 명령은 M7-15(`askpass` · `open`) · M7-20(`mcp`)이 더한다.
 

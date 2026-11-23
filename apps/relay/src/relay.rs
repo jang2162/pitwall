@@ -11,7 +11,7 @@ use tracing_subscriber::Layer as _;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt as _;
 
-const USAGE: &str = "usage: pitwall-relay <proxy|daemon|status|--version>";
+const USAGE: &str = "usage: pitwall-relay <proxy|daemon|status|pair --from-ssh <key> [<name>]|unpair <device id>|--verify <file> <sha256>|--version>";
 
 pub fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -19,6 +19,9 @@ pub fn main() -> ExitCode {
         Some("proxy") => proxy(),
         Some("daemon") => daemon(),
         Some("status") => status(),
+        Some("pair") => pair(&args[1..]),
+        Some("unpair") => unpair(&args[1..]),
+        Some("--verify") => verify(&args[1..]),
         Some("--version" | "version") => {
             println!(
                 "pitwall-relay {} ({})",
@@ -95,6 +98,110 @@ fn proxy() -> ExitCode {
             }
         }
     })
+}
+
+/// `pair --from-ssh <공개키> [<이름>]`(18-m7-plan M7-06 ⑧ · 결정 M7-D13): Desktop 이 SSH 로 부른다. 데몬 소켓 명령이 아니다 —
+/// 이 프로세스가 `$DATA/relay/pairings.json` 에 잠금을 쥐고 직접 쓰고, 데몬은 파일을 다시 읽는다. 표에 없는 키면 `owner` 로 넣는다.
+/// stdout 에 JSON 한 줄(`machine` — 이 머신의 id, `added`).
+fn pair(args: &[String]) -> ExitCode {
+    let (key, name) = match args {
+        [flag, key] if flag == "--from-ssh" => (key, "desktop"),
+        [flag, key, name] if flag == "--from-ssh" => (key, name.as_str()),
+        _ => {
+            eprintln!("usage: pitwall-relay pair --from-ssh <device public key> [<name>]");
+            return ExitCode::from(2);
+        }
+    };
+    let Some(key) = pw_link::PublicKey::parse(key) else {
+        eprintln!("pitwall-relay pair: the device public key is not a base64 Ed25519 key");
+        return ExitCode::from(2);
+    };
+    let paths = match paths() {
+        Ok(paths) => paths,
+        Err(code) => return code,
+    };
+    match pw_relay::pairings::pair(&paths.data, &key, name) {
+        Ok(paired) => {
+            if paired.added {
+                std::thread::sleep(pw_relay::pairings::SETTLE);
+            }
+            println!(
+                "{}",
+                serde_json::json!({"machine": paired.machine, "added": paired.added})
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("pitwall-relay pair: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// `unpair <기기 id>`(18-m7-plan M7-06 ⑨): 그 지문의 기기를 페어링 표에서 뺀다(파일에 직접). 데몬이 다시 읽고 그 기기의 링크를
+/// 끊는다. stdout 에 JSON 한 줄(`removed`).
+fn unpair(args: &[String]) -> ExitCode {
+    let [device] = args else {
+        eprintln!("usage: pitwall-relay unpair <device id>");
+        return ExitCode::from(2);
+    };
+    let paths = match paths() {
+        Ok(paths) => paths,
+        Err(code) => return code,
+    };
+    match pw_relay::pairings::unpair(
+        &paths.data,
+        &pw_link::DeviceId::from_stored(device.as_str()),
+    ) {
+        Ok(removed) => {
+            println!("{}", serde_json::json!({ "removed": removed }));
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("pitwall-relay unpair: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// `--verify <파일> <sha256>`: 원격에 `sha256sum` · `shasum` 이 없을 때 설치기(M7-06 ④)가 올린 파일의 해시를 이 바이너리로 본다.
+/// 같으면 0, 다르면 1.
+fn verify(args: &[String]) -> ExitCode {
+    let [path, expected] = args else {
+        eprintln!("usage: pitwall-relay --verify <file> <sha256>");
+        return ExitCode::from(2);
+    };
+    use sha2::Digest as _;
+    use std::io::Read as _;
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) => {
+            eprintln!("pitwall-relay --verify: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let mut hasher = sha2::Sha256::new();
+    let mut buffer = vec![0u8; 1 << 16];
+    loop {
+        match file.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(n) => hasher.update(&buffer[..n]),
+            Err(e) => {
+                eprintln!("pitwall-relay --verify: {e}");
+                return ExitCode::from(1);
+            }
+        }
+    }
+    let actual: String = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    if actual == expected.to_ascii_lowercase() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
 }
 
 fn status() -> ExitCode {
