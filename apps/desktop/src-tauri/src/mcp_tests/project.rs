@@ -28,7 +28,7 @@ impl WindowHost {
         let base = pw_core::registry::path::simplify(std::fs::canonicalize(tmp.path()).unwrap());
         let paths = pw_core::config::AppPaths::under(&base.join("app"));
         let requests = OpenRequests::default();
-        let (host, db) = crate::local_host_parts(
+        let (host, db, _) = crate::local_host_parts(
             paths.clone(),
             Arc::new(pw_diag::Diagnostics::new(base.join("logs"), "0.0.0")),
             Arc::new(pw_ext::Registry::default()),

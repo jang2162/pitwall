@@ -68,3 +68,35 @@ fn pw_host_does_not_depend_on_tauri() {
         .collect();
     assert!(tauri.is_empty(), "pw-host reaches {tauri:?}");
 }
+
+/// `cargo tree -p <패키지> -i pw-link` 의 첫 줄(pw-link 와 그 패키지에서 켜진 기능).
+fn pw_link_features_of(package: &str) -> String {
+    let output = std::process::Command::new(env!("CARGO"))
+        .args(["tree", "--offline", "-e", "normal,build", "-i", "pw-link"])
+        .args(["-f", "{p} [{f}]", "-p", package, "--manifest-path"])
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.toml"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    let first = text.lines().next().unwrap_or_default().to_owned();
+    assert!(first.starts_with("pw-link "), "{text}");
+    first
+}
+
+/// 18-m7-plan M7-08(메인 판정): pw-host 가 원격 호스트 관리(`pw-remote`)를 링크해도 **Relay 바이너리에는 SSH 부트스트랩
+/// (`pw-link/bootstrap` — 받기 · 매니페스트 검증 · 설치)이 들지 않는다**(M7-06 의 결정). 데스크톱 앱만 `pw-remote/ssh` 로 켠다 —
+/// 그쪽에 기능이 보이는 것으로 이 시험이 기능을 실제로 읽는지도 본다.
+#[test]
+fn the_relay_does_not_link_the_ssh_bootstrap() {
+    let relay = pw_link_features_of("pitwall-relay");
+    assert!(!relay.contains("bootstrap"), "{relay}");
+    let host = pw_link_features_of("pw-host");
+    assert!(!host.contains("bootstrap"), "{host}");
+    let desktop = pw_link_features_of("pitwall-desktop");
+    assert!(desktop.contains("bootstrap"), "{desktop}");
+}

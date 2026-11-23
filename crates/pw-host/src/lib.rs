@@ -72,6 +72,9 @@ pub struct Assembled {
     pub db_sessions: Arc<pw_db::DbSessions>,
     /// Host 에 남은 일(실행 · 터미널)과 언어 서버. Relay 데몬의 유휴 판정이 본다(18-m7-plan M7-04 ④).
     pub activity: Activity,
+    /// 원격 호스트 관리자(`remote.*` — 18-m7-plan M7-08). Desktop 만 `Some` 이다. 앱이 setup 에서 SSH 백엔드(`pw_remote::ssh`) ·
+    /// `HostRouter` 를 붙인다 — 붙이기 전에는 목록이 비고 붙기를 할 수 없다.
+    pub remote: Option<pw_remote::RemoteHosts>,
 }
 
 /// Host 에 남은 일. 복제하면 같은 것을 본다.
@@ -111,7 +114,8 @@ enum Flavor {
 ///   까닭이 없다(M7-10 리뷰 권고 6).
 /// - `openWith.` — 「다른 앱으로 열기」 는 그 머신에서 GUI 프로그램을 띄운다. 창 없는 원격 머신에서는 뜻이 없다(M7-04 리뷰 권고 4).
 /// - `cli.` — 「Shell 명령 설치」 안내(`cli.status`)는 Desktop 앱의 것이다. Relay 는 설치할 Shell 명령이 없다.
-pub const RELAY_EXCLUDED_PREFIXES: &[&str] = &["bundle.", "cli.", "openWith."];
+/// - `remote.` — 원격 호스트 · 연결 관리(`pw_remote` — 18-m7-plan M7-08)는 Desktop 의 것이다. Relay 는 다른 머신에 붙지 않는다.
+pub const RELAY_EXCLUDED_PREFIXES: &[&str] = &["bundle.", "cli.", "openWith.", "remote."];
 
 /// 부품으로 Host 를 조립한다. 메서드를 모두 등록하고, Host 의 설정 · 레지스트리가 있으면 그것을 기능들에 붙인다.
 pub fn assemble(parts: HostParts) -> Assembled {
@@ -269,6 +273,9 @@ fn assemble_as(parts: HostParts, flavor: Flavor) -> Assembled {
     // MCP 상태(`mcp.sessions` · `mcp.tools.list` · `mcp.audit.list`, M5-10). 카탈로그 · 감사 로그는 Host 를 만든 뒤 붙인다.
     let mcp_status = Arc::new(pw_mcp::methods::Mcp::new(mcp_sessions));
     let mcp_status_methods = Arc::clone(&mcp_status);
+    // 원격 호스트 · 연결 관리(`remote.*`, M7-08). Relay 는 아래에서 걷어 낸다(`RELAY_EXCLUDED_PREFIXES`).
+    let remote = pw_remote::RemoteHosts::default();
+    let remote_methods = remote.clone();
     let host = LocalHost::builder(id)
         .config(paths)
         .open_requests(open_requests)
@@ -313,6 +320,7 @@ fn assemble_as(parts: HostParts, flavor: Flavor) -> Assembled {
             pw_tools::install::methods::register(router, tools_installer_methods)
         })
         .methods(move |router| pw_mcp::methods::register(router, mcp_status_methods))
+        .methods(move |router| pw_remote::methods::register(router, &remote_methods))
         .methods(move |router| {
             if flavor == Flavor::Relay {
                 for prefix in RELAY_EXCLUDED_PREFIXES {
@@ -486,8 +494,17 @@ fn assemble_as(parts: HostParts, flavor: Flavor) -> Assembled {
             ));
         }
     }
+    let remote = (flavor == Flavor::Desktop).then(|| {
+        remote.attach_host(
+            host.registry().cloned(),
+            host.bus().clone(),
+            host.config().map(|c| c.global.clone()),
+        );
+        remote
+    });
     Assembled {
         host,
+        remote,
         db_sessions: db_sessions_out,
         activity: Activity {
             terminals: terminals_activity,

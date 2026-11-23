@@ -5118,9 +5118,11 @@ dependencies = [
  "pw-host",
  "pw-i18n",
  "pw-index",
+ "pw-link",
  "pw-lsp",
  "pw-mcp",
  "pw-open-with",
+ "pw-remote",
  "pw-rpc",
  "pw-run",
  "pw-runtime",
@@ -5762,6 +5764,7 @@ dependencies = [
  "pw-lsp-servers",
  "pw-mcp",
  "pw-open-with",
+ "pw-remote",
  "pw-rpc",
  "pw-run",
  "pw-runtime",
@@ -6014,6 +6017,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "pw-remote"
+version = "0.0.0"
+dependencies = [
+ "pw-core",
+ "pw-db",
+ "pw-git",
+ "pw-link",
+ "pw-release",
+ "pw-rpc",
+ "schemars 1.2.3",
+ "semver",
+ "serde",
+ "serde_json",
+ "specta",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
 name = "pw-rpc"
 version = "0.0.0"
 dependencies = [
@@ -6046,6 +6070,7 @@ dependencies = [
  "pw-lsp-servers",
  "pw-mcp",
  "pw-open-with",
+ "pw-remote",
  "pw-rpc",
  "pw-run",
  "pw-runtime",

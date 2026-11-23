@@ -33,6 +33,10 @@ pw-git = { path = "../../../crates/pw-git" }
 # Host 조립(18-m7-plan M7-01): 기능 크레이트의 메서드 등록은 pw-host 가 한다 — 앱은 부품만 넣는다(src/main.rs 의 `local_host_parts`).
 pw-host = { path = "../../../crates/pw-host" }
 pw-i18n = { path = "../../../crates/pw-i18n" }
+# 원격 호스트(M7-08): 기기 키(키체인 — `KeychainKeyStore`)와 Relay 받기(`HttpsFetch`).
+pw-link = { path = "../../../crates/pw-link", features = ["bootstrap"] }
+# 원격 호스트 · 연결 관리의 실제 SSH 백엔드(src/remote.rs). 기능 `ssh` 는 앱만 켠다 — Relay 에 들지 않는다.
+pw-remote = { path = "../../../crates/pw-remote", features = ["ssh"] }
 pw-mcp = { path = "../../../crates/pw-mcp" }
 pw-open-with = { path = "../../../crates/pw-open-with" }
 pw-run = { path = "../../../crates/pw-run" }

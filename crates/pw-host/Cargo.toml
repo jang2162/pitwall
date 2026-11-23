@@ -34,6 +34,9 @@ pw-lsp = { path = "../pw-lsp" }
 pw-lsp-servers = { path = "../pw-lsp-servers" }
 pw-mcp = { path = "../pw-mcp" }
 pw-open-with = { path = "../pw-open-with" }
+# 원격 호스트 · 연결 관리(`remote.*` — 18-m7-plan M7-08). Desktop 갈래만 등록한다. 기능 `ssh`(실제 SSH 부트스트랩)는 켜지 않는다 —
+# 데스크톱 앱이 켜고, Relay 바이너리에는 들지 않는다(tests/deps.rs).
+pw-remote = { path = "../pw-remote" }
 pw-run = { path = "../pw-run" }
 pw-runtime = { path = "../pw-runtime" }
 pw-syntax = { path = "../pw-syntax" }

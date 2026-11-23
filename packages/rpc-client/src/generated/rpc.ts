@@ -1053,6 +1053,30 @@ export type UnaryMethods = {
 	 */
 	"lsp.workspaceSymbol": { params: LspWorkspaceSymbolParams; result: LspWorkspaceSymbols };
 	/**
+	 * 묶음 판정: `commits` 가운데 `path` 의 저장소가 가진 것.
+	 */
+	"machine.contained": { params: MachineContainedParams; result: MachineCommits };
+	/**
+	 * 묶음 판정: 그 머신의 한 경로의 사실(정규화한 경로 · 공용 git 폴더 · 역사 바닥 · 그 경로를 루트로 가진 프로젝트).
+	 */
+	"machine.inspect": { params: MachinePathParams; result: MachineCheckoutFacts };
+	/**
+	 * 묶음 판정: 그 머신 프로젝트의 주 루트.
+	 */
+	"machine.projectRoot": { params: MachineProjectParams; result: MachineProjectRoot };
+	/**
+	 * 묶음 판정: `path` 아래 파일이 `limit` 개 이상인가(`.git` 은 세지 않는다).
+	 */
+	"machine.reachesFiles": { params: MachineReachesFilesParams; result: MachineReaches };
+	/**
+	 * 묶음 판정: 그 머신의 레지스트리에 `path` 를 루트로 한 프로젝트를 만든다.
+	 */
+	"machine.register": { params: MachinePathParams; result: MachineRegistered };
+	/**
+	 * 묶음 판정: `machine.register` 로 만든 프로젝트를 지운다(거절된 더하기의 되돌리기 — 폴더는 그대로).
+	 */
+	"machine.unregister": { params: MachineProjectParams; result: null };
+	/**
 	 * 승인 요청의 답. 프로젝트 요청은 그 프로젝트 창의 연결만, 프로젝트 없는 요청은 그 요청을 받은 창의 연결만 답한다.
 	 * 이미 끝난 요청이면 not found, 그 요청이 받지 않는 답이면 invalid params.
 	 */
@@ -1223,6 +1247,36 @@ export type UnaryMethods = {
 	 * 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.
 	 */
 	"project.update": { params: UpdateProjectParams; result: Project };
+	/**
+	 * 사람이 끊는다. 쓰는 창이 남아 있어도 다시 붙지 않는다(새 `remote.connect` · `remote.retry` 까지).
+	 */
+	"remote.disconnect": { params: RemoteHostParams; result: null };
+	/**
+	 * 링크 없이 가볍게 본다: 사람의 ControlMaster 가 떠 있는가(`ssh -O check`)와 마지막 링크 상태.
+	 */
+	"remote.hosts.check": { params: RemoteHostParams; result: RemoteHostCheck };
+	/**
+	 * 원격 호스트 목록: 전역 `[[remote_hosts]]` 와 `~/.ssh/config` 의 `Host` 이름(와일드카드 없음), 각각의 지금 상태 · 기억한
+	 * 머신 id · 마지막 링크 상태. 링크를 열지 않는다.
+	 */
+	"remote.hosts.list": { params: null; result: RemoteHostList };
+	/**
+	 * 그 호스트의 연결 로그(단계 · 실패 · ssh stderr 끝부분). askpass 답은 없다.
+	 */
+	"remote.log": { params: RemoteHostParams; result: RemoteLogEntry[] };
+	/**
+	 * 원격 askpass 질문의 답. 처음 온 답만 받는다.
+	 */
+	"remote.prompt.answer": { params: RemotePromptAnswerParams; result: null };
+	/**
+	 * 다시 시도: 쓰는 창이 있으면 기다림 없이 지금 붙는다.
+	 */
+	"remote.retry": { params: RemoteHostParams; result: null };
+	/**
+	 * 「이 머신을 새로 믿기」: 그 호스트가 `machineChanged` 이고 `found` 가 `machine` 일 때만 — 묶음 멤버의 머신 id 를 옮기고 새
+	 * id 를 기억한 뒤 다시 붙는다.
+	 */
+	"remote.trustMachine": { params: RemoteTrustMachineParams; result: null };
 	/**
 	 * 구성 파일을 지운다(`location` 이 없으면 공유 · 개인 둘 다). 그 프로젝트 창의 연결만. 그 id 의 구성(쓸 수 없는 것 포함)이
 	 * 없으면 not found.
@@ -1539,6 +1593,15 @@ export type StreamMethods = {
 	 */
 	"mcp.approvals": { params: McpApprovalsParams; item: McpApprovalEvent };
 	/**
+	 * 그 호스트를 쓴다: 링크가 없으면 붙고(SSH → 설치 → 데몬 → 핸드셰이크), 스트림이 열린 동안 링크를 둔다. 지금 상태부터 바뀔
+	 * 때마다 보낸다. 사람이 끊어 둔 호스트도 다시 붙는다. 모든 스트림이 닫히면 링크를 닫는다.
+	 */
+	"remote.connect": { params: RemoteHostParams; item: RemoteStatus };
+	/**
+	 * 원격 호스트를 붙이는 ssh 의 질문 스트림(호스트 키 확인 · 암호). 열 때 아직 열린 질문이 먼저 온다.
+	 */
+	"remote.prompts": { params: null; item: GitPromptEvent };
+	/**
 	 * 실행의 출력을 `since` 오프셋부터 보낸다(앞에 쌓인 것 → 새로 나오는 것 → 끝). 스트림을 끊어도 실행은 돈다.
 	 */
 	"run.attach": { params: RunAttachParams; item: RunAttachEvent };
@@ -1772,6 +1835,12 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"lsp.tool.diagnostics": {"name":"lsp.tool.diagnostics","kind":"unary","tier":"read","roles":["owner"],"params":"DiagnosticsToolParams","output":"DiagnosticsToolResult","doc":" Language server diagnostics (errors, warnings, hints) for a project, one page at a time: files in path order, each\n file's diagnostics most severe first. Filter by one file (`path`, absolute or relative to the project root) and by\n `minSeverity`. Lines and columns start at 1; columns count UTF-16 code units. Only what the language servers have\n published on their own: servers run while the project is open in a Pitwall window (they start when a file of that\n language is opened there), and many servers only report files that are open in the editor, so files nobody opened\n may be missing — an empty list is not proof the project builds. `servers` tells \"no problems\" apart from \"no server\n yet / still starting / still indexing\" (a `progress` means more diagnostics may come). This tool never starts a\n server. An untrusted project runs no language servers: the result is empty with `unavailable.reason = \"untrusted\"`.\n","mcp":{"group":"code","name":"diagnostics"},"fileScope":false},
 	"lsp.typeDefinition": {"name":"lsp.typeDefinition","kind":"unary","tier":"read","roles":["owner"],"params":"LspPositionParams","output":"LspLocationsResult","doc":" 타입 정의로(`textDocument/typeDefinition`).\n","mcp":null,"fileScope":false},
 	"lsp.workspaceSymbol": {"name":"lsp.workspaceSymbol","kind":"unary","tier":"read","roles":["owner"],"params":"LspWorkspaceSymbolParams","output":"LspWorkspaceSymbols","doc":" 프로젝트의 언어 서버들에 `workspace/symbol` 을 묻는다(심볼로 이동 · 클래스로 이동 · SE 「심볼」 탭 — M4-16). 이 창이 문서를 연\n 떠 있는 서버에만 묻고 서버를 띄우지 않는다. 루트 밖 위치는 읽기 토큰과 함께(결정 M4-D13). 미신뢰면 untrusted.\n","mcp":null,"fileScope":false},
+	"machine.contained": {"name":"machine.contained","kind":"unary","tier":"read","roles":["owner"],"params":"MachineContainedParams","output":"MachineCommits","doc":" 묶음 판정: `commits` 가운데 `path` 의 저장소가 가진 것.\n","mcp":null,"fileScope":false},
+	"machine.inspect": {"name":"machine.inspect","kind":"unary","tier":"read","roles":["owner"],"params":"MachinePathParams","output":"MachineCheckoutFacts","doc":" 묶음 판정: 그 머신의 한 경로의 사실(정규화한 경로 · 공용 git 폴더 · 역사 바닥 · 그 경로를 루트로 가진 프로젝트).\n","mcp":null,"fileScope":false},
+	"machine.projectRoot": {"name":"machine.projectRoot","kind":"unary","tier":"read","roles":["owner"],"params":"MachineProjectParams","output":"MachineProjectRoot","doc":" 묶음 판정: 그 머신 프로젝트의 주 루트.\n","mcp":null,"fileScope":false},
+	"machine.reachesFiles": {"name":"machine.reachesFiles","kind":"unary","tier":"read","roles":["owner"],"params":"MachineReachesFilesParams","output":"MachineReaches","doc":" 묶음 판정: `path` 아래 파일이 `limit` 개 이상인가(`.git` 은 세지 않는다).\n","mcp":null,"fileScope":false},
+	"machine.register": {"name":"machine.register","kind":"unary","tier":"write","roles":["owner"],"params":"MachinePathParams","output":"MachineRegistered","doc":" 묶음 판정: 그 머신의 레지스트리에 `path` 를 루트로 한 프로젝트를 만든다.\n","mcp":null,"fileScope":false},
+	"machine.unregister": {"name":"machine.unregister","kind":"unary","tier":"write","roles":["owner"],"params":"MachineProjectParams","output":"()","doc":" 묶음 판정: `machine.register` 로 만든 프로젝트를 지운다(거절된 더하기의 되돌리기 — 폴더는 그대로).\n","mcp":null,"fileScope":false},
 	"mcp.approval.answer": {"name":"mcp.approval.answer","kind":"unary","tier":"write","roles":["owner"],"params":"McpApprovalAnswerParams","output":"()","doc":" 승인 요청의 답. 프로젝트 요청은 그 프로젝트 창의 연결만, 프로젝트 없는 요청은 그 요청을 받은 창의 연결만 답한다.\n 이미 끝난 요청이면 not found, 그 요청이 받지 않는 답이면 invalid params.\n","mcp":null,"fileScope":false},
 	"mcp.approvals": {"name":"mcp.approvals","kind":"stream","tier":"read","roles":["owner"],"params":"McpApprovalsParams","output":"McpApprovalEvent","doc":" 창이 떠 있는 동안 열어 두는 승인 요청 스트림(16-m5-plan M5-12). 열 때 아직 대기 중인 그 창의 요청이 먼저 온다. 프로젝트\n 요청은 그 프로젝트 창에만, 프로젝트 없는 요청은 가장 최근에 앞에 있던 창 하나에 온다. `projectId` 는 그 프로젝트 창의\n 연결만 줄 수 있다.\n","mcp":null,"fileScope":false},
 	"mcp.audit.clear": {"name":"mcp.audit.clear","kind":"unary","tier":"write","roles":["owner"],"params":"McpAuditClearParams","output":"McpAuditCleared","doc":" 그 프로젝트의 감사 행을 모두 지운다(「에이전트 활동」 패널의 「기록 지우기」 — 화면이 확인을 받은 뒤 부른다). 그 프로젝트\n 창의 연결만 부른다(`project.state.set` 과 같은 판정). 지운 id 는 다시 쓰이지 않는다 — 앞서 받은 커서는 그 뒤의 행을 가리키지\n 않는다.\n","mcp":null,"fileScope":false},
@@ -1805,6 +1874,15 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"project.tool.register": {"name":"project.tool.register","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<ProjectRegisterToolParams>","output":"ProjectRegisterToolResult","doc":" Register a folder as a Pitwall project and return what was detected in it (build files, languages, the settings\n folder). Needs approval in Pitwall: the request shows the real path that will be registered (symbolic links and\n `..` resolved), the name and where the settings live. Refused before asking: a relative path, a folder that does\n not exist, the file system root, the home folder or a folder above it, and a folder that is already a project\n root or lies inside a registered project, including a git worktree of one (use `project_open` for those). The\n new project is not trusted: only a person can trust it in Pitwall.\n","mcp":{"group":"project","name":"project_register"},"fileScope":false},
 	"project.trust": {"name":"project.trust","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ProjectIdParams","output":"ProjectTrust","doc":" 프로젝트의 신뢰. 워크트리 프로젝트는 메인 저장소 프로젝트의 신뢰를 따른다(`ownerId`). 없는 id 면 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"project.update": {"name":"project.update","kind":"unary","tier":"write","roles":["owner"],"params":"UpdateProjectParams","output":"Project","doc":" 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.\n","mcp":null,"fileScope":false},
+	"remote.connect": {"name":"remote.connect","kind":"stream","tier":"write","roles":["owner"],"params":"RemoteHostParams","output":"RemoteStatus","doc":" 그 호스트를 쓴다: 링크가 없으면 붙고(SSH → 설치 → 데몬 → 핸드셰이크), 스트림이 열린 동안 링크를 둔다. 지금 상태부터 바뀔\n 때마다 보낸다. 사람이 끊어 둔 호스트도 다시 붙는다. 모든 스트림이 닫히면 링크를 닫는다.\n","mcp":null,"fileScope":false},
+	"remote.disconnect": {"name":"remote.disconnect","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteHostParams","output":"()","doc":" 사람이 끊는다. 쓰는 창이 남아 있어도 다시 붙지 않는다(새 `remote.connect` · `remote.retry` 까지).\n","mcp":null,"fileScope":false},
+	"remote.hosts.check": {"name":"remote.hosts.check","kind":"unary","tier":"read","roles":["owner"],"params":"RemoteHostParams","output":"RemoteHostCheck","doc":" 링크 없이 가볍게 본다: 사람의 ControlMaster 가 떠 있는가(`ssh -O check`)와 마지막 링크 상태.\n","mcp":null,"fileScope":false},
+	"remote.hosts.list": {"name":"remote.hosts.list","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"RemoteHostList","doc":" 원격 호스트 목록: 전역 `[[remote_hosts]]` 와 `~/.ssh/config` 의 `Host` 이름(와일드카드 없음), 각각의 지금 상태 · 기억한\n 머신 id · 마지막 링크 상태. 링크를 열지 않는다.\n","mcp":null,"fileScope":false},
+	"remote.log": {"name":"remote.log","kind":"unary","tier":"read","roles":["owner"],"params":"RemoteHostParams","output":"Vec<RemoteLogEntry>","doc":" 그 호스트의 연결 로그(단계 · 실패 · ssh stderr 끝부분). askpass 답은 없다.\n","mcp":null,"fileScope":false},
+	"remote.prompt.answer": {"name":"remote.prompt.answer","kind":"unary","tier":"write","roles":["owner"],"params":"RemotePromptAnswerParams","output":"()","doc":" 원격 askpass 질문의 답. 처음 온 답만 받는다.\n","mcp":null,"fileScope":false},
+	"remote.prompts": {"name":"remote.prompts","kind":"stream","tier":"read","roles":["owner"],"params":"()","output":"GitPromptEvent","doc":" 원격 호스트를 붙이는 ssh 의 질문 스트림(호스트 키 확인 · 암호). 열 때 아직 열린 질문이 먼저 온다.\n","mcp":null,"fileScope":false},
+	"remote.retry": {"name":"remote.retry","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteHostParams","output":"()","doc":" 다시 시도: 쓰는 창이 있으면 기다림 없이 지금 붙는다.\n","mcp":null,"fileScope":false},
+	"remote.trustMachine": {"name":"remote.trustMachine","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteTrustMachineParams","output":"()","doc":" 「이 머신을 새로 믿기」: 그 호스트가 `machineChanged` 이고 `found` 가 `machine` 일 때만 — 묶음 멤버의 머신 id 를 옮기고 새\n id 를 기억한 뒤 다시 붙는다.\n","mcp":null,"fileScope":false},
 	"run.attach": {"name":"run.attach","kind":"stream","tier":"read","roles":["owner"],"params":"RunAttachParams","output":"RunAttachEvent","doc":" 실행의 출력을 `since` 오프셋부터 보낸다(앞에 쌓인 것 → 새로 나오는 것 → 끝). 스트림을 끊어도 실행은 돈다.\n","mcp":null,"fileScope":false},
 	"run.config.delete": {"name":"run.config.delete","kind":"unary","tier":"write","roles":["owner"],"params":"RunConfigDeleteParams","output":"RunConfigDeleted","doc":" 구성 파일을 지운다(`location` 이 없으면 공유 · 개인 둘 다). 그 프로젝트 창의 연결만. 그 id 의 구성(쓸 수 없는 것 포함)이\n 없으면 not found.\n","mcp":null,"fileScope":false},
 	"run.config.list": {"name":"run.config.list","kind":"unary","tier":"read","roles":["owner"],"params":"RunConfigListParams","output":"RunConfigList","doc":" 프로젝트의 실행 구성 목록: 쓸 수 있는 구성 · 쓸 수 없는 구성(까닭) · 감지된 태스크. 디스크에 쓰지 않는다(구버전 파일도\n 메모리에서만 올린다). 없는 프로젝트는 not found, 그 프로젝트의 것이 아닌 `worktree` 는 invalid params.\n","mcp":null,"fileScope":false},
@@ -1856,7 +1934,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 };
 
 /** 선언된 이벤트 토픽(`rpc_event!`). 선언 없는 토픽은 구독할 수 없다. */
-export type TopicName = "config.changed" | "config.error" | "db.queryProgress" | "db.schemaChanged" | "db.secretRequested" | "db.sessionChanged" | "debug.breakpoints" | "debug.continued" | "debug.ended" | "debug.output" | "debug.stopped" | "fs.changed" | "git.refsChanged" | "git.statusChanged" | "lsp.applyEdit" | "lsp.diagnostics" | "lsp.showDocument" | "lsp.status" | "mcp.activity" | "mcp.sessionsChanged" | "notification.show" | "project.changed" | "run.chain" | "run.exited" | "run.ports" | "run.started" | "runtime.changed" | "task.finished" | "task.progress";
+export type TopicName = "config.changed" | "config.error" | "db.queryProgress" | "db.schemaChanged" | "db.secretRequested" | "db.sessionChanged" | "debug.breakpoints" | "debug.continued" | "debug.ended" | "debug.output" | "debug.stopped" | "fs.changed" | "git.refsChanged" | "git.statusChanged" | "lsp.applyEdit" | "lsp.diagnostics" | "lsp.showDocument" | "lsp.status" | "mcp.activity" | "mcp.sessionsChanged" | "notification.show" | "project.changed" | "remote.status" | "run.chain" | "run.exited" | "run.ports" | "run.started" | "runtime.changed" | "task.finished" | "task.progress";
 
 /** 토픽 메타데이터(구독할 수 있는 role). `events.subscribe` 는 호출자의 role 이 없는 토픽을 거절한다. */
 export const TOPICS: Record<TopicName, EventMeta> = {
@@ -1882,6 +1960,7 @@ export const TOPICS: Record<TopicName, EventMeta> = {
 	"mcp.sessionsChanged": {"name":"mcp.sessionsChanged","roles":["owner","mobile","readonly"]},
 	"notification.show": {"name":"notification.show","roles":["owner","mobile","readonly"]},
 	"project.changed": {"name":"project.changed","roles":["owner","mobile","readonly"]},
+	"remote.status": {"name":"remote.status","roles":["owner"]},
 	"run.chain": {"name":"run.chain","roles":["owner","mobile","readonly"]},
 	"run.exited": {"name":"run.exited","roles":["owner","mobile","readonly"]},
 	"run.ports": {"name":"run.ports","roles":["owner","mobile","readonly"]},
@@ -6770,6 +6849,14 @@ export type HighlightSpan = {
 	token: SyntaxToken,
 };
 
+/**  한 체크아웃의 역사 바닥. */
+export type HistoryBottoms = {
+	/**  루트 커밋과 얕은 경계 커밋(hex, 정렬 · 중복 없음). `HEAD` 가 아직 커밋이 없으면 비어 있다. */
+	commits: string[],
+	/**  얕은 클론인가. 그러면 바닥이 진짜 루트가 아닐 수 있다 — 공통 커밋이 깊이 밖에만 있으면 찾지 못한다. */
+	shallow: boolean,
+};
+
 /**  쓰기가 어떻게 끝났는가. */
 export type HistoryOutcome = 
 /**  바뀐 것이 없다(이미 들어 있는 브랜치의 merge, 이미 위에 있는 rebase). */
@@ -8346,6 +8433,54 @@ export type LspWorkspaceSymbols = {
 	truncated: boolean,
 };
 
+/**  한 경로의 사실(`CheckoutFacts` 의 와이어 꼴). */
+export type MachineCheckoutFacts = {
+	/**  정규화한 경로. */
+	path: string,
+	/**  공용 git 폴더. git 저장소가 아니면 `null`. */
+	repository: string | null,
+	history: HistoryBottoms,
+	/**  이 경로를 루트로 가진 그 머신의 프로젝트. */
+	project: string | null,
+};
+
+export type MachineCommits = {
+	commits: string[],
+};
+
+export type MachineContainedParams = {
+	path: string,
+	/**  물어볼 커밋(hex). */
+	commits: string[],
+};
+
+export type MachinePathParams = {
+	/**  그 머신의 절대 경로. */
+	path: string,
+};
+
+export type MachineProjectParams = {
+	projectId: string,
+};
+
+export type MachineProjectRoot = {
+	/**  없는 프로젝트면 `null`. */
+	root: string | null,
+};
+
+export type MachineReaches = {
+	reached: boolean,
+};
+
+export type MachineReachesFilesParams = {
+	path: string,
+	limit: number,
+};
+
+export type MachineRegistered = {
+	projectId: string,
+};
+
 /**  [`TOPIC_ACTIVITY`] 의 payload. */
 export type McpActivity = {
 	/**  쓰인 감사 행의 id(`mcp.audit.list` 의 `id`). */
@@ -9081,6 +9216,135 @@ export type Remember =
 { kind: "key"; key: string } | 
 /**  기억하지 않는다 — 셋째 버튼이 없다(`open_with_upsert`). */
 { kind: "never" };
+
+/**  실패 하나. `message` 는 영어 원문(진단), 화면은 `kind` 로 말을 고른다. 비밀(askpass 답)은 들지 않는다. */
+export type RemoteFailure = {
+	stage: RemoteStage,
+	kind: RemoteFailureKind,
+	message: string,
+};
+
+/**  실패의 종류. 화면이 사람의 말로 옮기고, 다시 붙기를 할지 가른다([`RemoteFailureKind::retryable`]). */
+export type RemoteFailureKind = 
+/**  호스트 키가 known_hosts 의 것과 다르다 — 덮는 길이 없다(사람이 known_hosts 를 고친다). */
+"hostKeyChanged" | 
+/**  호스트 키를 받지 않았다(취소 · 답 없음). */
+"hostKeyNotAccepted" | 
+/**  ssh 가 붙지 못했다(연결 · 인증) 또는 ssh 를 띄우지 못했다. */
+"ssh" | 
+/**  지원 밖 플랫폼 — 아무것도 올리지 않았다. */
+"unsupported" | 
+/**  설치 · 페어링이 실패했다. */
+"install" | 
+/**  판이 다르다. */
+"versionMismatch" | 
+/**  Relay 가 이 기기를 받지 않았다. */
+"rejected" | 
+/**  링크가 서지 않았거나 끊겼다. */
+"link" | 
+/**  이 머신이 이미 다른 호스트 이름으로 붙어 있다. */
+"alreadyConnected" | 
+/**  원격 호스트를 쓸 수 없다(설정 · 부품 없음). */
+"unavailable";
+
+/**  가벼운 상태 확인(`ssh -O check`). */
+export type RemoteHostCheck = {
+	/**  사람의 ControlMaster 가 떠 있는가. 마스터 설정이 없으면(확인할 수 없음) `null` — 그때는 `lastLink` 를 본다. */
+	master: boolean | null,
+	lastLink: RemoteLastLink | null,
+};
+
+/**  원격 호스트 하나(`remote.hosts.list`). */
+export type RemoteHostInfo = {
+	/**  항목 이름(별명 또는 `~/.ssh/config` 의 호스트 이름). `remote.*` 는 이것으로 고른다. */
+	name: string,
+	/**  ssh 목적지. */
+	host: string,
+	user: string | null,
+	port: number | null,
+	source: RemoteHostSource,
+	/**  기억한 머신 id(처음 붙은 뒤). */
+	machine: string | null,
+	status: RemoteStatus,
+	lastLink: RemoteLastLink | null,
+};
+
+export type RemoteHostList = {
+	hosts: RemoteHostInfo[],
+	/**  읽지 못한 설정 항목 등(사람이 읽을 영어 문장). */
+	warnings: string[],
+};
+
+export type RemoteHostParams = {
+	/**  항목 이름. */
+	name: string,
+};
+
+/**  호스트 항목이 어디서 왔나. */
+export type RemoteHostSource = 
+/**  전역 설정의 `[[remote_hosts]]`. */
+"settings" | 
+/**  `~/.ssh/config` 의 `Host` 줄(와일드카드 없음). */
+"sshConfig";
+
+export type RemoteLastLink = {
+	state: RemoteLastLinkState,
+	/**  유닉스 시각(ms). */
+	at: number,
+};
+
+/**  링크 없이 본 마지막 상태(메인 판정 M7-P6 — 마지막 링크 상태와 그 시각). */
+export type RemoteLastLinkState = "connected" | "disconnected" | "failed";
+
+/**  연결 로그 한 줄(18-m7-plan M7-08 ④). 비밀(askpass 답)은 남지 않는다. */
+export type RemoteLogEntry = {
+	/**  유닉스 시각(ms). */
+	at: number,
+	stage: RemoteStage | null,
+	level: RemoteLogLevel,
+	/**  영어 원문(ssh stderr 의 끝부분 포함 — 제어 · 양방향 글자 제거). */
+	text: string,
+};
+
+export type RemoteLogLevel = "info" | "error";
+
+export type RemotePromptAnswerParams = {
+	promptId: number,
+	answer: GitPromptAnswer,
+};
+
+/**  붙는 단계(진단 칸의 차례 — 18-m7-plan M7-08 ②). */
+export type RemoteStage = 
+/**  ssh 로 붙어 원격 OS · 아키텍처를 본다. */
+"ssh" | 
+/**  같은 판의 Relay 를 올리고(이미 있으면 그대로) 이 기기를 페어링한다. */
+"install" | 
+/**  `pitwall-relay proxy` 가 데몬을 띄우고 잇는다. */
+"daemon" | 
+/**  링크 핸드셰이크(판 · 기기 증명 · 머신 id). */
+"handshake";
+
+/**  호스트 하나의 연결 상태(18-m7-plan M7-08 ② — 끊김 → 붙는 중 → 붙음 → 다시 붙는 중). */
+export type RemoteStatus = 
+/**  링크가 없다. `byUser` 면 사람이 끊었다 — 다시 붙지 않는다. 마지막 실패가 있으면 `error`. */
+{ state: "disconnected"; byUser: boolean; error: RemoteFailure | null } | 
+/**  붙는 중(지금 단계). */
+{ state: "connecting"; stage: RemoteStage } | 
+/**  붙었다. `machine` 은 증명된 머신 id(Relay 기기 공개키 지문). */
+{ state: "connected"; machine: string } | 
+/**  끊긴 뒤 다시 붙기를 기다린다(지수 백오프). `attempt` 는 1부터. */
+{ state: "reconnecting"; attempt: number; retryInMs: number; error: RemoteFailure } | 
+/**
+ *  기억한 머신 id 와 다른 머신이 답했다(SSH 호스트 키 변경과 같은 취급 — 메인 판정 M7-P6). 사람이 「이 머신을 새로 믿기」
+ *  (`remote.trustMachine`)를 고르기 전에는 붙지 않는다.
+ */
+{ state: "machineChanged"; expected: string; found: string };
+
+export type RemoteTrustMachineParams = {
+	name: string,
+	/**  사람이 본 새 머신 id(`machineChanged` 의 `found`). 그사이 다른 id 가 왔으면 거절한다. */
+	machine: string,
+};
 
 export type RemoveBundleMemberParams = {
 	bundleId: string,

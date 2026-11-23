@@ -1,0 +1,514 @@
+//! 상태 기계 시험(18-m7-plan M7-08 Rust 시험 ① ② ③) — 가짜 [`Backend`] 로 SSH 없이 돈다. 실제 ssh · 설치 길은 `ssh` 모듈의
+//! 시험(가짜 `ssh`).
+
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+use pw_core::LocalHost;
+use pw_core::config::AppPaths;
+use tokio::sync::oneshot;
+
+use super::*;
+
+const MINI: &str = "SHA256:mini";
+
+struct FakeLink {
+    closed_by_us: AtomicBool,
+    drop_tx: Mutex<Option<oneshot::Sender<String>>>,
+}
+
+impl FakeLink {
+    /// 링크가 저절로 끊긴다(Wi-Fi 등).
+    fn drop_link(&self) {
+        if let Some(tx) = lock(&self.drop_tx).take() {
+            let _ = tx.send("peer closed".into());
+        }
+    }
+}
+
+enum Outcome {
+    Link(&'static str),
+    Fail(ConnectError),
+}
+
+#[derive(Default)]
+struct Fake {
+    script: Mutex<VecDeque<Outcome>>,
+    connects: AtomicUsize,
+    links: Mutex<Vec<Arc<FakeLink>>>,
+    expects: Mutex<Vec<Option<String>>>,
+}
+
+impl Fake {
+    fn push(&self, outcome: Outcome) {
+        lock(&self.script).push_back(outcome);
+    }
+
+    fn last_link(&self) -> Arc<FakeLink> {
+        lock(&self.links).last().cloned().expect("a link")
+    }
+}
+
+impl Backend for Fake {
+    fn hosts(&self, _settings: Option<&Value>) -> (Vec<HostEntry>, Vec<String>) {
+        (
+            vec![HostEntry {
+                name: "mini".into(),
+                host: "mini.local".into(),
+                user: None,
+                port: None,
+                source: RemoteHostSource::SshConfig,
+                ssh_args: Vec::new(),
+            }],
+            Vec::new(),
+        )
+    }
+
+    fn connect<'a>(
+        &'a self,
+        _entry: &'a HostEntry,
+        expect: Option<&'a str>,
+        progress: &'a (dyn Fn(Progress) + Send + Sync),
+    ) -> BoxFuture<'a, Result<Link, ConnectError>> {
+        Box::pin(async move {
+            self.connects.fetch_add(1, Ordering::SeqCst);
+            lock(&self.expects).push(expect.map(str::to_owned));
+            for stage in [
+                RemoteStage::Ssh,
+                RemoteStage::Install,
+                RemoteStage::Daemon,
+                RemoteStage::Handshake,
+            ] {
+                progress(Progress::Stage(stage));
+            }
+            let outcome = lock(&self.script)
+                .pop_front()
+                .unwrap_or(Outcome::Link(MINI));
+            match outcome {
+                Outcome::Fail(e) => Err(e),
+                Outcome::Link(machine) => {
+                    let (tx, rx) = oneshot::channel();
+                    let link = Arc::new(FakeLink {
+                        closed_by_us: AtomicBool::new(false),
+                        drop_tx: Mutex::new(Some(tx)),
+                    });
+                    lock(&self.links).push(Arc::clone(&link));
+                    let closer = Arc::clone(&link);
+                    Ok(Link {
+                        host: Arc::new(LocalHost::new(machine)),
+                        machine: machine.into(),
+                        closed: Box::pin(
+                            async move { rx.await.unwrap_or_else(|_| "closed".into()) },
+                        ),
+                        close: Box::new(move || {
+                            closer.closed_by_us.store(true, Ordering::SeqCst);
+                            closer.drop_link();
+                        }),
+                    })
+                }
+            }
+        })
+    }
+
+    fn check<'a>(&'a self, _entry: &'a HostEntry) -> BoxFuture<'a, Option<bool>> {
+        Box::pin(async { Some(false) })
+    }
+}
+
+struct Setup {
+    _dir: tempfile::TempDir,
+    remote: RemoteHosts,
+    fake: Arc<Fake>,
+    router: Arc<HostRouter>,
+    registry: Registry,
+}
+
+fn setup() -> Setup {
+    let dir = tempfile::tempdir().unwrap();
+    let bus = EventBus::new(64);
+    let registry = Registry::new(AppPaths::under(dir.path()), None, bus.clone());
+    let remote = RemoteHosts::default();
+    let fake = Arc::new(Fake::default());
+    let router = Arc::new(HostRouter::new());
+    remote.attach_host(Some(registry.clone()), bus, None);
+    remote.attach_backend(fake.clone());
+    remote.attach_router(Arc::clone(&router));
+    Setup {
+        _dir: dir,
+        remote,
+        fake,
+        router,
+        registry,
+    }
+}
+
+/// 상태가 `pred` 에 맞을 때까지 기다린다(멈춘 시계에서도 — 기다리는 동안 시계가 앞으로 간다).
+async fn until(remote: &RemoteHosts, pred: impl Fn(&RemoteStatus) -> bool) -> RemoteStatus {
+    let mut rx = remote.watch("mini");
+    tokio::time::timeout(Duration::from_secs(600), async {
+        loop {
+            let now = rx.borrow_and_update().clone();
+            if pred(&now) {
+                return now;
+            }
+            rx.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("status never matched; now {:?}", remote.status("mini")))
+}
+
+fn connected(s: &RemoteStatus) -> bool {
+    matches!(s, RemoteStatus::Connected { .. })
+}
+
+fn fail(kind: RemoteFailureKind, detail: Option<&str>) -> ConnectError {
+    ConnectError {
+        detail: detail.map(str::to_owned),
+        ..ConnectError::new(RemoteStage::Ssh, kind, "ssh could not connect")
+    }
+}
+
+// ① 사람이 끊은 뒤에는 다시 붙지 않는다 — 쓰는 창이 남아 있어도, 시간이 지나도. 사람이 끊지 않은 끊김은 다시 붙는다.
+#[tokio::test(start_paused = true)]
+async fn a_host_the_human_disconnected_is_not_reconnected() {
+    let s = setup();
+    let _use = s.remote.hold("mini").unwrap();
+    until(&s.remote, connected).await;
+    assert_eq!(s.fake.connects.load(Ordering::SeqCst), 1);
+
+    // 끊김(사람이 아님): 백오프 뒤 다시 붙는다.
+    s.fake.last_link().drop_link();
+    until(&s.remote, |st| {
+        matches!(st, RemoteStatus::Reconnecting { attempt: 1, .. })
+    })
+    .await;
+    until(&s.remote, connected).await;
+    assert_eq!(s.fake.connects.load(Ordering::SeqCst), 2);
+
+    s.remote.disconnect("mini").unwrap();
+    assert!(s.fake.last_link().closed_by_us.load(Ordering::SeqCst));
+    assert_eq!(
+        s.remote.status("mini"),
+        RemoteStatus::Disconnected {
+            by_user: true,
+            error: None
+        }
+    );
+    tokio::time::sleep(Duration::from_secs(300)).await;
+    assert_eq!(
+        s.fake.connects.load(Ordering::SeqCst),
+        2,
+        "reconnected after the human disconnected"
+    );
+    assert!(s.router.host(MINI).is_err());
+    // 새로 쓰겠다고 하면 다시 붙는다.
+    let _again = s.remote.hold("mini").unwrap();
+    until(&s.remote, connected).await;
+    assert_eq!(s.fake.connects.load(Ordering::SeqCst), 3);
+}
+
+// ② 쓰는 것(체크아웃 탭 · 창)이 모두 놓이면 링크를 닫는다. 하나라도 남으면 열어 둔다.
+#[tokio::test(start_paused = true)]
+async fn the_link_closes_when_every_use_is_released() {
+    let s = setup();
+    let first = s.remote.hold("mini").unwrap();
+    let second = s.remote.hold("mini").unwrap();
+    until(&s.remote, connected).await;
+    assert_eq!(
+        s.fake.connects.load(Ordering::SeqCst),
+        1,
+        "one link for two uses"
+    );
+    assert!(
+        s.router.host(MINI).is_ok(),
+        "the remote host is routed by its machine id"
+    );
+
+    drop(first);
+    assert!(!s.fake.last_link().closed_by_us.load(Ordering::SeqCst));
+    assert!(connected(&s.remote.status("mini")));
+
+    drop(second);
+    assert!(
+        s.fake.last_link().closed_by_us.load(Ordering::SeqCst),
+        "the link stayed open with no use"
+    );
+    assert_eq!(s.remote.status("mini"), RemoteStatus::idle());
+    assert!(s.router.host(MINI).is_err());
+    tokio::time::sleep(Duration::from_secs(120)).await;
+    assert_eq!(s.fake.connects.load(Ordering::SeqCst), 1);
+    let record = s.registry.remote_host("mini").unwrap().unwrap();
+    assert_eq!(record.last.map(|(m, _)| m), Some(LinkMark::Disconnected));
+}
+
+// ③ 연결 로그에 askpass 답이 없다 — 진단 글(ssh stderr)에 섞여 와도 가린다.
+#[tokio::test(start_paused = true)]
+async fn the_connection_log_has_no_askpass_answer() {
+    let s = setup();
+    s.remote.remember_secret("hunter2-secret");
+    s.remote.remember_secret("yes");
+    s.fake.push(Outcome::Fail(fail(
+        RemoteFailureKind::Ssh,
+        Some("debug1: answer was hunter2-secret\ndev@mini: Permission denied (password)."),
+    )));
+    let _use = s.remote.hold("mini").unwrap();
+    let status = until(&s.remote, |st| {
+        matches!(st, RemoteStatus::Disconnected { error: Some(_), .. })
+    })
+    .await;
+    let log = s.remote.log("mini");
+    let text: String = log
+        .iter()
+        .map(|l| l.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!text.contains("hunter2"), "{text}");
+    assert!(text.contains("[hidden]"), "{text}");
+    assert!(text.contains("Permission denied"), "{text}");
+    assert!(!format!("{status:?}").contains("hunter2"));
+    // 붙기가 끝나면 가릴 것도 지운다(메모리에 오래 두지 않는다).
+    assert!(lock(&s.remote.inner.secrets).is_empty());
+}
+
+// 단계가 차례로 로그 · 상태에 남고, 처음 붙은 머신 id 를 기억해 다음에는 그 id 만 기대한다. 다른 id 가 오면 멈추고, 사람이 본
+// 그 id 로만 「새로 믿기」 가 된다(묶음 멤버의 머신 id 도 옮긴다).
+#[tokio::test(start_paused = true)]
+async fn the_machine_id_is_remembered_and_a_changed_one_waits_for_the_human() {
+    let s = setup();
+    let first = s.remote.hold("mini").unwrap();
+    until(&s.remote, connected).await;
+    let stages: Vec<_> = s
+        .remote
+        .log("mini")
+        .iter()
+        .filter_map(|l| l.stage)
+        .collect();
+    for stage in [
+        RemoteStage::Ssh,
+        RemoteStage::Install,
+        RemoteStage::Daemon,
+        RemoteStage::Handshake,
+    ] {
+        assert!(stages.contains(&stage), "{stages:?}");
+    }
+    let list = s.remote.list();
+    assert_eq!(list.hosts[0].machine.as_deref(), Some(MINI));
+    assert_eq!(
+        list.hosts[0].last_link.as_ref().map(|l| l.state),
+        Some(RemoteLastLinkState::Connected)
+    );
+    drop(first);
+
+    s.fake.push(Outcome::Fail(ConnectError {
+        machine_changed: Some((MINI.into(), "SHA256:other".into())),
+        ..ConnectError::new(
+            RemoteStage::Handshake,
+            RemoteFailureKind::Rejected,
+            "machine id changed",
+        )
+    }));
+    let _use = s.remote.hold("mini").unwrap();
+    until(&s.remote, |st| {
+        matches!(st, RemoteStatus::MachineChanged { .. })
+    })
+    .await;
+    assert_eq!(
+        lock(&s.fake.expects).last().cloned().flatten().as_deref(),
+        Some(MINI)
+    );
+    tokio::time::sleep(Duration::from_secs(120)).await;
+    assert_eq!(
+        s.fake.connects.load(Ordering::SeqCst),
+        2,
+        "retried a changed machine"
+    );
+    assert!(s.remote.retry("mini").is_err());
+    assert!(s.remote.trust_machine("mini", "SHA256:third").is_err());
+    assert_eq!(
+        s.registry
+            .remote_host("mini")
+            .unwrap()
+            .unwrap()
+            .machine
+            .as_deref(),
+        Some(MINI)
+    );
+
+    s.fake.push(Outcome::Link("SHA256:other"));
+    s.remote.trust_machine("mini", "SHA256:other").unwrap();
+    until(&s.remote, connected).await;
+    assert_eq!(
+        s.registry
+            .remote_host("mini")
+            .unwrap()
+            .unwrap()
+            .machine
+            .as_deref(),
+        Some("SHA256:other")
+    );
+}
+
+// 처음 붙기가 실패하면 저절로 다시 하지 않는다(사람이 [다시 시도]). 붙었다 끊긴 뒤의 실패는 백오프(1 · 2 · 4 …)로 다시 하고,
+// 사람이 손대야 하는 실패(호스트 키)에서는 멈춘다.
+#[tokio::test(start_paused = true)]
+async fn the_first_failure_waits_for_retry_and_a_dropped_link_backs_off() {
+    let s = setup();
+    s.fake
+        .push(Outcome::Fail(fail(RemoteFailureKind::Ssh, None)));
+    let _use = s.remote.hold("mini").unwrap();
+    until(&s.remote, |st| {
+        matches!(st, RemoteStatus::Disconnected { error: Some(_), .. })
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(120)).await;
+    assert_eq!(s.fake.connects.load(Ordering::SeqCst), 1);
+
+    s.remote.retry("mini").unwrap();
+    until(&s.remote, connected).await;
+    s.fake
+        .push(Outcome::Fail(fail(RemoteFailureKind::Link, None)));
+    s.fake
+        .push(Outcome::Fail(fail(RemoteFailureKind::Ssh, None)));
+    s.fake
+        .push(Outcome::Fail(fail(RemoteFailureKind::HostKeyChanged, None)));
+    s.fake.last_link().drop_link();
+    let mut delays = Vec::new();
+    let mut rx = s.remote.watch("mini");
+    loop {
+        rx.changed().await.unwrap();
+        let now = rx.borrow_and_update().clone();
+        match now {
+            RemoteStatus::Reconnecting { retry_in_ms, .. } => delays.push(retry_in_ms),
+            RemoteStatus::Disconnected { error: Some(e), .. } => {
+                assert_eq!(e.kind, RemoteFailureKind::HostKeyChanged);
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(delays, [1000, 2000, 4000]);
+    let backoff = Backoff::default();
+    assert_eq!(backoff.delay(5), Duration::from_secs(16));
+    assert_eq!(backoff.delay(6), Duration::from_secs(30));
+    assert_eq!(backoff.delay(40), Duration::from_secs(30));
+}
+
+// 이름 없는 호스트 · 부품이 없는 프로세스.
+#[tokio::test]
+async fn unknown_hosts_and_a_process_without_the_backend_are_refused() {
+    let s = setup();
+    assert!(matches!(
+        s.remote.hold("nope"),
+        Err(RemoteError::UnknownHost(_))
+    ));
+    let bare = RemoteHosts::default();
+    assert!(matches!(bare.hold("mini"), Err(RemoteError::Unavailable)));
+    assert!(bare.list().hosts.is_empty());
+    assert_eq!(bare.list().warnings.len(), 1);
+}
+
+async fn call(
+    host: &LocalHost,
+    scope: pw_rpc::ConnectionScope,
+    method: &str,
+    params: Value,
+) -> Value {
+    let mut conn = host
+        .connect(pw_rpc::Caller {
+            role: pw_rpc::Role::Owner,
+            scope,
+            window: None,
+        })
+        .await
+        .unwrap();
+    conn.sink
+        .send(serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}));
+    loop {
+        let frame = conn.source.recv().await.unwrap();
+        if frame.get("id") == Some(&serde_json::json!(1)) {
+            return frame;
+        }
+    }
+}
+
+// RPC 길: 창이 `remote.prompt.answer` 로 넣은 askpass 답은 질문한 쪽에 닿고, 그 뒤 진단 글에 섞여 와도 로그에 남지 않는다.
+// `remote.*` 는 Host 범위 연결만 받는다(프로젝트 창 · MCP 세션은 거절).
+#[tokio::test]
+async fn an_answer_given_through_the_rpc_is_hidden_from_the_log_and_only_host_connections_manage_hosts()
+ {
+    use pw_git::write::{AskpassHint, GitPromptAnswer, GitPromptRequest};
+    use pw_rpc::ConnectionScope;
+
+    let s = setup();
+    let registered = s.remote.clone();
+    let host = LocalHost::builder("local")
+        .methods(move |r| methods::register(r, &registered))
+        .build();
+    let _window = s.remote.prompts().listen(PROMPTS_KEY);
+    let prompts = s.remote.prompts().clone();
+    let asked = tokio::spawn(async move {
+        prompts
+            .ask(
+                PROMPTS_KEY,
+                GitPromptRequest::Askpass {
+                    text: "dev@mini's password: ".into(),
+                    hint: AskpassHint::Secret,
+                },
+                Duration::from_secs(10),
+            )
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let answer = call(
+        &host,
+        ConnectionScope::Host,
+        "remote.prompt.answer",
+        serde_json::json!({"promptId": 1, "answer": {"kind": "askpass", "value": "s3cret-xyz"}}),
+    )
+    .await;
+    assert!(answer.get("error").is_none(), "{answer}");
+    assert_eq!(
+        asked.await.unwrap().unwrap(),
+        GitPromptAnswer::Askpass {
+            value: "s3cret-xyz".into()
+        }
+    );
+
+    s.fake.push(Outcome::Fail(fail(
+        RemoteFailureKind::Ssh,
+        Some("ProxyCommand said: s3cret-xyz"),
+    )));
+    let _use = s.remote.hold("mini").unwrap();
+    until(&s.remote, |st| {
+        matches!(st, RemoteStatus::Disconnected { error: Some(_), .. })
+    })
+    .await;
+    let log = call(
+        &host,
+        ConnectionScope::Host,
+        "remote.log",
+        serde_json::json!({"name": "mini"}),
+    )
+    .await;
+    let text = log["result"].to_string();
+    assert!(text.contains("ProxyCommand said: [hidden]"), "{text}");
+    assert!(!text.contains("s3cret"), "{text}");
+
+    for scope in [ConnectionScope::Project("p".into()), ConnectionScope::Agent] {
+        let refused = call(&host, scope, "remote.hosts.list", Value::Null).await;
+        assert_eq!(
+            refused["error"]["code"],
+            serde_json::json!(pw_rpc::code::PERMISSION_DENIED),
+            "{refused}"
+        );
+    }
+    let listed = call(
+        &host,
+        ConnectionScope::Host,
+        "remote.hosts.list",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(listed["result"]["hosts"][0]["name"], "mini", "{listed}");
+}

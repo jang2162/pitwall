@@ -33,6 +33,7 @@ mod menu;
 mod perf;
 #[cfg(feature = "perf-fake-db")]
 mod perf_fake_db;
+mod remote;
 mod shell_command;
 mod tool_cli;
 mod update;
@@ -62,6 +63,7 @@ fn local_host(
         pw_core::open::OpenRequests::default(),
         pw_mcp::sessions::Sessions::default(),
     )
+    .0
 }
 
 /// [`local_host`] 와 같고 그 Host 의 DB 세션도 돌려준다 — 시험이 실행 길에 끼워 넣는 자리(`DbSessions::test_hooks`)를 쓴다.
@@ -77,7 +79,7 @@ fn local_host_and_db(
     askpass: pw_git::write::Askpass,
     mcp_sessions: pw_mcp::sessions::Sessions,
 ) -> (LocalHost, Arc<pw_db::DbSessions>) {
-    local_host_parts(
+    let (host, db_sessions, _) = local_host_parts(
         paths,
         diagnostics,
         extensions,
@@ -86,7 +88,8 @@ fn local_host_and_db(
         askpass,
         pw_core::open::OpenRequests::default(),
         mcp_sessions,
-    )
+    );
+    (host, db_sessions)
 }
 
 /// 앱이 쓰는 LocalHost.
@@ -95,6 +98,7 @@ fn local_host_and_db(
 /// git askpass(`askpass`)도 부르는 쪽이 만든다 — 주 인스턴스가 된 뒤(setup)에 그 소켓을 연다.
 /// 열기 요청 자리(`open_requests`, 에이전트의 `project_open`)도 부르는 쪽이 만든다 — 창을 여는 쪽(agent_open.rs)은 setup 에서 붙인다.
 /// MCP 세션 등록부(`mcp_sessions`)도 부르는 쪽이 만든다 — `mcp.*` RPC 와 MCP 소켓(setup 에서 연다)이 같은 것을 쓴다.
+/// 원격 호스트 관리자(`remote.*` — M7-08)를 함께 돌려준다 — 앱은 라우터 · SSH 백엔드를 붙인다(remote.rs).
 #[allow(clippy::too_many_arguments)] // 부르는 쪽이 만들어 다른 자리(창 · 소켓)와 나눠 쓰는 부품들이다.
 fn local_host_with(
     paths: AppPaths,
@@ -105,8 +109,8 @@ fn local_host_with(
     askpass: pw_git::write::Askpass,
     open_requests: pw_core::open::OpenRequests,
     mcp_sessions: pw_mcp::sessions::Sessions,
-) -> LocalHost {
-    local_host_parts(
+) -> (LocalHost, Option<pw_remote::RemoteHosts>) {
+    let (host, _, remote) = local_host_parts(
         paths,
         diagnostics,
         extensions,
@@ -115,8 +119,8 @@ fn local_host_with(
         askpass,
         open_requests,
         mcp_sessions,
-    )
-    .0
+    );
+    (host, remote)
 }
 
 /// [`local_host_with`] 의 몸통 — 앱의 부품으로 공용 조립(`pw_host::assemble`)을 부른다. DB 세션은 시험([`local_host_and_db`])이
@@ -132,7 +136,11 @@ fn local_host_parts(
     askpass: pw_git::write::Askpass,
     open_requests: pw_core::open::OpenRequests,
     mcp_sessions: pw_mcp::sessions::Sessions,
-) -> (LocalHost, Arc<pw_db::DbSessions>) {
+) -> (
+    LocalHost,
+    Arc<pw_db::DbSessions>,
+    Option<pw_remote::RemoteHosts>,
+) {
     let assembled = pw_host::assemble(pw_host::HostParts {
         id: LOCAL_HOST_ID.into(),
         paths,
@@ -154,7 +162,7 @@ fn local_host_parts(
         settings_window: settings_window(),
         tokio: tauri::async_runtime::handle().inner().clone(),
     });
-    (assembled.host, assembled.db_sessions)
+    (assembled.host, assembled.db_sessions, assembled.remote)
 }
 
 /// 창 라벨이 설정 창인가(`pw_host::HostParts::settings_window`) — 도구 설치(`tools.install` 등)는 설정 창 · 그 프로젝트 창만 한다.
@@ -349,7 +357,7 @@ fn main() {
     let askpass = pw_git::write::Askpass::default();
     let open_requests = pw_core::open::OpenRequests::default();
     let mcp_sessions = pw_mcp::sessions::Sessions::new();
-    let host = Arc::new(local_host_with(
+    let (host, remote) = local_host_with(
         paths.clone(),
         Arc::clone(&diagnostics),
         extensions,
@@ -358,7 +366,8 @@ fn main() {
         askpass.clone(),
         open_requests.clone(),
         mcp_sessions.clone(),
-    ));
+    );
+    let host = Arc::new(host);
     // 「활성 기능」은 지금 Host 가 처리하는 메서드의 모듈 이름이다. 확장 · 설정 기능이 들어오면 그것으로 바꾼다.
     diagnostics.set_features(
         host.router()
@@ -381,6 +390,10 @@ fn main() {
     router
         .add_host(host.clone())
         .expect("빈 라우터에 Host 를 처음 등록한다");
+    // 붙은 원격 Host 는 그 머신 id 로 이 라우터에 더한다(M7-08).
+    if let Some(remote) = &remote {
+        remote.attach_router(Arc::clone(&router));
+    }
 
     let mut context = context();
     let identifier = single_instance_key(&context.config().identifier, &paths);
@@ -453,6 +466,10 @@ fn main() {
             // askpass 소켓도 주 인스턴스만 연다.
             #[cfg(unix)]
             serve_askpass(&askpass, &paths, &identifier);
+            // 원격 호스트의 SSH 백엔드: 기기 키는 이 인스턴스 키의 키체인 항목, ssh 의 질문은 같은 askpass 로 창에(M7-08).
+            if let Some(remote) = &remote {
+                remote::attach(remote, &askpass, &paths, &identifier);
+            }
             Ok(())
         })
         .build(context)

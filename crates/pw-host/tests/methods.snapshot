@@ -207,6 +207,12 @@ lsp.symbols.document Unary Read {Owner}
 lsp.tool.diagnostics Unary Read {Owner}
 lsp.typeDefinition Unary Read {Owner}
 lsp.workspaceSymbol Unary Read {Owner}
+machine.contained Unary Read {Owner}
+machine.inspect Unary Read {Owner}
+machine.projectRoot Unary Read {Owner}
+machine.reachesFiles Unary Read {Owner}
+machine.register Unary Write {Owner}
+machine.unregister Unary Write {Owner}
 mcp.approval.answer Unary Write {Owner}
 mcp.approvals Stream Read {Owner}
 mcp.audit.clear Unary Write {Owner}
@@ -240,6 +246,15 @@ project.tool.open Unary Read {Owner}
 project.tool.register Unary Write {Owner}
 project.trust Unary Read {Owner, Mobile, Readonly}
 project.update Unary Write {Owner}
+remote.connect Stream Write {Owner}
+remote.disconnect Unary Write {Owner}
+remote.hosts.check Unary Read {Owner}
+remote.hosts.list Unary Read {Owner}
+remote.log Unary Read {Owner}
+remote.prompt.answer Unary Write {Owner}
+remote.prompts Stream Read {Owner}
+remote.retry Unary Write {Owner}
+remote.trustMachine Unary Write {Owner}
 run.attach Stream Read {Owner}
 run.config.delete Unary Write {Owner}
 run.config.list Unary Read {Owner}

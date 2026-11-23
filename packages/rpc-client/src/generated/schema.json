@@ -39944,6 +39944,258 @@
       ],
       "tier": "read"
     },
+    "machine.contained": {
+      "description": "묶음 판정: `commits` 가운데 `path` 의 저장소가 가진 것.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "commits": {
+            "description": "물어볼 커밋(hex).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "commits"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "commits": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "commits"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "machine.inspect": {
+      "description": "묶음 판정: 그 머신의 한 경로의 사실(정규화한 경로 · 공용 git 폴더 · 역사 바닥 · 그 경로를 루트로 가진 프로젝트).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "path": {
+            "description": "그 머신의 절대 경로.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "HistoryBottoms": {
+            "description": "한 체크아웃의 역사 바닥.",
+            "properties": {
+              "commits": {
+                "description": "루트 커밋과 얕은 경계 커밋(hex, 정렬 · 중복 없음). `HEAD` 가 아직 커밋이 없으면 비어 있다.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "shallow": {
+                "description": "얕은 클론인가. 그러면 바닥이 진짜 루트가 아닐 수 있다 — 공통 커밋이 깊이 밖에만 있으면 찾지 못한다.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "commits",
+              "shallow"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "한 경로의 사실(`CheckoutFacts` 의 와이어 꼴).",
+        "properties": {
+          "history": {
+            "$ref": "#/$defs/HistoryBottoms"
+          },
+          "path": {
+            "description": "정규화한 경로.",
+            "type": "string"
+          },
+          "project": {
+            "description": "이 경로를 루트로 가진 그 머신의 프로젝트.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repository": {
+            "description": "공용 git 폴더. git 저장소가 아니면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "repository",
+          "history",
+          "project"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "machine.projectRoot": {
+      "description": "묶음 판정: 그 머신 프로젝트의 주 루트.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "root": {
+            "description": "없는 프로젝트면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "machine.reachesFiles": {
+      "description": "묶음 판정: `path` 아래 파일이 `limit` 개 이상인가(`.git` 은 세지 않는다).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "limit": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "reached": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "reached"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "machine.register": {
+      "description": "묶음 판정: 그 머신의 레지스트리에 `path` 를 루트로 한 프로젝트를 만든다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "path": {
+            "description": "그 머신의 절대 경로.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "machine.unregister": {
+      "description": "묶음 판정: `machine.register` 로 만든 프로젝트를 지운다(거절된 더하기의 되돌리기 — 폴더는 그대로).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "mcp.approval.answer": {
       "description": "승인 요청의 답. 프로젝트 요청은 그 프로젝트 창의 연결만, 프로젝트 없는 요청은 그 요청을 받은 창의 연결만 답한다.\n이미 끝난 요청이면 not found, 그 요청이 받지 않는 답이면 invalid params.",
       "kind": "unary",
@@ -44091,6 +44343,1083 @@
           "openedAt"
         ],
         "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "remote.connect": {
+      "description": "그 호스트를 쓴다: 링크가 없으면 붙고(SSH → 설치 → 데몬 → 핸드셰이크), 스트림이 열린 동안 링크를 둔다. 지금 상태부터 바뀔\n때마다 보낸다. 사람이 끊어 둔 호스트도 다시 붙는다. 모든 스트림이 닫히면 링크를 닫는다.",
+      "item": {
+        "$defs": {
+          "RemoteFailure": {
+            "description": "실패 하나. `message` 는 영어 원문(진단), 화면은 `kind` 로 말을 고른다. 비밀(askpass 답)은 들지 않는다.",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/RemoteFailureKind"
+              },
+              "message": {
+                "type": "string"
+              },
+              "stage": {
+                "$ref": "#/$defs/RemoteStage"
+              }
+            },
+            "required": [
+              "stage",
+              "kind",
+              "message"
+            ],
+            "type": "object"
+          },
+          "RemoteFailureKind": {
+            "description": "실패의 종류. 화면이 사람의 말로 옮기고, 다시 붙기를 할지 가른다([`RemoteFailureKind::retryable`]).",
+            "oneOf": [
+              {
+                "const": "hostKeyChanged",
+                "description": "호스트 키가 known_hosts 의 것과 다르다 — 덮는 길이 없다(사람이 known_hosts 를 고친다).",
+                "type": "string"
+              },
+              {
+                "const": "hostKeyNotAccepted",
+                "description": "호스트 키를 받지 않았다(취소 · 답 없음).",
+                "type": "string"
+              },
+              {
+                "const": "ssh",
+                "description": "ssh 가 붙지 못했다(연결 · 인증) 또는 ssh 를 띄우지 못했다.",
+                "type": "string"
+              },
+              {
+                "const": "unsupported",
+                "description": "지원 밖 플랫폼 — 아무것도 올리지 않았다.",
+                "type": "string"
+              },
+              {
+                "const": "install",
+                "description": "설치 · 페어링이 실패했다.",
+                "type": "string"
+              },
+              {
+                "const": "versionMismatch",
+                "description": "판이 다르다.",
+                "type": "string"
+              },
+              {
+                "const": "rejected",
+                "description": "Relay 가 이 기기를 받지 않았다.",
+                "type": "string"
+              },
+              {
+                "const": "link",
+                "description": "링크가 서지 않았거나 끊겼다.",
+                "type": "string"
+              },
+              {
+                "const": "alreadyConnected",
+                "description": "이 머신이 이미 다른 호스트 이름으로 붙어 있다.",
+                "type": "string"
+              },
+              {
+                "const": "unavailable",
+                "description": "원격 호스트를 쓸 수 없다(설정 · 부품 없음).",
+                "type": "string"
+              }
+            ]
+          },
+          "RemoteStage": {
+            "description": "붙는 단계(진단 칸의 차례 — 18-m7-plan M7-08 ②).",
+            "oneOf": [
+              {
+                "const": "ssh",
+                "description": "ssh 로 붙어 원격 OS · 아키텍처를 본다.",
+                "type": "string"
+              },
+              {
+                "const": "install",
+                "description": "같은 판의 Relay 를 올리고(이미 있으면 그대로) 이 기기를 페어링한다.",
+                "type": "string"
+              },
+              {
+                "const": "daemon",
+                "description": "`pitwall-relay proxy` 가 데몬을 띄우고 잇는다.",
+                "type": "string"
+              },
+              {
+                "const": "handshake",
+                "description": "링크 핸드셰이크(판 · 기기 증명 · 머신 id).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "호스트 하나의 연결 상태(18-m7-plan M7-08 ② — 끊김 → 붙는 중 → 붙음 → 다시 붙는 중).",
+        "oneOf": [
+          {
+            "description": "링크가 없다. `byUser` 면 사람이 끊었다 — 다시 붙지 않는다. 마지막 실패가 있으면 `error`.",
+            "properties": {
+              "byUser": {
+                "type": "boolean"
+              },
+              "error": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RemoteFailure"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "state": {
+                "const": "disconnected",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "byUser",
+              "error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "붙는 중(지금 단계).",
+            "properties": {
+              "stage": {
+                "$ref": "#/$defs/RemoteStage"
+              },
+              "state": {
+                "const": "connecting",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "stage"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "붙었다. `machine` 은 증명된 머신 id(Relay 기기 공개키 지문).",
+            "properties": {
+              "machine": {
+                "type": "string"
+              },
+              "state": {
+                "const": "connected",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "machine"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "끊긴 뒤 다시 붙기를 기다린다(지수 백오프). `attempt` 는 1부터.",
+            "properties": {
+              "attempt": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "error": {
+                "$ref": "#/$defs/RemoteFailure"
+              },
+              "retryInMs": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "state": {
+                "const": "reconnecting",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "attempt",
+              "retryInMs",
+              "error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "기억한 머신 id 와 다른 머신이 답했다(SSH 호스트 키 변경과 같은 취급 — 메인 판정 M7-P6). 사람이 「이 머신을 새로 믿기」\n(`remote.trustMachine`)를 고르기 전에는 붙지 않는다.",
+            "properties": {
+              "expected": {
+                "type": "string"
+              },
+              "found": {
+                "type": "string"
+              },
+              "state": {
+                "const": "machineChanged",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "expected",
+              "found"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "kind": "stream",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "name": {
+            "description": "항목 이름.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "remote.disconnect": {
+      "description": "사람이 끊는다. 쓰는 창이 남아 있어도 다시 붙지 않는다(새 `remote.connect` · `remote.retry` 까지).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "name": {
+            "description": "항목 이름.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "remote.hosts.check": {
+      "description": "링크 없이 가볍게 본다: 사람의 ControlMaster 가 떠 있는가(`ssh -O check`)와 마지막 링크 상태.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "name": {
+            "description": "항목 이름.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "RemoteLastLink": {
+            "properties": {
+              "at": {
+                "description": "유닉스 시각(ms).",
+                "format": "int64",
+                "type": "integer"
+              },
+              "state": {
+                "$ref": "#/$defs/RemoteLastLinkState"
+              }
+            },
+            "required": [
+              "state",
+              "at"
+            ],
+            "type": "object"
+          },
+          "RemoteLastLinkState": {
+            "description": "링크 없이 본 마지막 상태(메인 판정 M7-P6 — 마지막 링크 상태와 그 시각).",
+            "enum": [
+              "connected",
+              "disconnected",
+              "failed"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "가벼운 상태 확인(`ssh -O check`).",
+        "properties": {
+          "lastLink": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RemoteLastLink"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "master": {
+            "description": "사람의 ControlMaster 가 떠 있는가. 마스터 설정이 없으면(확인할 수 없음) `null` — 그때는 `lastLink` 를 본다.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "master",
+          "lastLink"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "remote.hosts.list": {
+      "description": "원격 호스트 목록: 전역 `[[remote_hosts]]` 와 `~/.ssh/config` 의 `Host` 이름(와일드카드 없음), 각각의 지금 상태 · 기억한\n머신 id · 마지막 링크 상태. 링크를 열지 않는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "result": {
+        "$defs": {
+          "RemoteFailure": {
+            "description": "실패 하나. `message` 는 영어 원문(진단), 화면은 `kind` 로 말을 고른다. 비밀(askpass 답)은 들지 않는다.",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/RemoteFailureKind"
+              },
+              "message": {
+                "type": "string"
+              },
+              "stage": {
+                "$ref": "#/$defs/RemoteStage"
+              }
+            },
+            "required": [
+              "stage",
+              "kind",
+              "message"
+            ],
+            "type": "object"
+          },
+          "RemoteFailureKind": {
+            "description": "실패의 종류. 화면이 사람의 말로 옮기고, 다시 붙기를 할지 가른다([`RemoteFailureKind::retryable`]).",
+            "oneOf": [
+              {
+                "const": "hostKeyChanged",
+                "description": "호스트 키가 known_hosts 의 것과 다르다 — 덮는 길이 없다(사람이 known_hosts 를 고친다).",
+                "type": "string"
+              },
+              {
+                "const": "hostKeyNotAccepted",
+                "description": "호스트 키를 받지 않았다(취소 · 답 없음).",
+                "type": "string"
+              },
+              {
+                "const": "ssh",
+                "description": "ssh 가 붙지 못했다(연결 · 인증) 또는 ssh 를 띄우지 못했다.",
+                "type": "string"
+              },
+              {
+                "const": "unsupported",
+                "description": "지원 밖 플랫폼 — 아무것도 올리지 않았다.",
+                "type": "string"
+              },
+              {
+                "const": "install",
+                "description": "설치 · 페어링이 실패했다.",
+                "type": "string"
+              },
+              {
+                "const": "versionMismatch",
+                "description": "판이 다르다.",
+                "type": "string"
+              },
+              {
+                "const": "rejected",
+                "description": "Relay 가 이 기기를 받지 않았다.",
+                "type": "string"
+              },
+              {
+                "const": "link",
+                "description": "링크가 서지 않았거나 끊겼다.",
+                "type": "string"
+              },
+              {
+                "const": "alreadyConnected",
+                "description": "이 머신이 이미 다른 호스트 이름으로 붙어 있다.",
+                "type": "string"
+              },
+              {
+                "const": "unavailable",
+                "description": "원격 호스트를 쓸 수 없다(설정 · 부품 없음).",
+                "type": "string"
+              }
+            ]
+          },
+          "RemoteHostInfo": {
+            "description": "원격 호스트 하나(`remote.hosts.list`).",
+            "properties": {
+              "host": {
+                "description": "ssh 목적지.",
+                "type": "string"
+              },
+              "lastLink": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RemoteLastLink"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "machine": {
+                "description": "기억한 머신 id(처음 붙은 뒤).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "description": "항목 이름(별명 또는 `~/.ssh/config` 의 호스트 이름). `remote.*` 는 이것으로 고른다.",
+                "type": "string"
+              },
+              "port": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "source": {
+                "$ref": "#/$defs/RemoteHostSource"
+              },
+              "status": {
+                "$ref": "#/$defs/RemoteStatus"
+              },
+              "user": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "host",
+              "user",
+              "port",
+              "source",
+              "machine",
+              "status",
+              "lastLink"
+            ],
+            "type": "object"
+          },
+          "RemoteHostSource": {
+            "description": "호스트 항목이 어디서 왔나.",
+            "oneOf": [
+              {
+                "const": "settings",
+                "description": "전역 설정의 `[[remote_hosts]]`.",
+                "type": "string"
+              },
+              {
+                "const": "sshConfig",
+                "description": "`~/.ssh/config` 의 `Host` 줄(와일드카드 없음).",
+                "type": "string"
+              }
+            ]
+          },
+          "RemoteLastLink": {
+            "properties": {
+              "at": {
+                "description": "유닉스 시각(ms).",
+                "format": "int64",
+                "type": "integer"
+              },
+              "state": {
+                "$ref": "#/$defs/RemoteLastLinkState"
+              }
+            },
+            "required": [
+              "state",
+              "at"
+            ],
+            "type": "object"
+          },
+          "RemoteLastLinkState": {
+            "description": "링크 없이 본 마지막 상태(메인 판정 M7-P6 — 마지막 링크 상태와 그 시각).",
+            "enum": [
+              "connected",
+              "disconnected",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "RemoteStage": {
+            "description": "붙는 단계(진단 칸의 차례 — 18-m7-plan M7-08 ②).",
+            "oneOf": [
+              {
+                "const": "ssh",
+                "description": "ssh 로 붙어 원격 OS · 아키텍처를 본다.",
+                "type": "string"
+              },
+              {
+                "const": "install",
+                "description": "같은 판의 Relay 를 올리고(이미 있으면 그대로) 이 기기를 페어링한다.",
+                "type": "string"
+              },
+              {
+                "const": "daemon",
+                "description": "`pitwall-relay proxy` 가 데몬을 띄우고 잇는다.",
+                "type": "string"
+              },
+              {
+                "const": "handshake",
+                "description": "링크 핸드셰이크(판 · 기기 증명 · 머신 id).",
+                "type": "string"
+              }
+            ]
+          },
+          "RemoteStatus": {
+            "description": "호스트 하나의 연결 상태(18-m7-plan M7-08 ② — 끊김 → 붙는 중 → 붙음 → 다시 붙는 중).",
+            "oneOf": [
+              {
+                "description": "링크가 없다. `byUser` 면 사람이 끊었다 — 다시 붙지 않는다. 마지막 실패가 있으면 `error`.",
+                "properties": {
+                  "byUser": {
+                    "type": "boolean"
+                  },
+                  "error": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/RemoteFailure"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "state": {
+                    "const": "disconnected",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "byUser",
+                  "error"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "붙는 중(지금 단계).",
+                "properties": {
+                  "stage": {
+                    "$ref": "#/$defs/RemoteStage"
+                  },
+                  "state": {
+                    "const": "connecting",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "stage"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "붙었다. `machine` 은 증명된 머신 id(Relay 기기 공개키 지문).",
+                "properties": {
+                  "machine": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "const": "connected",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "machine"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "끊긴 뒤 다시 붙기를 기다린다(지수 백오프). `attempt` 는 1부터.",
+                "properties": {
+                  "attempt": {
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "error": {
+                    "$ref": "#/$defs/RemoteFailure"
+                  },
+                  "retryInMs": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "state": {
+                    "const": "reconnecting",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "attempt",
+                  "retryInMs",
+                  "error"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "기억한 머신 id 와 다른 머신이 답했다(SSH 호스트 키 변경과 같은 취급 — 메인 판정 M7-P6). 사람이 「이 머신을 새로 믿기」\n(`remote.trustMachine`)를 고르기 전에는 붙지 않는다.",
+                "properties": {
+                  "expected": {
+                    "type": "string"
+                  },
+                  "found": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "const": "machineChanged",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "expected",
+                  "found"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "hosts": {
+            "items": {
+              "$ref": "#/$defs/RemoteHostInfo"
+            },
+            "type": "array"
+          },
+          "warnings": {
+            "description": "읽지 못한 설정 항목 등(사람이 읽을 영어 문장).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "hosts",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "remote.log": {
+      "description": "그 호스트의 연결 로그(단계 · 실패 · ssh stderr 끝부분). askpass 답은 없다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "name": {
+            "description": "항목 이름.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "RemoteLogEntry": {
+            "description": "연결 로그 한 줄(18-m7-plan M7-08 ④). 비밀(askpass 답)은 남지 않는다.",
+            "properties": {
+              "at": {
+                "description": "유닉스 시각(ms).",
+                "format": "int64",
+                "type": "integer"
+              },
+              "level": {
+                "$ref": "#/$defs/RemoteLogLevel"
+              },
+              "stage": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RemoteStage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "text": {
+                "description": "영어 원문(ssh stderr 의 끝부분 포함 — 제어 · 양방향 글자 제거).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "at",
+              "stage",
+              "level",
+              "text"
+            ],
+            "type": "object"
+          },
+          "RemoteLogLevel": {
+            "enum": [
+              "info",
+              "error"
+            ],
+            "type": "string"
+          },
+          "RemoteStage": {
+            "description": "붙는 단계(진단 칸의 차례 — 18-m7-plan M7-08 ②).",
+            "oneOf": [
+              {
+                "const": "ssh",
+                "description": "ssh 로 붙어 원격 OS · 아키텍처를 본다.",
+                "type": "string"
+              },
+              {
+                "const": "install",
+                "description": "같은 판의 Relay 를 올리고(이미 있으면 그대로) 이 기기를 페어링한다.",
+                "type": "string"
+              },
+              {
+                "const": "daemon",
+                "description": "`pitwall-relay proxy` 가 데몬을 띄우고 잇는다.",
+                "type": "string"
+              },
+              {
+                "const": "handshake",
+                "description": "링크 핸드셰이크(판 · 기기 증명 · 머신 id).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "items": {
+          "$ref": "#/$defs/RemoteLogEntry"
+        },
+        "type": "array"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "remote.prompt.answer": {
+      "description": "원격 askpass 질문의 답. 처음 온 답만 받는다.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "GitPromptAnswer": {
+            "description": "창의 답. `askpass` 질문에는 그 `hint` 에 맞는 답([`AskpassHint`]), `unsaved` 질문에는 `proceed` 나 `cancel` 만 받는다.",
+            "oneOf": [
+              {
+                "description": "넣은 값. 비밀이다 — `Debug` 는 가린다.",
+                "properties": {
+                  "kind": {
+                    "const": "askpass",
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "value"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "미저장 문서를 확인했다(저장했거나 저장하지 않기로 했다) — 쓰기를 한다. askpass 의 `confirm` 이면 「예」 다.",
+                "properties": {
+                  "kind": {
+                    "const": "proceed",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "취소. askpass 면 git 이 인증 실패로 끝나고, 미저장 확인이면 쓰기를 하지 않는다.",
+                "properties": {
+                  "kind": {
+                    "const": "cancel",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "answer": {
+            "$ref": "#/$defs/GitPromptAnswer"
+          },
+          "promptId": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "promptId",
+          "answer"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "remote.prompts": {
+      "description": "원격 호스트를 붙이는 ssh 의 질문 스트림(호스트 키 확인 · 암호). 열 때 아직 열린 질문이 먼저 온다.",
+      "item": {
+        "$defs": {
+          "AskpassHint": {
+            "description": "askpass 질문의 종류. ssh 가 `SSH_ASKPASS_PROMPT` 로 알려 준다(git 은 늘 `secret`).",
+            "oneOf": [
+              {
+                "const": "secret",
+                "description": "값을 넣는다(암호 · 토큰 · 키 암호 · 호스트 키 확인의 `yes`). 답은 `askpass` 나 `cancel`.",
+                "type": "string"
+              },
+              {
+                "const": "confirm",
+                "description": "예 · 아니오(ssh 의 `confirm` — 에이전트 키를 쓸지 등). 답은 `proceed`(예) 나 `cancel`(아니오).",
+                "type": "string"
+              },
+              {
+                "const": "notice",
+                "description": "알림만(ssh 의 `none` — 보안 키를 만지라는 안내). ssh 가 일을 마치면 도우미를 끝내고 질문이 닫힌다. 답은 `cancel`(내리기)만.",
+                "type": "string"
+              }
+            ]
+          },
+          "GitPrompt": {
+            "properties": {
+              "promptId": {
+                "description": "이 Host 안에서 질문마다 다르다. 답할 때 쓴다.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "request": {
+                "$ref": "#/$defs/GitPromptRequest"
+              }
+            },
+            "required": [
+              "promptId",
+              "request"
+            ],
+            "type": "object"
+          },
+          "GitPromptRequest": {
+            "description": "창에 묻는 것.",
+            "oneOf": [
+              {
+                "description": "git · ssh 가 묻는 것(암호 · 토큰 · 키 암호 · 호스트 키 확인). `text` 는 그 프로그램이 준 문장을 [`askpass_text`] 로 다듬은\n것이다 — 번역하지 않는다. `hint` 가 `secret` 이면 답은 비밀번호 칸으로 받는다.",
+                "properties": {
+                  "hint": {
+                    "$ref": "#/$defs/AskpassHint"
+                  },
+                  "kind": {
+                    "const": "askpass",
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "text",
+                  "hint"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "작업 트리를 바꾸는 쓰기를 하기 전이다. 창은 이 경로와 겹치는 미저장 문서가 있으면 확인하고(M1-13 의 확인 — 저장 · 저장 안\n함 · 취소), 없으면 바로 `proceed` 로 답한다. `paths` 는 `workTree` 기준 상대 경로(`/` 구분)이고, `null` 이면 작업 트리\n전체다(바뀔 경로를 미리 모르는 쓰기 — 진행 중 작업의 계속 · 중단 등).",
+                "properties": {
+                  "kind": {
+                    "const": "unsaved",
+                    "type": "string"
+                  },
+                  "paths": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "workTree": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "workTree",
+                  "paths"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`git.prompts` 스트림의 항목.",
+        "oneOf": [
+          {
+            "description": "새 질문(또는 듣기 시작할 때 아직 열린 질문).",
+            "properties": {
+              "kind": {
+                "const": "open",
+                "type": "string"
+              },
+              "prompt": {
+                "$ref": "#/$defs/GitPrompt"
+              }
+            },
+            "required": [
+              "kind",
+              "prompt"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "그 질문이 끝났다(답을 받음 · 시간 초과 · 묻던 쓰기가 끝남). 떠 있는 다이얼로그를 내린다.",
+            "properties": {
+              "kind": {
+                "const": "closed",
+                "type": "string"
+              },
+              "promptId": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "promptId"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "kind": "stream",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "remote.retry": {
+      "description": "다시 시도: 쓰는 창이 있으면 기다림 없이 지금 붙는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "name": {
+            "description": "항목 이름.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "remote.trustMachine": {
+      "description": "「이 머신을 새로 믿기」: 그 호스트가 `machineChanged` 이고 `found` 가 `machine` 일 때만 — 묶음 멤버의 머신 id 를 옮기고 새\nid 를 기억한 뒤 다시 붙는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "machine": {
+            "description": "사람이 본 새 머신 id(`machineChanged` 의 `found`). 그사이 다른 id 가 왔으면 거절한다.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "machine"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
       },
       "roles": [
         "owner"

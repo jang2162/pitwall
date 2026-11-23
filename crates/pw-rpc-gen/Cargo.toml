@@ -29,6 +29,7 @@ pw-lsp-servers = { path = "../pw-lsp-servers" }
 # MCP 상태 RPC(16-m5-plan.md M5-10): `mcp.*`.
 pw-mcp = { path = "../pw-mcp" }
 pw-open-with = { path = "../pw-open-with" }
+pw-remote = { path = "../pw-remote" }
 pw-rpc = { path = "../pw-rpc" }
 pw-run = { path = "../pw-run" }
 pw-runtime = { path = "../pw-runtime" }
