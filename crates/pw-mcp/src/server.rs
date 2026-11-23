@@ -296,10 +296,20 @@ struct Inner {
     closed: CancellationToken,
     /// 「이 세션 동안 허용」: (프로젝트, 툴 이름 · 계획의 열쇠). 다른 머신 호출의 열쇠에는 그 머신이 든다([`machine_key`]).
     allowed: Mutex<BTreeSet<(Option<String>, Allowance)>>,
-    /// 「이 세션 동안 이 머신 허용」 한 머신 id(18-m7-plan M7-18).
-    machines_allowed: Mutex<BTreeSet<String>>,
+    /// 「이 세션 동안 이 머신 허용」: (프로젝트 — 묶음의 이 머신 멤버, 머신 id)(18-m7-plan M7-18). 프로젝트가 들어 있어 한 창에서
+    /// 준 허용이 다른 묶음의 같은 머신 멤버에 닿지 않는다(리뷰 F1 — CLI 판 `cli_machines` 와 같은 열쇠).
+    machines_allowed: Mutex<BTreeSet<(String, String)>>,
     /// 머신마다의 연결(다른 머신만 — 이 머신은 `client`).
     pool: checkout::Pool,
+}
+
+/// 풀었지만 아직 연결을 잇지 않은 다른 머신 대상([`Session::aim`] → [`Session::link`]).
+struct Unlinked {
+    machine: String,
+    project: String,
+    routing: String,
+    /// 에이전트에게 보일 머신 이름.
+    shown: String,
 }
 
 /// 승인을 지난 호출의 승인 방식과 계획 해시.
@@ -578,16 +588,13 @@ impl Session {
             .and_then(Value::as_str)
             .map(str::to_owned);
         let aimed = match checkout {
-            Ok(checkout) => {
-                self.aim(&tool, checkout, &mut args, &mut project_id, &cancel)
-                    .await
-            }
+            Ok(checkout) => self.aim(&tool, checkout, &mut args, &mut project_id).await,
             Err(message) => Err(Refusal {
                 message,
                 mark: Mark::error(None),
             }),
         };
-        let (remote, explicit) = match aimed {
+        let (unlinked, explicit) = match aimed {
             Ok(aimed) => aimed,
             Err(refusal) => {
                 self.audit(
@@ -606,9 +613,10 @@ impl Session {
         if !explicit {
             self.fill_worktree(&tool, &mut args, project_id.as_deref());
         }
-        // 다른 머신의 프로젝트 설정(노출 · 정책)은 그 머신의 것이다 — 이 세션이 읽지 않는다. 승인은 `auto_approve` 없이 묻는다.
-        if remote.is_none()
-            && tool.project_scoped()
+        // 대상 프로젝트의 설정 · 노출 판정은 한 자리다 — 다른 머신을 겨눈 호출도 여기서 `project_id` 는 묶음의 이 머신 멤버(에이전트가
+        // 고른 Desktop 쪽 프로젝트)다(리뷰 B1). 그 프로젝트가 끈 툴은 `checkout` 을 달아도 어디서도 돌지 않는다. 다른 머신 자신의 설정은
+        // 이 세션이 읽지 않는다(그 머신의 로컬 규칙 — M7-20). 승인은 `auto_approve` 없이 묻는다.
+        if tool.project_scoped()
             && let Some(target) = project_id.as_deref()
         {
             let refused = match self.target_config_unreadable(target, &cancel).await {
@@ -629,8 +637,7 @@ impl Session {
                 return Ok(failed(refusal.message, refusal.mark));
             }
         }
-        if remote.is_none()
-            && tool.project_scoped()
+        if tool.project_scoped()
             && let Some(target) = project_id.as_deref()
             && self.inner.project.as_ref().is_none_or(|p| p.id != target)
         {
@@ -657,6 +664,25 @@ impl Session {
                 }
             }
         }
+        let remote = match unlinked {
+            None => None,
+            Some(target) => match self.link(target, &cancel).await {
+                Ok(aim) => Some(aim),
+                Err(refusal) => {
+                    self.audit(
+                        None,
+                        &name,
+                        &args,
+                        project_id,
+                        refusal.mark.outcome,
+                        Some(refusal.message.clone()),
+                        None,
+                        started,
+                    );
+                    return Ok(failed(refusal.message, refusal.mark));
+                }
+            },
+        };
         if let Decision::Deny(reason) = policy::decide(tool.tier, &self.inner.services.approval) {
             let code = if self.headless() {
                 Reason::HeadlessWrite
@@ -1020,7 +1046,7 @@ impl Session {
         if by_machine {
             // 감사의 승인 방식은 `session` 이다 — 이 세션 동안의 허용이고, 대상 머신은 같은 행의 인자 요약(`checkout`)에 있다.
             // 승인 방식 열의 `CHECK` 를 넓히려면 감사 파일을 새 판으로 옮겨야 한다(audit.rs 「셋째 판」 의 꼴) — 하지 않았다.
-            if self.machine_allows(&aim.machine) {
+            if self.machine_allows(routing, &aim.machine) {
                 return Ok(AuditApproval::Session);
             }
             if cli && route.cli_machine_allowed(routing, &aim.machine) {
@@ -1080,7 +1106,7 @@ impl Session {
                         .machines_allowed
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
-                        .insert(aim.machine.clone());
+                        .insert((routing.to_owned(), aim.machine.clone()));
                 }
                 Ok(if cli {
                     AuditApproval::Window
@@ -1131,12 +1157,12 @@ impl Session {
         }
     }
 
-    fn machine_allows(&self, machine: &str) -> bool {
+    fn machine_allows(&self, project: &str, machine: &str) -> bool {
         self.inner
             .machines_allowed
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .contains(machine)
+            .contains(&(project.to_owned(), machine.to_owned()))
     }
 
     /// 호출을 보낼 연결: 다른 머신이면 그 머신 연결, 아니면 이 머신 Host.
@@ -1147,7 +1173,7 @@ impl Session {
     /// `checkout` 을 풀어 대상을 정한다(05 「체크아웃」). 돌려주는 것은 (다른 머신 대상, 이 머신 대상을 `checkout` 으로 명시했는가).
     /// - `checkout` 이 없으면: `projectId` 가 묶음 id 면 그 로컬 멤버로 바꾼다(없으면 거절). 나머지는 지금 그대로.
     /// - 이 머신을 고르면: 그 묶음의 로컬 멤버와 그 워크트리로 바꾼다.
-    /// - 다른 머신을 고르면: 다른 머신을 아는 앱 세션 · 그 묶음 창이 열려 있음 · 그 머신에 닿음을 차례로 보고, 입력을 그 머신
+    /// - 다른 머신을 고르면: 다른 머신을 아는 앱 세션 · 그 묶음 창이 열려 있음을 차례로 보고(붙는 것은 노출 판정 뒤 [`Self::link`]), 입력을 그 머신
     ///   프로젝트 id · 워크트리로 바꾼다. 감사 인자 요약에 남게 `checkout`(머신 id · 워크트리)을 입력에 다시 넣는다 — 보낼 때
     ///   떼어 낸다([`sent`]). `project_id` 는 승인 · 감사의 프로젝트(묶음의 로컬 멤버)가 된다.
     async fn aim(
@@ -1156,8 +1182,7 @@ impl Session {
         checkout: Option<CheckoutInput>,
         args: &mut Map<String, Value>,
         project_id: &mut Option<String>,
-        cancel: &CancellationToken,
-    ) -> Result<(Option<RemoteAim>, bool), Refusal> {
+    ) -> Result<(Option<Unlinked>, bool), Refusal> {
         let name = &tool.name;
         let machines = self.inner.services.machines.as_deref();
         let Some(checkout) = checkout else {
@@ -1271,25 +1296,57 @@ impl Session {
                 bundle.name
             )));
         }
-        let link = tokio::select! {
-            link = self.inner.pool.get(machines, &machine) => link,
-            () = cancel.cancelled() => return Err(Refusal::cancelled()),
-        }
-        .map_err(|e| unavailable(format!("cannot reach machine `{shown}`: {}", e.message())))?;
         args.insert(
             CHECKOUT.into(),
             checkout::audit_value(&machine, worktree.as_deref()),
         );
         *project_id = Some(routing.clone());
         Ok((
-            Some(RemoteAim {
+            Some(Unlinked {
                 machine,
                 project: member.project_id.clone(),
                 routing,
-                link,
+                shown,
             }),
             true,
         ))
+    }
+
+    /// 풀린 다른 머신 대상에 연결을 잇는다(연결 풀 — 머신마다 하나). 노출 · 설정 판정을 지난 뒤에 부른다 — 노출이 끈 툴로는 그
+    /// 머신에 붙지도 않는다.
+    async fn link(
+        &self,
+        target: Unlinked,
+        cancel: &CancellationToken,
+    ) -> Result<RemoteAim, Refusal> {
+        let Some(machines) = self.inner.services.machines.as_deref() else {
+            return Err(Refusal::denied(
+                Reason::MachineUnavailable,
+                "this session cannot target another checkout".to_owned(),
+            ));
+        };
+        let Unlinked {
+            machine,
+            project,
+            routing,
+            shown,
+        } = target;
+        let link = tokio::select! {
+            link = self.inner.pool.get(machines, &machine) => link,
+            () = cancel.cancelled() => return Err(Refusal::cancelled()),
+        }
+        .map_err(|e| {
+            Refusal::denied(
+                Reason::MachineUnavailable,
+                format!("cannot reach machine `{shown}`: {}", e.message()),
+            )
+        })?;
+        Ok(RemoteAim {
+            machine,
+            project,
+            routing,
+            link,
+        })
     }
 
     /// `project_list` 의 결과에 묶음을 싣는다(05 「체크아웃」 — `project_list` 는 묶음을 낸다): 묶음에 든 프로젝트에 `bundleId` ·

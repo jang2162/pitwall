@@ -6,6 +6,7 @@
 //! Host 에 `Agent` 범위로 연다(실제 Desktop 구현과 같은 `HostRouter::connect`).
 
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
 
 use pw_core::registry::bundle::{LOCAL_MACHINE, ProjectBundle, ProjectBundleMember};
 use pw_core::{BoxFuture, Target};
@@ -16,6 +17,7 @@ use super::*;
 const MINI: &str = "SHA256:mini";
 const BOX: &str = "SHA256:box";
 const BUNDLE: &str = "b-00000000000000aa";
+const BUNDLE_BETA: &str = "b-00000000000000bb";
 
 /// 다른 머신 하나(진짜 Host · 레지스트리).
 struct Machine {
@@ -77,21 +79,60 @@ impl Machine {
 /// Desktop 이 꽂는 것의 가짜: 묶음 하나(이 머신 `alpha` + mini + box), 별명, 링크.
 struct FakeMachines {
     router: Arc<HostRouter>,
-    bundle: ProjectBundle,
+    bundles: Mutex<Vec<ProjectBundle>>,
     connects: Mutex<Vec<String>>,
     refuse: Mutex<Option<MachineError>>,
+    /// 참이면 연 연결의 `project.trust` 가 실패한다(그 머신의 신뢰를 읽지 못함 — 리뷰 F3).
+    break_trust: AtomicBool,
+    /// 연 연결마다 끊는 단추(링크가 끊김 — 리뷰 F3).
+    cuts: Mutex<Vec<CancellationToken>>,
+}
+
+/// `project.trust` 를 없는 메서드로 바꿔 보내는 연결 — 그 Host 가 오류로 답한다.
+struct BreakTrust {
+    inner: Box<dyn pw_core::FrameSink>,
+    on: bool,
+}
+
+impl pw_core::FrameSink for BreakTrust {
+    fn send(&self, mut frame: Value) {
+        if self.on && frame["method"] == json!("project.trust") {
+            frame["method"] = json!("project.trustBroken");
+        }
+        self.inner.send(frame);
+    }
+}
+
+/// 끊는 단추가 눌리면 끝나는 받는 쪽 — 링크가 끊긴 연결.
+struct Cut {
+    inner: Box<dyn pw_core::FrameSource>,
+    cut: CancellationToken,
+}
+
+impl pw_core::FrameSource for Cut {
+    fn recv(&mut self) -> BoxFuture<'_, Option<Value>> {
+        Box::pin(async move {
+            tokio::select! {
+                frame = self.inner.recv() => frame,
+                () = self.cut.cancelled() => None,
+            }
+        })
+    }
 }
 
 impl Machines for FakeMachines {
     fn bundle(&self, project_id: &str) -> Result<Option<ProjectBundle>, String> {
-        Ok(
-            (project_id == self.bundle.id || self.bundle.local_project() == Some(project_id))
-                .then(|| self.bundle.clone()),
-        )
+        Ok(self
+            .bundles
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|b| project_id == b.id || b.local_project() == Some(project_id))
+            .cloned())
     }
 
     fn bundles(&self) -> Result<Vec<ProjectBundle>, String> {
-        Ok(vec![self.bundle.clone()])
+        Ok(self.bundles.lock().unwrap().clone())
     }
 
     fn machine_id(&self, name: &str) -> Option<String> {
@@ -124,6 +165,18 @@ impl Machines for FakeMachines {
                 )
                 .await
                 .map_err(|e| MachineError::Unreachable(e.to_string()))?;
+            let cut = CancellationToken::new();
+            self.cuts.lock().unwrap().push(cut.clone());
+            let connection = pw_core::Connection {
+                sink: Box::new(BreakTrust {
+                    inner: connection.sink,
+                    on: self.break_trust.load(Ordering::SeqCst),
+                }),
+                source: Box::new(Cut {
+                    inner: connection.source,
+                    cut,
+                }),
+            };
             Ok(MachineLink {
                 connection,
                 hold: Box::new(()),
@@ -171,9 +224,11 @@ impl Remote {
         };
         let machines = Arc::new(FakeMachines {
             router,
-            bundle,
+            bundles: Mutex::new(vec![bundle]),
             connects: Mutex::default(),
             refuse: Mutex::default(),
+            break_trust: AtomicBool::new(false),
+            cuts: Mutex::default(),
         });
         Self {
             f,
@@ -184,14 +239,56 @@ impl Remote {
     }
 
     async fn agent(&self, client: &str) -> Agent {
+        self.agent_in(client, "alpha").await
+    }
+
+    /// 세션을 `work/<project>` 에서 연다.
+    async fn agent_in(&self, client: &str, project: &str) -> Agent {
         let machines: Arc<dyn Machines> = self.machines.clone();
         self.f
             .agent_with(
                 client,
-                &self.f.work("alpha"),
+                &self.f.work(project),
                 self.f.services_with(HostKind::App, Some(machines)),
             )
             .await
+    }
+
+    /// 둘째 묶음: 이 머신 `beta` + mini 의 다른 프로젝트(신뢰). 그 mini 프로젝트 id 를 돌려준다.
+    fn beta_bundle(&self) -> String {
+        let root = self.mini.root.parent().unwrap().join("beta");
+        std::fs::create_dir_all(&root).unwrap();
+        let project = self
+            .mini
+            .registry
+            .create(NewProject {
+                root,
+                ..NewProject::default()
+            })
+            .unwrap()
+            .id;
+        self.mini.registry.set_trust(&project, true).unwrap();
+        self.machines.bundles.lock().unwrap().push(ProjectBundle {
+            id: BUNDLE_BETA.into(),
+            name: "beta".into(),
+            favorite: false,
+            tags: Vec::new(),
+            opened_at: None,
+            implicit: false,
+            members: vec![
+                ProjectBundleMember {
+                    machine: LOCAL_MACHINE.into(),
+                    project_id: self.f.beta.clone(),
+                    last_target: None,
+                },
+                ProjectBundleMember {
+                    machine: MINI.into(),
+                    project_id: project.clone(),
+                    last_target: None,
+                },
+            ],
+        });
+        project
     }
 
     fn connects(&self) -> Vec<String> {
@@ -679,4 +776,132 @@ async fn project_list_carries_the_bundles() {
             {"machine": BOX, "name": "box"}
         ])
     );
+}
+
+/// 리뷰 B1: 다른 머신을 겨눠도 묶음의 이 머신 멤버(에이전트가 고른 Desktop 쪽 프로젝트)의 `[mcp]` 노출을 지난다 — 그 프로젝트가 끈
+/// 툴은 `checkout` 을 달아도 어디서도 돌지 않고, 그 머신에 붙지도 않는다. 세션은 beta, 대상은 alpha 묶음(이 머신 멤버 alpha).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn another_projects_exposure_is_kept_when_targeting_another_machine() {
+    let r = Remote::new();
+    let alpha = r.f.work("alpha");
+    std::fs::create_dir_all(alpha.join(".pitwall")).unwrap();
+    std::fs::write(
+        alpha.join(".pitwall/project.toml"),
+        "schema = 1\n[mcp.tools]\nfake_echo = false\n",
+    )
+    .unwrap();
+    let _window = r.f.window(&r.f.alpha);
+    let agent = r.agent_in("agent", "beta").await;
+    let here = agent
+        .call("fake_echo", json!({"projectId": r.f.alpha, "tag": "x"}))
+        .await;
+    assert_eq!(
+        mark(&here),
+        Mark::denied(Reason::NotExposed),
+        "대조: 이 머신"
+    );
+    for project in [r.f.alpha.as_str(), BUNDLE] {
+        let there = agent
+            .call(
+                "fake_echo",
+                on("mini", json!({ "projectId": project, "tag": "x" })),
+            )
+            .await;
+        assert_eq!(
+            mark(&there),
+            Mark::denied(Reason::NotExposed),
+            "{project}: {}",
+            text(&there)
+        );
+    }
+    assert!(r.connects().is_empty(), "끈 툴로 그 머신에 붙었다");
+    assert_eq!((r.mini.runs(), r.f.runs()), (0, 0));
+}
+
+/// 리뷰 F1: 「이 세션 동안 이 머신 허용」 은 (프로젝트, 머신)이다 — alpha 묶음에서 허용한 mini 가 beta 묶음의 mini 멤버에 닿지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_machine_allowance_stays_in_its_project() {
+    let r = Remote::new();
+    r.beta_bundle();
+    let mut alpha = r.f.window(&r.f.alpha);
+    let mut beta = r.f.window(&r.f.beta);
+    let agent = r.agent("agent").await;
+    let call = agent.spawn("fake_write", on("mini", json!({"tag": "a"})));
+    let request = alpha.opened().await;
+    alpha
+        .answer(request.id, McpApprovalAnswer::Machine)
+        .unwrap();
+    assert_eq!(mark(&within(call).await.unwrap()), Mark::ok());
+    alpha.closed(request.id).await;
+    // 대조: 같은 프로젝트 · 같은 머신은 묻지 않는다.
+    assert_eq!(
+        mark(
+            &agent
+                .call("fake_write", on("mini", json!({"tag": "a2"})))
+                .await
+        ),
+        Mark::ok()
+    );
+    let call = agent.spawn(
+        "fake_write",
+        on("mini", json!({"projectId": BUNDLE_BETA, "tag": "b"})),
+    );
+    let asked = beta.opened().await;
+    assert_eq!(asked.project_id.as_deref(), Some(r.f.beta.as_str()));
+    assert_eq!(asked.machine.as_deref(), Some(MINI));
+    beta.answer(asked.id, McpApprovalAnswer::Deny).unwrap();
+    assert_eq!(
+        mark(&within(call).await.unwrap()),
+        Mark::denied(Reason::ApprovalDenied)
+    );
+    assert!(alpha.quiet());
+    assert_eq!(r.mini.runs(), 2);
+}
+
+/// 리뷰 F3: 그 머신의 신뢰를 읽지 못하면 미신뢰로 본다 — 머신 허용 뒤에도 묻고 [이 머신 허용] 을 싣지 않는다(fail-closed).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unreadable_trust_is_untrusted() {
+    let r = Remote::new();
+    r.machines.break_trust.store(true, Ordering::SeqCst);
+    let mut window = r.f.window(&r.f.alpha);
+    let agent = r.agent("agent").await;
+    for _ in 0..2 {
+        let call = agent.spawn("fake_write", on("mini", json!({"tag": "1"})));
+        let asked = window.opened().await;
+        assert_eq!(
+            asked.answers,
+            [McpApprovalAnswer::Deny, McpApprovalAnswer::Once]
+        );
+        window.answer(asked.id, McpApprovalAnswer::Once).unwrap();
+        assert_eq!(mark(&within(call).await.unwrap()), Mark::ok());
+        window.closed(asked.id).await;
+    }
+    assert_eq!(r.mini.runs(), 2);
+}
+
+/// 리뷰 F3: 링크가 끊겨 연결이 닫히면 다음 호출은 연결을 다시 연다 — 닫힌 연결을 계속 쓰지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_closed_machine_connection_is_opened_again() {
+    let r = Remote::new();
+    let _window = r.f.window(&r.f.alpha);
+    let agent = r.agent("agent").await;
+    assert_eq!(
+        mark(
+            &agent
+                .call("fake_echo", on("mini", json!({"tag": "1"})))
+                .await
+        ),
+        Mark::ok()
+    );
+    for cut in r.machines.cuts.lock().unwrap().iter() {
+        cut.cancel();
+    }
+    // 펌프가 닫힘을 볼 틈.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let again = agent
+        .call("fake_echo", on("mini", json!({"tag": "2"})))
+        .await;
+    assert_eq!(mark(&again), Mark::ok(), "{}", text(&again));
+    assert_eq!(r.connects(), [MINI, MINI]);
+    assert_eq!(r.mini.runs(), 2);
 }

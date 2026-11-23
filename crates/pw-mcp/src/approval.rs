@@ -496,8 +496,12 @@ impl Approvals {
             }
             _ => None,
         };
+        // 다른 머신을 겨눈 계획의 「사람이 본 구성」 은 이 머신의 기록이 아니다 — 그 실행이 도는 머신의 구성 열쇠 · 해시다. 이 머신
+        // 프로젝트(묶음의 이 머신 멤버 창)의 `run_seen` 에 쓰면 이 머신의 같은 열쇠 기록을 덮고, 털린 Relay 가 실은 해시로 이 머신
+        // 구성이 정책 자동이 된다(M7-D9 — 다른 머신 호출에 정책 자동 미적용, 리뷰 F2). 그 머신의 기록은 그 머신 Relay 의 몫(M7-20).
         let seen = match (&pending.route, answer) {
             (_, McpApprovalAnswer::Deny) => None,
+            _ if pending.request.machine.is_some() => None,
             (Route::Project(project), _) if !pending.request.plan.seen.is_empty() => {
                 Some((project.clone(), pending.request.plan.seen.clone()))
             }
@@ -707,6 +711,47 @@ mod tests {
         match within(listener.recv()).await {
             Some(McpApprovalEvent::Open { request }) => *request,
             other => panic!("{other:?}"),
+        }
+    }
+
+    /// 리뷰 F2: 다른 머신을 겨눈 계획의 「사람이 본 구성」 은 허용해도 돌려주지 않는다 — 이 머신 프로젝트의 `run_seen` 에 쓰이지
+    /// 않는다. 이 머신 계획은 그대로 돌려준다(대조).
+    #[tokio::test]
+    async fn a_remote_plans_seen_configuration_is_not_recorded_here() {
+        let approvals = Approvals::default();
+        let scope = ConnectionScope::Project("p".into());
+        let by = Answerer {
+            scope: &scope,
+            connection: conn(1),
+        };
+        let mut listener = approvals.listen(Some("p"), Some("w"), conn(1));
+        for machine in [None, Some("SHA256:mini")] {
+            let mut request = ask(Some("p"), false);
+            request.machine = machine.map(str::to_owned);
+            request.plan = ToolPlan::builder("test.run", Tier::Exec, &serde_json::json!({}))
+                .seen("dev", "sha256:seen")
+                .build();
+            let asking = tokio::spawn({
+                let approvals = approvals.clone();
+                async move { approvals.ask(request).await }
+            });
+            let shown = opened(&mut listener).await;
+            let seen = approvals
+                .answer_seen(&by, shown.id, McpApprovalAnswer::Once)
+                .unwrap();
+            match machine {
+                None => assert_eq!(
+                    seen.map(|(p, s)| (p, s.len())),
+                    Some(("p".to_owned(), 1)),
+                    "이 머신 계획은 기록한다(대조)"
+                ),
+                Some(_) => assert_eq!(
+                    seen, None,
+                    "다른 머신 계획의 seen 을 이 머신에 기록하려 했다"
+                ),
+            }
+            assert_eq!(within(asking).await.unwrap(), Ok(McpApprovalAnswer::Once));
+            let _ = within(listener.recv()).await;
         }
     }
 
