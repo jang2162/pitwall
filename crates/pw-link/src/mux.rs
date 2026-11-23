@@ -1314,6 +1314,27 @@ mod tests {
         assert_eq!(a.channel_count(), 0);
     }
 
+    /// 보낸 것보다 많이 받았다는 `ack` 는 규칙 위반이라 링크를 닫는다 — 받아들이면 다시 보낼 줄이 비어 다음 이어 붙기에서 틀을
+    /// 잃는다(리뷰 권고 2).
+    #[tokio::test]
+    async fn an_ack_past_what_was_sent_breaks_the_link() {
+        let (a, mut peer) = framed_pair();
+        let (a, _) = Mux::start_resumable(a, LinkLimits::default());
+        peer.write
+            .write(&LinkFrame::control(Kind::Ack, json!({"seq": 1})))
+            .await
+            .unwrap();
+        until("the link took an ack for nothing sent", || {
+            a.reason().is_some()
+        })
+        .await;
+        assert!(
+            matches!(a.reason(), Some(super::CloseReason::Protocol(why)) if why.contains("ack")),
+            "{:?}",
+            a.reason()
+        );
+    }
+
     /// 창이 없어 못 보낸 메시지의 합은 링크 보내기 예산을 넘지 않는다 — `want` 에 답하지 않는 상대에게 채널마다 큰 틀이 쌓이지
     /// 않게(델타 리뷰 권고 4). 넘긴 메시지의 채널만 닫힌다.
     #[tokio::test]
