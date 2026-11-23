@@ -27,6 +27,7 @@ import type {
 } from "@pitwall/rpc-client";
 import { createStore, type StoreApi } from "zustand/vanilla";
 
+import { LOCAL_MACHINE, qualify } from "../checkout/checkout";
 import type { CurrentFrame } from "./breakpoint-gutter";
 import { cappedText } from "./value-text";
 
@@ -96,8 +97,19 @@ export interface DebugState {
 export interface DebugDeps {
   client: DebugClient;
   projectId: string;
-  /** 루트 안 파일을 에디터로 연다. */
-  openFile(target: { path: string; worktree?: string; line: number; column: number }): void;
+  /**
+   * 디버그 연결의 머신(18-m7-plan M7-21 — 활성 체크아웃의 머신). 어댑터 · 대상은 그 머신에서 돌고 프레임 · 세션의 경로 · 워크트리는
+   * 그 머신의 것이다 — 멈춘 줄은 창 안의 꼴(`qualify`)로 두고, 여는 요청은 이 머신을 싣는다(M7-11 델타 리뷰 B3). 없으면 이 머신.
+   */
+  machine?: string;
+  /** 루트 안 파일을 에디터로 연다. `path` · `worktree` 는 `machine` 의 것이다(접두 없음). */
+  openFile(target: {
+    path: string;
+    worktree?: string;
+    machine: string;
+    line: number;
+    column: number;
+  }): void;
   /** 루트 밖 프레임을 읽기 전용 탭으로 연다(토큰). */
   openOutside(frame: {
     runId: string;
@@ -172,7 +184,8 @@ export class DebugSessions {
       .catch((e: unknown) => console.warn("[debug] could not follow debug sessions", e));
     return () => {
       disposed = true;
-      void unsubscribe?.();
+      // 연결이 함께 닫히는 중이면(다른 머신의 체크아웃에서 벗어남) 구독 해제는 실패한다 — 그 실패는 버린다.
+      void unsubscribe?.().catch(() => {});
       this.store.setState({ connected: false });
     };
   }
@@ -497,10 +510,13 @@ export class DebugSessions {
       this.current.setState({ frame: undefined });
       return;
     }
-    this.current.setState({ frame: { path: frame.path, line } });
+    const machine = deps.machine ?? LOCAL_MACHINE;
+    // 에디터 거터는 창 안의 경로로 견준다 — 다른 머신의 프레임은 그 머신이 붙은 꼴이다(이 머신의 같은 경로 탭에 줄을 칠하지 않게).
+    this.current.setState({ frame: { path: qualify(machine, frame.path), line } });
     if (open)
       deps.openFile({
         path: frame.path,
+        machine,
         line,
         column,
         ...(s.worktree !== null && { worktree: s.worktree }),

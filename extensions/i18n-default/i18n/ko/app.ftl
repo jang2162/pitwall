@@ -323,6 +323,7 @@ lsp-banner-failed = 설치하지 못했다: { $message }
 # $name: 패키지, $version: 판
 tools-confirm-title = { $name } { $version } 설치
 tools-confirm-update-title = { $name } { $version } 로 업데이트
+tools-confirm-machine = { $machine } 에 설치합니다(그 머신의 설치기가 받는다)
 tools-confirm-intro = 이 패키지를 처음 받는다. 출처와 라이선스를 확인한다.
 tools-confirm-changed = 확인하는 사이 판 · 라이선스 · 출처가 바뀌었다. 바뀐 값을 다시 확인한다.
 tools-confirm-description = 설명

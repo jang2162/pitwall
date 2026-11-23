@@ -119,6 +119,7 @@ run-picker-run = 실행
 run-picker-debug = 디버그
 run-picker-debug-none = 이 구성에는 [debug] 가 없다
 # 실행할 체크아웃이 활성 체크아웃이 아닐 때 — 디버그는 활성 체크아웃에서 열린다
+run-picker-debug-install-path = { $machine } 에서 받지 못하면 그 머신에 어댑터를 직접 깔고 그 머신의 설정에 경로를 적는다: [dap.{ $adapter }] path
 run-picker-debug-active-only = 디버그는 활성 체크아웃에서만 연다 — 그 체크아웃을 활성으로 두거나 대상을 활성 체크아웃으로 돌린다
 # $message: 오류 원문
 run-picker-debug-failed = 디버그를 시작하지 못했다: { $message }

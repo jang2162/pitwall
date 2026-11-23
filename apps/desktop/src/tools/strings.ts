@@ -76,6 +76,7 @@ export function toolsStrings(t: Translate) {
       updateTitle: (name: string, version: string) =>
         t("tools-confirm-update-title", { name, version }),
       intro: t("tools-confirm-intro"),
+      machine: (machine: string) => t("tools-confirm-machine", { machine }),
       changed: t("tools-confirm-changed"),
       description: t("tools-confirm-description"),
       version: t("tools-confirm-version"),

@@ -119,6 +119,7 @@ run-picker-read-failed = Could not read the { $detector } tasks: { $message }
 run-picker-run = Run
 run-picker-debug = Debug
 run-picker-debug-none = This configuration has no [debug] section
+run-picker-debug-install-path = If { $machine } cannot download it, install the adapter there yourself and set its path in that machine's settings: [dap.{ $adapter }] path
 run-picker-debug-active-only = Debugging opens in the active checkout only — make that checkout active or follow the active checkout
 # $message: the error text
 run-picker-debug-failed = Could not start debugging: { $message }

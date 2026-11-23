@@ -10,6 +10,8 @@ import type { ToolConfirmRequired, ToolPackageDetail } from "@pitwall/rpc-client
 import * as Dialog from "@radix-ui/react-dialog";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 
+import { LOCAL_MACHINE } from "../checkout/checkout";
+import { useMachineName } from "../checkout/machine-mark";
 import { useKeymapPopup } from "../keymap/keymap-provider";
 import {
   formatBytes,
@@ -72,16 +74,38 @@ interface Pending {
   resolve(ok: boolean): void;
 }
 
+/**
+ * 다른 머신에 설치할 때의 문장(18-m7-plan M7-21 ③ — 결정 M7-D7: 그 머신의 설치기가 그 머신에서 받는다). 이름은 **Desktop 이 아는
+ * 그 연결의 머신 id** 로만 찾는다(Desktop 별명) — `4001` 의 data 나 그 머신이 준 글은 쓰지 않는다(메인 판정). 이 머신이면 그리지 않고
+ * 이름도 읽지 않는다(설정 창 · 웰컴처럼 머신 이름 쿼리 문맥이 없는 자리).
+ */
+function ToolMachineLine({ machine }: { machine: string }) {
+  const T = useToolsStrings().confirm;
+  const name = useMachineName();
+  return (
+    <p
+      data-testid="tool-confirm-machine"
+      data-machine={machine}
+      className="text-[12px] font-semibold"
+    >
+      {T.machine(name(machine))}
+    </p>
+  );
+}
+
 export function ToolConfirmDialog({
   request,
   kind,
   detail,
+  machine,
   openUrl,
   onAnswer,
 }: {
   request: ToolConfirmRequired;
   kind: ToolChangeKind;
   detail: ToolPackageDetail | undefined;
+  /** 설치할 머신(그 설치를 부른 연결의 머신). 없거나 이 머신이면 문장을 그리지 않는다. */
+  machine?: string;
   openUrl(url: string): void;
   onAnswer(ok: boolean): void;
 }) {
@@ -110,6 +134,9 @@ export function ToolConfirmDialog({
               ? T.title(request.name, request.version)
               : T.updateTitle(request.name, request.version)}
           </Dialog.Title>
+          {machine !== undefined && machine !== LOCAL_MACHINE && (
+            <ToolMachineLine machine={machine} />
+          )}
           <Dialog.Description className="text-ui-muted-foreground">
             {request.rejected ? T.changed : T.intro}
           </Dialog.Description>
@@ -201,11 +228,12 @@ export function ToolConfirmDialog({
 
 /**
  * 확인 다이얼로그를 띄우는 `ask` 와 창이 그릴 `element`. `call` 은 설명 · 주소를 더 읽는 데(`tools.registry.get`) 쓴다 — 없으면
- * 확인 값만 보인다.
+ * 확인 값만 보인다. `machine` 은 `call` 이 가는 연결의 머신이다(설치도 그 연결로 간다 — 문장의 머신이 실제 설치 머신과 같게).
  */
 export function useToolConfirm(
   call: ToolsCall | undefined,
   openUrl: (url: string) => void,
+  machine?: string,
 ): { ask: ToolConfirmAsk; element: ReactNode } {
   const [pending, setPending] = useState<Pending>();
   const [detail, setDetail] = useState<ToolPackageDetail>();
@@ -240,6 +268,7 @@ export function useToolConfirm(
       request={pending.request}
       kind={pending.kind}
       detail={detail?.summary.name === pending.request.name ? detail : undefined}
+      {...(machine !== undefined && { machine })}
       openUrl={openUrl}
       onAnswer={(ok) => {
         setPending(undefined);

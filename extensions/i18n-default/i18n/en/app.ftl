@@ -322,6 +322,7 @@ lsp-banner-failed = Could not install: { $message }
 # $name: package, $version: version
 tools-confirm-title = Install { $name } { $version }
 tools-confirm-update-title = Update { $name } to { $version }
+tools-confirm-machine = Installs on { $machine }, by that machine's installer
 tools-confirm-intro = This package is downloaded for the first time. Check where it comes from and its license.
 tools-confirm-changed = The version, license or source changed while you were confirming. Check the new values.
 tools-confirm-description = Description

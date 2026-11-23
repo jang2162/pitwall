@@ -154,7 +154,8 @@ export class Breakpoints {
       .catch((e: unknown) => console.warn("[debug] could not read the breakpoints", e));
     return () => {
       disposed = true;
-      void unsubscribe?.();
+      // 연결이 함께 닫히는 중이면(다른 머신의 체크아웃에서 벗어남) 구독 해제는 실패한다 — 그 실패는 버린다.
+      void unsubscribe?.().catch(() => {});
       if (this.client === client) this.client = undefined;
     };
   }

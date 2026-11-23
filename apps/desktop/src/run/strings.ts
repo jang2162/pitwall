@@ -99,6 +99,8 @@ export function runStrings(t: Translate) {
       debug: t("run-picker-debug"),
       debugNone: t("run-picker-debug-none"),
       debugActiveOnly: t("run-picker-debug-active-only"),
+      debugInstallPath: (machine: string, adapter: string) =>
+        t("run-picker-debug-install-path", { machine, adapter }),
       debugFailed: (message: string) => t("run-picker-debug-failed", { message }),
       stop: t("run-picker-stop"),
       unusable: (reason: string) => t("run-picker-unusable-reason", { reason }),

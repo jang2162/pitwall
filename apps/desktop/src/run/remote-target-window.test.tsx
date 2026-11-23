@@ -15,7 +15,8 @@ import { afterEach, beforeEach, expect, vi } from "vitest";
 
 import defaultTheme from "../../../../extensions/theme-default/themes/default.json";
 import { App } from "../App";
-import { checkoutKey } from "../checkout/checkout";
+import { checkoutKey, qualify } from "../checkout/checkout";
+import { windowDebug } from "../debug/debug-session";
 import { resetWindowFileTree } from "../file-tree/project-view";
 import type { KeymapNative } from "../keymap/native";
 import { activeWorktreeStore } from "../open-with/active-worktree";
@@ -74,6 +75,12 @@ const fake = vi.hoisted(() => ({
   /** 지금 링크 상태(새 `remote.connect` 스트림의 첫 항목). */
   status: undefined as unknown,
   files: new Map<string, Set<string>>(),
+  /** 머신 → 디버그가 어댑터를 못 찾는가(`adapterMissing` — M7-21 ③). */
+  adapterMissing: new Map<string, boolean>(),
+  /** 머신 → 멈춘 프레임(`debug.stack`). */
+  frames: new Map<string, unknown[]>(),
+  /** 구독(연결 · 번호 · 토픽 · 프로젝트). */
+  subs: [] as { conn: number; id: number; topics: string[]; projectId: string | undefined }[],
 }));
 
 vi.mock("@tauri-apps/api/webview", () => ({
@@ -132,7 +139,7 @@ vi.mock("../tauri-transport", async () => {
           fake.calls.get(machine)!.push({ method: m.method, params });
         if (m.method.startsWith("remote.") && !hostScope)
           return fail(-32001, "remote.* takes only a host connection");
-        if (/^(terminal|run|fs)\./.test(m.method) && hostScope)
+        if (/^(terminal|run|fs|debug|tools\.install)\b/.test(m.method) && hostScope)
           return fail(-32001, `${m.method} takes a project window connection`);
         const info = (s: Shell) => ({
           terminalId: s.id,
@@ -235,8 +242,54 @@ vi.mock("../tauri-transport", async () => {
           }
           case "stream.credit":
             return;
-          case "events.subscribe":
-            return reply({ subscriptionId: next++ });
+          case "events.subscribe": {
+            const id = next++;
+            fake.subs.push({
+              conn,
+              id,
+              topics: (params.topics as string[] | undefined) ?? [],
+              projectId: params.projectId as string | undefined,
+            });
+            return reply({ subscriptionId: id });
+          }
+          case "debug.breakpoints.list":
+            return reply({ files: [], problem: null });
+          case "debug.start": {
+            if (params.projectId !== project) return fail(-32001, "another project");
+            if (fake.adapterMissing.get(machine))
+              return fail(-32602, "no adapter", {
+                reason: "adapterMissing",
+                adapter: "debugpy",
+                resolution: { kind: "notInstalled", mason: "debugpy" },
+              });
+            const run = {
+              ...RUN(machine, project!, (params.worktree as string | null) ?? null),
+              runId: "d1",
+              kind: "debug",
+            };
+            fake.runs.get(machine)!.push(run);
+            return reply({ run, adapter: "debugpy" });
+          }
+          case "debug.threads":
+            return reply({ threads: [{ id: 1, name: "main" }] });
+          case "debug.stack":
+            return reply({ frames: fake.frames.get(machine) ?? [], totalFrames: null });
+          case "debug.scopes":
+            return reply({ scopes: [] });
+          case "tools.registry.get":
+            break;
+          case "tools.install":
+            if (params.confirmed) return fail(4003, "install failed on purpose");
+            return fail(4001, "confirm", {
+              name: "debugpy",
+              version: "1.8.0",
+              licenses: ["MIT"],
+              sourceDomains: ["pypi.org"],
+              size: null,
+              checksum: "pinned",
+              note: null,
+              rejected: null,
+            });
           case "events.unsubscribe":
             return reply(null);
           case "lang.detect":
@@ -489,7 +542,10 @@ beforeEach(() => {
     fake.runs.set(machine, []);
     fake.trusted.set(machine, true);
     fake.files.set(machine, new Set());
+    fake.adapterMissing.set(machine, false);
+    fake.frames.set(machine, []);
   }
+  fake.subs = [];
   fake.runLogs = new Map();
   fake.conns = new Map();
   fake.links = [];
@@ -518,6 +574,9 @@ beforeEach(() => {
 
 afterEach(async () => {
   await endTest();
+  // 창별 디버그 세션(모듈 변수) — 끝나지 않은 세션이 다음 시험에 남지 않게.
+  windowDebug().store.setState({ sessions: [], activeRunId: undefined });
+  windowDebug().current.setState({ frame: undefined });
   await reactAct(async () => root?.unmount());
   await reactAct(async () => windowTerminals().disposeAll());
   await reactAct(async () => windowRuns().disposeAll());
@@ -1265,4 +1324,121 @@ it("offers Keep and Close when only a remote run is left", async () => {
   await click(dialog.querySelector("[data-answer=keep]"));
   expect(await closing).toBe(true);
   expect(calls(MINI, "run.stop")).toHaveLength(0);
+});
+
+/** 그 머신 연결의 그 토픽 구독에 이벤트를 보낸다. */
+async function emit(machine: string, topic: string, payload: unknown) {
+  await act(async () => {
+    for (const sub of fake.subs) {
+      const conn = fake.conns.get(sub.conn);
+      if (!conn || conn.closed || conn.machine !== machine || !sub.topics.includes(topic)) continue;
+      conn.send({
+        method: "events.event",
+        params: { subscriptionId: sub.id, projectId: sub.projectId, topic, payload },
+      });
+    }
+  });
+  await settle();
+}
+
+// 18-m7-plan M7-21 ①(메인 판정 — 디버그는 활성 체크아웃 머신에서): 활성 체크아웃이 다른 머신이면 디버그 세션은 그 머신 연결 · 그 머신
+// 프로젝트로 열리고, 멈춘 프레임은 **그 머신의 파일**로 연다(같은 경로의 이 머신 파일이 있어도) — 멈춘 줄도 그 머신 경로의 탭에만.
+it("debugs the active remote checkout on that machine and opens its stopped frame there", async () => {
+  const FILE = "/work/demo/src/app.py";
+  fake.files.get(MINI)!.add(FILE);
+  fake.files.get("local")!.add(FILE);
+  fake.frames.set(MINI, [
+    {
+      id: 1,
+      name: "main",
+      path: FILE,
+      sourceReference: null,
+      line: 3,
+      column: 1,
+      presentationHint: null,
+      token: null,
+    },
+  ]);
+  await mount();
+  await act(async () => projectOpenInbox.push({ worktree: REMOTE_MAIN }));
+  await settle();
+  await vi.waitFor(() => expect(byTestId("run-picker")?.textContent).toContain("Dev (mini)"));
+  // 브레이크포인트 저장은 그 머신의 것(그 머신 Relay 의 `$DATA/relay/projects/…`).
+  await vi.waitFor(() =>
+    expect(calls(MINI, "debug.breakpoints.list").map((c) => c.params.projectId)).toContain("r1"),
+  );
+  expect((byTestId("run-debug") as HTMLButtonElement).disabled).toBe(false);
+  await act(async () => void registry().run("debug.current"));
+  await settle();
+  await vi.waitFor(() => expect(calls(MINI, "debug.start")).toHaveLength(1));
+  expect(calls(MINI, "debug.start")[0]!.params).toMatchObject({ projectId: "r1", configId: "dev" });
+  expect(calls("local", "debug.start")).toHaveLength(0);
+
+  const before = calls("local", "fs.stat").length;
+  await emit(MINI, "debug.stopped", {
+    projectId: "r1",
+    runId: "d1",
+    session: null,
+    reason: "breakpoint",
+    description: null,
+    threadId: 1,
+    text: null,
+    allThreadsStopped: true,
+    hitBreakpointIds: [],
+  });
+  await vi.waitFor(() => expect(calls(MINI, "debug.stack")).toHaveLength(1));
+  // 멈춘 줄은 그 머신 경로(창 안의 꼴)에 — 이 머신의 같은 경로 탭에 칠하지 않는다.
+  await vi.waitFor(() =>
+    expect(windowDebug().current.getState().frame).toEqual({ path: qualify(MINI, FILE), line: 3 }),
+  );
+  // 프레임은 그 머신의 파일로 연다(열기 입구의 `fs.stat` 이 그 머신으로).
+  await vi.waitFor(() => expect(calls(MINI, "fs.stat").map((c) => c.params.path)).toContain(FILE));
+  expect(calls("local", "fs.stat").length).toBe(before);
+  await vi.waitFor(() =>
+    expect(
+      dock!.panels.some((p) => (p.params as { path?: string }).path === qualify(MINI, FILE)),
+    ).toBe(true),
+  );
+});
+
+// M7-21 ③(결정 M7-D7 · 메인 판정): 어댑터가 없으면 그 머신의 설치기에 묻고, 확인 창에 **Desktop 이 아는 그 연결의 머신 별명**
+// (`remote.hosts.list` 의 `mini`)을 싣는다. 받지 못하면 그 머신의 `[dap.<id>] path` 를 안내한다. 이 머신의 설치에는 머신 문장이 없다.
+it("asks that machine's installer for a missing adapter and names the machine in the consent dialog", async () => {
+  fake.adapterMissing.set(MINI, true);
+  fake.adapterMissing.set("local", true);
+  await mount();
+  await act(async () => projectOpenInbox.push({ worktree: REMOTE_MAIN }));
+  await settle();
+  await vi.waitFor(() => expect(byTestId("run-picker")?.textContent).toContain("Dev (mini)"));
+  await act(async () => void registry().run("debug.current"));
+  const dialog = await vi.waitFor(() => {
+    const d = byTestId("tool-confirm-dialog");
+    expect(d).not.toBeNull();
+    return d!;
+  });
+  expect(calls(MINI, "tools.install")).toHaveLength(1);
+  expect(calls("local", "tools.install")).toHaveLength(0);
+  const line = dialog.querySelector("[data-testid=tool-confirm-machine]");
+  expect(line?.getAttribute("data-machine")).toBe(MINI);
+  expect(line?.textContent).toContain("mini");
+  // [설치] — 그 머신의 설치기가 받다가 실패한다 — 그 머신의 경로 설정 안내.
+  await click(byTestId("tool-confirm-accept"));
+  await vi.waitFor(() => expect(calls(MINI, "tools.install")).toHaveLength(2));
+  expect(calls(MINI, "tools.install")[1]!.params.confirmed).toBeTruthy();
+  await vi.waitFor(() => expect(document.body.textContent).toContain("[dap.debugpy] path"));
+  expect(calls("local", "tools.install")).toHaveLength(0);
+
+  // 이 머신 체크아웃이면 같은 확인 창에 머신 문장이 없다.
+  await act(async () => projectOpenInbox.push({ mainCheckout: true }));
+  await settle();
+  await vi.waitFor(() => expect(byTestId("run-picker")?.textContent).toContain("Dev (local)"));
+  await act(async () => void registry().run("debug.current"));
+  const local = await vi.waitFor(() => {
+    const d = byTestId("tool-confirm-dialog");
+    expect(d).not.toBeNull();
+    return d!;
+  });
+  expect(calls("local", "tools.install")).toHaveLength(1);
+  expect(local.querySelector("[data-testid=tool-confirm-machine]")).toBeNull();
+  await click(byTestId("tool-confirm-cancel"));
 });

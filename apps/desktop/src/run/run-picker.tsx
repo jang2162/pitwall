@@ -26,10 +26,10 @@ import { useKeymapPopup, useRegisterActions } from "../keymap/keymap-provider";
 import { showPanel } from "../layout/project-layout";
 import { useNotify } from "../notifications/notifications";
 import { windowDebug } from "../debug/debug-session";
-import type { Checkout } from "../checkout/checkout";
+import { type Checkout, LOCAL_MACHINE } from "../checkout/checkout";
 import { useCheckoutHost } from "../checkout/checkout-hosts";
 import { activeCheckout } from "../open-with/active-worktree";
-import { TargetMachineProvider } from "../checkout/machine-mark";
+import { TargetMachineProvider, useMachineName } from "../checkout/machine-mark";
 import { useToolConfirm } from "../tools/confirm-dialog";
 import { changeTool, type ToolsCall } from "../tools/install";
 import { useToolsStrings } from "../tools/strings";
@@ -99,12 +99,18 @@ function useLauncher(
   const notify = useNotify();
   const risk = useRiskConfirm();
   const { client } = useCheckoutHost(machine);
+  const machineName = useMachineName();
   const toolsCall = useMemo<ToolsCall | undefined>(
     () => (client ? (method, params) => client.call(method, params) : undefined),
     [client],
   );
-  // 디버그 어댑터 설치 확인(실기 F-1): 설정 > 도구 · 언어 서버 배너와 같은 확인 창.
-  const toolConfirm = useToolConfirm(toolsCall, (url) => void openUrl(url).catch(() => {}));
+  // 디버그 어댑터 설치 확인(실기 F-1): 설정 > 도구 · 언어 서버 배너와 같은 확인 창. 설치는 구성을 읽은 머신의 연결로 가므로
+  // (`changeTool(place.client …)`) 그 머신의 설치기가 그 머신에서 받는다 — 확인 창에 그 머신 이름(M7-21 ③ · 결정 M7-D7).
+  const toolConfirm = useToolConfirm(
+    toolsCall,
+    (url) => void openUrl(url).catch(() => {}),
+    machine,
+  );
   const askSql = useCallback(
     async (data: RunSqlConfirmRequired) => {
       const answer = await risk.confirm(sqlRunQuestion(data));
@@ -184,11 +190,20 @@ function useLauncher(
             confirmAskerOn(machine),
           );
         // 어댑터가 없으면 설치 확인 → 설치 → 같은 시작을 한 번 더(src/debug/adapter-install.ts). 취소하면 시작하지 않는다.
-        await startOrInstallAdapter(start, async ({ mason }) => {
+        await startOrInstallAdapter(start, async ({ mason, adapter }) => {
           try {
             return (await changeTool(call, toolConfirm.ask, "install", mason)) !== undefined;
           } catch (e) {
-            notify({ level: "error", title: toolsT.banner.failed(mason), body: errorText(e) });
+            // 다른 머신이 받지 못하면(인터넷을 막은 원격 등) 그 머신의 경로 설정을 안내한다(M7-21 ③ · 결정 M7-D7).
+            const hint =
+              machine === LOCAL_MACHINE || adapter === ""
+                ? ""
+                : `\n${T.debugInstallPath(machineName(machine), adapter)}`;
+            notify({
+              level: "error",
+              title: toolsT.banner.failed(mason),
+              body: `${errorText(e)}${hint}`,
+            });
             return false;
           }
         });
@@ -196,7 +211,7 @@ function useLauncher(
         notify({ level: "error", title: T.debugFailed(errorText(e)) });
       }
     },
-    [configs, notify, T, toolsT, askSql, toolConfirm.ask, debugHere, machine],
+    [configs, notify, T, toolsT, askSql, toolConfirm.ask, debugHere, machine, machineName],
   );
   return { launch, debug, riskElement: risk.element, toolConfirmElement: toolConfirm.element };
 }

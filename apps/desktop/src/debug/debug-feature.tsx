@@ -12,6 +12,8 @@ import { provideContext } from "../keymap/context";
 import { useKeymap, useRegisterActions } from "../keymap/keymap-provider";
 import { outsideSources } from "../lsp/outside-sources";
 import { useNotify } from "../notifications/notifications";
+import { checkoutOfKey, LOCAL_MACHINE, qualify, unqualify } from "../checkout/checkout";
+import { useActiveMachine } from "../open-with/active-worktree";
 import { useHost } from "../rpc/host";
 import type { EditorDebug } from "./breakpoint-gutter";
 import { BreakpointEditor, BreakpointList, breakpointUi, describe } from "./breakpoint-dialogs";
@@ -52,6 +54,23 @@ export function documentSource(documents: DocumentStore, path: string): Breakpoi
   };
 }
 
+/**
+ * 거터의 문서(창 안의 경로 · 워크트리 열쇠)가 디버그 연결의 머신(`machine`)의 프로젝트에서 어디인가(18-m7-plan M7-21). 다른 머신의
+ * 문서면 `undefined` — 그 머신의 브레이크포인트를 이 머신의 같은 경로 문서에 두지 않는다(그 반대도). `worktree` 는 그 머신의 워크트리
+ * (접두 없음)다. `rel` 은 루트를 알 때 `relative` 로 낸다.
+ */
+export function debugDocument(
+  machine: string,
+  path: string,
+  worktree: string | undefined,
+): { path: string; worktree: string | undefined } | undefined {
+  const doc = unqualify(path);
+  if (doc.machine !== machine) return undefined;
+  const tree = checkoutOfKey(worktree);
+  if (worktree !== undefined && tree.machine !== machine) return undefined;
+  return { path: doc.path, worktree: tree.worktree };
+}
+
 export function DebugFeature({
   projectId,
   workspace,
@@ -68,6 +87,8 @@ export function DebugFeature({
   const T = useDebugStrings();
   const notify = useNotify();
   const { client } = useHost();
+  // 디버그 연결(활성 체크아웃)의 머신 — 어댑터 · 브레이크포인트 저장은 그 머신의 것이다(M7-21).
+  const machine = useActiveMachine();
   const { registry } = useKeymap();
   const [shown] = useState(() => new Set<string>());
 
@@ -75,6 +96,7 @@ export function DebugFeature({
     sessions.setDeps({
       client,
       projectId,
+      machine,
       openFile: (target) => void workspace.open(target),
       openOutside: (frame) => {
         const outside = outsideSources();
@@ -83,7 +105,10 @@ export function DebugFeature({
           path: frame.path,
           server: frame.adapter,
           language: null,
-          ...(frame.worktree !== undefined && { worktree: frame.worktree }),
+          // 탭의 워크트리는 창 안의 열쇠다(그 머신이 붙은 꼴).
+          ...(frame.worktree !== undefined && {
+            worktree: machine === LOCAL_MACHINE ? frame.worktree : qualify(machine, frame.worktree),
+          }),
           debug: true,
           read: async () => {
             const read = await client.call("debug.source", {
@@ -169,8 +194,10 @@ export function DebugFeature({
       attach(path, worktree) {
         let release: (() => void) | undefined;
         let gone = false;
-        void rootOf(worktree).then((root) => {
-          const rel = root === undefined ? undefined : relative(root, path);
+        const doc = debugDocument(machine, path, worktree);
+        if (!doc) return () => {};
+        void rootOf(doc.worktree).then((root) => {
+          const rel = root === undefined ? undefined : relative(root, doc.path);
           if (gone || rel === undefined) return;
           release = breakpoints.attach(path, rel, documentSource(workspace.documents, path));
         });
@@ -186,7 +213,7 @@ export function DebugFeature({
     return () => {
       if (debugEditorHost.getState().host === host) debugEditorHost.setState({ host: undefined });
     };
-  }, [client, projectId, breakpoints, sessions, workspace, roots, T]);
+  }, [client, projectId, machine, breakpoints, sessions, workspace, roots, T]);
 
   const actions = useMemo(
     () =>
@@ -239,8 +266,9 @@ export function DebugFeature({
             }
             void client?.call("project.get", { id: projectId }).then((p) => {
               const root = p.roots[0];
+              // 그 머신의 경로다 — 머신을 실어 연다(접두 없는 경로를 다른 머신으로 붙이지 않게, M7-11 델타 리뷰 B3).
               if (root !== undefined)
-                void workspace.open({ path: `${root}/${rel}`, line, column: 1 });
+                void workspace.open({ path: `${root}/${rel}`, machine, line, column: 1 });
             });
           }}
           onClose={() => breakpointUi.setState({ listing: false })}
