@@ -8,9 +8,11 @@
 //!    기기를 페어링했는데 Relay 가 `Unpaired` 로 거절하면 한 번 더 붙어 본다**(M7-06 리뷰 R-g — 떠 있던 데몬이 페어링 파일을 다시
 //!    읽기 전일 수 있다).
 //!
-//! 0. **직접 연결 먼저**(18-m7-plan M7-24 ④ · 08 「연결 방식」 의 순서): 이 호스트에 기억한 머신 id 가 있고 항목이 직접 연결을 끄지
-//!    않았으면 QUIC + Noise(`pw_link::SecuredTransport<QuicTransport>`, 그 머신 id 만 기대한다)를 먼저 해 본다. 안 되면 SSH 로
-//!    떨어진다 — SSH 는 원래 길이라 보안이 낮아지지 않는다. **처음 붙는 호스트(기억한 id 없음)는 직접 연결을 하지 않는다**(Noise ·
+//! 0. **직접 연결 먼저 — 그 주소를 알 때만**(18-m7-plan M7-24 ④ · 리뷰 F3 메인 판정): 이 호스트에 기억한 머신 id 가 있고, 직접 연결
+//!    주소를 알 때(코드로 페어링한 직접 연결 전용 호스트 · 이 실행에서 직접 연결이 섰거나 SSH 링크 뒤 그 포트가 답한 호스트)만
+//!    QUIC + Noise(`pw_link::SecuredTransport<QuicTransport>`, 그 머신 id 만 기대한다)를 먼저 해 본다 — SSH 로 떨어질 수 있으면
+//!    [`DIRECT_FIRST_TIMEOUT`](1.2초) 안에. 모르면 QUIC 를 보내지 않고 SSH 로 바로 붙는다(재부팅 뒤 첫 연결은 SSH — 결정 M7-D2).
+//!    안 되면 SSH 로 떨어진다 — SSH 는 원래 길이라 보안이 낮아지지 않는다. **처음 붙는 호스트(기억한 id 없음)는 직접 연결을 하지 않는다**(Noise ·
 //!    링크가 처음 보는 키를 믿게 되는 길이 없게 — 처음 페어링은 SSH 나 코드로). 무엇으로 붙었는지는 상태의 `via` 로 사람에게 보인다.
 //!    직접 연결이 다른 머신(다른 키)에 닿았으면 연결 로그에 경고를 남기고 SSH 로 간다.
 //!
@@ -57,8 +59,14 @@ fn pair_error(e: &pw_link::PairError) -> String {
     }
 }
 
-/// 직접 연결 한 번(QUIC 연결 · Noise · 링크 핸드셰이크)의 전체 시한. 넘으면 SSH 로 떨어진다.
+/// 직접 연결 전용 호스트(`ssh = false`)의 직접 연결 한 번(QUIC 연결 · Noise · 링크 핸드셰이크) 시한 — 떨어질 길이 없으니 넉넉히.
 pub const DIRECT_TIMEOUT: Duration = Duration::from_secs(6);
+/// SSH 로 떨어질 수 있는 호스트의 직접 연결 시한(리뷰 F3 · 메인 판정). LAN · tailnet 의 왕복은 보통 수십 ms 이고 붙기 한 번은 왕복
+/// 여섯쯤(QUIC Retry · 핸드셰이크 2 + Noise 1.5 + 링크 핸드셰이크 2)이라, 1.2초면 왕복 200ms(DERP 를 거치는 tailnet)까지 덮으면서
+/// 데몬이 없을 때(재부팅 · 유휴로 끝난 뒤) 사람이 기다리는 시간을 그만큼으로 묶는다.
+pub const DIRECT_FIRST_TIMEOUT: Duration = Duration::from_millis(1200);
+/// SSH 링크가 선 뒤 그 호스트의 직접 연결 포트에 받는 쪽이 있는지 보는 QUIC 핸드셰이크의 시한.
+const DIRECT_PROBE_TIMEOUT: Duration = Duration::from_millis(800);
 
 /// 이 빌드의 판(워크스페이스 판 하나 — Relay 와 같다).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -129,6 +137,10 @@ pub struct SshBackend {
     key: tokio::sync::OnceCell<Arc<DeviceKey>>,
     /// 증명된 머신 id 마다 지금 링크의 원격 Host(포트 포워딩이 연결을 잇는다 — 18-m7-plan M7-22). 링크가 사라지면 비어 있다.
     links: Mutex<std::collections::HashMap<String, std::sync::Weak<RemoteHost>>>,
+    /// 직접 연결 주소를 아는 호스트 항목(리뷰 F3): 이 실행에서 직접 연결이 선 적이 있거나, SSH 링크가 선 뒤 그 주소의 직접 연결
+    /// 포트가 답했다. 여기 있는 SSH 호스트만 직접 연결을 먼저 해 본다. 직접 연결이 실패하면 뺀다(다음은 SSH 로 바로). 앱이 다시
+    /// 뜨면 비어 있다 — 그래서 하루의 첫 연결은 SSH 다(결정 M7-D2).
+    direct_known: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 /// 원격 Host 의 링크로 포워딩 연결을 잇는다. 링크(원격 Host)가 사라졌으면 거절한다.
@@ -159,6 +171,7 @@ impl SshBackend {
             settle: PAIRING_SETTLE,
             key: tokio::sync::OnceCell::new(),
             links: Mutex::default(),
+            direct_known: Arc::default(),
         }
     }
 
@@ -221,14 +234,24 @@ impl SshBackend {
         progress: &(dyn Fn(Progress) + Send + Sync),
     ) -> Result<Link, ConnectError> {
         let mut direct_failed = None;
-        if let (Some(port), Some(expected)) = (entry.direct, expect) {
+        // 직접 연결은 그 주소를 알 때만(코드로 페어링한 직접 연결 전용 호스트 · 이 실행에서 직접 연결이 선 · 답한 호스트) 먼저 해 본다.
+        // 모르면 QUIC 를 한 번도 보내지 않고 SSH 로 바로 간다(리뷰 F3).
+        let known = !entry.ssh || self.knows_direct(&entry.name);
+        if let (Some(port), Some(expected), true) = (entry.direct, expect, known) {
             progress(Progress::Stage(RemoteStage::Direct));
-            match self.direct(entry, port, expected).await {
+            let limit = if entry.ssh {
+                DIRECT_FIRST_TIMEOUT
+            } else {
+                DIRECT_TIMEOUT
+            };
+            match self.direct(entry, port, expected, limit).await {
                 Ok(link) => {
+                    self.learn_direct(&entry.name, true);
                     progress(Progress::Via(RemoteVia::Direct));
                     return Ok(link);
                 }
                 Err((why, other_machine)) => {
+                    self.learn_direct(&entry.name, false);
                     let line = format!(
                         "direct connection to {}:{port} did not stand ({why}){}",
                         entry.host,
@@ -349,7 +372,57 @@ impl SshBackend {
         }
         progress(Progress::Stage(RemoteStage::Handshake));
         progress(Progress::Via(RemoteVia::Ssh));
+        if let Some(port) = entry.direct {
+            self.probe_direct(entry, port);
+        }
         Ok(self.link_of(remote, machine))
+    }
+
+    fn knows_direct(&self, name: &str) -> bool {
+        self.direct_known
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(name)
+    }
+
+    fn learn_direct(&self, name: &str, works: bool) {
+        let mut known = self
+            .direct_known
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if works {
+            known.insert(name.to_owned());
+        } else {
+            known.remove(name);
+        }
+    }
+
+    /// 시험: 이 호스트의 직접 연결 주소를 안다고 둔다.
+    #[cfg(test)]
+    pub(crate) fn remember_direct(&self, name: &str) {
+        self.learn_direct(name, true);
+    }
+
+    /// SSH 링크가 선 뒤 한 번: 그 호스트 주소의 직접 연결 포트에 받는 쪽이 있으면(QUIC 핸드셰이크만) 다음 붙기부터 직접 연결을 먼저
+    /// 해 본다. 상대가 누구인지는 그 직접 연결의 Noise · 기억한 머신 키가 판정한다.
+    fn probe_direct(&self, entry: &HostEntry, port: u16) {
+        let (known, name, host) = (
+            Arc::clone(&self.direct_known),
+            entry.name.clone(),
+            entry.host.clone(),
+        );
+        tokio::spawn(async move {
+            let Ok(mut addrs) = tokio::net::lookup_host((host.as_str(), port)).await else {
+                return;
+            };
+            let Some(addr) = addrs.next() else { return };
+            if pw_link::quic::probe(addr, DIRECT_PROBE_TIMEOUT).await {
+                known
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(name);
+            }
+        });
     }
 
     /// 직접 연결 한 번: 기억한 머신 `expected` 만 기대한다. 실패하면 (까닭, 다른 머신이 답했나).
@@ -358,10 +431,11 @@ impl SshBackend {
         entry: &HostEntry,
         port: u16,
         expected: &str,
+        limit: Duration,
     ) -> Result<Link, (String, bool)> {
         let key = self.key().await.map_err(|e| (e.message, false))?;
         let transport = SecuredTransport::new(
-            QuicTransport::new(entry.host.clone(), port),
+            QuicTransport::new(entry.host.clone(), port).with_connect_timeout(limit),
             Arc::clone(&key),
         );
         let identity = Arc::new(DesktopIdentity {
@@ -376,7 +450,7 @@ impl SshBackend {
             Expect::Machine(expected_id),
             self.limits,
         ));
-        match tokio::time::timeout(DIRECT_TIMEOUT, remote.attach()).await {
+        match tokio::time::timeout(limit, remote.attach()).await {
             Ok(Ok(_)) => Ok(self.link_of(remote, expected.to_owned())),
             Ok(Err(e)) => {
                 remote.detach();
@@ -385,7 +459,7 @@ impl SshBackend {
             }
             Err(_) => {
                 remote.detach();
-                Err((format!("no link in {} s", DIRECT_TIMEOUT.as_secs()), false))
+                Err((format!("no link in {} ms", limit.as_millis()), false))
             }
         }
     }

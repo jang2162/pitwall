@@ -146,10 +146,21 @@ impl Resident {
         }
         let was_on = unit.path.is_file();
         if was_on {
-            // 옛 단위를 먼저 내린다(옛 판 바이너리를 띄우던 것).
-            self.deactivate(&unit);
+            // 옛 단위를 먼저 내린다(옛 판 바이너리를 띄우던 것). 이미 내려가 있으면 실패해도 된다.
+            if let Err(e) = self.deactivate(&unit) {
+                tracing::warn!(%e, "the old resident unit was not running");
+            }
         }
         write_file(&unit.path, &unit.text)?;
+        // 올리지 못하면 파일을 지운다 — 「상주」 로 보이는데 데몬이 없는 꼴이 되지 않게(리뷰 R1).
+        if let Err(e) = self.activate(&unit) {
+            let _ = std::fs::remove_file(&unit.path);
+            return Err(e);
+        }
+        Ok(unit)
+    }
+
+    fn activate(&self, unit: &Unit) -> io::Result<()> {
         match self.manager {
             Manager::Launchd => (self.run)(
                 "launchctl",
@@ -172,11 +183,11 @@ impl Resident {
                 )?;
             }
         }
-        Ok(unit)
+        Ok(())
     }
 
-    fn deactivate(&self, unit: &Unit) {
-        let result = match self.manager {
+    fn deactivate(&self, unit: &Unit) -> io::Result<()> {
+        match self.manager {
             Manager::Launchd => (self.run)(
                 "launchctl",
                 &["bootout".into(), format!("gui/{}/{}", self.uid, unit.label)],
@@ -190,9 +201,6 @@ impl Resident {
                     unit.label.clone(),
                 ],
             ),
-        };
-        if let Err(e) = result {
-            tracing::warn!(%e, "the service manager did not take the unit down");
         }
     }
 
@@ -202,7 +210,14 @@ impl Resident {
         if !unit.path.is_file() {
             return Ok(false);
         }
-        self.deactivate(&unit);
+        // 내리지 못하면 파일을 남기고 실패로 낸다 — 상주 데몬이 도는데 「꺼짐」 으로 보이지 않게(리뷰 R1).
+        self.deactivate(&unit).map_err(|e| {
+            io::Error::other(format!(
+                "the service manager did not take the relay down ({e}); the unit stays at {} — \
+                 remove it by hand if the relay is not running",
+                unit.path.display()
+            ))
+        })?;
         std::fs::remove_file(&unit.path)?;
         if self.manager == Manager::SystemdUser {
             let _ = (self.run)("systemctl", &["--user".into(), "daemon-reload".into()]);
@@ -349,6 +364,24 @@ mod tests {
         let calls = calls.lock().unwrap();
         assert_eq!(calls.len(), 3);
         assert!(calls[1].starts_with("launchctl bootout"));
+    }
+
+    /// 리뷰 R1: 서비스 관리자가 실패하면 `on` 은 파일을 남기지 않고, `off` 는 실패로 내고 파일을 남긴다(꺼진 척하지 않는다).
+    #[test]
+    fn a_failing_service_manager_is_an_error_not_a_quiet_state() {
+        let home = tempfile::tempdir().unwrap();
+        let (mut r, _) = resident(Manager::Launchd, home.path());
+        r.run = Box::new(|_, _| Err(io::Error::other("launchctl failed")));
+        assert!(r.on().is_err());
+        assert!(!r.is_on(), "a unit that never came up was left behind");
+        let (ok, _) = resident(Manager::Launchd, home.path());
+        ok.on().unwrap();
+        assert!(r.off().is_err());
+        assert!(
+            r.is_on(),
+            "the unit was removed while the relay may still run"
+        );
+        assert!(ok.off().unwrap());
     }
 
     #[test]

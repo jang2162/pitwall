@@ -326,3 +326,51 @@ async fn a_silent_address_fails_within_the_connect_timeout() {
     assert!(started.elapsed() < Duration::from_secs(3));
     assert_eq!(failed.kind(), std::io::ErrorKind::TimedOut);
 }
+
+/// 리뷰 R2: 증명 전 QUIC 자원 — 받는 쪽은 양방향 스트림 하나만 열게 하고, 단방향 스트림 · 데이터그램은 받지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_relay_takes_one_stream_and_no_uni_streams_or_datagrams() {
+    let listener = Arc::new(QuicListener::bind(loopback()).unwrap());
+    let addr = listener.local_addr().unwrap();
+    {
+        let listener = Arc::clone(&listener);
+        tokio::spawn(async move {
+            while let Some(incoming) = listener.next().await {
+                tokio::spawn(async move {
+                    if let Ok(mut stream) = incoming.accept().await {
+                        let mut sink = Vec::new();
+                        let _ =
+                            tokio::io::AsyncReadExt::read_to_end(&mut stream.read, &mut sink).await;
+                    }
+                });
+            }
+        });
+    }
+    let endpoint = quinn::Endpoint::client((Ipv4Addr::UNSPECIFIED, 0).into()).unwrap();
+    let connection = endpoint
+        .connect_with(
+            crate::quic::client_config().unwrap(),
+            addr,
+            crate::quic::SERVER_NAME,
+        )
+        .unwrap()
+        .await
+        .unwrap();
+    let (mut send, _recv) = connection.open_bi().await.unwrap();
+    send.write_all(b"x").await.unwrap();
+    let short = Duration::from_millis(300);
+    assert!(
+        tokio::time::timeout(short, connection.open_bi())
+            .await
+            .is_err(),
+        "a second stream was allowed"
+    );
+    assert!(
+        tokio::time::timeout(short, connection.open_uni())
+            .await
+            .is_err(),
+        "a uni stream was allowed"
+    );
+    assert!(connection.send_datagram(vec![0u8; 8].into()).is_err());
+    connection.close(0u32.into(), b"done");
+}

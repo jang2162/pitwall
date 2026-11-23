@@ -5,6 +5,7 @@
 use std::net::Ipv4Addr;
 use std::sync::atomic::AtomicU32;
 
+use pw_link::LinkStream;
 use pw_link::pair::{CodeBook, Pending};
 use pw_link::quic::QuicListener;
 use pw_link::{Pairing, PairingCode, PairingTable, RelayIdentity, RelayParts};
@@ -50,7 +51,7 @@ struct QuicRelay {
     key: Arc<DeviceKey>,
     port: u16,
     pairings: PairingTable,
-    _listener: Arc<QuicListener>,
+    listener: Arc<QuicListener>,
 }
 
 /// 루프백의 QUIC + Noise Relay. `paired` 면 이 시험의 Desktop 키(`Fixed`)를 owner 로 넣어 둔다.
@@ -99,7 +100,7 @@ fn quic_relay(paired: bool, code: Option<&str>) -> QuicRelay {
         key,
         port,
         pairings,
-        _listener: listener,
+        listener,
     }
 }
 
@@ -141,6 +142,7 @@ fn vias(seen: &[Progress]) -> Vec<RemoteVia> {
 async fn a_remembered_machine_links_directly_without_ssh() {
     let s = setup();
     let backend = s.backend(&[], None);
+    backend.remember_direct("mini");
     let relay = quic_relay(true, None);
     let machine = relay.key.id();
     let (result, seen) = connect_entry(
@@ -162,8 +164,39 @@ async fn a_remembered_machine_links_directly_without_ssh() {
 async fn a_blocked_direct_connection_falls_back_to_ssh() {
     let s = setup();
     let backend = s.backend(&[], None);
+    backend.remember_direct("mini");
     let silent = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let port = silent.local_addr().unwrap().port();
+    let started = std::time::Instant::now();
+    let seen_ssh_at = Arc::new(Mutex::new(None));
+    let at = Arc::clone(&seen_ssh_at);
+    let progress = move |p: Progress| {
+        if matches!(p, Progress::Stage(RemoteStage::Ssh)) {
+            at.lock().unwrap().get_or_insert(started.elapsed());
+        }
+    };
+    let _ = backend
+        .connect(
+            &entry(Some(port), true),
+            Some("SHA256:fakemachine"),
+            &progress,
+        )
+        .await;
+    // 짧은 시한(1.2초) 뒤 SSH 로 간다 — 주소 하나마다 3초 · 전체 6초를 기다리지 않는다.
+    let waited = seen_ssh_at.lock().unwrap().expect("no ssh stage");
+    assert!(
+        waited < crate::ssh::DIRECT_FIRST_TIMEOUT + Duration::from_millis(600),
+        "waited {waited:?} before ssh"
+    );
+    // 직접 연결이 실패했으니 다음 붙기는 SSH 로 바로(QUIC 를 보내지 않는다).
+    let (_, again) = connect_entry(
+        &backend,
+        &entry(Some(port), true),
+        Some("SHA256:fakemachine"),
+    )
+    .await;
+    assert!(!stages(&again).contains(&RemoteStage::Direct));
+    backend.remember_direct("mini");
     let (result, seen) = connect_entry(
         &backend,
         &entry(Some(port), true),
@@ -198,6 +231,7 @@ async fn first_contact_never_tries_a_direct_connection() {
 async fn another_machine_at_the_direct_address_is_a_warning_not_a_link() {
     let s = setup();
     let backend = s.backend(&[], None);
+    backend.remember_direct("mini");
     let other = quic_relay(true, None);
     let remembered = DeviceKey::generate().unwrap().id();
     let (_, seen) = connect_entry(
@@ -252,4 +286,156 @@ async fn a_code_pairs_this_desktop_over_a_direct_connection() {
     let (result, _) =
         connect_entry(&backend, &entry(Some(relay.port), false), Some(&machine)).await;
     (result.unwrap().close)();
+}
+
+/// 리뷰 F3: 직접 연결 주소를 모르는 SSH 호스트(기억한 머신은 있다 — SSH 로 설치한 호스트의 하루 첫 연결)는 QUIC 를 한 번도 보내지
+/// 않고 SSH 로 바로 붙는다. 그 주소에 Relay 가 받고 있어도 그렇다(받는 쪽이 본 Retry 0).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_ssh_host_without_a_known_direct_address_sends_no_quic() {
+    let s = setup();
+    let backend = s.backend(&[], None);
+    let relay = quic_relay(true, None);
+    let machine = relay.key.id();
+    let (_, seen) = connect_entry(
+        &backend,
+        &entry(Some(relay.port), true),
+        Some(machine.as_str()),
+    )
+    .await;
+    assert_eq!(stages(&seen).first(), Some(&RemoteStage::Ssh));
+    assert!(!stages(&seen).contains(&RemoteStage::Direct));
+    assert_eq!(
+        relay.listener.retries(),
+        0,
+        "a quic packet reached the relay"
+    );
+}
+
+/// 이 시험 프로세스 안의 진짜 Relay 하나: SSH `proxy` 자리(TCP — 가짜 원격의 스크립트가 bash `/dev/tcp` 로 잇는다)와 직접 연결
+/// 자리(QUIC + Noise)가 같은 기기 키 · 페어링 표를 쓴다.
+struct BothRelay {
+    key: Arc<DeviceKey>,
+    tcp_port: u16,
+    quic_port: u16,
+    _listener: Arc<QuicListener>,
+}
+
+async fn both_relay() -> BothRelay {
+    let key = Arc::new(DeviceKey::generate().unwrap());
+    let pairings = PairingTable::new(vec![Pairing {
+        key: DeviceKey::from_seed(&[7; 32]).public(),
+        role: Role::Owner,
+        name: "mac".into(),
+    }]);
+    let parts = RelayParts::new(
+        Arc::new(RelayIdentity {
+            key: Arc::clone(&key),
+            versions: Versions::new(VERSION, "dev"),
+        }),
+        pairings.clone(),
+        Arc::new(pw_core::LocalHost::new("relay")) as Arc<dyn pw_core::Host>,
+        LinkLimits::default(),
+    );
+    let tcp = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let tcp_port = tcp.local_addr().unwrap().port();
+    {
+        let parts = parts.clone();
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = tcp.accept().await {
+                let parts = parts.clone();
+                tokio::spawn(async move {
+                    let _ = pw_link::serve(LinkStream::split(socket), &parts).await;
+                });
+            }
+        });
+    }
+    let listener = Arc::new(QuicListener::bind((Ipv4Addr::LOCALHOST, 0).into()).unwrap());
+    let quic_port = listener.local_addr().unwrap().port();
+    {
+        let (listener, book) = (
+            Arc::clone(&listener),
+            Arc::new(Book {
+                code: Mutex::new(None),
+                attempts: AtomicU32::new(0),
+                pairings,
+            }),
+        );
+        tokio::spawn(async move {
+            while let Some(incoming) = listener.next().await {
+                let (parts, book) = (parts.clone(), Arc::clone(&book));
+                tokio::spawn(async move {
+                    if let Ok(stream) = incoming.accept().await {
+                        let _ = pw_link::serve_noise(stream, &parts, &*book, |_| {}).await;
+                    }
+                });
+            }
+        });
+    }
+    BothRelay {
+        key,
+        tcp_port,
+        quic_port,
+        _listener: listener,
+    }
+}
+
+/// 가짜 원격의 Relay 스크립트: `pair` 는 그 Relay 의 머신 id 를, `proxy` 는 bash `/dev/tcp` 로 시험 Relay 의 TCP 에 잇는다.
+fn bridging_script(relay: &BothRelay) -> String {
+    format!(
+        "#!/bin/bash\ncase \"$1\" in\n  --verify) exit 1 ;;\n  pair) echo '{{\"machine\":\"{}\",\"added\":false}}' ;;\n  \
+         proxy) exec 3<>/dev/tcp/127.0.0.1/{}; cat <&3 & cat >&3; wait ;;\n  *) exit 2 ;;\nesac\n",
+        relay.key.id().as_str(),
+        relay.tcp_port
+    )
+}
+
+/// 리뷰 F3: 직접 연결 주소를 알지만 그 포트가 답하지 않으면(데몬이 직접 연결을 받지 않음) 짧은 시한 뒤 SSH 로 떨어지고, 붙은 링크는
+/// `via = ssh` 로 보인다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_silent_known_address_falls_back_to_ssh_and_says_ssh() {
+    let relay = both_relay().await;
+    let s = setup_with(&bridging_script(&relay));
+    let backend = s.backend(&[], None);
+    backend.remember_direct("mini");
+    let silent = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = silent.local_addr().unwrap().port();
+    let machine = relay.key.id();
+    let (result, seen) =
+        connect_entry(&backend, &entry(Some(port), true), Some(machine.as_str())).await;
+    let link = result.expect("the ssh link stands");
+    assert_eq!(stages(&seen).first(), Some(&RemoteStage::Direct));
+    assert!(stages(&seen).contains(&RemoteStage::Ssh));
+    assert_eq!(vias(&seen), [RemoteVia::Ssh]);
+    (link.close)();
+}
+
+/// SSH 링크가 선 뒤 그 호스트의 직접 연결 포트가 답하면 주소를 배워, 다음 붙기는 SSH 없이 직접 연결로 붙는다(`via = direct`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_ssh_link_learns_the_direct_address_for_the_next_time() {
+    let relay = both_relay().await;
+    let s = setup_with(&bridging_script(&relay));
+    let backend = s.backend(&[], None);
+    let machine = relay.key.id();
+    let host = entry(Some(relay.quic_port), true);
+    let (first, seen) = connect_entry(&backend, &host, Some(machine.as_str())).await;
+    let first = first.expect("the ssh link stands");
+    assert!(!stages(&seen).contains(&RemoteStage::Direct));
+    assert_eq!(vias(&seen), [RemoteVia::Ssh]);
+    // 배우기는 링크 뒤에 따로 돈다.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !backend.knows_direct("mini") {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the direct address was not learned"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    (first.close)();
+    let (second, seen) = connect_entry(&backend, &host, Some(machine.as_str())).await;
+    let second = second.expect("the direct link stands");
+    assert_eq!(stages(&seen), [RemoteStage::Direct]);
+    assert_eq!(vias(&seen), [RemoteVia::Direct]);
+    (second.close)();
 }

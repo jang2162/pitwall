@@ -59,7 +59,8 @@ impl SshAskpass for Answers {
     }
 }
 
-fn dev_dist(dir: &Path) {
+/// 「원격」 에 올릴 Relay 스크립트를 `script` 로.
+fn dev_dist_with(dir: &Path, script: &str) {
     let dist = dir.join("relay-dist-dev");
     std::fs::create_dir_all(&dist).unwrap();
     let version = Version::parse(VERSION).unwrap();
@@ -69,7 +70,7 @@ fn dev_dist(dir: &Path) {
         .unwrap();
     let name = asset_name(&version, platform);
     let path = dist.join(&name);
-    write_executable(&path, FAKE_RELAY);
+    write_executable(&path, script);
     let entry = describe(&path, &name, MAX_BINARY_BYTES).unwrap();
     let manifest = assemble(&version, &[entry], false).unwrap();
     std::fs::write(dist.join(MANIFEST_FILE), manifest.to_bytes()).unwrap();
@@ -83,10 +84,14 @@ struct Setup {
 }
 
 fn setup() -> Setup {
+    setup_with(FAKE_RELAY)
+}
+
+fn setup_with(script: &str) -> Setup {
     let dir = tempfile::tempdir().unwrap();
     let remote = FakeRemote::new(dir.path(), "home", true);
     remote.uname("Linux x86_64");
-    dev_dist(dir.path());
+    dev_dist_with(dir.path(), script);
     Setup { dir, remote }
 }
 
