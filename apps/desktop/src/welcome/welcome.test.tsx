@@ -419,6 +419,61 @@ it("marks a project bundled with another machine's checkout with each machine as
   expect(marksOf("billing-api")).toEqual([]);
 });
 
+// 18-m7-plan M7-11b ② · 완료 기준 ③: 줄은 묶음 하나다. 원격만인 묶음(로컬 프로젝트 없음)도 한 줄이고, 고르면 그 묶음 창을 연다.
+// 로컬 프로젝트가 든 행 있는 묶음의 줄도 그 묶음 id 로 연다. 원격만인 줄은 이 머신의 경로가 없어 폴더 보기 · 빼기가 없다.
+it("lists a remote-only bundle as a row and opens that bundle's window", async () => {
+  host.bundles = [
+    {
+      id: "b-00000000000000aa",
+      name: "build-farm",
+      favorite: false,
+      tags: [],
+      openedAt: null,
+      implicit: false,
+      members: [{ machine: "SHA256:mini", projectId: "r1", lastTarget: null }],
+    },
+    {
+      id: "b-0011223344556677",
+      name: "web-console",
+      favorite: false,
+      tags: [],
+      openedAt: 20,
+      implicit: false,
+      members: [
+        { machine: "local", projectId: "a", lastTarget: null },
+        { machine: "SHA256:mini", projectId: "f00d", lastTarget: null },
+      ],
+    },
+  ];
+  await mount();
+  await vi.waitFor(() => expect(rowNames()).toContain("build-farm"));
+  // 연 적 없는 줄은 이름순이다.
+  expect(rowNames()).toEqual(["billing-api", "web-console", "build-farm", "infra"]);
+  const remoteOnly = rows()[2]!;
+  expect(remoteOnly.getAttribute("data-value")).toBe("b-00000000000000aa");
+  expect(
+    [...remoteOnly.querySelectorAll('[aria-label="머신"] [role="listitem"]')].map(
+      (m) => m.textContent,
+    ),
+  ).toEqual(["SHA256:mini"]);
+
+  await act(async () => remoteOnly.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+  expect(native.openProjectWindow).toHaveBeenLastCalledWith({ projectId: "b-00000000000000aa" });
+  // 두 번 누르기는 고르지 않는다 — 첫 줄에서 한 칸 아래.
+  await press("ArrowDown");
+  expect(selectedRow()?.textContent).toContain("web-console");
+  await press("Enter");
+  expect(native.openProjectWindow).toHaveBeenLastCalledWith({ projectId: "b-0011223344556677" });
+
+  // 원격만인 줄의 메뉴는 열기뿐이다.
+  await act(async () =>
+    remoteOnly.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })),
+  );
+  await settle();
+  const menu = [...document.querySelectorAll('[role="menuitem"]')].map((m) => m.textContent);
+  expect(menu).toEqual(["열기"]);
+});
+
 it("closes the welcome window on ⌘W", async () => {
   await mount();
   keymapNative.closeWindow.mockClear();

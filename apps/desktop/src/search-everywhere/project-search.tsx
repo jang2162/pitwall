@@ -30,11 +30,11 @@ import type { EditorWorkspace } from "../editor/editor-workspace";
 import { treeScope, windowFileTree } from "../file-tree/project-view";
 import { type AppStrings, useAppStrings } from "../i18n/app-strings";
 import { useKeymap, useRegisterActions, useSearchSource } from "../keymap/keymap-provider";
-import { useHost, useRpcQuery } from "../rpc/host";
+import { useHost } from "../rpc/host";
 import { MATCH_CLASS } from "../search/match-text";
 import { SEARCH_ITEM_CLASS, searchFilter } from "../ui/search-popup";
-import { MachineMarks, useProjectMachines } from "../welcome/machines";
-import { sortProjects } from "../welcome/projects";
+import { projectIdFromQuery } from "../project-open";
+import { isWindowRow, MachineMarks, useBundleRows } from "../welcome/machines";
 import { matchRecent, parseFileQuery } from "./file-query";
 import { FILE_LIMIT, FileSearch, type Scope } from "./file-search";
 import { createRecentFiles, type RecentFiles } from "./recent-files";
@@ -210,6 +210,8 @@ function Group({ heading, children }: { heading: string | undefined; children: R
 
 interface Deps {
   projectId: string;
+  /** 이 창의 id(창 쿼리 — 로컬 프로젝트 id 또는 묶음 id). 프로젝트 탭이 「이 창」 을 단다. */
+  windowId: string;
   workspace: EditorWorkspace;
   recent: RecentFiles;
   files: FileSearch;
@@ -372,15 +374,15 @@ function makeRecentResults(deps: Deps) {
 function makeProjectResults(deps: Deps) {
   return function ProjectResults({ query, limit, heading, onMore, choose }: SearchResultsProps) {
     const T = useAppStrings().search;
-    const projects = useRpcQuery("project.list", null);
-    const machinesOf = useProjectMachines();
-    const scored = sortProjects(projects.data ?? [])
-      .map((p) => ({ p, score: searchFilter(p.name, query, p.roots.slice(0, 1)) }))
+    // 줄은 묶음 하나다 — 웰컴 창과 같은 줄 · 순서(welcome/machines.tsx, 18-m7-plan M7-11b ②).
+    const { rows, projects } = useBundleRows();
+    const scored = rows
+      .map((p) => ({ p, score: searchFilter(p.name, query, p.project?.roots.slice(0, 1) ?? []) }))
       .filter((x) => x.score > 0)
       .sort((a, b) => b.score - a.score);
     const shown = limit === undefined ? scored : scored.slice(0, limit);
     const open = (id: string) => {
-      if (id === deps.projectId || !deps.openProjectWindow) return;
+      if (!deps.openProjectWindow) return;
       deps
         .openProjectWindow(id)
         .catch((e: unknown) => console.warn("[search] project not opened", id, e));
@@ -394,20 +396,20 @@ function makeProjectResults(deps: Deps) {
           <Command.Item
             key={p.id}
             value={`project:${p.id}`}
-            onSelect={() => choose(() => open(p.id))}
+            onSelect={() => choose(() => !isWindowRow(p, deps.windowId) && open(p.id))}
             className={SEARCH_ITEM_CLASS}
           >
             <span className="flex min-w-0 flex-1 items-baseline gap-2">
               <span className="flex-none">{p.name}</span>
               <span
                 className="min-w-0 truncate text-[11px] text-ui-muted-foreground"
-                title={p.roots[0]}
+                title={p.project?.roots[0]}
               >
-                {p.roots[0]}
+                {p.project?.roots[0]}
               </span>
             </span>
-            <MachineMarks machines={machinesOf.get(p.id)} />
-            {p.id === deps.projectId && (
+            <MachineMarks machines={p.machines} />
+            {isWindowRow(p, deps.windowId) && (
               <span className="flex-none text-[11px] text-ui-muted-foreground">
                 {T.currentProject}
               </span>
@@ -423,12 +425,15 @@ function makeProjectResults(deps: Deps) {
 /** 프로젝트 창의 파일로 이동 · 최근 파일 · 프로젝트 스위처. 창이 사는 동안 하나 둔다. */
 export function ProjectSearch({
   projectId,
+  windowId = projectIdFromQuery(window.location.search) ?? projectId,
   workspace,
   api,
   openProjectWindow,
   recent: given,
 }: {
   projectId: string;
+  /** 이 창의 id. 없으면 창 쿼리, 그것도 없으면(시험) `projectId`. */
+  windowId?: string;
   workspace: EditorWorkspace;
   /** 도킹 영역. 최근 파일은 그 에디터 탭의 활성화로 센다. */
   api: DockviewApi | undefined;
@@ -471,11 +476,14 @@ export function ProjectSearch({
   useRegisterActions(actions);
 
   const deps = useRef<Deps>(undefined as never);
-  deps.current = { projectId, workspace, recent, files, openProjectWindow };
+  deps.current = { projectId, windowId, workspace, recent, files, openProjectWindow };
   const sources = useMemo(() => {
     const live: Deps = {
       get projectId() {
         return deps.current.projectId;
+      },
+      get windowId() {
+        return deps.current.windowId;
       },
       get workspace() {
         return deps.current.workspace;

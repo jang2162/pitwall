@@ -23,7 +23,7 @@ import {
 } from "react";
 
 import { useAppStrings } from "../i18n/app-strings";
-import { MachineMarks, useProjectMachines } from "./machines";
+import { type BundleRow, MachineMarks, useBundleRows } from "./machines";
 import { useKeymap, useKeymapPopup, useRegisterActions } from "../keymap/keymap-provider";
 import { McpConnections } from "../mcp/mcp-status";
 import { useOpenWith } from "../open-with/open-with";
@@ -41,7 +41,6 @@ import {
   isStorageUnavailable,
   openArgsFor,
   parentDir,
-  sortProjects,
   storageBanner,
 } from "./projects";
 import { useWelcomeStrings } from "./strings";
@@ -84,19 +83,17 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
   const queryClient = useQueryClient();
   const { platform, shortcuts } = useKeymap();
   const S = useWelcomeStrings();
-  const projects = useRpcQuery("project.list", null);
+  // 줄은 묶음 하나다(18-m7-plan M7-11b ② — welcome/machines.tsx).
+  const { rows: list } = useBundleRows();
   // 행의 현재 브랜치(10-ui.md S1). Host 가 HEAD 파일만 읽는다 — git 을 실행하지 않는다. 분리된 HEAD 면 비어 있다.
   const branches = useRpcQuery("git.projectBranches", {});
   const branchOf = useMemo(
     () => new Map((branches.data?.projects ?? []).map((p) => [p.projectId, p.branch])),
     [branches.data],
   );
-  // 다른 머신의 체크아웃과 묶인 프로젝트의 머신 표지(10-ui.md 2.9, M7-10).
-  const machinesOf = useProjectMachines();
   const storage = useRpcQuery("project.storage", null);
   const banner = storageBanner(storage.data, S);
   const readOnly = banner?.readOnly === true;
-  const list = useMemo(() => sortProjects(projects.data ?? []), [projects.data]);
 
   const [chosen, setChosen] = useState("");
   // 고른 줄이 목록에 없으면(처음 · 제거 · 다른 창에서 지움) 첫 줄. cmdk 가 스스로 첫 줄을 고르게 두지 않는다 — cmdk 는 자기 선택을
@@ -122,7 +119,12 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
     [log, S],
   );
   const refreshList = useCallback(
-    () => queryClient.invalidateQueries({ queryKey: rpcQueryKey(key, "project.list") }),
+    () =>
+      Promise.all(
+        (["project.list", "bundle.list"] as const).map((method) =>
+          queryClient.invalidateQueries({ queryKey: rpcQueryKey(key, method) }),
+        ),
+      ),
     [queryClient, key],
   );
   // 쓰기가 STORAGE_UNAVAILABLE 로 거절되면 저장소 상태가 바뀐 것이다 — 배너 · 쓰기 비활성을 창 포커스를 기다리지 않고 맞춘다
@@ -234,8 +236,9 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
   );
 
   const byId = (id: string) => list.find((p) => p.id === id);
+  // 액션(폴더 보기 · 외부 도구 · 목록에서 빼기)은 로컬 멤버의 프로젝트에 한다 — 원격만인 줄은 열기만.
   const selectedProject = useRef<() => Project | undefined>(() => undefined);
-  selectedProject.current = () => byId(selected);
+  selectedProject.current = () => byId(selected)?.project;
   const searchEmpty = useRef(true);
   searchEmpty.current = search === "";
   const writable = useRef(false);
@@ -272,6 +275,7 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
         writable: () => writable.current,
         newProject: () => setFlow({ kind: "create", root: "" }),
         openFolder: pickAndOpenFolder,
+        // 로컬 프로젝트 id 로 열어도 그 묶음의 창이다(src-tauri/src/launch.rs `open_project_as`).
         open: (p) => openWindow({ projectId: p.id }),
         reveal,
         remove: removeProject,
@@ -292,17 +296,17 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
 
   // 클릭은 고르기만 한다(cmdk 는 클릭을 onSelect 로 보낸다). 키보드 Enter 의 onSelect 만 연다.
   const pointerSelect = useRef(false);
-  const [menuTarget, setMenuTarget] = useState<Project>();
+  const [menuTarget, setMenuTarget] = useState<BundleRow>();
   const keepFocusOnClose = useRef(false);
   const onContextMenu = (e: MouseEvent) => {
     const id = (e.target as Element).closest("[cmdk-item]")?.getAttribute("data-value");
-    const project = id ? byId(id) : undefined;
-    if (!project) {
+    const row = id ? byId(id) : undefined;
+    if (!row) {
       e.preventDefault();
       return;
     }
-    setChosen(project.id);
-    setMenuTarget(project);
+    setChosen(row.id);
+    setMenuTarget(row);
   };
 
   const T = S;
@@ -377,39 +381,40 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
                   <Command.Empty className="px-3 py-2 text-ui-muted-foreground">
                     {list.length === 0 ? T.list.empty : T.list.noMatch}
                   </Command.Empty>
-                  {list.map((project) => (
+                  {list.map((row) => (
                     <Command.Item
-                      key={project.id}
-                      value={project.id}
-                      keywords={[project.name, ...project.roots, ...project.tags]}
+                      key={row.id}
+                      value={row.id}
+                      keywords={[row.name, ...(row.project?.roots ?? []), ...row.tags]}
                       onPointerDown={() => (pointerSelect.current = true)}
                       onSelect={() => {
                         if (pointerSelect.current) pointerSelect.current = false;
-                        else void openWindow({ projectId: project.id });
+                        else void openWindow({ projectId: row.id });
                       }}
-                      onDoubleClick={() => void openWindow({ projectId: project.id })}
+                      onDoubleClick={() => void openWindow({ projectId: row.id })}
                       className="flex h-[22px] cursor-default items-center gap-2 px-3 data-[selected=true]:bg-ui-active"
                     >
                       <Star
-                        aria-label={project.favorite ? T.list.favorite : undefined}
-                        aria-hidden={!project.favorite}
-                        className={`size-3 flex-none ${project.favorite ? "fill-current text-ui-accent" : "invisible"}`}
+                        aria-label={row.favorite ? T.list.favorite : undefined}
+                        aria-hidden={!row.favorite}
+                        className={`size-3 flex-none ${row.favorite ? "fill-current text-ui-accent" : "invisible"}`}
                       />
-                      <span className="w-[180px] flex-none truncate">{project.name}</span>
-                      {/* 경로는 앞에서 자른다 — 프로젝트를 가르는 것은 끝 조각이다. rtl 로 말줄임을 앞에 두고 글자 순서는 LRM 으로 지킨다. */}
+                      <span className="w-[180px] flex-none truncate">{row.name}</span>
+                      {/* 경로는 앞에서 자른다 — 프로젝트를 가르는 것은 끝 조각이다. rtl 로 말줄임을 앞에 두고 글자 순서는 LRM 으로 지킨다.
+                          원격만인 줄은 이 머신의 경로가 없다 — 머신 표지가 그 줄을 가른다. */}
                       <span
                         dir="rtl"
                         className="min-w-0 flex-1 truncate text-left text-ui-muted-foreground"
-                        title={project.roots[0]}
+                        title={row.project?.roots[0]}
                       >
-                        {`\u200e${project.roots[0]}\u200e`}
+                        {row.project && `\u200e${row.project.roots[0]}\u200e`}
                       </span>
-                      <MachineMarks machines={machinesOf.get(project.id)} />
+                      <MachineMarks machines={row.machines} />
                       <BranchTag
-                        name={branchOf.get(project.id) ?? undefined}
+                        name={(row.project && branchOf.get(row.project.id)) ?? undefined}
                         label={T.list.branch}
                       />
-                      {project.tags.map((tag) => (
+                      {row.tags.map((tag) => (
                         <span
                           key={tag}
                           className="flex-none rounded-sm border border-ui-border px-1 text-[11px]"
@@ -437,22 +442,21 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
                     <MenuItem onSelect={() => void openWindow({ projectId: menuTarget.id })}>
                       {T.menu.open}
                     </MenuItem>
-                    <MenuItem onSelect={() => reveal(menuTarget)}>
-                      {T.menu.reveal(platform)}
-                    </MenuItem>
-                    <MenuItem
-                      onSelect={() => {
-                        keepFocusOnClose.current = true;
-                        openWith.openPopup({ projectId: menuTarget.id, name: menuTarget.name });
-                      }}
-                    >
-                      {openWithStrings.action}
-                    </MenuItem>
-                    <ContextMenu.Separator className="my-1 h-px bg-ui-border" />
-                    {/* 단축키를 적지 않는다 — 메뉴가 열린 동안은 창 단축키가 꺼져(useKeymapPopup) ⌘⌫ 가 돌지 않는다. */}
-                    <MenuItem disabled={readOnly} onSelect={() => void removeProject(menuTarget)}>
-                      {T.menu.remove}
-                    </MenuItem>
+                    {menuTarget.project && (
+                      <RowProjectMenu
+                        project={menuTarget.project}
+                        readOnly={readOnly}
+                        T={T}
+                        platform={platform}
+                        openWithLabel={openWithStrings.action}
+                        reveal={reveal}
+                        remove={removeProject}
+                        openWith={(project) => {
+                          keepFocusOnClose.current = true;
+                          openWith.openPopup({ projectId: project.id, name: project.name });
+                        }}
+                      />
+                    )}
                   </>
                 )}
               </ContextMenu.Content>
@@ -571,6 +575,39 @@ export function WelcomeWindow({ native, log }: { native: WelcomeNative; log?: We
       : null;
     return openArgsFor(resolution, projectId, origin);
   }
+}
+
+/** 로컬 멤버의 프로젝트가 있는 줄의 메뉴 항목(폴더 보기 · 외부 도구 · 목록에서 빼기). 원격만인 줄에는 없다. */
+function RowProjectMenu({
+  project,
+  readOnly,
+  T,
+  platform,
+  openWithLabel,
+  reveal,
+  remove,
+  openWith,
+}: {
+  project: Project;
+  readOnly: boolean;
+  T: ReturnType<typeof useWelcomeStrings>;
+  platform: ReturnType<typeof useKeymap>["platform"];
+  openWithLabel: string;
+  reveal(project: Project): void;
+  remove(project: Project): Promise<void>;
+  openWith(project: Project): void;
+}) {
+  return (
+    <>
+      <MenuItem onSelect={() => reveal(project)}>{T.menu.reveal(platform)}</MenuItem>
+      <MenuItem onSelect={() => openWith(project)}>{openWithLabel}</MenuItem>
+      <ContextMenu.Separator className="my-1 h-px bg-ui-border" />
+      {/* 단축키를 적지 않는다 — 메뉴가 열린 동안은 창 단축키가 꺼져(useKeymapPopup) ⌘⌫ 가 돌지 않는다. */}
+      <MenuItem disabled={readOnly} onSelect={() => void remove(project)}>
+        {T.menu.remove}
+      </MenuItem>
+    </>
+  );
 }
 
 function MenuItem({

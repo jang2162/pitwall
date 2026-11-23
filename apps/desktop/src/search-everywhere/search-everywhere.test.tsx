@@ -549,7 +549,8 @@ it("switches to another project's window with ⌘⇧P, and only closes the popup
   await mount();
   await press({ code: "KeyP", key: "P", metaKey: true, shiftKey: true });
   expect(popup()?.getAttribute("data-search-everywhere")).toBe("projects");
-  await vi.waitFor(() => expect(values()).toEqual(["project:p2", "project:p1"]));
+  // 줄은 묶음 하나다(M7-11b) — 다른 머신과 묶인 p2 의 줄은 그 묶음 id 다.
+  await vi.waitFor(() => expect(values()).toEqual(["project:b-0011223344556677", "project:p1"]));
   expect(items()[1]!.textContent).toContain("이 창");
   // 스위처의 머신 표지(10-ui.md 2.9): 다른 머신과 묶인 프로젝트에만, 글로.
   const marks = (i: number) =>
@@ -566,10 +567,10 @@ it("switches to another project's window with ⌘⇧P, and only closes the popup
 
   await press({ code: "KeyP", key: "P", metaKey: true, shiftKey: true });
   await type("bill");
-  await vi.waitFor(() => expect(values()).toEqual(["project:p2"]));
+  await vi.waitFor(() => expect(values()).toEqual(["project:b-0011223344556677"]));
   await press({ code: "Enter", key: "Enter" });
   await settle();
-  expect(native.openProjectWindow).toHaveBeenCalledExactlyOnceWith("p2");
+  expect(native.openProjectWindow).toHaveBeenCalledExactlyOnceWith("b-0011223344556677");
 });
 
 it("lists recent files with ⌘E, selects the previous one, and opens it on Enter", async () => {
