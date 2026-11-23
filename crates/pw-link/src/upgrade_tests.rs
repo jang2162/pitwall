@@ -222,21 +222,121 @@ async fn a_binary_that_cannot_tell_stays() {
     let dir = tempfile::tempdir().unwrap();
     let remote = FakeRemote::new(dir.path(), "home", true);
     Stub::new(dir.path(), &remote, CURRENT);
-    Stub::new(dir.path(), &remote, "2.0.0");
-    write_executable(
-        &remote.relay_dir().join("pitwall-relay-dev-1.0.0"),
-        "#!/bin/sh\nexit 1\n",
-    );
+    Stub::new(dir.path(), &remote, "2.1.0");
+    // 1 그 밖의 오류, 4 데몬이 답하지 않음(증명 전 연결 상한 · 바쁨 · 시간 초과), 126 실행 못 함 — 모두 「없음」 이 확실하지 않다.
+    for (version, code) in [("1.0.0", 1), ("1.1.0", 4), ("1.2.0", 126)] {
+        write_executable(
+            &remote
+                .relay_dir()
+                .join(format!("pitwall-relay-dev-{version}")),
+            &format!("#!/bin/sh\nexit {code}\n"),
+        );
+    }
     let installer = installer(dir.path(), &remote);
-    let cleaned = installer
-        .clean(&installer.survey().await.unwrap())
+    let survey = installer.survey().await.unwrap();
+    assert_eq!(survey.unknown().len(), 3, "{survey:?}");
+    assert!(survey.old_daemons().is_empty());
+    let mut cleaned = installer.clean(&survey).await.unwrap();
+    cleaned.unknown.sort();
+    assert_eq!(
+        cleaned.unknown,
+        [
+            ("pitwall-relay-dev-1.0.0".to_owned(), Some(1)),
+            ("pitwall-relay-dev-1.1.0".to_owned(), Some(4)),
+            ("pitwall-relay-dev-1.2.0".to_owned(), Some(126)),
+        ]
+    );
+    assert!(cleaned.removed.is_empty(), "{cleaned:?}");
+    for version in ["1.0.0", "1.1.0", "1.2.0"] {
+        assert!(
+            remote
+                .relay_dir()
+                .join(format!("pitwall-relay-dev-{version}"))
+                .exists()
+        );
+    }
+}
+
+/// 답하지 않는 옛 판 데몬은 「없음」 이 아니다 — 끝내기는 `NoAnswer` 로 아무것도 보내지 않는다(F1).
+#[tokio::test]
+async fn a_daemon_that_does_not_answer_is_not_gone() {
+    let dir = tempfile::tempdir().unwrap();
+    let remote = FakeRemote::new(dir.path(), "home", true);
+    Stub::new(dir.path(), &remote, CURRENT);
+    let old = Stub::new(dir.path(), &remote, "2.0.0");
+    let daemon = Sleeper::start();
+    old.run(daemon.pid, 1, 0);
+    let installer = installer(dir.path(), &remote);
+    let seen = installer.survey().await.unwrap().old_daemons()[0].clone();
+    // 이제 그 데몬이 답하지 않는다(4).
+    write_executable(
+        &remote.relay_dir().join("pitwall-relay-dev-2.0.0"),
+        "#!/bin/sh\nexit 4\n",
+    );
+    assert_eq!(
+        installer.stop_old(&seen).await.unwrap(),
+        StopOutcome::NoAnswer
+    );
+    assert!(daemon.alive());
+    // 조사와 끝내기 사이에 답이 끊긴 경우도 원격 셸이 「gone」 으로 읽지 않는다.
+    let pid = daemon.pid.to_string();
+    let output = installer
+        .run("stop", STOP, &["pitwall-relay-dev-2.0.0", &pid], None)
         .await
         .unwrap();
     assert_eq!(
-        cleaned.unknown,
-        [("pitwall-relay-dev-1.0.0".to_owned(), Some(1))]
+        marked(&output.stdout, "pitwall-stop ").as_deref(),
+        Some("unknown")
     );
-    assert!(remote.relay_dir().join("pitwall-relay-dev-1.0.0").exists());
+    assert!(daemon.alive());
+}
+
+/// 원격이 답하지 않으면(옛 판 `status` 가 멈춤) 조사는 시간 상한에서 끝난다.
+#[tokio::test]
+async fn a_hanging_survey_ends_at_its_time_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let remote = FakeRemote::new(dir.path(), "home", true);
+    Stub::new(dir.path(), &remote, CURRENT);
+    write_executable(
+        &remote.relay_dir().join("pitwall-relay-dev-2.0.0"),
+        "#!/bin/sh\nexec sleep 30\n",
+    );
+    TEST_LIMIT_MS.store(1500, std::sync::atomic::Ordering::Relaxed);
+    let installer = installer(dir.path(), &remote);
+    let started = std::time::Instant::now();
+    let err = installer.survey().await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            InstallError::Remote {
+                step: "survey",
+                code: None,
+                ..
+            }
+        ),
+        "{err}"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+}
+
+/// 사람이 둔 `pitwall-relay-*` 파일 가운데 판 꼴이 아닌 것은 조사가 실행하지 않는다(R3).
+#[tokio::test]
+async fn the_survey_runs_only_relay_version_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let remote = FakeRemote::new(dir.path(), "home", true);
+    Stub::new(dir.path(), &remote, CURRENT);
+    let ran = dir.path().join("ran");
+    write_executable(
+        &remote.relay_dir().join("pitwall-relay-backup.sh"),
+        &format!("#!/bin/sh\necho x > '{}'\nexit 3\n", ran.display()),
+    );
+    let installer = installer(dir.path(), &remote);
+    let survey = installer.survey().await.unwrap();
+    assert!(
+        !ran.exists(),
+        "the survey ran a file that is not a relay version"
+    );
+    assert_eq!(survey.binaries.len(), 1, "{survey:?}");
 }
 
 /// 정리 스크립트는 `pitwall-relay-*` 이름만 지운다 — Desktop 이 다른 이름을 넘겨도(`state.db` · `/` 가 든 이름) 거절한다.
@@ -292,6 +392,21 @@ async fn an_old_daemon_is_stopped_only_as_the_person_saw_it() {
     assert_eq!(seen.file, "pitwall-relay-dev-2.0.0");
     assert_eq!((seen.status.runs, seen.status.terminals), (1, 2));
     assert_eq!(seen.left(), 3);
+
+    // 사람이 본 뒤 다른 Desktop 이 옛 판에 붙었다(링크 — R2).
+    std::fs::write(
+        &old.marker,
+        std::fs::read_to_string(&old.marker)
+            .unwrap()
+            .replace("\"links\":0", "\"links\":1"),
+    )
+    .unwrap();
+    match installer.stop_old(&seen).await.unwrap() {
+        StopOutcome::Changed(now) => assert_eq!(now.status.links, 1),
+        other => panic!("{other:?}"),
+    }
+    assert!(daemon.alive(), "cut a desktop the person did not see");
+    let seen = installer.survey().await.unwrap().old_daemons()[0].clone();
 
     // 사람이 본 뒤 터미널이 하나 더 열렸다.
     old.run(daemon.pid, 1, 3);
@@ -357,4 +472,71 @@ async fn the_stop_script_signals_only_the_pid_the_daemon_reports() {
         "signalled a pid the daemon did not report"
     );
     assert!(daemon.alive());
+}
+
+/// 끝내기 스크립트도 `/` 가 든 이름 · 올리기 임시 파일을 거절한다 — Desktop 의 이름 거르기를 지나 오지 않은 경우(R1).
+#[tokio::test]
+async fn the_stop_script_refuses_paths_and_uploads() {
+    let dir = tempfile::tempdir().unwrap();
+    let remote = FakeRemote::new(dir.path(), "home", true);
+    Stub::new(dir.path(), &remote, CURRENT);
+    let daemon = Sleeper::start();
+    let pid = daemon.pid.to_string();
+    // `.part` 도 이름 그대로면 `status` 에 pid 를 내는 실행 파일이다 — 거절하지 않으면 신호가 간다.
+    let fake = format!("#!/bin/sh\necho '{{\"pid\":{pid},\"runs\":0,\"terminals\":0}}'\n");
+    write_executable(
+        &remote.relay_dir().join("pitwall-relay-dev-2.0.0.part.1"),
+        &fake,
+    );
+    std::fs::create_dir_all(remote.relay_dir().join("pitwall-relay-x")).unwrap();
+    write_executable(&remote.relay_dir().join("pitwall-relay-y"), &fake);
+    let installer = installer(dir.path(), &remote);
+    for name in [
+        "pitwall-relay-dev-2.0.0.part.1",
+        "pitwall-relay-x/../pitwall-relay-y",
+    ] {
+        let refused = installer.run("stop", STOP, &[name, &pid], None).await;
+        assert!(
+            matches!(refused, Err(InstallError::Remote { code: Some(64), .. })),
+            "{name}: {refused:?}"
+        );
+        assert!(daemon.alive(), "{name}");
+    }
+}
+
+/// `stop_old` 는 Relay 바이너리 이름이 아니면 ssh 를 부르지 않는다(R1).
+#[tokio::test]
+async fn stop_old_refuses_a_name_that_is_not_a_relay_binary() {
+    let dir = tempfile::tempdir().unwrap();
+    let remote = FakeRemote::new(dir.path(), "home", true);
+    let installer = installer(dir.path(), &remote);
+    let seen = OldDaemon {
+        file: "pitwall-relay-dev-1.0.0/../x".into(),
+        status: serde_json::from_str(r#"{"pid":7}"#).unwrap(),
+    };
+    assert!(matches!(
+        installer.stop_old(&seen).await,
+        Err(InstallError::Protocol(_))
+    ));
+    assert!(remote.calls().is_empty(), "ssh ran");
+}
+
+/// 정리 스크립트는 그 셸이 살아 있는 올리기 임시 파일을 남긴다 — 조사 뒤 · 정리 전에 올리기가 시작된 경우(R1).
+#[tokio::test]
+async fn the_clean_script_keeps_an_upload_in_progress() {
+    let dir = tempfile::tempdir().unwrap();
+    let remote = FakeRemote::new(dir.path(), "home", true);
+    Stub::new(dir.path(), &remote, CURRENT);
+    let live = format!("pitwall-relay-dev-{CURRENT}.part.{}", std::process::id());
+    std::fs::write(remote.relay_dir().join(&live), b"half").unwrap();
+    let installer = installer(dir.path(), &remote);
+    let output = installer
+        .run("clean-up", CLEAN, &[&live], None)
+        .await
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains(&format!("pitwall-clean uploading {live}"))
+    );
+    assert!(remote.relay_dir().join(&live).exists());
 }

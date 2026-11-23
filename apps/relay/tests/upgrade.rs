@@ -327,3 +327,188 @@ async fn a_new_version_runs_its_own_daemon_beside_the_old_one() {
     call(&mut new_welcome, 2, "host.ping", json!({})).await;
     assert!(new.survey().await.unwrap().old_daemons().is_empty());
 }
+
+/// 판 `version` 의 데몬 소켓 자리(가짜 원격의 환경 — `HOME` 만). 임시 폴더는 이 프로세스의 것(`TMPDIR` 이 없는 원격 프로세스도
+/// macOS 에서는 같은 사용자 임시 폴더, Linux 에서는 `/tmp` 를 쓴다 — `std::env::temp_dir`).
+fn socket_of(home: &Path, version: &str) -> PathBuf {
+    let mut env = pw_core::config::PathEnv::empty(pw_core::config::OsFamily::Unix);
+    env.home = Some(home.to_path_buf());
+    let paths = pw_relay::paths::relay_paths(&pw_core::config::AppPaths::resolve(&env).unwrap());
+    pw_relay::socket::endpoint(
+        &paths,
+        CHANNEL,
+        version,
+        &std::env::temp_dir(),
+        pw_relay::socket::current_uid(),
+    )
+    .unwrap()
+}
+
+/// 원격 환경 그대로(`HOME` · 판)로 부른 `status` 의 종료 코드. `limit` 안에 끝나지 않으면 죽이고 `None`.
+fn status_code(home: &Path, version: &str, limit: Duration) -> Option<i32> {
+    let mut child = std::process::Command::new(BIN)
+        .arg("status")
+        .env_clear()
+        .env("HOME", home)
+        .env(pw_relay::DEV_VERSION_ENV, version)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status.code();
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn bump(version: &str, by: u64) -> String {
+    let mut version = semver::Version::parse(version).unwrap();
+    version.patch += by;
+    version.pre = semver::Prerelease::EMPTY;
+    version.to_string()
+}
+
+/// 리뷰 F1: 떠 있는 옛 판 데몬의 증명 전 연결 상한이 차 있어(같은 uid 의 연결이 몰림) `status` 가 답을 받지 못해도 「데몬 없음」
+/// 이 아니다 — `status` 는 4(모름)를 내고, 정리는 그 데몬의 바이너리를 가장 오래된 판이어도 남긴다. 상한이 풀리면 다시 답한다.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_busy_old_daemon_keeps_its_binary() {
+    assert_eq!(
+        option_env!("PITWALL_RELEASE_CHANNEL").unwrap_or("dev"),
+        CHANNEL
+    );
+    let old_version = BUILD.to_owned();
+    let middle = bump(BUILD, 1);
+    let new_version = bump(BUILD, 2);
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let remote = FakeRemote::new(&root, "home", true);
+    let config = remote.home.join(".config/pitwall/relay");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("relay.toml"),
+        "schema = 1\n[idle]\nexit_after = \"30s\"\n",
+    )
+    .unwrap();
+    let _daemons = Daemons {
+        home: remote.home.clone(),
+        versions: vec![old_version.clone()],
+    };
+    let key = Arc::new(DeviceKey::generate().unwrap());
+    let no_progress = |_: pw_link::install::Progress| {};
+
+    // 가장 오래된 판의 데몬을 띄운다(붙었다가 뗀다 — 데몬은 유휴 시한까지 산다).
+    use_dev_dist(&root, &old_version);
+    let old = installer(&root, &remote, &old_version);
+    old.bootstrap(&key.public(), "mac", &no_progress)
+        .await
+        .unwrap();
+    let old_host = remote_host(&old, &key, &old_version);
+    old_host.attach().await.unwrap();
+    old_host.detach();
+    assert_eq!(
+        status_code(&remote.home, &old_version, Duration::from_secs(15)),
+        Some(0)
+    );
+    // 가운데 판(데몬 없음)과 새 판.
+    write_executable(
+        &remote
+            .relay_dir()
+            .join(format!("pitwall-relay-{CHANNEL}-{middle}")),
+        "#!/bin/sh\nexit 3\n",
+    );
+    use_dev_dist(&root, &new_version);
+    let new = installer(&root, &remote, &new_version);
+    new.bootstrap(&key.public(), "mac", &no_progress)
+        .await
+        .unwrap();
+
+    // 옛 판 데몬의 증명 전 자리를 채운다 — 첫 틀을 보내지 않는 연결을 계속 연다.
+    let socket = socket_of(&remote.home, &old_version);
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let filler = {
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            let mut held = std::collections::VecDeque::new();
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Ok(stream) = std::os::unix::net::UnixStream::connect(&socket) {
+                    held.push_back(stream);
+                    if held.len() > 400 {
+                        held.pop_front();
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        status_code(&remote.home, &old_version, Duration::from_secs(15)),
+        Some(4),
+        "a busy daemon is not \"no daemon\""
+    );
+    let survey = new.survey().await.unwrap();
+    let old_file = format!("pitwall-relay-{CHANNEL}-{old_version}");
+    assert!(
+        survey.to_remove().contains(&old_file),
+        "the oldest version is a clean-up candidate: {survey:?}"
+    );
+    let cleaned = new.clean(&survey).await.unwrap();
+    assert!(
+        !cleaned.removed.contains(&old_file),
+        "removed a running daemon's binary: {cleaned:?}"
+    );
+    assert!(remote.relay_dir().join(&old_file).exists());
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    filler.join().unwrap();
+
+    // 상한이 풀리면(쥔 연결은 첫 틀 시한 5초에 닫힌다) 다시 답한다.
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while status_code(&remote.home, &old_version, Duration::from_secs(15)) != Some(0) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the daemon never answered again"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let again = new.survey().await.unwrap();
+    assert_eq!(again.old_daemons().len(), 1, "{again:?}");
+}
+
+/// 받기는 하되 답하지 않는 데몬이면 `status` 는 시간 상한(5초) 안에 4 로 끝난다 — 조사를 붙잡지 않는다(F1).
+#[test]
+fn status_gives_up_on_a_daemon_that_never_answers() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap().join("home");
+    let socket = socket_of(&home, "7.7.7");
+    let folder = socket.parent().unwrap();
+    std::fs::create_dir_all(folder).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let _ = std::fs::remove_file(&socket);
+    let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    let started = std::time::Instant::now();
+    assert_eq!(
+        status_code(&home, "7.7.7", Duration::from_secs(20)),
+        Some(4)
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(12),
+        "{:?}",
+        started.elapsed()
+    );
+    drop(listener);
+    let _ = std::fs::remove_file(&socket);
+    // 소켓이 없으면 3(데몬이 없는 것이 확실하다).
+    assert_eq!(
+        status_code(&home, "7.7.7", Duration::from_secs(20)),
+        Some(3)
+    );
+}

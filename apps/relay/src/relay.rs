@@ -207,6 +207,23 @@ fn verify(args: &[String]) -> ExitCode {
     }
 }
 
+/// `status` 가 데몬의 답을 기다리는 시간. 받기는 하되 답하지 않는 데몬이 조사(`pw_link::upgrade`)를 붙잡지 않게.
+const STATUS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// `status` 의 종료 코드 — 판에 묶이지 않는 약속이다(옛 판 바이너리에도 박혀 나간다, 18-m7-plan M7-07 리뷰 F1):
+/// 0 답(JSON 한 줄), 3 **이 판의 데몬이 없다는 것이 확실하다**(소켓 파일이 없거나 받는 쪽이 없다), 4 **모른다**(소켓은 있는데
+/// 답이 없다 — 증명 전 연결 상한이 찼거나 바쁘거나 시간 초과 · 폴더 권한), 1 그 밖의 오류. 정리는 3 일 때만 바이너리를 지운다.
+pub(crate) const STATUS_NO_DAEMON: u8 = 3;
+pub(crate) const STATUS_UNKNOWN: u8 = 4;
+
+/// 연결 오류가 「데몬 없음」 을 확실히 말하는가.
+fn no_daemon(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+    )
+}
+
 fn status() -> ExitCode {
     let socket = match paths().and_then(|p| socket_path(&p)) {
         Ok(socket) => socket,
@@ -217,12 +234,40 @@ fn status() -> ExitCode {
         .build()
         .expect("tokio runtime");
     let uid = pw_relay::socket::current_uid();
-    match rt.block_on(pw_relay::command::request(
-        &socket,
-        uid,
-        Command::Status,
-        serde_json::Value::Null,
-    )) {
+    let answer = rt.block_on(async {
+        let stream =
+            match tokio::time::timeout(STATUS_TIMEOUT, pw_relay::socket::connect(&socket, uid))
+                .await
+            {
+                Ok(Ok(stream)) => stream,
+                Ok(Err(e)) => return Err((no_daemon(&e), e.to_string())),
+                Err(_) => {
+                    return Err((
+                        false,
+                        format!("no connection in {} s", STATUS_TIMEOUT.as_secs()),
+                    ));
+                }
+            };
+        match tokio::time::timeout(
+            STATUS_TIMEOUT,
+            pw_relay::command::request_on(
+                pw_link::LinkStream::split(stream),
+                Command::Status,
+                serde_json::Value::Null,
+            ),
+        )
+        .await
+        {
+            Ok(Ok(reply)) => Ok(reply),
+            // 붙은 뒤의 오류(답 없이 닫힘 — 증명 전 상한 등)는 데몬이 있다는 뜻이다.
+            Ok(Err(e)) => Err((false, e.to_string())),
+            Err(_) => Err((
+                false,
+                format!("no answer in {} s", STATUS_TIMEOUT.as_secs()),
+            )),
+        }
+    });
+    match answer {
         Ok(Ok(status)) => {
             println!("{status}");
             ExitCode::SUCCESS
@@ -231,9 +276,13 @@ fn status() -> ExitCode {
             eprintln!("pitwall-relay status: {e}");
             ExitCode::from(1)
         }
-        Err(e) => {
+        Err((true, e)) => {
             eprintln!("pitwall-relay status: no daemon of this version is running ({e})");
-            ExitCode::from(3)
+            ExitCode::from(STATUS_NO_DAEMON)
+        }
+        Err((false, e)) => {
+            eprintln!("pitwall-relay status: the daemon of this version did not answer ({e})");
+            ExitCode::from(STATUS_UNKNOWN)
         }
     }
 }
