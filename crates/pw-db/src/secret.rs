@@ -89,19 +89,47 @@ pub fn machine_index_account(machine: &str) -> String {
     format!("{machine}/index")
 }
 
-/// 비밀을 읽게 한 흐름이 누구의 것인가(18-m7-plan M7-12 ② ④). 연결을 여는 자리([`crate::connection`])가 키체인을 읽는 블로킹 구간에
-/// [`with_asker`] 로 세우고, 「Desktop 에 묻는」 저장소(`crate::desktop_secret::DesktopSecrets` — 원격 Relay)가 본다. 다른 저장소는
-/// 보지 않는다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 비밀을 부른 창의 요청 하나 — 그 창(링크로 온 연결이면 Relay 가 붙인 `<기기 id>/<label>`)과 요청 id(JSON 글 — `7` · `"a"`).
+/// 원격 Relay 는 Desktop 에 청할 때 이것을 대고, Desktop 은 그 요청이 지금 기다리는 중이고 비밀이 필요한 메서드일 때만 답한다
+/// (18-m7-plan M7-12 리뷰 F1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecretCall {
+    pub window: String,
+    pub request: String,
+}
+
+impl SecretCall {
+    /// 이 태스크에서 지금 도는 창의 요청(`pw_rpc::current_call`). 창이 없거나 요청 밖이면 `None`. 핸들러 future 안(블로킹 구간에
+    /// 들어가기 전)에서 부른다.
+    pub fn current() -> Option<Self> {
+        let call = pw_rpc::current_call()?;
+        Some(Self {
+            window: call.window?,
+            request: serde_json::to_string(&call.request).ok()?,
+        })
+    }
+}
+
+/// 비밀을 읽게 한 흐름이 누구의 것인가(18-m7-plan M7-12 ② ④). 연결을 여는 자리([`crate::connection`]) · 비밀을 넣고 지우는 자리가
+/// 키체인을 쓰는 블로킹 구간에 [`with_asker`] 로 세우고, 「Desktop 에 묻는」 저장소(`crate::desktop_secret::DesktopSecrets` — 원격
+/// Relay)가 본다. 다른 저장소는 보지 않는다.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecretAsker {
-    /// 그 프로젝트 창(사람)의 증거.
-    Window,
+    /// 그 프로젝트 창(사람)의 증거와, 알면 그 비밀을 부른 요청.
+    Window(Option<SecretCall>),
     /// 에이전트(MCP 세션)의 증거 — Desktop 에 묻지 않는다(D48 · D60).
     Agent,
 }
 
+impl SecretAsker {
+    /// 창의 증거 + 지금 도는 요청([`SecretCall::current`]). 핸들러 future 안에서 부른다.
+    pub fn window() -> Self {
+        Self::Window(SecretCall::current())
+    }
+}
+
 thread_local! {
-    static ASKER: std::cell::Cell<Option<SecretAsker>> = const { std::cell::Cell::new(None) };
+    static ASKER: std::cell::RefCell<Option<SecretAsker>> = const { std::cell::RefCell::new(None) };
 }
 
 /// `f` 가 도는 동안 이 스레드의 [`current_asker`] 를 `asker` 로 둔다(끝나면 앞의 값으로 — 패닉해도).
@@ -109,16 +137,17 @@ pub fn with_asker<R>(asker: SecretAsker, f: impl FnOnce() -> R) -> R {
     struct Restore(Option<SecretAsker>);
     impl Drop for Restore {
         fn drop(&mut self) {
-            ASKER.with(|a| a.set(self.0));
+            let before = self.0.take();
+            ASKER.with(|a| *a.borrow_mut() = before);
         }
     }
-    let _restore = Restore(ASKER.with(|a| a.replace(Some(asker))));
+    let _restore = Restore(ASKER.with(|a| a.borrow_mut().replace(asker)));
     f()
 }
 
 /// 이 스레드에서 지금 비밀을 읽게 한 흐름. 세운 곳이 없으면 `None` — 묻는 저장소는 묻지 않는다(fail-closed).
 pub fn current_asker() -> Option<SecretAsker> {
-    ASKER.with(std::cell::Cell::get)
+    ASKER.with(|a| a.borrow().clone())
 }
 
 /// 비밀을 보내도 되는 대상. 이 중 하나라도 바뀌면 저장한 비밀을 쓰지 않는다.
@@ -544,11 +573,17 @@ pub(crate) fn register(router: &mut Router, connections: Arc<Connections>) {
     router
         .unary(DbSecretSet, move |ctx, params: DbSecretSetParams| {
             let (c, scope) = (Arc::clone(&set), ctx.scope().clone());
-            blocking(move || c.set_secret(&scope, &params))
+            async move {
+                let asker = SecretAsker::window();
+                blocking(move || with_asker(asker, || c.set_secret(&scope, &params))).await
+            }
         })
         .unary(DbSecretClear, move |ctx, params: DbSecretClearParams| {
             let (c, scope) = (Arc::clone(&clear), ctx.scope().clone());
-            blocking(move || c.clear_secret(&scope, &params))
+            async move {
+                let asker = SecretAsker::window();
+                blocking(move || with_asker(asker, || c.clear_secret(&scope, &params))).await
+            }
         });
 }
 

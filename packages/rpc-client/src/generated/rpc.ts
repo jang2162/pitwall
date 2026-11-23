@@ -10628,6 +10628,8 @@ export type SecretMissing =
 
 /**  Relay → Desktop 청 하나(`secret.requests` 의 항목). */
 export type SecretRequest = {
+	/**  이 비밀을 부른 창의 요청 — Desktop 은 그 요청이 지금 기다리는 중이고 그 메서드가 이 청을 필요로 할 때만 답한다. */
+	call: SecretRequestCall,
 	/**  답(`secret.answer`)에 싣는 id. 받는 Desktop 마다 다르다. */
 	id: number,
 	/**  그 머신(Relay) 레지스트리의 프로젝트 id. */
@@ -10635,6 +10637,14 @@ export type SecretRequest = {
 	connectionId: string,
 	key: DbSecretKey,
 	op: SecretRequestOp,
+};
+
+/**  청을 부른 창의 요청(`crate::secret::SecretCall`). */
+export type SecretRequestCall = {
+	/**  그 연결의 창 label(링크로 온 연결이면 `<기기 id>/<label>`). */
+	window: string,
+	/**  그 요청의 JSON-RPC id(JSON 글 — `7` · `"a"`). */
+	request: string,
 };
 
 /**  청의 종류. */

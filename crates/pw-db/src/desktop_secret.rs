@@ -6,7 +6,7 @@
 //! - 붙은 Desktop 이 owner · Host 범위 연결로 `secret.requests`(스트림)를 연다. Relay 가 비밀을 읽거나 쓰거나 지울 때마다 그 스트림에
 //!   청([`SecretRequest`])을 보내고, Desktop 이 **같은 연결**로 `secret.answer` 를 보낸다(다른 연결의 답은 받지 않는다). 여러
 //!   Desktop 이 열었으면 모두에게 보내고 처음 온 답(값 · 없음 · 했음 · 실패)을 쓴다 — 모두 거절하면 거절이다.
-//! - Desktop 은 **그 프로젝트 창이 그 연결로 요청을 보내고 답을 기다리는 동안만** 답한다(`pw_remote::secrets`). 열쇠의 머신 id 는
+//! - 청에는 그 비밀을 부른 창의 요청([`SecretRequestCall`] — 창 label · 요청 id)이 실린다. Desktop 은 **그 요청이 지금 답을 기다리는 중이고 비밀이 필요한 메서드일 때 한 번만** 답한다(`pw_remote::secrets`). 열쇠의 머신 id 는
 //!   Relay 가 대는 것이 아니라 그 링크가 증명한 것이다 — 다른 머신 id 의 링크는 남의 비밀을 받지 못한다(계획 리뷰 F1).
 //! - 에이전트의 증거로 연 연결([`SecretAsker::Agent`])이나 세운 곳이 없는 흐름(`None`)에서는 묻지 않는다(D48 · D60 — 에이전트의 DB
 //!   툴은 사람이 연 연결만 쓴다).
@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::config::lock;
-use crate::secret::{DbSecretKey, SecretAsker, SecretStore, StoreError, current_asker};
+use crate::secret::{DbSecretKey, SecretAsker, SecretCall, SecretStore, StoreError, current_asker};
 
 /// Desktop 의 답을 기다리는 시한. 사람이 누른 흐름 안의 청이라 Desktop 은 곧바로 답한다(키체인 읽기 하나).
 pub const WAIT: Duration = Duration::from_secs(20);
@@ -66,6 +66,8 @@ impl fmt::Debug for SecretRequestOp {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct SecretRequest {
+    /// 이 비밀을 부른 창의 요청 — Desktop 은 그 요청이 지금 기다리는 중이고 그 메서드가 이 청을 필요로 할 때만 답한다.
+    pub call: SecretRequestCall,
     /// 답(`secret.answer`)에 싣는 id. 받는 Desktop 마다 다르다.
     #[specta(type = pw_rpc::JsNumber)]
     pub id: u64,
@@ -74,6 +76,18 @@ pub struct SecretRequest {
     pub connection_id: String,
     pub key: DbSecretKey,
     pub op: SecretRequestOp,
+}
+
+/// 청을 부른 창의 요청(`crate::secret::SecretCall`).
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretRequestCall {
+    /// 그 연결의 창 label(링크로 온 연결이면 `<기기 id>/<label>`).
+    pub window: String,
+    /// 그 요청의 JSON-RPC id(JSON 글 — `7` · `"a"`).
+    pub request: String,
 }
 
 /// Desktop 의 답.
@@ -280,7 +294,12 @@ impl DesktopSecrets {
     }
 
     /// 붙은 Desktop 들에 묻고 답을 기다린다(블로킹). 붙은 Desktop 이 없으면 `None`.
-    fn ask(&self, account: &str, op: SecretRequestOp) -> Result<Reply, StoreError> {
+    fn ask(
+        &self,
+        account: &str,
+        call: &SecretCall,
+        op: SecretRequestOp,
+    ) -> Result<Reply, StoreError> {
         let (project_id, connection_id, key) = parse_account(account)
             .ok_or_else(|| StoreError(format!("not a db secret account: {account}")))?;
         let (reply, answer) = std_mpsc::channel();
@@ -292,6 +311,10 @@ impl DesktopSecrets {
             for session in sessions {
                 let id = state.next();
                 let request = SecretRequest {
+                    call: SecretRequestCall {
+                        window: call.window.clone(),
+                        request: call.request.clone(),
+                    },
                     id,
                     project_id: project_id.clone(),
                     connection_id: connection_id.clone(),
@@ -331,16 +354,25 @@ impl DesktopSecrets {
     }
 }
 
+/// 창의 흐름이고 그 비밀을 부른 요청을 알 때만 그 요청. 에이전트 · 세운 곳 없는 흐름 · 요청을 모르는 흐름은 `None`(묻지 않는다).
+fn window_call() -> Option<SecretCall> {
+    match current_asker() {
+        Some(SecretAsker::Window(call)) => call,
+        _ => None,
+    }
+}
+
+fn outside_a_request() -> StoreError {
+    StoreError("not in a window's request — the desktop is not asked".to_owned())
+}
+
 impl SecretStore for DesktopSecrets {
     fn get(&self, account: &str) -> Result<Option<Secret>, StoreError> {
-        match current_asker() {
-            Some(SecretAsker::Window) => {}
-            asker => {
-                tracing::info!(target: "pw_db", %account, ?asker, "not asking the desktop for a secret outside a window's flow");
-                return Ok(None);
-            }
-        }
-        match self.ask(account, SecretRequestOp::Read)? {
+        let Some(call) = window_call() else {
+            tracing::info!(target: "pw_db", %account, "not asking the desktop for a secret outside a window's request");
+            return Ok(None);
+        };
+        match self.ask(account, &call, SecretRequestOp::Read)? {
             Reply::Answer(SecretAnswer::Value { item }) => Ok(Some(item)),
             Reply::Answer(SecretAnswer::Missing) => Ok(None),
             Reply::Answer(SecretAnswer::Failed { message }) => Err(StoreError(message)),
@@ -358,7 +390,8 @@ impl SecretStore for DesktopSecrets {
         let op = SecretRequestOp::Store {
             item: value.clone(),
         };
-        match self.ask(account, op)? {
+        let call = window_call().ok_or_else(outside_a_request)?;
+        match self.ask(account, &call, op)? {
             Reply::Answer(SecretAnswer::Done) => Ok(()),
             Reply::Answer(SecretAnswer::Failed { message }) => Err(StoreError(message)),
             _ => Err(StoreError(
@@ -368,7 +401,8 @@ impl SecretStore for DesktopSecrets {
     }
 
     fn delete(&self, account: &str) -> Result<(), StoreError> {
-        match self.ask(account, SecretRequestOp::Remove)? {
+        let call = window_call().ok_or_else(outside_a_request)?;
+        match self.ask(account, &call, SecretRequestOp::Remove)? {
             Reply::Answer(SecretAnswer::Done | SecretAnswer::Missing) => Ok(()),
             Reply::Answer(SecretAnswer::Failed { message }) => Err(StoreError(message)),
             _ => Err(StoreError(

@@ -1352,7 +1352,12 @@ pub fn register(router: &mut Router, connections: Arc<Connections>) {
             DbConnectionDelete,
             move |ctx, params: DbConnectionParams| {
                 let (c, scope) = (Arc::clone(&delete), ctx.scope().clone());
-                blocking(move || c.delete(&scope, &params))
+                // 지우면 그 연결의 비밀도 지운다 — 원격 Relay 는 그 창의 이 요청을 대고 Desktop 에 청한다(M7-12).
+                async move {
+                    let asker = crate::secret::SecretAsker::window();
+                    blocking(move || crate::secret::with_asker(asker, || c.delete(&scope, &params)))
+                        .await
+                }
             },
         );
     crate::secret::register(router, Arc::clone(&connections));

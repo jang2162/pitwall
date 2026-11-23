@@ -34,7 +34,7 @@ pub use router::{
     Caller, ConnectionScope, Ctx, FILE_EVENT_SCOPE_PREFIX, FileScope, PointOfNoReturn, Router,
     SessionId, StreamSink,
 };
-pub use session::Session;
+pub use session::{CurrentCall, Session, current_call};
 pub use typegen::{JsNumber, JsonValue, MethodInfo, TypeInfo, methods, types};
 
 #[doc(hidden)]

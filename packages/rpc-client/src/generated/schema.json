@@ -53220,6 +53220,24 @@
             ],
             "type": "string"
           },
+          "SecretRequestCall": {
+            "description": "청을 부른 창의 요청(`crate::secret::SecretCall`).",
+            "properties": {
+              "request": {
+                "description": "그 요청의 JSON-RPC id(JSON 글 — `7` · `\"a\"`).",
+                "type": "string"
+              },
+              "window": {
+                "description": "그 연결의 창 label(링크로 온 연결이면 `<기기 id>/<label>`).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "window",
+              "request"
+            ],
+            "type": "object"
+          },
           "SecretRequestOp": {
             "description": "청의 종류.",
             "oneOf": [
@@ -53272,6 +53290,10 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "Relay → Desktop 청 하나(`secret.requests` 의 항목).",
         "properties": {
+          "call": {
+            "$ref": "#/$defs/SecretRequestCall",
+            "description": "이 비밀을 부른 창의 요청 — Desktop 은 그 요청이 지금 기다리는 중이고 그 메서드가 이 청을 필요로 할 때만 답한다."
+          },
           "connectionId": {
             "type": "string"
           },
@@ -53293,6 +53315,7 @@
           }
         },
         "required": [
+          "call",
           "id",
           "projectId",
           "connectionId",

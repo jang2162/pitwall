@@ -87,7 +87,7 @@ pub async fn connect_with(
     let asker = asker_of(grant);
     let resolved = blocking(move || {
         let trusted = c.trust_gate(&project, wt.as_deref())?;
-        crate::secret::with_asker(asker, || c.resolve(&trusted, &id))
+        crate::secret::with_asker(asker.clone(), || c.resolve(&trusted, &id))
     })
     .await?;
     let target = DbTarget::of_resolved(&resolved);
@@ -116,7 +116,7 @@ fn asker_of(grant: &DbGrant) -> crate::secret::SecretAsker {
     if grant.is_agent() {
         crate::secret::SecretAsker::Agent
     } else {
-        crate::secret::SecretAsker::Window
+        crate::secret::SecretAsker::window()
     }
 }
 
@@ -257,14 +257,16 @@ impl DbSessions {
         let asker = asker_of(grant);
         let resolved = blocking(move || {
             let trusted = c.trust_gate(&params.project_id, params.worktree.as_deref())?;
-            crate::secret::with_asker(asker, || match (&params.draft, &params.connection_id) {
-                (Some(draft), id) => {
-                    c.resolve_draft(&trusted, id.as_deref(), draft, params.secret.clone())
+            crate::secret::with_asker(asker.clone(), || {
+                match (&params.draft, &params.connection_id) {
+                    (Some(draft), id) => {
+                        c.resolve_draft(&trusted, id.as_deref(), draft, params.secret.clone())
+                    }
+                    (None, Some(id)) => c.resolve(&trusted, id),
+                    (None, None) => Err(RpcError::invalid_params(
+                        "give connectionId or draft to test",
+                    )),
                 }
-                (None, Some(id)) => c.resolve(&trusted, id),
-                (None, None) => Err(RpcError::invalid_params(
-                    "give connectionId or draft to test",
-                )),
             })
         })
         .await?;

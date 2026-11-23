@@ -43,6 +43,23 @@ pub struct Session {
     inner: Arc<Inner>,
 }
 
+/// 지금 도는 unary 요청 하나 — 그 요청을 연 창(호출자의 [`Caller::window`](crate::Caller))과 요청 id. 핸들러 future 가 도는 동안만
+/// 있다([`current_call`]). 원격 Relay 의 비밀 저장소가 「이 비밀을 부른 Desktop 요청」 을 대는 데 쓴다(18-m7-plan M7-12 리뷰 F1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CurrentCall {
+    pub window: Option<String>,
+    pub request: Id,
+}
+
+tokio::task_local! {
+    static CALL: CurrentCall;
+}
+
+/// 이 태스크에서 지금 도는 unary 요청. 핸들러 future 밖(그것이 띄운 다른 태스크 · `spawn_blocking` 안 포함)이면 `None`.
+pub fn current_call() -> Option<CurrentCall> {
+    CALL.try_with(Clone::clone).ok()
+}
+
 /// 다음 세션의 id.
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 
@@ -294,6 +311,16 @@ impl Inner {
                 self.finish_request(id, Err(e));
                 return;
             }
+        };
+        let fut: crate::router::BoxFuture<Result<Value, RpcError>> = match &id {
+            Some(request) => Box::pin(CALL.scope(
+                CurrentCall {
+                    window: self.caller.window.clone(),
+                    request: request.clone(),
+                },
+                fut,
+            )),
+            None => fut,
         };
         let mut guard = RequestGuard {
             inner: Arc::clone(self),

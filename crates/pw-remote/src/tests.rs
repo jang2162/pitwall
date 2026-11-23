@@ -33,12 +33,17 @@ enum Outcome {
     Hang,
 }
 
+/// 증명된 머신 id 로 링크의 원격 Host 를 만드는 것.
+type MakeHost = Box<dyn Fn(&str) -> Arc<dyn Host> + Send>;
+
 #[derive(Default)]
 struct Fake {
     script: Mutex<VecDeque<Outcome>>,
     connects: AtomicUsize,
     links: Mutex<Vec<Arc<FakeLink>>>,
     expects: Mutex<Vec<Option<String>>>,
+    /// 링크의 원격 Host 를 만드는 것(없으면 빈 `LocalHost`). 받는 것은 증명된 머신 id.
+    hosts: Mutex<Option<MakeHost>>,
 }
 
 impl Fake {
@@ -98,7 +103,10 @@ impl Backend for Fake {
                     lock(&self.links).push(Arc::clone(&link));
                     let closer = Arc::clone(&link);
                     Ok(Link {
-                        host: Arc::new(LocalHost::new(machine)),
+                        host: match lock(&self.hosts).as_ref() {
+                            Some(make) => make(machine),
+                            None => Arc::new(LocalHost::new(machine)),
+                        },
                         machine: machine.into(),
                         closed: Box::pin(
                             async move { rx.await.unwrap_or_else(|_| "closed".into()) },
@@ -752,4 +760,99 @@ async fn a_first_connection_to_a_machine_known_under_another_name_is_not_used() 
             .and_then(|r| r.machine),
         None
     );
+}
+
+/// 리뷰 F2 ①: 비밀 청에 답하는 열쇠는 그 링크가 증명한 머신 id 다(호스트 별명 `mini` 가 아니다). 붙은 원격 Host 는 라우터에 감싼
+/// 채로 들어가, 그 창 연결의 비밀이 필요한 요청이 청을 연다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn secret_answers_use_the_machine_id_the_link_proved() {
+    use crate::secrets::tests::{ITEM, P, listening, probe_with, relay_host, store_with, window};
+    use pw_db::desktop_secret::DesktopSecrets;
+    use pw_db::secret::{DbSecretKey, machine_account};
+
+    let s = setup();
+    let secrets = DesktopSecrets::with_wait(Duration::from_secs(3));
+    let made = secrets.clone();
+    *lock(&s.fake.hosts) = Some(Box::new(move |machine: &str| -> Arc<dyn Host> {
+        Arc::new(relay_host(machine, &made))
+    }));
+    let entries = [
+        (machine_account(MINI, P, "dev", DbSecretKey::Password), ITEM),
+        (
+            machine_account("mini", P, "dev", DbSecretKey::Password),
+            "by-alias",
+        ),
+    ];
+    s.remote.attach_secrets(store_with(&entries));
+    let _use = s.remote.hold("mini").unwrap();
+    until(&s.remote, connected).await;
+    listening(&secrets).await;
+    let gated = s.router.host(MINI).unwrap();
+    let got = probe_with(
+        &gated,
+        window(),
+        "db.session.open",
+        "dev",
+        "dev",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(got, serde_json::json!([ITEM]));
+}
+
+/// 리뷰 F2 ②: 「이 머신을 새로 믿기」 는 옛 머신 id 의 키체인 비밀만 지운다 — 새 id · 다른 머신의 것은 남는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trusting_a_new_machine_forgets_only_the_old_ids_secrets() {
+    use crate::secrets::tests::{ITEM, P, store_with};
+    use pw_db::secret::{DbSecretKey, machine_account, machine_index_account};
+
+    const NEW: &str = "SHA256:other";
+    const ELSE: &str = "SHA256:elsewhere";
+    let s = setup();
+    let mut entries = Vec::new();
+    for machine in [MINI, NEW, ELSE] {
+        let account = machine_account(machine, P, "dev", DbSecretKey::Password);
+        entries.push((
+            machine_index_account(machine),
+            serde_json::json!([account]).to_string(),
+        ));
+        entries.push((account, ITEM.to_owned()));
+    }
+    let borrowed: Vec<(String, &str)> = entries
+        .iter()
+        .map(|(a, v)| (a.clone(), v.as_str()))
+        .collect();
+    let store = store_with(&borrowed);
+    s.remote.attach_secrets(store.clone());
+    let first = s.remote.hold("mini").unwrap();
+    until(&s.remote, connected).await;
+    drop(first);
+    s.fake.push(Outcome::Fail(ConnectError {
+        machine_changed: Some((MINI.into(), NEW.into())),
+        ..ConnectError::new(
+            RemoteStage::Handshake,
+            RemoteFailureKind::Rejected,
+            "machine id changed",
+        )
+    }));
+    let _use = s.remote.hold("mini").unwrap();
+    until(&s.remote, |st| {
+        matches!(st, RemoteStatus::MachineChanged { .. })
+    })
+    .await;
+    s.fake.push(Outcome::Link(NEW));
+    let remote = s.remote.clone();
+    tokio::task::spawn_blocking(move || remote.trust_machine("mini", NEW))
+        .await
+        .unwrap()
+        .unwrap();
+    let left = store.accounts();
+    assert!(left.iter().all(|a| !a.starts_with(MINI)), "{left:?}");
+    for machine in [NEW, ELSE] {
+        assert!(
+            left.contains(&machine_account(machine, P, "dev", DbSecretKey::Password)),
+            "{left:?}"
+        );
+        assert!(left.contains(&machine_index_account(machine)), "{left:?}");
+    }
 }

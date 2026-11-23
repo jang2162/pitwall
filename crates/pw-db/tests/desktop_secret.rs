@@ -11,7 +11,7 @@ use std::time::Duration;
 use common::{Conn, Fixture, StreamMsg, target_of};
 use pw_db::DbSessions;
 use pw_db::desktop_secret::{DesktopSecrets, SecretRequest, SecretRequestOp};
-use pw_db::secret::{DbSecretKey, SecretAsker, SecretStore, with_asker};
+use pw_db::secret::{DbSecretKey, SecretAsker, SecretCall, SecretStore, with_asker};
 use pw_db_driver::fake::FakeDriver;
 use pw_db_types::SqlDialect;
 use pw_rpc::{ConnectionScope, RpcError, code as rpc_code};
@@ -132,6 +132,21 @@ async fn open(w: &mut Conn, project: &str) -> Result<Value, RpcError> {
     .await
 }
 
+const LABEL: &str = "SHA256:dev/project-1";
+
+/// 그 프로젝트 창의 연결(링크로 온 것처럼 창 label 이 `<기기 id>/<label>`).
+fn win(f: &Fixture) -> Conn {
+    f.connect_in(ConnectionScope::Project(f.id.clone()), Some(LABEL))
+}
+
+/// 창의 흐름 + 그 비밀을 부른 요청(시험이 저장소를 바로 부를 때).
+fn direct() -> SecretAsker {
+    SecretAsker::Window(Some(SecretCall {
+        window: "SHA256:dev/project-1".into(),
+        request: "41".into(),
+    }))
+}
+
 fn account(project: &str) -> String {
     pw_db::secret::account(project, "dev", DbSecretKey::Password)
 }
@@ -140,7 +155,7 @@ fn account(project: &str) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_window_flow_asks_the_desktop_each_time_and_keeps_nothing() {
     let e = env();
-    let mut w = e.f.window();
+    let mut w = win(&e.f);
     let item = item(&mut w, &e.f.id, "dev").await;
     let desktop = Desktop::attach(&e.f, &e.secrets, item, Answer::Value).await;
 
@@ -169,6 +184,21 @@ async fn a_window_flow_asks_the_desktop_each_time_and_keeps_nothing() {
             (e.f.id.as_str(), "dev", &SecretRequestOp::Read)
         );
     }
+    // 청은 그것을 부른 창의 요청(창 label · 요청 id — 1 은 `db.connection.get`, 2 · 3 이 두 열기)을 댄다(리뷰 F1).
+    let calls: Vec<(&str, &str)> = seen
+        .iter()
+        .map(|r| (r.call.window.as_str(), r.call.request.as_str()))
+        .collect();
+    assert_eq!(calls, [(LABEL, "2"), (LABEL, "3")]);
+    // 창 label 이 없는 연결(요청을 댈 수 없는 흐름)은 묻지 않는다.
+    let mut unlabeled = e.f.window();
+    let refused = open(&mut unlabeled, &e.f.id).await.unwrap_err();
+    assert_eq!(
+        refused.code,
+        pw_db::trust::code::SECRET_REQUIRED,
+        "{refused:?}"
+    );
+    assert_eq!(desktop.seen().len(), 2);
     // 메모리 저장소(로컬 키체인 자리)에는 아무것도 없다.
     assert!(e.f.store.accounts().is_empty());
 }
@@ -177,7 +207,7 @@ async fn a_window_flow_asks_the_desktop_each_time_and_keeps_nothing() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_saved_secret_goes_to_the_desktop() {
     let e = env();
-    let mut w = e.f.window();
+    let mut w = win(&e.f);
     let value = item(&mut w, &e.f.id, "dev").await;
     let desktop = Desktop::attach(&e.f, &e.secrets, value, Answer::Value).await;
     w.set_password(&e.f.id, "dev", PLANTED).await.unwrap();
@@ -194,7 +224,7 @@ async fn a_saved_secret_goes_to_the_desktop() {
     drop(desktop);
 
     let e = env();
-    let mut w = e.f.window();
+    let mut w = win(&e.f);
     let value = item(&mut w, &e.f.id, "dev").await;
     let _desktop = Desktop::attach(&e.f, &e.secrets, value, Answer::Declined).await;
     w.set_password(&e.f.id, "dev", PLANTED).await.unwrap_err();
@@ -204,7 +234,7 @@ async fn a_saved_secret_goes_to_the_desktop() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_declined_or_absent_desktop_opens_nothing() {
     let e = env();
-    let mut w = e.f.window();
+    let mut w = win(&e.f);
     let missing = open(&mut w, &e.f.id).await.unwrap_err();
     assert_eq!(
         missing.code,
@@ -231,7 +261,7 @@ async fn a_declined_or_absent_desktop_opens_nothing() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_flow_never_asks_the_desktop() {
     let e = env();
-    let mut w = e.f.window();
+    let mut w = win(&e.f);
     let value = item(&mut w, &e.f.id, "dev").await;
     let desktop = Desktop::attach(&e.f, &e.secrets, value, Answer::Value).await;
     // 사람이 탐색기에서 연결을 펼친다(「사람이 연 연결」).
@@ -242,8 +272,13 @@ async fn an_agent_flow_never_asks_the_desktop() {
     .await
     .unwrap();
     assert_eq!(desktop.seen().len(), 1);
+    // 사람이 비밀을 넣는다(Desktop 에 두기 청 — Relay 는 대상 사본만 적는다). 에이전트의 툴이 「비밀 없음」 앞에서 멈추지 않고 연결을
+    // 여는 데까지 가게.
+    w.set_password(&e.f.id, "dev", PLANTED).await.unwrap();
+    assert_eq!(desktop.seen().len(), 2);
 
-    let mut agent = e.f.connect(ConnectionScope::Agent);
+    // 창 label 을 붙인 에이전트 연결 — label 이 있어도(Relay 의 `admit` 은 에이전트의 label 을 걷지만) 에이전트의 증거로는 묻지 않는다.
+    let mut agent = e.f.connect_in(ConnectionScope::Agent, Some(LABEL));
     let refused = agent
         .call(
             "db.tool.query",
@@ -256,7 +291,40 @@ async fn an_agent_flow_never_asks_the_desktop() {
         pw_db::trust::code::SECRET_REQUIRED,
         "{refused:?}"
     );
-    assert_eq!(desktop.seen().len(), 1, "{:?}", desktop.seen());
+    assert_eq!(desktop.seen().len(), 2, "{:?}", desktop.seen());
+    // 연결 시험 길도 같다(`db.tool.connectionTest` — 리뷰 F3). 첫 호출은 「승인 필요」 와 계획, 승인 표를 실은 둘째 호출이 연결을
+    // 시험하려다 「비밀 필요」 로 멈춘다(청이 가지 않는다).
+    let test = |hash: Option<String>| {
+        let mut params = json!({ "projectId": e.f.id, "connectionId": "dev" });
+        if let Some(hash) = hash {
+            params[pw_core::registry::plan::APPROVAL_KEY] = json!({ "hash": hash });
+        }
+        params
+    };
+    let asked = agent
+        .call("db.tool.connectionTest", test(None))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        asked.code,
+        pw_core::registry::plan::APPROVAL_REQUIRED,
+        "{asked:?}"
+    );
+    let hash = asked.data.as_ref().unwrap()["plan"]["hash"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let refused = agent
+        .call("db.tool.connectionTest", test(Some(hash)))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.code,
+        pw_db::trust::code::SECRET_REQUIRED,
+        "{refused:?}"
+    );
+    assert_eq!(desktop.seen().len(), 2, "{:?}", desktop.seen());
+    assert_eq!(e.pg.connect_specs().len(), 1);
 
     // 저장소를 바로 불러도 같다: 에이전트 · 세운 곳 없는 흐름은 묻지 않고, 창의 흐름만 묻는다.
     let (s, account) = (e.secrets.clone(), account(&e.f.id));
@@ -264,7 +332,7 @@ async fn an_agent_flow_never_asks_the_desktop() {
         (
             with_asker(SecretAsker::Agent, || s.get(&account)),
             s.get(&account),
-            with_asker(SecretAsker::Window, || s.get(&account)),
+            with_asker(direct(), || s.get(&account)),
         )
     })
     .await
@@ -272,14 +340,14 @@ async fn an_agent_flow_never_asks_the_desktop() {
     assert_eq!(agent_read, Ok(None));
     assert_eq!(unset_read, Ok(None));
     assert!(window_read.unwrap().is_some());
-    assert_eq!(desktop.seen().len(), 2);
+    assert_eq!(desktop.seen().len(), 3);
 }
 
 /// 답은 그 청을 받은 연결의 것만 받는다. 다른 연결 · 프로젝트 창은 청을 받지도 답하지도 못한다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn only_the_desktop_connection_that_got_a_request_answers_it() {
     let e = env();
-    let mut window = e.f.window();
+    let mut window = win(&e.f);
     // 스트림은 열린 뒤 범위 판정으로 끝난다(`stream.end` failed).
     let refused = window.start("secret.requests", Value::Null).await.unwrap();
     window.credit(refused, 8);
@@ -296,8 +364,7 @@ async fn only_the_desktop_connection_that_got_a_request_answers_it() {
     desktop.credit(stream, 8);
     let mut other = e.f.connect(ConnectionScope::Host);
     let (s, account) = (e.secrets.clone(), account(&e.f.id));
-    let reading =
-        tokio::task::spawn_blocking(move || with_asker(SecretAsker::Window, || s.get(&account)));
+    let reading = tokio::task::spawn_blocking(move || with_asker(direct(), || s.get(&account)));
     let StreamMsg::Chunk(data) = desktop.next(stream).await else {
         panic!("no request");
     };
