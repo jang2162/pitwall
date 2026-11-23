@@ -256,6 +256,7 @@ project.tool.register Unary Write {Owner}
 project.trust Unary Read {Owner, Mobile, Readonly}
 project.update Unary Write {Owner}
 remote.connect Stream Write {Owner}
+remote.devices Unary Read {Owner}
 remote.disconnect Unary Write {Owner}
 remote.forward.close Unary Write {Owner}
 remote.forward.open Stream Write {Owner}
@@ -264,12 +265,14 @@ remote.hosts.check Unary Read {Owner}
 remote.hosts.list Unary Read {Owner}
 remote.linkCommand Unary Write {Owner}
 remote.log Unary Read {Owner}
+remote.pairCode Unary Write {Owner}
 remote.prompt.answer Unary Write {Owner}
 remote.prompts Stream Read {Owner}
 remote.relays Unary Read {Owner}
 remote.retry Unary Write {Owner}
 remote.stopOld Unary Write {Owner}
 remote.trustMachine Unary Write {Owner}
+remote.unpairDevice Unary Write {Owner}
 run.attach Stream Read {Owner}
 run.config.delete Unary Write {Owner}
 run.config.list Unary Read {Owner}

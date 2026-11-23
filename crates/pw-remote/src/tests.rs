@@ -823,6 +823,18 @@ async fn every_remote_method_takes_only_a_host_connection() {
             serde_json::json!({ "name": "mini", "remotePort": 5173 }),
         ),
         ("remote.forward.close", serde_json::json!({ "id": 1 })),
+        (
+            "remote.devices",
+            serde_json::json!({ "name": "mini", "machine": "SHA256:x" }),
+        ),
+        (
+            "remote.unpairDevice",
+            serde_json::json!({ "name": "mini", "machine": "SHA256:x", "device": "SHA256:d" }),
+        ),
+        (
+            "remote.pairCode",
+            serde_json::json!({ "name": "mini", "machine": "SHA256:x", "role": "readonly" }),
+        ),
     ];
     let declared: std::collections::BTreeSet<&str> = host
         .router()
@@ -1025,3 +1037,137 @@ async fn each_link_tidies_once_and_its_relays_go_with_it() {
 }
 
 mod forwards;
+/// 기기 화면의 몸통 흉내(Relay 의 `relay.*` 자리) — 부른 수와 부른 기기(창 label 의 접두)를 센다.
+#[derive(Default)]
+struct FakeDevices {
+    calls: Mutex<Vec<(String, Option<String>)>>,
+}
+
+impl pw_link::devices::DeviceAdmin for FakeDevices {
+    fn list(&self, caller: Option<&str>) -> std::io::Result<Vec<pw_link::devices::RelayDevice>> {
+        lock(&self.calls).push(("list".into(), caller.map(str::to_owned)));
+        Ok(vec![pw_link::devices::RelayDevice {
+            device: "SHA256:me".into(),
+            key: "AAAA".into(),
+            name: "mac".into(),
+            role: pw_rpc::Role::Owner,
+            paired_at_ms: Some(1),
+            last_seen_ms: Some(2),
+            you: caller == Some("SHA256:me"),
+        }])
+    }
+
+    fn unpair(&self, device: &str) -> std::io::Result<bool> {
+        lock(&self.calls).push(("unpair".into(), Some(device.to_owned())));
+        Ok(true)
+    }
+
+    fn pair_code(
+        &self,
+        role: pw_rpc::Role,
+        _name: Option<&str>,
+    ) -> std::io::Result<pw_link::devices::RelayPairCode> {
+        lock(&self.calls).push(("pairCode".into(), Some(format!("{role:?}"))));
+        Ok(pw_link::devices::RelayPairCode {
+            code: "123456".into(),
+            expires_at_ms: 9,
+        })
+    }
+}
+
+/// 링크 너머 Relay Host 흉내: `relay.*` 를 내고, 들어온 연결의 창 label 에 기기 id 를 붙인다(진짜 링크의 `admit` 처럼).
+struct LinkedRelay {
+    inner: LocalHost,
+}
+
+impl Host for LinkedRelay {
+    fn id(&self) -> &str {
+        self.inner.id()
+    }
+
+    fn connect(
+        &self,
+        mut caller: pw_rpc::Caller,
+    ) -> BoxFuture<'_, Result<pw_core::Connection, HostError>> {
+        caller.window = caller.window.map(|w| format!("SHA256:me/{w}"));
+        self.inner.connect(caller)
+    }
+
+    fn is_remote(&self) -> bool {
+        true
+    }
+}
+
+// 18-m7-plan M7-23 ③ (메인 판정): 기기 화면의 중계는 그 호스트가 지금 사람이 본 머신에 붙어 있을 때만 그 링크로 Relay 를 부른다 —
+// 다른 머신 id 면 아무것도 부르지 않는다. 붙지 않았으면 부르지 않는다(링크를 새로 열지 않는다). Relay 는 이 Desktop 의 연결을 그
+// 기기의 것으로 받는다(`you`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_device_screen_calls_the_relay_only_on_the_linked_machine() {
+    let s = setup();
+    let devices = Arc::new(FakeDevices::default());
+    {
+        let devices = Arc::clone(&devices);
+        *lock(&s.fake.hosts) = Some(Box::new(move |machine| {
+            let slot = pw_link::devices::Devices::default();
+            slot.attach(Arc::clone(&devices) as Arc<dyn pw_link::devices::DeviceAdmin>);
+            Arc::new(LinkedRelay {
+                inner: LocalHost::builder(machine)
+                    .methods(move |r| pw_link::devices::register(r, &slot))
+                    .build(),
+            }) as Arc<dyn Host>
+        }));
+    }
+    // 붙지 않았다.
+    let refused = s
+        .remote
+        .relay_call::<pw_link::devices::RelayDeviceList>("mini", MINI, "relay.devices", Value::Null)
+        .await;
+    assert!(
+        matches!(refused, Err(RemoteError::Conflict(_))),
+        "{refused:?}"
+    );
+    assert_eq!(
+        s.fake.connects.load(Ordering::SeqCst),
+        0,
+        "the device screen dialed"
+    );
+
+    let _use = s.remote.hold("mini").unwrap();
+    until(&s.remote, connected).await;
+    let other = s
+        .remote
+        .relay_call::<pw_link::devices::RelayUnpairResult>(
+            "mini",
+            "SHA256:other",
+            "relay.unpair",
+            serde_json::json!({ "device": "SHA256:me" }),
+        )
+        .await;
+    assert!(matches!(other, Err(RemoteError::Conflict(_))), "{other:?}");
+    assert!(
+        lock(&devices.calls).is_empty(),
+        "called a relay of another machine"
+    );
+
+    let list: pw_link::devices::RelayDeviceList = s
+        .remote
+        .relay_call("mini", MINI, "relay.devices", Value::Null)
+        .await
+        .unwrap();
+    assert!(list.devices[0].you);
+    assert_eq!(
+        lock(&devices.calls).as_slice(),
+        [("list".to_owned(), Some("SHA256:me".to_owned()))]
+    );
+    let code: pw_link::devices::RelayPairCode = s
+        .remote
+        .relay_call(
+            "mini",
+            MINI,
+            "relay.pairCode",
+            serde_json::json!({ "role": "readonly", "name": null }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(code.code, "123456");
+}

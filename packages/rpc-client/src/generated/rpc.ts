@@ -1308,6 +1308,11 @@ export type UnaryMethods = {
 	 */
 	"relay.unpair": { params: RelayUnpairParams; result: RelayUnpairResult };
 	/**
+	 * 기기 화면(18-m7-plan M7-23 ③): 그 호스트가 지금 `machine` 에 붙어 있으면 그 Relay 의 페어링 표(`relay.devices`)를 읽는다.
+	 * 링크를 새로 열지 않는다. role 판정은 Relay 가 한다(owner 기기만 — 두 겹).
+	 */
+	"remote.devices": { params: RemoteDevicesParams; result: RelayDeviceList };
+	/**
 	 * 사람이 끊는다. 쓰는 창이 남아 있어도 다시 붙지 않는다(새 `remote.connect` · `remote.retry` 까지).
 	 */
 	"remote.disconnect": { params: RemoteHostParams; result: null };
@@ -1338,6 +1343,11 @@ export type UnaryMethods = {
 	 * 그 호스트의 연결 로그(단계 · 실패 · ssh stderr 끝부분). askpass 답은 없다.
 	 */
 	"remote.log": { params: RemoteHostParams; result: RemoteLogEntry[] };
+	/**
+	 * 그 Relay 에 다른 기기를 붙일 6자리 코드를 만든다(`relay.pairCode` — 5분, 세 번 틀리면 끝, 한 번 쓰면 끝). 그 호스트가 지금
+	 * `machine` 에 붙어 있을 때만.
+	 */
+	"remote.pairCode": { params: RemotePairCodeParams; result: RelayPairCode };
 	/**
 	 * 원격 askpass 질문의 답. 처음 온 답만 받는다.
 	 */
@@ -1370,6 +1380,11 @@ export type UnaryMethods = {
 	 * id 를 기억한 뒤 다시 붙는다.
 	 */
 	"remote.trustMachine": { params: RemoteTrustMachineParams; result: null };
+	/**
+	 * 그 Relay 에서 기기 하나를 해제한다(`relay.unpair` — 그 기기의 열린 링크 · 구독 · 터미널 붙기 · 이어 붙기 토큰이 곧바로 끊긴다).
+	 * 그 호스트가 지금 `machine` 에 붙어 있을 때만. 이 Desktop 자신을 해제하면 이 링크도 끊긴다.
+	 */
+	"remote.unpairDevice": { params: RemoteUnpairDeviceParams; result: RelayUnpairResult };
 	/**
 	 * 구성 파일을 지운다(`location` 이 없으면 공유 · 개인 둘 다). 그 프로젝트 창의 연결만. 그 id 의 구성(쓸 수 없는 것 포함)이
 	 * 없으면 not found.
@@ -2018,6 +2033,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"relay.pairCode": {"name":"relay.pairCode","kind":"unary","tier":"write","roles":["owner"],"params":"RelayPairCodeParams","output":"RelayPairCode","doc":" 다른 기기를 이 Relay 에 붙일 6자리 코드를 만든다(5분, 틀린 시도 세 번이면 끝, 한 번 쓰면 끝). 앞의 대기 코드는 끝난다. owner\n 기기만.\n","mcp":null,"fileScope":false},
 	"relay.unpair": {"name":"relay.unpair","kind":"unary","tier":"write","roles":["owner"],"params":"RelayUnpairParams","output":"RelayUnpairResult","doc":" 기기 하나를 해제한다 — 그 기기의 열린 링크 · 구독 · 터미널 붙기 · 이어 붙기 토큰이 곧바로 끊긴다. owner 기기만.\n","mcp":null,"fileScope":false},
 	"remote.connect": {"name":"remote.connect","kind":"stream","tier":"write","roles":["owner"],"params":"RemoteHostParams","output":"RemoteStatus","doc":" 그 호스트를 쓴다: 링크가 없으면 붙고(SSH → 설치 → 데몬 → 핸드셰이크), 스트림이 열린 동안 링크를 둔다. 지금 상태부터 바뀔\n 때마다 보낸다. 사람이 끊어 둔 호스트도 다시 붙는다. 모든 스트림이 닫히면 링크를 닫는다.\n","mcp":null,"fileScope":false},
+	"remote.devices": {"name":"remote.devices","kind":"unary","tier":"read","roles":["owner"],"params":"RemoteDevicesParams","output":"RelayDeviceList","doc":" 기기 화면(18-m7-plan M7-23 ③): 그 호스트가 지금 `machine` 에 붙어 있으면 그 Relay 의 페어링 표(`relay.devices`)를 읽는다.\n 링크를 새로 열지 않는다. role 판정은 Relay 가 한다(owner 기기만 — 두 겹).\n","mcp":null,"fileScope":false},
 	"remote.disconnect": {"name":"remote.disconnect","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteHostParams","output":"()","doc":" 사람이 끊는다. 쓰는 창이 남아 있어도 다시 붙지 않는다(새 `remote.connect` · `remote.retry` 까지).\n","mcp":null,"fileScope":false},
 	"remote.forward.close": {"name":"remote.forward.close","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteForwardCloseParams","output":"()","doc":" 포워딩 하나를 끈다. 실행 탭의 것이면 그 스트림이 끝나고, 설정의 것은 다음에 붙을 때 다시 연다.\n","mcp":null,"fileScope":false},
 	"remote.forward.open": {"name":"remote.forward.open","kind":"stream","tier":"write","roles":["owner"],"params":"RemoteForwardOpenParams","output":"RemoteForward","doc":" 실행 탭 포트의 「로컬로 포워딩」: 그 호스트의 `localhost:remotePort` 를 이 컴퓨터의 루프백(`127.0.0.1`)에서 듣는다. 스트림이\n 열린 동안 포워딩과 그 호스트를 쓴다(링크가 없으면 붙는다). 처음 열린 포워딩을, 닫히면(`remote.forward.close`) 끝을 보낸다. 로컬\n 포트를 이미 누가 쓰면 `conflict`(data `{ reason: \"portInUse\", port }`) — 다른 `localPort` 로 다시 연다.\n","mcp":null,"fileScope":false},
@@ -2026,12 +2042,14 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"remote.hosts.list": {"name":"remote.hosts.list","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"RemoteHostList","doc":" 원격 호스트 목록: 전역 `[[remote_hosts]]` 와 `~/.ssh/config` 의 `Host` 이름(와일드카드 없음), 각각의 지금 상태 · 기억한\n 머신 id · 마지막 링크 상태. 링크를 열지 않는다.\n","mcp":null,"fileScope":false},
 	"remote.linkCommand": {"name":"remote.linkCommand","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteLinkCommandParams","output":"()","doc":" 원격의 `~/.local/bin/pitwall` 링크를 이 판 Relay 로 두거나(`on`) 걷는다(메인 판정 M7-P12 — 사람이 고를 때만). 그 자리에 사람의\n 다른 파일이 있으면 Relay 가 거절한다. 그 호스트가 지금 `machine` 에 붙어 있을 때만.\n","mcp":null,"fileScope":false},
 	"remote.log": {"name":"remote.log","kind":"unary","tier":"read","roles":["owner"],"params":"RemoteHostParams","output":"Vec<RemoteLogEntry>","doc":" 그 호스트의 연결 로그(단계 · 실패 · ssh stderr 끝부분). askpass 답은 없다.\n","mcp":null,"fileScope":false},
+	"remote.pairCode": {"name":"remote.pairCode","kind":"unary","tier":"write","roles":["owner"],"params":"RemotePairCodeParams","output":"RelayPairCode","doc":" 그 Relay 에 다른 기기를 붙일 6자리 코드를 만든다(`relay.pairCode` — 5분, 세 번 틀리면 끝, 한 번 쓰면 끝). 그 호스트가 지금\n `machine` 에 붙어 있을 때만.\n","mcp":null,"fileScope":false},
 	"remote.prompt.answer": {"name":"remote.prompt.answer","kind":"unary","tier":"write","roles":["owner"],"params":"RemotePromptAnswerParams","output":"()","doc":" 원격 askpass 질문의 답. 처음 온 답만 받는다.\n","mcp":null,"fileScope":false},
 	"remote.prompts": {"name":"remote.prompts","kind":"stream","tier":"read","roles":["owner"],"params":"()","output":"GitPromptEvent","doc":" 원격 호스트를 붙이는 ssh 의 질문 스트림(호스트 키 확인 · 암호). 열 때 아직 열린 질문이 먼저 온다.\n","mcp":null,"fileScope":false},
 	"remote.relays": {"name":"remote.relays","kind":"unary","tier":"read","roles":["owner"],"params":"RemoteHostParams","output":"Option<RemoteRelays>","doc":" 지금 링크에서 본 원격 Relay(18-m7-plan M7-07b ②): 떠 있는 옛 판 데몬(판 · 실행 · 터미널 · 붙은 링크 수 — 사람이 본 그대로\n `remote.stopOld` 에 싣는다) · 답하지 않는 옛 판 · `pitwall` 명령 링크 · 이번 정리에서 지운 것. 링크가 없거나 아직 보지 않았으면\n `null`. 바뀌면 `remote.relays` 이벤트.\n","mcp":null,"fileScope":false},
 	"remote.retry": {"name":"remote.retry","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteHostParams","output":"()","doc":" 다시 시도: 쓰는 창이 있으면 기다림 없이 지금 붙는다.\n","mcp":null,"fileScope":false},
 	"remote.stopOld": {"name":"remote.stopOld","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteStopOldParams","output":"RemoteStopOutcome","doc":" [옛 판 끝내기](M7-07b ③): 그 호스트가 지금 `machine` 에 붙어 있고, 원격의 그 옛 판 데몬이 사람이 본 `seen` 그대로(pid · 실행 ·\n 터미널 · 붙은 링크 수)일 때만 SIGTERM — 실행 트리는 그 데몬이 끝낸다. 바뀌었으면 끝내지 않고 `changed` 로 지금 것을 돌려준다.\n","mcp":null,"fileScope":false},
 	"remote.trustMachine": {"name":"remote.trustMachine","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteTrustMachineParams","output":"()","doc":" 「이 머신을 새로 믿기」: 그 호스트가 `machineChanged` 이고 `found` 가 `machine` 일 때만 — 묶음 멤버의 머신 id 를 옮기고 새\n id 를 기억한 뒤 다시 붙는다.\n","mcp":null,"fileScope":false},
+	"remote.unpairDevice": {"name":"remote.unpairDevice","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteUnpairDeviceParams","output":"RelayUnpairResult","doc":" 그 Relay 에서 기기 하나를 해제한다(`relay.unpair` — 그 기기의 열린 링크 · 구독 · 터미널 붙기 · 이어 붙기 토큰이 곧바로 끊긴다).\n 그 호스트가 지금 `machine` 에 붙어 있을 때만. 이 Desktop 자신을 해제하면 이 링크도 끊긴다.\n","mcp":null,"fileScope":false},
 	"run.attach": {"name":"run.attach","kind":"stream","tier":"read","roles":["owner"],"params":"RunAttachParams","output":"RunAttachEvent","doc":" 실행의 출력을 `since` 오프셋부터 보낸다(앞에 쌓인 것 → 새로 나오는 것 → 끝). 스트림을 끊어도 실행은 돈다.\n","mcp":null,"fileScope":false},
 	"run.config.delete": {"name":"run.config.delete","kind":"unary","tier":"write","roles":["owner"],"params":"RunConfigDeleteParams","output":"RunConfigDeleted","doc":" 구성 파일을 지운다(`location` 이 없으면 공유 · 개인 둘 다). 그 프로젝트 창의 연결만. 그 id 의 구성(쓸 수 없는 것 포함)이\n 없으면 not found.\n","mcp":null,"fileScope":false},
 	"run.config.list": {"name":"run.config.list","kind":"unary","tier":"read","roles":["owner"],"params":"RunConfigListParams","output":"RunConfigList","doc":" 프로젝트의 실행 구성 목록: 쓸 수 있는 구성 · 쓸 수 없는 구성(까닭) · 감지된 태스크. 디스크에 쓰지 않는다(구버전 파일도\n 메모리에서만 올린다). 없는 프로젝트는 not found, 그 프로젝트의 것이 아닌 `worktree` 는 invalid params.\n","mcp":null,"fileScope":false},
@@ -9605,6 +9623,13 @@ export type RemoteCommandLink =
 /**  사람의 다른 파일 · 링크 — 건드리지 않는다. */
 "other";
 
+/**  기기 화면(18-m7-plan M7-23 ③): 그 호스트가 지금 `machine` 에 붙어 있을 때만 그 Relay 의 `relay.*` 를 부른다. */
+export type RemoteDevicesParams = {
+	name: string,
+	/**  사람이 본 머신(붙은 상태의 `machine`). 그 호스트가 지금 다른 머신에 붙어 있으면 부르지 않는다. */
+	machine: string,
+};
+
 /**  실패 하나. `message` 는 영어 원문(진단), 화면은 `kind` 로 말을 고른다. 비밀(askpass 답)은 들지 않는다. */
 export type RemoteFailure = {
 	stage: RemoteStage,
@@ -9792,6 +9817,15 @@ export type RemoteOldRelay = {
 	links: number,
 };
 
+export type RemotePairCodeParams = {
+	name: string,
+	machine: string,
+	/**  그 코드로 붙는 기기의 role. */
+	role: Role,
+	/**  그 기기의 이름(없으면 기기가 댄 이름). */
+	deviceName?: string | null,
+};
+
 export type RemotePromptAnswerParams = {
 	promptId: number,
 	answer: GitPromptAnswer,
@@ -9872,6 +9906,13 @@ export type RemoteTrustMachineParams = {
 	name: string,
 	/**  사람이 본 새 머신 id(`machineChanged` 의 `found`). 그사이 다른 id 가 왔으면 거절한다. */
 	machine: string,
+};
+
+export type RemoteUnpairDeviceParams = {
+	name: string,
+	machine: string,
+	/**  해제할 기기 id(`relay.devices` 의 `device`). */
+	device: string,
 };
 
 export type RemoveBundleMemberParams = {

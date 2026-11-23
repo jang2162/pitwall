@@ -483,3 +483,39 @@ pub struct RemoteForwardCloseParams {
     #[specta(type = pw_rpc::JsNumber)]
     pub id: u64,
 }
+
+/// 기기 화면(18-m7-plan M7-23 ③): 그 호스트가 지금 `machine` 에 붙어 있을 때만 그 Relay 의 `relay.*` 를 부른다.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteDevicesParams {
+    pub name: String,
+    /// 사람이 본 머신(붙은 상태의 `machine`). 그 호스트가 지금 다른 머신에 붙어 있으면 부르지 않는다.
+    pub machine: String,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteUnpairDeviceParams {
+    pub name: String,
+    pub machine: String,
+    /// 해제할 기기 id(`relay.devices` 의 `device`).
+    pub device: String,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RemotePairCodeParams {
+    pub name: String,
+    pub machine: String,
+    /// 그 코드로 붙는 기기의 role.
+    pub role: pw_rpc::Role,
+    /// 그 기기의 이름(없으면 기기가 댄 이름).
+    #[serde(default)]
+    pub device_name: Option<String>,
+}

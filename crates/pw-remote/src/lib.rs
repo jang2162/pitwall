@@ -33,6 +33,11 @@ use zeroize::Zeroizing;
 
 mod forwards;
 pub mod methods;
+
+/// [`RemoteHosts::relay_call`] 이 여는 연결의 창 label — Relay 는 `<기기 id>/devices` 로 받아 「이 기기」 를 안다.
+pub const DEVICES_WINDOW: &str = "devices";
+/// [`RemoteHosts::relay_call`] 의 답 시한.
+const RELAY_CALL_TIMEOUT: Duration = Duration::from_secs(20);
 pub mod secrets;
 #[cfg(feature = "ssh")]
 pub mod ssh;
@@ -1193,6 +1198,55 @@ impl RemoteHosts {
                 "`{name}` is not connected to machine {machine} now"
             ))),
         }
+    }
+
+    /// 기기 화면(18-m7-plan M7-23 ③): 그 호스트가 지금 `machine` 에 붙어 있으면(링크가 증명한 머신 id — 다르면 아무것도 하지
+    /// 않는다) 그 링크로 Relay Host 에 owner · Host 범위 연결 하나를 열어 `method` 하나를 부르고 결과를 그 타입으로 돌려준다. 링크를
+    /// 새로 열지 않는다. role 은 Relay 가 판정한다(이 중계는 대신 판정하지 않는다).
+    pub async fn relay_call<T: serde::de::DeserializeOwned>(
+        &self,
+        name: &str,
+        machine: &str,
+        method: &str,
+        params: Value,
+    ) -> Result<T, RemoteError> {
+        self.entry(name)?;
+        let linked = lock(&self.inner.slots)
+            .get(name)
+            .and_then(|slot| slot.link.as_ref().map(|(m, _)| m.clone()));
+        if linked.as_deref() != Some(machine) {
+            return Err(RemoteError::Conflict(format!(
+                "`{name}` is not connected to machine {machine} now"
+            )));
+        }
+        let router = read(&self.inner.router).ok_or(RemoteError::Unavailable)?;
+        let host = router
+            .host(machine)
+            .map_err(|e| RemoteError::Conflict(e.to_string()))?;
+        let mut connection = host
+            .connect(pw_rpc::Caller::new(pw_rpc::Role::Owner).in_window(DEVICES_WINDOW))
+            .await
+            .map_err(|e| RemoteError::Remote(e.to_string()))?;
+        connection.sink.send(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": method, "params": params,
+        }));
+        let answer = tokio::time::timeout(RELAY_CALL_TIMEOUT, async {
+            while let Some(frame) = connection.source.recv().await {
+                if frame.get("id") == Some(&serde_json::json!(1)) {
+                    return Some(frame);
+                }
+            }
+            None
+        })
+        .await
+        .map_err(|_| RemoteError::Remote(format!("{method} did not answer")))?
+        .ok_or_else(|| RemoteError::Remote(format!("the link closed during {method}")))?;
+        if let Some(error) = answer.get("error") {
+            let message = error["message"].as_str().unwrap_or("refused").to_owned();
+            return Err(RemoteError::Remote(message));
+        }
+        serde_json::from_value(answer["result"].clone())
+            .map_err(|e| RemoteError::Remote(format!("bad {method} result: {e}")))
     }
 
     /// 붙은 뒤 한 번: 조사 · 링크 옮기기 · 정리(M7-07b ①).

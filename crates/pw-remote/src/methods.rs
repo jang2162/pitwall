@@ -12,12 +12,14 @@
 use pw_git::write::{AnswerError, GitPromptAnswer, GitPromptEvent};
 use pw_rpc::{ConnectionScope, Ctx, Router, RpcError, code, rpc_method};
 
+use pw_link::devices::{RelayDeviceList, RelayPairCode, RelayUnpairResult};
+
 use crate::{
-    ForwardOpenError, PROMPTS_KEY, RemoteError, RemoteForward, RemoteForwardCloseParams,
-    RemoteForwardOpenParams, RemoteForwardsParams, RemoteHostCheck, RemoteHostList,
-    RemoteHostParams, RemoteHosts, RemoteLinkCommandParams, RemoteLogEntry,
-    RemotePromptAnswerParams, RemoteRelays, RemoteStatus, RemoteStopOldParams, RemoteStopOutcome,
-    RemoteTrustMachineParams,
+    ForwardOpenError, PROMPTS_KEY, RemoteDevicesParams, RemoteError, RemoteForward,
+    RemoteForwardCloseParams, RemoteForwardOpenParams, RemoteForwardsParams, RemoteHostCheck,
+    RemoteHostList, RemoteHostParams, RemoteHosts, RemoteLinkCommandParams, RemoteLogEntry,
+    RemotePairCodeParams, RemotePromptAnswerParams, RemoteRelays, RemoteStatus,
+    RemoteStopOldParams, RemoteStopOutcome, RemoteTrustMachineParams, RemoteUnpairDeviceParams,
 };
 
 rpc_method! {
@@ -116,6 +118,33 @@ rpc_method! {
     pub RemoteLinkCommand: "remote.linkCommand" {
         params: RemoteLinkCommandParams,
         result: (),
+        tier: Write,
+        roles: [Owner],
+    }
+
+    /// 기기 화면(18-m7-plan M7-23 ③): 그 호스트가 지금 `machine` 에 붙어 있으면 그 Relay 의 페어링 표(`relay.devices`)를 읽는다.
+    /// 링크를 새로 열지 않는다. role 판정은 Relay 가 한다(owner 기기만 — 두 겹).
+    pub RemoteDevices: "remote.devices" {
+        params: RemoteDevicesParams,
+        result: RelayDeviceList,
+        tier: Read,
+        roles: [Owner],
+    }
+
+    /// 그 Relay 에서 기기 하나를 해제한다(`relay.unpair` — 그 기기의 열린 링크 · 구독 · 터미널 붙기 · 이어 붙기 토큰이 곧바로 끊긴다).
+    /// 그 호스트가 지금 `machine` 에 붙어 있을 때만. 이 Desktop 자신을 해제하면 이 링크도 끊긴다.
+    pub RemoteUnpairDevice: "remote.unpairDevice" {
+        params: RemoteUnpairDeviceParams,
+        result: RelayUnpairResult,
+        tier: Write,
+        roles: [Owner],
+    }
+
+    /// 그 Relay 에 다른 기기를 붙일 6자리 코드를 만든다(`relay.pairCode` — 5분, 세 번 틀리면 끝, 한 번 쓰면 끝). 그 호스트가 지금
+    /// `machine` 에 붙어 있을 때만.
+    pub RemotePairCode: "remote.pairCode" {
+        params: RemotePairCodeParams,
+        result: RelayPairCode,
         tier: Write,
         roles: [Owner],
     }
@@ -287,6 +316,54 @@ pub fn register(router: &mut Router, remote: &RemoteHosts) {
         async move {
             host_scope(&ctx)?;
             r.link_command(&p.name, &p.machine, p.on).await.map_err(rpc)
+        }
+    });
+    let r = remote.clone();
+    router.unary(RemoteDevices, move |ctx, p: RemoteDevicesParams| {
+        let r = r.clone();
+        async move {
+            host_scope(&ctx)?;
+            r.relay_call(
+                &p.name,
+                &p.machine,
+                "relay.devices",
+                serde_json::Value::Null,
+            )
+            .await
+            .map_err(rpc)
+        }
+    });
+    let r = remote.clone();
+    router.unary(
+        RemoteUnpairDevice,
+        move |ctx, p: RemoteUnpairDeviceParams| {
+            let r = r.clone();
+            async move {
+                host_scope(&ctx)?;
+                r.relay_call(
+                    &p.name,
+                    &p.machine,
+                    "relay.unpair",
+                    serde_json::json!({ "device": p.device }),
+                )
+                .await
+                .map_err(rpc)
+            }
+        },
+    );
+    let r = remote.clone();
+    router.unary(RemotePairCode, move |ctx, p: RemotePairCodeParams| {
+        let r = r.clone();
+        async move {
+            host_scope(&ctx)?;
+            r.relay_call(
+                &p.name,
+                &p.machine,
+                "relay.pairCode",
+                serde_json::json!({ "role": p.role, "name": p.device_name }),
+            )
+            .await
+            .map_err(rpc)
         }
     });
     let r = remote.clone();
