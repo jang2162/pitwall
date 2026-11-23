@@ -25,6 +25,7 @@ import type { ViewerProps } from "./viewers";
 /**
  * 다른 머신 문서(18-m7-plan M7-13)의 경로와 루트는 머신이 붙은 꼴이다(`pitwall-remote://<머신>/…` — checkout/checkout.ts). 풀기 규칙
  * (markdown.ts)은 그 `//` 의 빈 마디를 루트 밖으로 본다 — 머신을 떼고 그 머신의 경로로 푼 뒤 다시 붙인다. 이 머신 경로는 그대로다.
+ * 루트가 문서와 다른 머신의 것이면 풀지 않는다.
  */
 function onItsMachine(
   path: string,
@@ -32,7 +33,10 @@ function onItsMachine(
   resolve: (from: string, root: string) => string | undefined,
 ): string | undefined {
   const { machine, path: from } = unqualify(path);
-  const resolved = resolve(from, unqualify(root).path);
+  const top = unqualify(root);
+  // 다른 머신의 루트로는 풀지 않는다 — 같은 경로라도 다른 머신의 파일이다.
+  if (top.machine !== machine) return undefined;
+  const resolved = resolve(from, top.path);
   return resolved === undefined ? undefined : qualify(machine, resolved);
 }
 
@@ -189,7 +193,8 @@ function MarkdownPreview({
     const link = classifyLink(
       anchor.getAttribute("href") ?? "",
       unqualify(path).path,
-      root && unqualify(root).path,
+      // 다른 머신의 루트로는 풀지 않는다(`onItsMachine` 과 같은 규칙 — 루트 없음은 파일 링크를 막는다).
+      root !== undefined && unqualify(root).machine === machine ? unqualify(root).path : undefined,
     );
     // 파일 링크도 그 머신의 경로다 — 머신을 다시 붙이고 열기 요청에 머신을 싣는다(M7-11 델타 리뷰 B3).
     const target = link.kind === "file" ? { ...link, path: qualify(machine, link.path) } : link;
