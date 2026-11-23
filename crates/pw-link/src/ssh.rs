@@ -41,6 +41,9 @@ pub const STDERR_LIMIT: usize = 4096;
 pub const STDOUT_LIMIT: usize = 64 * 1024;
 /// 원격 명령 인자 하나의 최대 길이.
 pub const MAX_ARG: usize = 256;
+/// [`Ssh::run`] 한 번의 기본 시간 상한. 창에서 사람의 답을 기다린 시간은 세지 않는다. 가장 긴 일은 Relay 업로드(56 MiB 까지 —
+/// 느린 링크 ~1 Mbps 에서 8분 남짓)라 넉넉히 둔다. 상한을 넘으면 ssh 를 끝내고 [`SshError::TimedOut`](M7-07 이 넘긴 일반 상한).
+pub const RUN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 /// ssh 가 연결 · 인증 · 호스트 키에서 실패하면 내는 종료 코드. [`Ssh::run`] 은 이 코드를 늘 ssh 의 실패로 본다 — **원격 스크립트 ·
 /// `pitwall-relay` 하위 명령은 255 로 끝나지 않는다**(M7-07 · M7-08 이 스크립트를 더할 때도).
@@ -333,6 +336,7 @@ fn build_argv(
 pub struct AskpassSession {
     env: Vec<(OsString, OsString)>,
     _keep: Box<dyn Any + Send + Sync>,
+    asking: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
 }
 
 impl AskpassSession {
@@ -340,7 +344,14 @@ impl AskpassSession {
         Self {
             env,
             _keep: Box::new(keep),
+            asking: None,
         }
+    }
+
+    /// `asking` 이 참인 동안(창에 질문이 떠 사람의 답을 기다린다) [`Ssh::run`] 의 시간 상한을 세지 않는다.
+    pub fn with_asking(mut self, asking: Arc<dyn Fn() -> bool + Send + Sync>) -> Self {
+        self.asking = Some(asking);
+        self
     }
 }
 
@@ -363,6 +374,8 @@ pub enum SshError {
     HostKeyNotAccepted { stderr: String },
     /// 연결 · 인증 실패(ssh 종료 코드 255).
     Connect { stderr: String },
+    /// [`Ssh::run`] 이 시간 상한 안에 끝나지 않았다(사람의 답을 기다린 시간은 세지 않는다). ssh 는 끝냈다.
+    TimedOut { seconds: u64, stderr: String },
 }
 
 impl std::fmt::Display for SshError {
@@ -380,6 +393,9 @@ impl std::fmt::Display for SshError {
                 write!(f, "the remote host key was not accepted:\n{stderr}")
             }
             SshError::Connect { stderr } => write!(f, "ssh could not connect:\n{stderr}"),
+            SshError::TimedOut { seconds, stderr } => {
+                write!(f, "ssh did not finish in {seconds} s:\n{stderr}")
+            }
         }
     }
 }
@@ -437,6 +453,7 @@ pub struct Ssh {
     askpass: Option<Arc<dyn SshAskpass>>,
     target: SshTarget,
     options: Vec<String>,
+    timeout: std::time::Duration,
 }
 
 impl Ssh {
@@ -459,12 +476,19 @@ impl Ssh {
             askpass: None,
             target,
             options,
+            timeout: RUN_TIMEOUT,
         })
     }
 
     /// 자식 환경 전체를 정한다(앱 프로세스의 환경을 물려주지 않는다). 없으면 앱 프로세스의 환경이다.
     pub fn env(mut self, env: Vec<(OsString, OsString)>) -> Self {
         self.env = Some(env);
+        self
+    }
+
+    /// [`Self::run`] 의 시간 상한을 바꾼다(기본 [`RUN_TIMEOUT`]).
+    pub fn timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.timeout = timeout;
         self
     }
 
@@ -579,24 +603,41 @@ impl Ssh {
             }
             out
         };
+        let err = Mutex::new(Vec::new());
         let read_err = async {
-            let mut err = Vec::new();
             let mut buf = [0u8; 4096];
             loop {
                 match stderr.read(&mut buf).await {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
+                        let mut err = err.lock().unwrap_or_else(PoisonError::into_inner);
                         err.extend_from_slice(&buf[..n]);
                         if err.len() > STDERR_LIMIT * 2 {
-                            err.drain(..err.len() - STDERR_LIMIT);
+                            let cut = err.len() - STDERR_LIMIT;
+                            err.drain(..cut);
                         }
                     }
                 }
             }
-            err
         };
-        let ((), out, err) = tokio::join!(write, read_out, read_err);
-        let status = child.wait().await.map_err(SshError::Spawn)?;
+        let asking = _session.as_ref().and_then(|s| s.asking.clone());
+        let work = async {
+            let ((), out, ()) = tokio::join!(write, read_out, read_err);
+            (out, child.wait().await)
+        };
+        let (out, status) = match within(self.timeout, asking, work).await {
+            Some(done) => done,
+            None => {
+                // `kill_on_drop` — 이 함수가 돌아가며 자식 ssh 를 버리면 끝난다.
+                let stderr = tail(&err.lock().unwrap_or_else(PoisonError::into_inner));
+                return Err(SshError::TimedOut {
+                    seconds: self.timeout.as_secs(),
+                    stderr,
+                });
+            }
+        };
+        let status = status.map_err(SshError::Spawn)?;
+        let err = err.into_inner().unwrap_or_else(PoisonError::into_inner);
         let stderr = tail(&err);
         if status.code() == Some(SSH_FAILED) {
             return Err(classify(stderr));
@@ -616,6 +657,30 @@ impl Ssh {
             script,
             args,
             stderr: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
+
+/// `work` 를 `limit` 까지 기다린다. `asking` 이 참인 동안(사람의 답을 기다림)은 시간을 세지 않는다. 넘으면 `None`(work 는 버린다).
+async fn within<T>(
+    limit: std::time::Duration,
+    asking: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+    work: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    const TICK: std::time::Duration = std::time::Duration::from_millis(100);
+    tokio::pin!(work);
+    let mut counted = std::time::Duration::ZERO;
+    loop {
+        tokio::select! {
+            done = &mut work => return Some(done),
+            () = tokio::time::sleep(TICK) => {
+                if !asking.as_ref().is_some_and(|a| a()) {
+                    counted += TICK;
+                }
+                if counted >= limit {
+                    return None;
+                }
+            }
         }
     }
 }

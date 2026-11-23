@@ -538,3 +538,42 @@ async fn the_master_check_runs_no_remote_command() {
         assert_eq!(call, ["-O", "check", "--", "mini"]);
     }
 }
+
+/// M7-07 이 넘긴 `Ssh::run` 의 일반 시간 상한: 넘으면 ssh 를 끝내고 `TimedOut`. 창에 질문이 떠 사람의 답을 기다리는 동안은
+/// 세지 않는다(askpass 가 답하는 데 상한보다 오래 걸려도 끝까지 간다).
+#[tokio::test]
+async fn ssh_runs_have_a_time_limit_that_skips_the_time_spent_asking() {
+    let dir = tempfile::tempdir().unwrap();
+    let remote = FakeRemote::new(dir.path(), "home", true);
+    let ssh = Ssh::with_program(remote.ssh.clone(), SshTarget::alias("mini"), Vec::new())
+        .unwrap()
+        .env(remote.env(&[]))
+        .timeout(std::time::Duration::from_millis(500));
+    let started = std::time::Instant::now();
+    let err = ssh.run("sleep 30", &[], None).await.unwrap_err();
+    assert!(matches!(err, SshError::TimedOut { .. }), "{err:?}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+
+    // 호스트 키 질문에 2초 걸려 답한다 — 그동안 「묻는 중」 이라 0.5초 상한을 세지 않는다.
+    let answer = dir.path().join("slow-answer.sh");
+    write_executable(&answer, "#!/bin/sh\nsleep 2\necho yes\n");
+    struct Slow(std::path::PathBuf, std::time::Instant);
+    impl SshAskpass for Slow {
+        fn session(&self) -> Option<AskpassSession> {
+            let since = self.1;
+            Some(
+                AskpassSession::new(vec![("SSH_ASKPASS".into(), self.0.clone().into())], ())
+                    .with_asking(Arc::new(move || {
+                        since.elapsed() < std::time::Duration::from_secs(3)
+                    })),
+            )
+        }
+    }
+    let ssh = Ssh::with_program(remote.ssh.clone(), SshTarget::alias("mini"), Vec::new())
+        .unwrap()
+        .env(remote.env(&[("FAKE_SSH_HOSTKEY", "unknown")]))
+        .askpass(Arc::new(Slow(answer, std::time::Instant::now())))
+        .timeout(std::time::Duration::from_millis(500));
+    let done = ssh.run("true", &[], None).await.unwrap();
+    assert_eq!(done.code, Some(0));
+}
