@@ -884,7 +884,7 @@ async fn the_front_bounds_bodies_headers_slow_requests_and_connections() {
         json!({"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {"pad": "x".repeat(2048)}});
     assert_eq!(agent.post(&big).await.status, 413);
     // 길이를 숨긴(chunked) 큰 본문도.
-    let mut chunked = format!("POST /mcp HTTP/1.1\r\n");
+    let mut chunked = String::from("POST /mcp HTTP/1.1\r\n");
     for (k, v) in agent.headers() {
         chunked.push_str(&format!("{k}: {v}\r\n"));
     }

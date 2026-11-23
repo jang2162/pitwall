@@ -1170,7 +1170,8 @@ mod tests {
         let rows = all(&log);
         assert_eq!(version(&file), SCHEMA_VERSION);
         assert_eq!(SCHEMA_VERSION, 4);
-        let kept: Vec<(i64, Option<AuditApproval>, Option<&str>, Option<&str>)> = rows
+        type Kept<'a> = (i64, Option<AuditApproval>, Option<&'a str>, Option<&'a str>);
+        let kept: Vec<Kept> = rows
             .iter()
             .map(|r| {
                 (

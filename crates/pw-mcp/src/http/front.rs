@@ -201,7 +201,7 @@ pub(super) fn host_allowed(headers: &HeaderMap, port: u16) -> bool {
         return false;
     };
     let host = host.to_ascii_lowercase();
-    loopback_authorities(port).iter().any(|a| *a == host)
+    loopback_authorities(port).contains(&host)
 }
 
 /// `Origin` 이 있으면 `http://` 의 같은 셋만. `Sec-Fetch-Site` 가 있으면 `none`(사람이 주소창에 친 것) · `same-origin` 만.
@@ -269,7 +269,7 @@ async fn post(server: &Arc<Server>, request: Request<Incoming>) -> Response<Out>
         .map(str::to_owned);
     let body = match read_body(request.into_body(), server.limits).await {
         Ok(body) => body,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let Ok(message) = serde_json::from_slice::<Value>(&body) else {
         return rpc_error(StatusCode::BAD_REQUEST, -32700, "the body is not json");
@@ -424,31 +424,37 @@ fn delete(server: &Arc<Server>, headers: &HeaderMap) -> Response<Out> {
 }
 
 /// 본문을 상한 · 시한 안에서 읽는다.
-async fn read_body(mut body: Incoming, limits: super::Limits) -> Result<Vec<u8>, Response<Out>> {
+async fn read_body(
+    mut body: Incoming,
+    limits: super::Limits,
+) -> Result<Vec<u8>, Box<Response<Out>>> {
     if body
         .size_hint()
         .lower()
         .try_into()
         .map_or(true, |n: usize| n > limits.max_body)
     {
-        return Err(plain(
+        return Err(Box::new(plain(
             StatusCode::PAYLOAD_TOO_LARGE,
             "the body is too large",
-        ));
+        )));
     }
     let read = async {
         let mut out = Vec::new();
         while let Some(frame) = std::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await
         {
             let Ok(frame) = frame else {
-                return Err(plain(StatusCode::BAD_REQUEST, "the body could not be read"));
+                return Err(Box::new(plain(
+                    StatusCode::BAD_REQUEST,
+                    "the body could not be read",
+                )));
             };
             if let Ok(data) = frame.into_data() {
                 if out.len() + data.len() > limits.max_body {
-                    return Err(plain(
+                    return Err(Box::new(plain(
                         StatusCode::PAYLOAD_TOO_LARGE,
                         "the body is too large",
-                    ));
+                    )));
                 }
                 out.extend_from_slice(&data);
             }
@@ -458,10 +464,10 @@ async fn read_body(mut body: Incoming, limits: super::Limits) -> Result<Vec<u8>,
     tokio::time::timeout(limits.body_timeout, read)
         .await
         .unwrap_or_else(|_| {
-            Err(plain(
+            Err(Box::new(plain(
                 StatusCode::REQUEST_TIMEOUT,
                 "the body did not arrive in time",
-            ))
+            )))
         })
 }
 
