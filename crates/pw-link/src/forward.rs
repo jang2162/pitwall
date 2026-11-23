@@ -24,7 +24,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio_util::sync::CancellationToken;
 
 #[cfg(doc)]
@@ -150,17 +150,62 @@ pub fn local_addr(local_host: Option<&str>, port: u16) -> Result<SocketAddr, For
 
 /// 루프백에서 듣는다. 루프백이 아닌 주소는 다시 거절한다(부른 쪽이 [`local_addr`] 를 건너뛰어도). 포트가 쓰이고 있으면
 /// [`ForwardError::PortInUse`]. 포트 0 은 OS 가 빈 포트를 고른다.
+///
+/// **이 컴퓨터에서 이미 쓰는 포트를 덮지 않는다**(메인 판정 「쓰는 포트 덮지 않음」 — 리뷰 F1): `tokio::net::TcpListener::bind` 는
+/// Unix 에서 `SO_REUSEADDR` 를 켠다(mio). macOS · BSD 에서는 그 소켓이 다른 프로세스가 `0.0.0.0:P` · `[::]:P` 로 듣는 중에도 더
+/// 좁은 `127.0.0.1:P` · `[::1]:P` 에 바인드되고, 루프백으로 오는 연결이 이쪽(원격)으로 새 사람이 보던 로컬 서버가 조용히 가려진다.
+/// 그래서 소켓을 직접 만들고 `SO_REUSEADDR` 를 끈다 — 그러면 그 경우 모두 `EADDRINUSE` 다. Linux 는 듣는 소켓이 있으면 어느 쪽이든
+/// 거절한다. Windows 는 std · mio 가 `SO_REUSEADDR` 를 켜지 않고, 이쪽 소켓에 `SO_EXCLUSIVEADDRUSE` 를 걸어 뒤에 다른 프로세스가
+/// 이 포트의 더 좁은 주소로 이 포워딩을 가로채지 못하게 한다 — 다른 프로세스가 먼저 와일드카드로 든 포트 위에 Windows 가 이 바인드를
+/// 거절하는지는 실기로 확인하지 않았다. 대가: 듣기를 닫은 직후 같은 포트를 다시 열 때 `TIME_WAIT` 에 걸릴 수 있다(듣는 소켓 자체는
+/// 대개 `TIME_WAIT` 를 만들지 않는다).
 pub async fn bind(addr: SocketAddr) -> Result<TcpListener, ForwardError> {
     if !addr.ip().is_loopback() {
         return Err(ForwardError::NotLoopback(addr.ip().to_string()));
     }
-    TcpListener::bind(addr).await.map_err(|e| {
+    let failed = |e: std::io::Error| {
         if e.kind() == std::io::ErrorKind::AddrInUse {
             ForwardError::PortInUse(addr.port())
         } else {
             ForwardError::Bind(e.to_string())
         }
-    })
+    };
+    let socket = if addr.is_ipv4() {
+        TcpSocket::new_v4()
+    } else {
+        TcpSocket::new_v6()
+    }
+    .map_err(failed)?;
+    socket.set_reuseaddr(false).map_err(failed)?;
+    #[cfg(windows)]
+    exclusive(&socket).map_err(failed)?;
+    socket.bind(addr).map_err(failed)?;
+    socket.listen(1024).map_err(failed)
+}
+
+/// Windows: `SO_EXCLUSIVEADDRUSE` — 다른 소켓이 이 포트(더 좁은 주소 포함)에 바인드하지 못하게.
+#[cfg(windows)]
+fn exclusive(socket: &TcpSocket) -> std::io::Result<()> {
+    use std::os::windows::io::AsRawSocket;
+    use windows_sys::Win32::Networking::WinSock::{
+        SO_EXCLUSIVEADDRUSE, SOCKET, SOL_SOCKET, setsockopt,
+    };
+    let on: i32 = 1;
+    // SAFETY: 살아 있는 소켓 핸들과 길이가 맞는 4바이트 값을 넘긴다.
+    let rc = unsafe {
+        setsockopt(
+            socket.as_raw_socket() as SOCKET,
+            SOL_SOCKET,
+            SO_EXCLUSIVEADDRUSE,
+            (&raw const on).cast(),
+            std::mem::size_of::<i32>() as i32,
+        )
+    };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }
 
 /// 한 방향이 끝난 꼴.
@@ -293,6 +338,35 @@ mod tests {
         assert!(matches!(err, ForwardError::NotLoopback(_)), "{err}");
         let listener = bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
         assert!(listener.local_addr().unwrap().ip().is_loopback());
+    }
+
+    /// 이 컴퓨터의 다른 소켓이 와일드카드(`0.0.0.0` · `::`)나 같은 루프백으로 쥔 포트 위에 바인드하지 않는다 — macOS 에서
+    /// `SO_REUSEADDR` 를 켜면 더 좁은 루프백 주소에 바인드돼 그 서버를 가린다(리뷰 F1). `SO_REUSEADDR` 를 켜면 이 시험이 실패한다.
+    #[tokio::test]
+    async fn bind_does_not_cover_a_port_another_socket_holds() {
+        let mut cases: Vec<(&str, &str)> =
+            vec![("0.0.0.0", "127.0.0.1"), ("127.0.0.1", "127.0.0.1")];
+        // IPv6 가 없는 기기(일부 CI)에서는 IPv6 경우를 건너뛴다.
+        if std::net::TcpListener::bind("[::1]:0").is_ok() {
+            cases.extend([("::", "127.0.0.1"), ("::", "::1"), ("::1", "::1")]);
+        }
+        for (held, ours) in cases {
+            let holder = std::net::TcpListener::bind((held, 0)).unwrap();
+            let port = holder.local_addr().unwrap().port();
+            let err = bind(local_addr(Some(ours), port).unwrap())
+                .await
+                .map(|l| l.local_addr().unwrap())
+                .unwrap_err();
+            assert_eq!(
+                err,
+                ForwardError::PortInUse(port),
+                "{held} held, bound {ours}"
+            );
+            assert!(
+                err.to_string()
+                    .contains(&format!("port {port} is already in use"))
+            );
+        }
     }
 
     /// 이미 쓰이는 로컬 포트는 그 포트 번호를 실은 [`ForwardError::PortInUse`] 다(18-m7-plan M7-22 ④).

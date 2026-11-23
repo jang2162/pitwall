@@ -48,6 +48,11 @@ tokio-util = { workspace = true }
 tracing = "0.1.44"
 zeroize = "1.9.1"
 
+# Windows: 포워딩의 듣는 소켓에 `SO_EXCLUSIVEADDRUSE`(`forward::bind` — 다른 프로세스가 그 포트를 가로채지 못하게). 워크스페이스가
+# 이미 쓰는 판이다.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Networking_WinSock"] }
+
 [dev-dependencies]
 # 시험 메서드(`rpc_method!`)의 입출력 타입.
 schemars = { workspace = true }
