@@ -9,6 +9,11 @@
 //! [idle]
 //! exit_after = "30m"            # 링크 · 실행 · 터미널이 없으면 이만큼 뒤 끝난다(기본 30분)
 //! stop_lsp_after = "30m"        # 링크가 없으면 이만큼 뒤 언어 서버를 끈다(기본 30분)
+//!
+//! [listen]                      # 직접 연결(QUIC + Noise — M7-24, `crate::listen`)
+//! port = 7420                   # 기본 7420
+//! interfaces = ["tailscale", "lan"]  # 기본값. "all" 은 명시적으로만(공인 주소 포함 — 경고). 빈 목록이면 직접 연결을 받지 않는다
+//! advertise = true              # LAN 에 mDNS 광고(기본 켬 — "lan" · "all" 을 들을 때만)
 //! ```
 //!
 //! 시간은 `"90s"` · `"30m"` · `"2h"` 또는 초(정수)다. 파일이 없으면 기본값(`roots` 없음)이다. 읽을 수 없거나 틀린 값이면 데몬은 뜨지
@@ -17,6 +22,8 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+use crate::listen::{Interfaces, ListenConfig};
 
 /// 기본 유휴 시간(메인 판정 M7-P13 의 출발값).
 pub const DEFAULT_EXIT_AFTER: Duration = Duration::from_secs(30 * 60);
@@ -28,12 +35,9 @@ pub struct RelayConfig {
     /// 적힌 그대로(`~/` 만 홈으로 푼다). 정규화는 [`crate::roots::Roots`] 가 한다.
     pub roots: Vec<PathBuf>,
     pub idle: IdleConfig,
-    /// 이 판이 아직 쓰지 않는 표(`[listen]` — M7-24). 데몬은 경고만 남긴다 — 네트워크로 받지 않는 쪽이라 무시해도 넓어지지 않는다.
-    pub not_yet: Vec<String>,
+    /// 직접 연결(`[listen]` — M7-24).
+    pub listen: ListenConfig,
 }
-
-/// 알지만 이 판이 아직 쓰지 않는 표.
-pub const NOT_YET: &[&str] = &["listen"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IdleConfig {
@@ -119,11 +123,50 @@ pub fn parse(text: &str, home: Option<&Path>) -> Result<RelayConfig, String> {
                     }
                 }
             }
-            other if NOT_YET.contains(&other) => config.not_yet.push(other.to_owned()),
+            "listen" => config.listen = listen(item)?,
             other => return Err(format!("unknown key `{other}`")),
         }
     }
     Ok(config)
+}
+
+fn listen(item: &toml_edit::Item) -> Result<ListenConfig, String> {
+    let table = item.as_table_like().ok_or("`[listen]` must be a table")?;
+    let mut listen = ListenConfig::default();
+    for (key, item) in table.iter() {
+        match key {
+            "port" => {
+                listen.port = item
+                    .as_integer()
+                    .and_then(|p| u16::try_from(p).ok())
+                    .filter(|p| *p != 0)
+                    .ok_or("`listen.port` must be a port number (1-65535)")?;
+            }
+            "interfaces" => {
+                let list = item
+                    .as_array()
+                    .ok_or("`listen.interfaces` must be an array like [\"tailscale\", \"lan\"]")?;
+                let mut interfaces = Vec::new();
+                for value in list {
+                    let kind = value
+                        .as_str()
+                        .and_then(Interfaces::parse)
+                        .ok_or("`listen.interfaces` takes \"tailscale\", \"lan\" or \"all\"")?;
+                    if !interfaces.contains(&kind) {
+                        interfaces.push(kind);
+                    }
+                }
+                listen.interfaces = interfaces;
+            }
+            "advertise" => {
+                listen.advertise = item
+                    .as_bool()
+                    .ok_or("`listen.advertise` must be true or false")?;
+            }
+            other => return Err(format!("unknown key `listen.{other}`")),
+        }
+    }
+    Ok(listen)
 }
 
 /// `~/…` 는 홈 아래로. 그 밖에는 절대 경로만 받는다 — 상대 경로는 데몬이 뜬 위치에 따라 뜻이 바뀐다.
@@ -185,9 +228,24 @@ stop_lsp_after = 90
         );
         assert_eq!(config.idle.exit_after, Duration::from_secs(7200));
         assert_eq!(config.idle.stop_lsp_after, Duration::from_secs(90));
-        assert!(config.not_yet.is_empty());
-        let later = parse("[listen]\nport = 7420\n", None).unwrap();
-        assert_eq!(later.not_yet, ["listen"]);
+        assert_eq!(config.listen, ListenConfig::default());
+        let listen = parse(
+            "[listen]\nport = 7500\ninterfaces = [\"tailscale\"]\nadvertise = false\n",
+            None,
+        )
+        .unwrap()
+        .listen;
+        assert_eq!(listen.port, 7500);
+        assert_eq!(listen.interfaces, [Interfaces::Tailscale]);
+        assert!(!listen.advertise);
+        let off = parse("[listen]\ninterfaces = []\n", None).unwrap().listen;
+        assert!(!off.enabled());
+        assert!(
+            parse("[listen]\ninterfaces = [\"all\"]\n", None)
+                .unwrap()
+                .listen
+                .wide()
+        );
     }
 
     #[test]
@@ -208,6 +266,12 @@ stop_lsp_after = 90
             "[idle]\nexit = \"30m\"",
             "roots = [",
             "schema = 2",
+            "[listen]\ninterfaces = [\"0.0.0.0\"]",
+            "[listen]\ninterfaces = [\"public\"]",
+            "[listen]\ninterfaces = \"all\"",
+            "[listen]\nport = 0",
+            "[listen]\nport = 70000",
+            "[listen]\nbind = \"0.0.0.0\"",
         ] {
             assert!(parse(text, Some(Path::new("/h"))).is_err(), "{text}");
         }

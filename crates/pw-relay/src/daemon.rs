@@ -7,6 +7,10 @@
 //! - 첫 틀은 [`FIRST_FRAME_TIMEOUT`] 안에 와야 한다.
 //! - 증명된 링크는 [`Presence`] 에 센다 — 유휴 판정과 「붙은 owner 링크가 있는가」(M7-20 의 M7-D10 ④ 판정 — `crate::mcp::services`)가 본다.
 //! - 열린 MCP 연결도 유휴 판정에 든다([`Daemon::count_agents`] — M7-20).
+//! - **직접 연결(QUIC — M7-24)**([`Daemon::serve_direct`]): 받은 스트림은 `pw_link::serve_noise` 로만 잇는다(Noise 없이 링크 틀을
+//!   받는 길 없음 · 좁은 명령은 받지 않는다). 소켓과 같은 증명 전 자리를 쓰되 **주소(IP)별 상한**([`MAX_UNPROVEN_PER_ADDRESS`])을
+//!   더 두고, 받은 때부터 증명(또는 코드 페어링)까지 **전체 시한 하나**([`DIRECT_PROOF_TIMEOUT`])를 건다 — Noise · 첫 틀 · 코드
+//!   페어링마다 따로인 `dead_after`(M7-23 리뷰 R8)보다 먼저 끝난다. 한 주소가 자리를 채워 링크 · 대기 코드를 막지 못하게(R4).
 
 use std::future::Future;
 use std::pin::Pin;
@@ -30,6 +34,10 @@ use crate::socket::Listener;
 pub const MAX_UNPROVEN: usize = 16;
 /// 첫 틀을 기다리는 시간.
 pub const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
+/// 직접 연결을 받은 때부터 링크가 증명될 때까지(코드 페어링이면 끝날 때까지)의 전체 시한(출발값 — M7-04 리뷰 권고 1).
+pub const DIRECT_PROOF_TIMEOUT: Duration = Duration::from_secs(5);
+/// 직접 연결에서 주소(IP) 하나가 쥘 수 있는 증명 전 자리(출발값). 전체 상한 [`MAX_UNPROVEN`] 안에서 센다.
+pub const MAX_UNPROVEN_PER_ADDRESS: usize = 4;
 
 /// Host 에 남은 일(실행 · 터미널)과 언어 서버 끄기. 데몬은 `pw_host::Activity` 를 넣는다.
 pub trait Activity: Send + Sync + 'static {
@@ -160,6 +168,10 @@ struct Shared {
     agents: std::sync::OnceLock<pw_mcp::socket::Connections>,
     /// 링크가 증명될 때마다 부른다(기기 화면의 마지막 접속 — [`Daemon::on_proven`], M7-23).
     proven: std::sync::OnceLock<ProvenHook>,
+    /// 직접 연결의 주소별 증명 전 자리 수.
+    by_address: Mutex<std::collections::HashMap<std::net::IpAddr, usize>>,
+    /// 직접 연결의 증명 전 시한(시험이 줄인다).
+    direct_timeout: Mutex<Duration>,
 }
 
 impl Daemon {
@@ -174,6 +186,8 @@ impl Daemon {
                 started: std::time::Instant::now(),
                 agents: std::sync::OnceLock::new(),
                 proven: std::sync::OnceLock::new(),
+                by_address: Mutex::default(),
+                direct_timeout: Mutex::new(DIRECT_PROOF_TIMEOUT),
             }),
         }
     }
@@ -362,6 +376,132 @@ impl Daemon {
         }
     }
 
+    /// 시험: 직접 연결의 증명 전 시한을 바꾼다.
+    pub fn set_direct_timeout(&self, timeout: Duration) {
+        *self
+            .shared
+            .direct_timeout
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = timeout;
+    }
+
+    /// 지금 `ip` 가 쥔 직접 연결의 증명 전 자리 수.
+    pub fn unproven_from(&self, ip: std::net::IpAddr) -> usize {
+        self.shared
+            .by_address
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&ip)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// QUIC 엔드포인트 하나에서 받는다(엔드포인트가 닫히면 끝난다). `codes` 는 대기 코드(`crate::codes::FileCodeBook`) — 파일 잠금 ·
+    /// `fsync` 를 하는 동기 호출이라 런타임 일꾼을 막지 않게 감싸서 부른다(M7-23 리뷰 R3).
+    pub async fn serve_direct(
+        &self,
+        listener: Arc<pw_link::quic::QuicListener>,
+        codes: Arc<dyn pw_link::CodeBook>,
+    ) {
+        let codes: Arc<dyn pw_link::CodeBook> = Arc::new(Blocking(codes));
+        while let Some(incoming) = listener.next().await {
+            let ip = incoming.remote().ip();
+            let Some(slot) = self.direct_slot(ip) else {
+                incoming.refuse();
+                continue;
+            };
+            let (daemon, codes) = (self.clone(), Arc::clone(&codes));
+            tokio::spawn(async move { daemon.direct(incoming, codes, slot).await });
+        }
+    }
+
+    /// 주소별 · 전체 증명 전 자리 하나. 없으면 `None`.
+    fn direct_slot(&self, ip: std::net::IpAddr) -> Option<Slot> {
+        let mut by = self
+            .shared
+            .by_address
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let held = by.get(&ip).copied().unwrap_or(0);
+        if held >= MAX_UNPROVEN_PER_ADDRESS {
+            tracing::warn!(
+                limit = MAX_UNPROVEN_PER_ADDRESS,
+                "one address holds too many unproven direct connections; refusing a new one"
+            );
+            return None;
+        }
+        let Ok(permit) = Arc::clone(&self.shared.unproven).try_acquire_owned() else {
+            tracing::warn!(
+                limit = self.shared.parts.max_unproven,
+                "too many unproven relay connections; refusing a direct one"
+            );
+            return None;
+        };
+        by.insert(ip, held + 1);
+        let mut slot = Slot::new(&self.shared, permit);
+        slot.address = Some(ip);
+        Some(slot)
+    }
+
+    async fn direct(
+        &self,
+        incoming: pw_link::quic::QuicIncoming,
+        codes: Arc<dyn pw_link::CodeBook>,
+        slot: Slot,
+    ) {
+        let limit = *self
+            .shared
+            .direct_timeout
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let proven_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let attached: Arc<Mutex<Option<LinkGuard>>> = Arc::default();
+        let serve = {
+            let (proven_flag, held) = (Arc::clone(&proven_flag), Arc::clone(&attached));
+            let presence = self.shared.presence.clone();
+            let hook = self.shared.proven.get().cloned();
+            let parts = &self.shared.parts.link;
+            async move {
+                let stream = incoming
+                    .accept()
+                    .await
+                    .map_err(|e| pw_link::ServeError::Io(e.to_string()))?;
+                pw_link::serve_noise(stream, parts, &*codes, move |proven| {
+                    // 증명됐다 — 전체 시한을 풀고, 증명 전 자리(주소별 포함)를 놓고 붙은 링크로 센다.
+                    proven_flag.store(true, Ordering::SeqCst);
+                    drop(slot);
+                    if let Some(hook) = hook {
+                        hook(proven);
+                    }
+                    *held.lock().unwrap_or_else(PoisonError::into_inner) =
+                        Some(presence.attach(proven.role));
+                })
+                .await
+            }
+        };
+        tokio::pin!(serve);
+        let result = match tokio::time::timeout(limit, &mut serve).await {
+            Ok(result) => Some(result),
+            Err(_) if proven_flag.load(Ordering::SeqCst) => Some(serve.await),
+            // 시한 안에 증명하지 못했다 — 미래를 버리면 QUIC 연결이 닫히고 자리가 돌아온다.
+            Err(_) => None,
+        };
+        attached
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        match result {
+            None => tracing::info!("a direct connection did not prove itself in time"),
+            Some(Ok(pw_link::Served::Link(reason))) => {
+                tracing::info!(?reason, "a direct link closed");
+            }
+            Some(Ok(pw_link::Served::Paired { device, role })) => {
+                tracing::info!(%device, ?role, "paired a device with a code over a direct connection");
+            }
+            Some(Err(e)) => tracing::info!(%e, "a direct link did not stand"),
+        }
+    }
+
     async fn link(&self, framed: Framed, first: Value, slot: Slot) {
         let Ok(first) = serde_json::from_value::<LinkFrame>(first) else {
             return;
@@ -395,6 +535,8 @@ impl Daemon {
 struct Slot {
     _permit: OwnedSemaphorePermit,
     shared: Arc<Shared>,
+    /// 직접 연결이면 그 주소(주소별 자리를 함께 놓는다).
+    address: Option<std::net::IpAddr>,
 }
 
 impl Slot {
@@ -403,6 +545,7 @@ impl Slot {
         Self {
             _permit: permit,
             shared: Arc::clone(shared),
+            address: None,
         }
     }
 }
@@ -410,5 +553,44 @@ impl Slot {
 impl Drop for Slot {
     fn drop(&mut self) {
         self.shared.pending.fetch_sub(1, Ordering::SeqCst);
+        if let Some(ip) = self.address {
+            let mut by = self
+                .shared
+                .by_address
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if let Some(n) = by.get_mut(&ip) {
+                *n -= 1;
+                if *n == 0 {
+                    by.remove(&ip);
+                }
+            }
+        }
+    }
+}
+
+/// 동기 대기 코드(파일 잠금 · `fsync`)를 런타임 일꾼을 막지 않고 부른다 — 여러 일꾼 런타임이면 `block_in_place`(M7-23 리뷰 R3).
+struct Blocking(Arc<dyn pw_link::CodeBook>);
+
+fn blocking<T>(f: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current().map(|h| h.runtime_flavor()) {
+        Ok(tokio::runtime::RuntimeFlavor::MultiThread) => tokio::task::block_in_place(f),
+        _ => f(),
+    }
+}
+
+impl pw_link::CodeBook for Blocking {
+    fn attempt(&self) -> std::io::Result<Option<pw_link::pair::Pending>> {
+        blocking(|| self.0.attempt())
+    }
+
+    fn complete(
+        &self,
+        code: &pw_link::PairingCode,
+        key: &pw_link::PublicKey,
+        role: Role,
+        name: &str,
+    ) -> std::io::Result<()> {
+        blocking(|| self.0.complete(code, key, role, name))
     }
 }

@@ -9640,6 +9640,18 @@ export type RelayDevice = {
 
 export type RelayDeviceList = {
 	devices: RelayDevice[],
+	/**  이 Relay 의 직접 연결 듣기(18-m7-plan M7-24 ②). 듣지 않거나 모르면 없다. */
+	listen?: RelayListen | null,
+};
+
+/**  Relay 의 직접 연결 듣기(`relay.toml [listen]`). `wide` 면 `"all"` 을 골랐다 — 기기 화면이 경고한다. */
+export type RelayListen = {
+	port: number,
+	/**  고른 값(`tailscale` · `lan` · `all`). */
+	interfaces: string[],
+	wide: boolean,
+	/**  지금 듣는 주소(`ip:port`). */
+	addresses: string[],
 };
 
 export type RelayPairCode = {

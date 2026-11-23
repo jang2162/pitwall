@@ -7,6 +7,12 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# 직접 연결의 듣는 주소(18-m7-plan M7-24 ② — 인터페이스 주소 목록). mdns-sd 가 쓰는 판과 같다.
+if-addrs = "0.15.0"
+# LAN 검색 광고(18-m7-plan M7-24 ③ · 메인 판정 M7-P14). 광고에는 무작위 이름 · 포트 · 링크 프로토콜 판만 싣는다(`pw_relay::advertise`).
+mdns-sd = { version = "0.22.0", default-features = false }
+# 광고의 무작위 표지(pw-link 와 같은 판).
+getrandom = "0.4.3"
 # 소켓 자격(uid) · 잠금 파일(flock) · 새 세션(setsid).
 libc = "0.2.190"
 pw-core = { path = "../pw-core" }

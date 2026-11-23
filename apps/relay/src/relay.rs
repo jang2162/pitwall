@@ -11,7 +11,7 @@ use tracing_subscriber::Layer as _;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt as _;
 
-const USAGE: &str = "usage: pitwall-relay <proxy|daemon|mcp [--project <path>]|tool <name> [flags]|status [--json]|open <file>...|askpass <prompt>|link-command [--remove]|machine|pair [--role <owner|mobile|readonly>] [--name <name>]|pair --from-ssh <key> [<name>]|unpair <device id>|--verify <file> <sha256>|--version>";
+const USAGE: &str = "usage: pitwall-relay <proxy|daemon|mcp [--project <path>]|tool <name> [flags]|status [--json]|open <file>...|askpass <prompt>|link-command [--remove]|resident <on|off|status>|machine|pair [--role <owner|mobile|readonly>] [--name <name>]|pair --from-ssh <key> [<name>]|unpair <device id>|--verify <file> <sha256>|--version>";
 
 pub fn main() -> ExitCode {
     let mut argv = std::env::args_os();
@@ -29,7 +29,10 @@ pub fn main() -> ExitCode {
     }
     match args.first().map(String::as_str) {
         Some("proxy") => proxy(),
-        Some("daemon") => daemon(),
+        Some("daemon") if args.len() == 1 => daemon(false),
+        // 상주 단위(launchd · systemd user)가 띄운다 — 유휴로 끝나지 않는다(18-m7-plan M7-24 ⑤).
+        Some("daemon") if args.len() == 2 && args[1] == "--resident" => daemon(true),
+        Some("resident") => resident(&args[1..]),
         // `status` 는 판에 묶이지 않는 최소 질의다(18-m7-plan M7-07 ②): 새 판 Desktop 이 옛 판 바이너리로 부른다. `--json` 을 받아도
         // 같다(출력은 늘 JSON 한 줄 — 꼴은 `pw_relay::command::Status`, 시험이 고정한다).
         Some("status") if args.len() == 1 || (args.len() == 2 && args[1] == "--json") => status(),
@@ -518,7 +521,78 @@ fn status() -> ExitCode {
     }
 }
 
-fn daemon() -> ExitCode {
+/// `pitwall-relay resident on|off|status`: 이 판의 데몬을 상주시키거나(사람이 고를 때만 — 결정 M7-D2) 내린다. 마지막 줄은 JSON
+/// `{"resident": bool, "path": …}` 이다(Desktop 의 「상주시키기」 가 ssh 로 부르고 읽는다).
+fn resident(args: &[String]) -> ExitCode {
+    let action = match args {
+        [a] if a == "on" || a == "off" || a == "status" => a.as_str(),
+        _ => {
+            eprintln!("usage: pitwall-relay resident <on|off|status>");
+            return ExitCode::from(2);
+        }
+    };
+    let Some(manager) = pw_relay::resident::Manager::current() else {
+        eprintln!("pitwall-relay resident: no service manager on this system");
+        return ExitCode::from(1);
+    };
+    let env = pw_core::config::PathEnv::current();
+    let Some(home) = env.home.clone() else {
+        eprintln!("pitwall-relay resident: no home folder");
+        return ExitCode::from(1);
+    };
+    let binary = match std::env::current_exe().and_then(std::fs::canonicalize) {
+        Ok(exe) => exe,
+        Err(e) => {
+            eprintln!("pitwall-relay resident: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let r = pw_relay::resident::Resident {
+        manager,
+        home,
+        config_home: std::env::var_os("XDG_CONFIG_HOME")
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.is_absolute()),
+        binary,
+        channel: pw_relay::RELEASE_CHANNEL.to_owned(),
+        uid: pw_relay::socket::current_uid(),
+        run: Box::new(pw_relay::resident::run_command),
+    };
+    let result = match action {
+        "on" => r.on().map(|unit| {
+            eprintln!(
+                "pitwall-relay resident: this relay now starts with your login ({}). `pitwall-relay resident off` undoes it.",
+                unit.path.display()
+            );
+            if manager == pw_relay::resident::Manager::SystemdUser {
+                eprintln!(
+                    "pitwall-relay resident: to keep it running after you log out, run `loginctl enable-linger` yourself."
+                );
+            }
+            true
+        }),
+        "off" => r.off().map(|_| false),
+        _ => Ok(r.is_on()),
+    };
+    match result {
+        Ok(on) => {
+            println!(
+                "{}",
+                serde_json::json!({ "resident": on, "path": r.unit().path })
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("pitwall-relay resident: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// 상주 데몬의 유휴 시한(사실상 끝나지 않는다).
+const RESIDENT_IDLE: std::time::Duration = std::time::Duration::from_secs(100 * 365 * 24 * 3600);
+
+fn daemon(resident: bool) -> ExitCode {
     let paths = match paths() {
         Ok(paths) => paths,
         Err(code) => return code,
@@ -539,8 +613,12 @@ fn daemon() -> ExitCode {
             return ExitCode::from(78);
         }
     };
-    for table in &config.not_yet {
-        tracing::warn!(table = %table, "relay.toml has a table this relay does not use yet; ignoring it");
+    let mut config = config;
+    if resident {
+        tracing::info!(
+            "resident daemon: the idle exit is off (`pitwall-relay resident off` takes it down)"
+        );
+        config.idle.exit_after = RESIDENT_IDLE;
     }
     let socket = match socket_path(&paths) {
         Ok(socket) => socket,
@@ -610,13 +688,22 @@ fn daemon() -> ExitCode {
             assembled.host.registry().cloned(),
         ));
         // 기기 관리(`relay.*` — M7-23): 페어링 표 · 대기 코드 · 기기 시각. owner 링크의 RPC 만 닿는다.
+        let listen_state = pw_relay::listen::ListenState::default();
         if let Some(devices) = &assembled.devices {
-            devices.attach(Arc::new(pw_relay::devices::RelayDevices::new(
-                paths.data.clone(),
-                pairings.clone(),
-                pw_relay::codes::system_clock(),
-            )));
+            devices.attach(Arc::new(
+                pw_relay::devices::RelayDevices::new(
+                    paths.data.clone(),
+                    pairings.clone(),
+                    pw_relay::codes::system_clock(),
+                )
+                .with_listen(listen_state.clone()),
+            ));
         }
+        let codes: Arc<dyn pw_link::CodeBook> = Arc::new(pw_relay::codes::FileCodeBook::new(
+            paths.data.clone(),
+            Some(pairings.clone()),
+            pw_relay::codes::system_clock(),
+        ));
         let host = Arc::new(assembled.host);
         let daemon = Daemon::new(DaemonParts {
             link: RelayParts {
@@ -687,8 +774,17 @@ fn daemon() -> ExitCode {
                     shutdown.child_token(),
                 ));
         }
+        // 직접 연결(QUIC + Noise — M7-24): `[listen]` 이 고른 인터페이스 주소마다. 묶지 못한 주소는 건너뛴다(SSH 는 그대로).
+        let direct = tokio::spawn(pw_relay::direct::run(
+            daemon.clone(),
+            config.listen.clone(),
+            codes,
+            listen_state,
+            pw_relay::listen::scan,
+        ));
         tokio::spawn(stop_on_signal(shutdown.clone()));
         let ended = daemon.run(listener, shutdown.clone()).await;
+        direct.abort();
         // 열린 MCP 세션을 닫고 대기 중인 승인을 거둔다(앱의 끝내기와 같다 — 감사 큐를 비울 때까지 잠깐 기다린다).
         shutdown.cancel();
         let _ = tokio::task::spawn_blocking(move || {

@@ -45608,6 +45608,41 @@
             ],
             "type": "object"
           },
+          "RelayListen": {
+            "description": "Relay 의 직접 연결 듣기(`relay.toml [listen]`). `wide` 면 `\"all\"` 을 골랐다 — 기기 화면이 경고한다.",
+            "properties": {
+              "addresses": {
+                "description": "지금 듣는 주소(`ip:port`).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "interfaces": {
+                "description": "고른 값(`tailscale` · `lan` · `all`).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "port": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "wide": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "port",
+              "interfaces",
+              "wide",
+              "addresses"
+            ],
+            "type": "object"
+          },
           "Role": {
             "description": "호출자(페어링 기기)의 role. 값은 `docs/design/08-remote-mobile.md` 「보안 모델」 절을 따른다.",
             "oneOf": [
@@ -45636,10 +45671,23 @@
               "$ref": "#/$defs/RelayDevice"
             },
             "type": "array"
+          },
+          "listen": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RelayListen"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "이 Relay 의 직접 연결 듣기(18-m7-plan M7-24 ②). 듣지 않거나 모르면 없다."
           }
         },
         "required": [
-          "devices"
+          "devices",
+          "listen"
         ],
         "type": "object"
       },
@@ -46092,6 +46140,41 @@
             ],
             "type": "object"
           },
+          "RelayListen": {
+            "description": "Relay 의 직접 연결 듣기(`relay.toml [listen]`). `wide` 면 `\"all\"` 을 골랐다 — 기기 화면이 경고한다.",
+            "properties": {
+              "addresses": {
+                "description": "지금 듣는 주소(`ip:port`).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "interfaces": {
+                "description": "고른 값(`tailscale` · `lan` · `all`).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "port": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "wide": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "port",
+              "interfaces",
+              "wide",
+              "addresses"
+            ],
+            "type": "object"
+          },
           "Role": {
             "description": "호출자(페어링 기기)의 role. 값은 `docs/design/08-remote-mobile.md` 「보안 모델」 절을 따른다.",
             "oneOf": [
@@ -46120,10 +46203,23 @@
               "$ref": "#/$defs/RelayDevice"
             },
             "type": "array"
+          },
+          "listen": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RelayListen"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "이 Relay 의 직접 연결 듣기(18-m7-plan M7-24 ②). 듣지 않거나 모르면 없다."
           }
         },
         "required": [
-          "devices"
+          "devices",
+          "listen"
         ],
         "type": "object"
       },

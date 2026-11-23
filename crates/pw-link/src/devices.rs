@@ -43,6 +43,23 @@ pub struct RelayDevice {
 )]
 pub struct RelayDeviceList {
     pub devices: Vec<RelayDevice>,
+    /// 이 Relay 의 직접 연결 듣기(18-m7-plan M7-24 ②). 듣지 않거나 모르면 없다.
+    #[serde(default)]
+    pub listen: Option<RelayListen>,
+}
+
+/// Relay 의 직접 연결 듣기(`relay.toml [listen]`). `wide` 면 `"all"` 을 골랐다 — 기기 화면이 경고한다.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayListen {
+    pub port: u16,
+    /// 고른 값(`tailscale` · `lan` · `all`).
+    pub interfaces: Vec<String>,
+    pub wide: bool,
+    /// 지금 듣는 주소(`ip:port`).
+    pub addresses: Vec<String>,
 }
 
 #[derive(
@@ -116,6 +133,10 @@ pub trait DeviceAdmin: Send + Sync + 'static {
     fn list(&self, caller: Option<&str>) -> std::io::Result<Vec<RelayDevice>>;
     fn unpair(&self, device: &str) -> std::io::Result<bool>;
     fn pair_code(&self, role: Role, name: Option<&str>) -> std::io::Result<RelayPairCode>;
+    /// 직접 연결 듣기(M7-24). 기본은 모름.
+    fn listen(&self) -> Option<RelayListen> {
+        None
+    }
 }
 
 /// 몸통을 붙일 자리. 복제는 같은 자리를 본다.
@@ -176,8 +197,9 @@ pub fn register(router: &mut Router, devices: &Devices) {
                 .as_deref()
                 .and_then(crate::link_window)
                 .map(|(device, _)| device.to_owned());
+            let listen = admin.listen();
             let devices = blocking(move || admin.list(caller.as_deref())).await?;
-            Ok(RelayDeviceList { devices })
+            Ok(RelayDeviceList { devices, listen })
         }
     });
     let d = devices.clone();

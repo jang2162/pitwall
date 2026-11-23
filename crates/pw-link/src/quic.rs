@@ -32,6 +32,10 @@ use crate::transport::{LinkStream, Transport};
 
 /// 직접 연결의 기본 포트(08 「연결 방식」 · `relay.toml [listen] port`).
 pub const DEFAULT_PORT: u16 = 7420;
+/// LAN 검색(mDNS)의 서비스 종류(18-m7-plan M7-24 ③). 광고에는 무작위 이름 · 포트 · 링크 프로토콜 판만 싣는다(`pw_relay::advertise`).
+pub const MDNS_SERVICE: &str = "_pitwall-relay._udp.local.";
+/// 광고 TXT 의 링크 프로토콜 판 키.
+pub const MDNS_PROTOCOL_KEY: &str = "pv";
 /// ALPN — 다른 QUIC 서비스와 섞이지 않게.
 pub const ALPN: &[u8] = b"pitwall-link/1";
 /// 인증서 · SNI 의 이름(고정값 — 머신을 드러내지 않는다).
@@ -394,6 +398,31 @@ impl QuicTransport {
             .map_err(connection_error)?;
         let (send, recv) = connection.open_bi().await.map_err(connection_error)?;
         Ok(stream(connection, send, recv, Some(endpoint)))
+    }
+}
+
+/// `addr` 에 직접 연결 받는 쪽이 있는가(QUIC 핸드셰이크만 하고 스트림을 열지 않고 닫는다 — 검색 결과의 표시). 상대를 증명하지
+/// 않는다 — 있다는 것만 본다.
+pub async fn probe(addr: SocketAddr, timeout: Duration) -> bool {
+    let local: SocketAddr = match addr.ip() {
+        IpAddr::V4(_) => (Ipv4Addr::UNSPECIFIED, 0).into(),
+        IpAddr::V6(_) => (Ipv6Addr::UNSPECIFIED, 0).into(),
+    };
+    let Ok(endpoint) = quinn::Endpoint::client(local) else {
+        return false;
+    };
+    let Ok(config) = client_config() else {
+        return false;
+    };
+    let Ok(connecting) = endpoint.connect_with(config, addr, SERVER_NAME) else {
+        return false;
+    };
+    match tokio::time::timeout(timeout, connecting).await {
+        Ok(Ok(connection)) => {
+            connection.close(0u32.into(), b"probe");
+            true
+        }
+        _ => false,
     }
 }
 

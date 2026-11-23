@@ -5,6 +5,8 @@
 //! - [`paths`]: Relay 의 앱 경로 — `$CONFIG` · `$DATA` · `$STATE` · `$CACHE` 아래 `relay/` 가 뿌리다. 같은 머신의 Desktop 과
 //!   레지스트리 · 신뢰 · 감사 · MCP 소켓 · 토큰을 나누지 않는다.
 //! - [`config`]: `$CONFIG/relay/relay.toml`(`name` · `roots` · `[idle]`). RPC 로 쓰지 않는다(메인 판정 M7-P5).
+//! - [`listen`] · [`advertise`]: 직접 연결(QUIC — M7-24)의 듣는 주소(Tailscale · LAN — 와일드카드 없음)와 LAN mDNS 광고(무작위
+//!   이름 · 포트 · 프로토콜 판만).
 //! - [`roots`]: `roots` 밖은 프로젝트로 등록하지 않는다(심링크를 푼 실제 경로로).
 //! - [`socket`]: 사용자 전용 유닉스 소켓(`$STATE/relay/<채널>-<판>.sock`) — 폴더 0700 · 소켓 0600 · 상대 uid.
 //! - [`codes`] · [`devices`]: 6자리 코드 페어링의 대기 코드, 기기 관리(`relay.*` — 목록 · 해제 · 코드)의 몸통과 기기 시각(M7-23).
@@ -14,24 +16,29 @@
 //! - [`daemon`]: 받기 — 증명 전 연결 수 상한, 첫 틀 상한(`pw_link::HANDSHAKE_MAX_FRAME`), 링크 · 좁은 명령 가르기, 붙은 링크.
 //! - [`idle`]: 링크 · 실행 · 터미널이 없으면 `[idle] exit_after` 뒤 끝난다.
 //! - [`host`]: Relay 부품으로 조립한 Host(`pw_host::assemble_relay`)와 `roots` 판정.
+//! - [`resident`]: 상주 — 사람이 `pitwall-relay resident on` 을 고를 때만 launchd · systemd user 단위(M7-24 ⑤).
 //! - [`proxy`]: stdio ↔ 데몬 소켓. 데몬이 없으면 띄운다(`setsid`).
 //! - [`mcp`]: Relay 의 MCP 엔드포인트 — 원격 머신의 에이전트가 붙는 소켓 · 세션 부품(M7-20).
 
 // Relay 는 macOS · Linux 만이다(18-m7-plan 결정 M7-D4) — Windows 에서는 빈 크레이트다(워크스페이스 빌드만 지난다).
 #![cfg(unix)]
 
+pub mod advertise;
 pub mod codes;
 pub mod command;
 pub mod config;
 pub mod daemon;
 pub mod devices;
+pub mod direct;
 pub mod host;
 pub mod idle;
+pub mod listen;
 pub mod mcp;
 pub mod narrow;
 pub mod pairings;
 pub mod paths;
 pub mod proxy;
+pub mod resident;
 pub mod roots;
 pub mod socket;
 

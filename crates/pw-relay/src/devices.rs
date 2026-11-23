@@ -110,12 +110,24 @@ pub struct RelayDevices {
     data: PathBuf,
     table: PairingTable,
     clock: Clock,
+    listen: Option<crate::listen::ListenState>,
 }
 
 impl RelayDevices {
     /// `data` 는 `$DATA/relay`, `table` 은 데몬의 표.
     pub fn new(data: PathBuf, table: PairingTable, clock: Clock) -> Self {
-        Self { data, table, clock }
+        Self {
+            data,
+            table,
+            clock,
+            listen: None,
+        }
+    }
+
+    /// 직접 연결 듣기를 기기 목록에 싣는다(M7-24 — `"all"` 경고).
+    pub fn with_listen(mut self, listen: crate::listen::ListenState) -> Self {
+        self.listen = Some(listen);
+        self
     }
 }
 
@@ -161,6 +173,12 @@ impl DeviceAdmin for RelayDevices {
             code: code.reveal().to_owned(),
             expires_at_ms,
         })
+    }
+
+    fn listen(&self) -> Option<pw_link::devices::RelayListen> {
+        self.listen
+            .as_ref()
+            .and_then(crate::listen::ListenState::get)
     }
 }
 
