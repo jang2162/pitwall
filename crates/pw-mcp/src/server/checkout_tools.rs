@@ -287,6 +287,8 @@ impl Session {
                     machine: member.machine.clone(),
                     project: member.project_id.clone(),
                     routing: local.clone().unwrap_or_else(|| member.project_id.clone()),
+                    // 읽기만 한다(작업 트리 목록) — 승인을 묻지 않는다.
+                    remote_only: false,
                     shown: shown.clone(),
                 };
                 match self.link(target, cancel).await {
@@ -391,7 +393,7 @@ impl Session {
             Approval::Unavailable => None,
         };
         let decided = match &target.remote {
-            Some(aim) => self.approve_remote(tool, &plan, aim, cancel).await,
+            Some(aim) => self.approve_remote(tool, &plan, aim, None, cancel).await,
             None => self.approve(tool, &plan, Some(&routing), cancel).await,
         };
         drop(hold);
@@ -583,6 +585,8 @@ impl Session {
                             machine: s.machine.clone(),
                             project: s.project.clone(),
                             routing: routing.clone(),
+                            // `checkout_send` 의 승인 자리 · 시한은 그 툴의 규칙(M7-19)이다.
+                            remote_only: false,
                             shown: s.shown.clone(),
                         },
                         cancel,
