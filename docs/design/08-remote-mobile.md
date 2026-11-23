@@ -13,7 +13,7 @@
 | 구성 요소 | 설치 위치 | 역할 |
 |---|---|---|
 | **Pitwall Desktop** | 개발자 PC | 메인 UI. 내부에 Local Host + 내장 Relay 엔드포인트(모바일 접속용) |
-| **Pitwall Relay** (`pitwall-relay`) | 원격 서버 / 개발 VM / 집 PC | Host 코어(fs/git/lsp/dap/run/db)를 데몬으로 실행 + 암호화된 연결 엔드포인트. 사람이 「상주시키기」 를 고르면 launchd · systemd user 로 상주, 아니면 SSH 로 띄운 데몬이 유휴 규칙까지 산다(18-m7-plan 결정 M7-D2 · 06 D74). Windows 원격은 이후 |
+| **Pitwall Relay** (`pitwall-relay`) | 원격 서버 / 개발 VM / 집 PC | Host 코어(fs/git/lsp/dap/run/db)를 데몬으로 실행 + 암호화된 연결 엔드포인트. 사람이 「상주시키기」 를 고르면(원격 호스트 줄의 [이 머신에 상주시키기] · 그 머신의 `pitwall-relay resident on`) launchd · systemd user 로 상주하고 유휴로 끝나지 않는다. 아니면 SSH 로 띄운 데몬이 유휴 규칙까지 산다 — 그래서 재부팅 뒤 첫 연결은 SSH 다(18-m7-plan 결정 M7-D2 · 06 D74 — 구현 `pw_relay::resident`). Windows 원격은 이후 |
 | **Pitwall Mobile** | Android (이후 iOS) | 컴패니언 앱 |
 
 ```
@@ -41,9 +41,10 @@
 | 2 | **SSH 터널** | Relay를 데몬으로 둘 수 없거나 직접 연결이 막힌 환경 — `ssh host pitwall-relay --stdio` |
 
 - **Tailscale 연동 (D)**
-  - Relay는 기본적으로 **Tailscale 인터페이스와 LAN에만 바인드** (공인 IP에 열지 않음)
-  - Desktop/Mobile은 tailnet 기기 목록(로컬 Tailscale API)에서 Relay가 떠 있는 기기를 자동 검색
-  - Tailscale이 없는 환경은 LAN(mDNS) 또는 SSH로 동작
+  - Relay는 기본적으로 **Tailscale 인터페이스와 LAN에만 바인드** (공인 IP에 열지 않음). 고른 인터페이스의 주소 하나하나에 묶고 와일드카드(`0.0.0.0` · `::`)에는 어떤 값으로도 묶지 않는다 — Tailscale 은 주소 범위(100.64.0.0/10 · fd7a:115c:a1e0::/48)이면서 인터페이스 이름이 `tailscale*` · `utun*` 인 주소, LAN 은 사설 주소(10/8 · 172.16/12 · 192.168/16 · ULA fc00::/7)다. 공인 주소 · 링크 로컬 · 루프백은 들지 않는다. 인터페이스는 10초마다 다시 읽어 새 주소에 묶고 사라진 주소는 닫는다. 포트를 다른 프로그램이 쥐고 있으면 그 주소는 건너뛰고 경고한다(`SO_REUSEADDR` 없이 묶는다 — 18-m7-plan M7-24 — 구현 `pw_relay::listen`)
+  - Desktop/Mobile은 tailnet 기기 목록(로컬 Tailscale API — 소켓이 없으면 `tailscale status --json`)에서 온라인 기기를 보이고, 그 주소의 직접 연결 포트에 QUIC 핸드셰이크만 해 Relay 가 받는지 표시한다(누구인지는 증명하지 않는다 — 코드 페어링 · 기억한 키가 판정한다)
+  - Tailscale이 없는 환경은 LAN(mDNS) 또는 SSH로 동작. mDNS 광고(`_pitwall-relay._udp`)에는 **무작위 이름(데몬이 뜰 때마다 새로) · 포트 · 링크 프로토콜 판만** 싣는다 — 머신 이름 · 키 지문 · 사용자명은 싣지 않는다. 광고는 듣는 LAN 주소의 인터페이스에서만 낸다(구현 `pw_relay::advertise`)
+- **고르기**(18-m7-plan M7-24 ④): Desktop 은 그 호스트에 기억한 머신 id 가 있을 때만 직접 연결(QUIC + Noise, 그 머신 id 만 기대 — 6초)을 먼저 해 보고, 안 되면 SSH 로 떨어진다. SSH 는 원래 길이라 보안이 낮아지지 않는다. 처음 붙는 호스트는 직접 연결을 하지 않는다(처음 페어링은 SSH 나 코드로). 무엇으로 붙었는지(직접 연결(QUIC) · SSH)는 원격 호스트 줄에 보이고, 직접 연결이 다른 키의 Relay 에 닿았으면 연결 로그에 경고를 남긴다. 호스트 항목의 `direct = false` 면 직접 연결을 해 보지 않고, `ssh = false`(코드로 페어링한 수동 배치 Relay)면 SSH 로 떨어지지 않는다(구현 `pw_remote::ssh`)
 - Tailscale이 이미 WireGuard로 암호화하지만, **Pitwall 자체 인증(Noise + 기기 키)도 항상 적용** → tailnet의 다른 기기라도 페어링하지 않으면 접근 불가
 - 전송 위 프로토콜은 03-architecture의 JSON-RPC 그대로 → UI/MCP 입장에서는 로컬과 원격이 같다
 - `pw-link`의 전송은 `Transport` trait으로 추상화 (`Quic`, `Ssh`, 추후 `Hub`)
@@ -52,7 +53,7 @@
 
 ### Relay 설치
 
-**방법 A. 원격에서 직접 설치** — `curl -fsSL https://.../install.sh | sh` (또는 Homebrew/apt/단일 바이너리) → 서비스 등록(v1.0 전 — 18-m7-plan 「3」. M7 에서는 릴리스 바이너리를 아래 경로 · 이름 규칙으로 직접 배치하고 `pitwall-relay pair` 코드로 페어링한다)
+**방법 A. 원격에서 직접 설치** — `curl -fsSL https://.../install.sh | sh` (또는 Homebrew/apt/단일 바이너리) → 서비스 등록(v1.0 전 — 18-m7-plan 「3」. M7 에서는 릴리스 바이너리를 아래 경로 · 이름 규칙으로 직접 배치하고, 그 머신에서 `pitwall-relay pair` 로 코드를 띄워 Desktop 의 웰컴 「원격 호스트」 탭 [코드로 Relay 붙이기…] 에 입력한다 — 직접 연결 전용 호스트로 더해진다. 데몬을 SSH 없이 살리려면 그 머신에서 `pitwall-relay resident on`(끄기 `resident off`) — 상주는 사람이 고를 때만이다, 결정 M7-D2)
 
 **방법 B. Desktop에서 SSH로 설치 (Zed 방식)**
 1. 시스템 `ssh` 바이너리 사용 (사용자의 `~/.ssh/config`, 에이전트, ProxyJump, ControlMaster를 그대로 존중). 비밀번호는 설정에 저장하지 않고 키 인증 권장, 프롬프트는 GUI askpass로 처리. 처음 보는 호스트 키는 ssh 의 확인이 askpass 로 창에 간다 — 그 질문은 `SSH_ASKPASS_PROMPT` 힌트 없이 오고 `yes`(또는 지문)를 돌려야 받는다(빈 답 · `no` 는 거절). 확인을 끄는 옵션(`StrictHostKeyChecking=no` · `UserKnownHostsFile=/dev/null` 등)은 Pitwall 이 넘기지 않으며 사람의 `ssh_args` 에 있으면 흔한 꼴은 거절한다(사람의 `~/.ssh/config` · `-F` 로 준 설정 파일은 ssh 가 그대로 따른다). 바뀐 호스트 키는 ssh 의 거절 원문을 보인다(18-m7-plan M7-06 · M7-P17 — 구현 `pw_link::ssh`)
@@ -63,27 +64,28 @@
    - 올리기: 같은 폴더의 임시 이름(`<이름>.part.<pid>`)에 쓰고 원격에서 해시를 다시 본 뒤(`sha256sum` · `shasum -a 256`, 둘 다 없으면 올린 바이너리의 `--verify`)에만 0700 · rename. 올릴 바이트는 한 번 읽어 해시와 전송에 함께 쓴다(구현 `pw_link::install`)
    - 수동: 릴리스 바이너리를 위 경로 · 이름 규칙으로 직접 배치
    - 페어링: SSH 로 붙을 때마다 `pitwall-relay pair --from-ssh <Desktop 공개키>` 로 그 Desktop 키를 페어링 표에 `owner` 로(없을 때만) 넣고 머신 id 를 받는다 — 데몬 소켓 명령이 아니라 페어링 표 파일에 잠금(`pairings.lock`)을 쥐고 직접 쓴다. 해제는 `pitwall-relay unpair <기기 id>`(18-m7-plan M7-06 ⑧ ⑨)
-5. 상주 서비스 등록(systemd user / launchd) 또는 SSH 세션 기반 데몬으로 기동
+5. SSH 세션 기반 데몬으로 기동(유휴 규칙까지 산다). 상주(systemd user / launchd)는 사람이 원격 호스트 줄의 [이 머신에 상주시키기] 를 고를 때만 단위를 쓴다(`remote.resident` → 원격의 `pitwall-relay resident on` — 18-m7-plan 결정 M7-D2). 끄면 단위를 내리고(떠 있는 상주 데몬이 끝난다) 파일을 지운다. 단위는 그 판 바이너리를 가리킨다 — 새 판을 깔면 사람이 다시 고른다. Linux 에서 로그아웃 뒤에도 살리려면 사람이 `loginctl enable-linger` 를 따로 한다
 6. 오래된 버전 바이너리 정리 (최근 2개 유지) — 이 Desktop 의 판과, 나머지 가운데 판(semver)이 가장 높은 하나를 남긴다. 원격 `$DATA/relay/` 의 `pitwall-relay-*` 만 보고(같은 폴더의 `state.db` · `device.key` · `pairings.json` 은 건드리지 않는다), 판을 읽을 수 없는 이름은 지우지 않는다. **떠 있는 데몬의 바이너리는 지우지 않는다** — 지우기 직전 원격 셸이 그 바이너리의 `status` 를 불러 데몬이 없는 것이 확실할 때(종료 3 — 소켓이 없거나 받는 쪽이 없다)만 지운다. 답이 없으면(4 — 증명 전 연결 상한 · 바쁨 · 5초 시간 초과) 남긴다. 셸이 끝난 올리기 임시 파일(`.part.<pid>`)도 지운다(18-m7-plan M7-07 ③ — 구현 `pw_link::upgrade`)
 
 ### 연결 · 재연결 (프록시 모드)
 - 연결할 때마다 `pitwall-relay proxy`를 실행 → 데몬이 없으면 띄우고, 있으면 기존 데몬에 붙음
 - 데몬은 (채널, 판)마다 따로다 — 소켓 `$STATE/relay/<채널>-<판>.sock`(구현 `pw_relay::socket::endpoint`), 바이너리 `pitwall-relay-{channel}-{version}`, 핸드셰이크도 판 · 채널을 견준다. Desktop 이 새 판이면 새 판을 깔고 새 판 데몬이 따로 뜬다 — **옛 판 데몬에 붙지 않고 끝내지도 않는다**(18-m7-plan 결정 M7-D6 ①)
 - 옛 판 데몬은 링크 · 실행 · 터미널이 모두 없어지면 유휴 규칙으로 스스로 끝난다. 그동안 Desktop 은 옛 판 바이너리의 `pitwall-relay status`(판에 묶이지 않는 최소 질의 — JSON 한 줄, 칸은 덧붙이기만 한다. 종료 코드 0 답 · 3 데몬이 없는 것이 확실함 · 4 답 없음)로 남은 실행 · 터미널 · 붙은 링크 수를 읽어 「옛 판 Relay 에 n개 남음」 과 [옛 판 끝내기] 를 보인다. 끝내기는 사람이 본 그 데몬(pid · 실행 · 터미널 · 링크 수)이 그대로일 때만 — 답하지 않는 데몬에는 보내지 않는다 — SIGTERM 을 보내고 — 그사이 바뀌었으면 보내지 않고 새 수를 다시 보인다 — 실행 트리 끝내기는 그 데몬이 한다. 옛 판의 실행은 새 Desktop 에서 보이지 않는다(18-m7-plan M7-07 ② — 구현 `pw_link::upgrade`). **붙을 때마다 한 번** 조사 → (`~/.local/bin/pitwall` 이 Pitwall 이 둔 링크 — 대상이 정확히 `$DATA/relay/pitwall-relay-<채널>-<판>` — 이고 옛 판을 가리키면 이 판으로 옮김. 사람이 손으로 둔 다른 링크는 건드리지 않는다. 옮기지 못하면 그 판은 이번 정리에서 남김) → 정리가 돈다. 조사 · 정리 · 끝내기 · 링크 바꾸기는 링크와 따로 된 ssh 라, 각 원격 스크립트는 먼저 이 판 Relay 의 머신 id(`pitwall-relay machine` — 기기 키 지문)가 링크가 증명한 머신 id 와 같은지 보고 다르면 아무것도 하지 않는다(Desktop 은 「다른 머신」 으로 알린다 — 원격이 말한 id 는 같은지 확인에만 쓴다). 결과는 그 링크의 증명된 머신 id 와 함께 원격 호스트 화면의 그 호스트 줄에 보이고(`remote.relays` · 이벤트 `remote.relays`), [옛 판 끝내기](`remote.stopOld`)는 그 호스트가 지금 그 머신에 붙어 있고 보인 값(pid · 실행 · 터미널 · 링크 수)이 그대로일 때만 끝낸다. 다른 Desktop 이 그 옛 판에 붙어 있으면 그 수와 「그 연결도 끊긴다」 를 보인다. `pitwall` 명령 링크는 같은 줄의 칸에서 사람이 고를 때만 둔다(`remote.linkCommand` — 18-m7-plan M7-07b)
-- Tailscale/LAN 직접 연결(QUIC)이 가능하면 데이터 경로는 직접 연결, 불가하면 SSH 채널 위로 그대로 운영
+- Tailscale/LAN 직접 연결(QUIC)이 가능하면 데이터 경로는 직접 연결, 불가하면 SSH 채널 위로 그대로 운영(「연결 방식」 의 「고르기」). 직접 연결은 데몬이 떠 있어야 하므로, 상주가 아니면 SSH 로 데몬을 띄운 뒤의 다시 붙기부터 직접 연결이 된다. 판마다 데몬이 따로라 같은 포트(7420)는 먼저 뜬 판이 쥔다 — 다른 판 Desktop 의 직접 연결은 판이 달라 붙지 않고 SSH 로 떨어진다
 
 ### 페어링 (직접 연결용)
 1. `pitwall-relay pair [--role owner|mobile|readonly] [--name <이름>]` → 터미널에 **6자리 코드** 표시 (SSH로 설치한 경우 Desktop이 SSH 채널로 자동 페어링). 붙은 owner Desktop 의 기기 칸에서 [코드 띄우기] 로도 만든다(`relay.pairCode`). QR 은 아직 없다(터미널 QR 렌더러 의존이 든다 — 18-m7-plan M7-23 보고)
-2. 새 기기에서 코드 입력 → 페어링 완료. 입력 화면은 직접 연결 주소와 함께 M7-24 다(프로토콜은 `pw_link::pair_with_code`). Relay 가 코드를 받는 직접 연결 받기도 M7-24 다 — 그 전에 만든 코드는 쓰이지 않고 5분 뒤 끝난다(기기 칸은 만료 때 화면에서 지운다)
+2. 새 기기에서 코드 입력 → 페어링 완료. Desktop 의 입력 화면은 웰컴 「원격 호스트」 탭의 [코드로 Relay 붙이기…] 다 — [검색](Tailscale 기기 · LAN 광고)에서 고르거나 주소를 치고, 6자리 코드와 호스트 이름을 넣는다(`remote.pairDirect` → `pw_link::pair_with_code` — 18-m7-plan M7-24). 끝나면 전역 설정 `[[remote_hosts]]` 에 `ssh = false` 항목을 덧붙이고(다른 항목 · 주석은 그대로) 그 머신 id 를 기억한다. Relay 는 직접 연결 받기(`pw_link::serve_noise`)에서 코드를 받는다(기기 칸은 만료 때 화면에서 지운다)
 - 코드는 Relay 에 하나만 대기한다(`$DATA/relay/pairing-code.json`, 0600 — 새 코드를 만들면 앞 코드는 끝난다). **5분 만료 · 틀린 시도 세 번이면 끝 · 한 번 쓰면 끝**이고, 시도는 연결마다가 아니라 그 코드에 대해 Relay 전체에서 센다(데몬이 다시 떠도 이어진다). 시도는 Relay 가 답을 보내기 전에 센다
 - 코드 페어링은 **Noise XX 세션 위에서만** 받는다(데몬 소켓 · SSH 링크의 `pair` 첫 틀은 거절). 코드는 PAKE(SPAKE2)의 암호로만 쓰고 그 대본과 두 방향 키 확인을 Noise 핸드셰이크 해시에 묶는다 — 처음 붙는 능동 중간자가 받은 값으로 코드를 오프라인 대입하거나, 코드 교환을 다른 세션으로 옮겨 자기 키를 넣지 못한다. 페어링되는 키는 그 Noise 세션이 증명한 키이고 role 은 코드를 만든 사람이 고른 것이다(구현 `pw_link::pair` · `pw_relay::codes`)
 - 코드는 로그 · 감사 · 에이전트가 읽는 글에 남지 않는다(사람에게 보이는 터미널 · 기기 칸에만)
-- 대가: 시도를 코드 단위 · Relay 전체에서 세므로, 직접 연결 포트에 닿는 누구든 아무 값으로 세 번 붙으면 대기 코드가 끝난다(페어링 DoS — 무차별 대입을 막는 설계의 대가). 사람은 새 코드를 띄운다. 완화는 주소별 증명 전 자리 상한(18-m7-plan M7-24)이다
+- 대가: 시도를 코드 단위 · Relay 전체에서 세므로, 직접 연결 포트에 닿는 누구든 아무 값으로 세 번 붙으면 대기 코드가 끝난다(페어링 DoS — 무차별 대입을 막는 설계의 대가). 사람은 새 코드를 띄운다. 완화는 주소별 증명 전 자리 상한(주소 하나에 4 — 18-m7-plan M7-24)과 증명 전 전체 시한(5초)이다 — 주소를 여럿 쥔 상대는 막지 못한다
 
 ### 보안 모델
 - **SSH 로 붙은 링크도 Desktop 기기 키를 증명한다** — 원격 머신의 같은 사용자 프로세스가 데몬 소켓으로 Desktop 행세를 하지 못하게(18-m7-plan M7-02 · 결정 M7-D13). Desktop 도 Relay 의 기기 키로 머신 id 를 확인한다(M7-P6). 같은 uid 로 Relay 의 데이터 폴더에 쓸 수 있는 프로세스는 이 증명으로 막지 못한다
 - 기기마다 Ed25519 키쌍 생성, 페어링 시 공개키 교환 (TOFU + 짧은 코드로 확인)
 - 세션 암호화/인증: **Noise 프로토콜(XX 패턴)** — 직접 연결(QUIC — M7-24)의 것이다. 정적 키는 같은 기기 Ed25519 키를 X25519 로 바꾼 것이고, 그 위 링크 프로토콜(판 · 도전 서명 · role)은 SSH 링크와 같다. 안쪽 `hello` 의 기기 키가 Noise 상대 정적 키와 같아야 받는다 — 털린 Relay 가 다른 Relay 의 핸드셰이크를 중계해 틀을 끼워 넣지 못한다(구현 `pw_link::noise`). SSH 링크는 Noise 를 쓰지 않는다(ssh 가 암호화 · 호스트 인증을 하고 기기 키는 도전 서명으로 증명한다)
+- **직접 연결의 QUIC**(18-m7-plan M7-24 — 구현 `pw_link::quic` · `pw_relay::daemon`): QUIC 의 TLS 는 신뢰 근거가 아니다 — Relay 는 뜰 때마다 자체 서명 인증서(고정 이름 `pitwall-relay`, 머신 이름 없음)를 만들고 Desktop 은 어떤 인증서든 받는다. 받은 스트림은 Noise 로만 잇는다(Noise 없이 링크 틀 · 좁은 명령을 받는 길 없음). 0-RTT 는 받지 않는다(세션 티켓 · 이른 데이터 없음). 검증되지 않은 주소의 첫 패킷에는 Retry 로 주소를 먼저 검증한다(증폭 공격 — quinn 의 검증 전 3배 상한과 함께). 연결 하나에 양방향 스트림 하나. 증명 전 자원: 데몬 전체 16 자리(소켓과 함께) · 주소 하나에 4 자리 · 받은 때부터 증명(또는 코드 페어링 끝)까지 전체 5초 하나
 - Relay는 페어링된 기기 목록과 **기기별 권한 범위(role)**를 보유
   - `owner`(Desktop): 전체
   - `mobile`: 조회 + 허용된 조작만 (6절)
@@ -104,6 +106,9 @@ host = "build.tail1234.ts.net"     # Tailscale MagicDNS 또는 ~/.ssh/config 호
 username = "dev"                   # 기본: 로컬 사용자명
 port = 22
 ssh_args = ["-o", "ServerAliveInterval=30"]
+# direct = true                    # 기본: 기억한 머신이 있으면 직접 연결(QUIC)을 먼저 해 본다. false 면 SSH 만
+# direct_port = 7420               # 직접 연결 포트(기본 7420)
+# ssh = true                       # false 면 SSH 로 떨어지지 않는다(코드로 페어링한 수동 배치 Relay — 화면이 이렇게 더한다)
 
 [[remote_hosts.port_forwards]]
 local_port = 8080
@@ -127,13 +132,14 @@ name = "build-server"
 roots = ["~/work"]                 # 이 아래만 프로젝트로 노출
 [listen]
 port = 7420
-interfaces = ["tailscale", "lan"]  # 기본값. "all"은 명시적으로만
+interfaces = ["tailscale", "lan"]  # 기본값. "all"은 명시적으로만(공인 주소 포함 — Relay 로그 · Desktop 기기 칸에 경고). []면 직접 연결을 받지 않는다
+advertise = true                   # LAN mDNS 광고(기본 — "lan" · "all" 을 들을 때만)
 [idle]
 exit_after = "30m"                 # 링크 · 실행 · 터미널이 없으면 이만큼 뒤 데몬이 끝난다
 stop_lsp_after = "30m"
 ```
 
-`roots` 가 없으면 아무것도 등록하지 않는다. `relay.toml`(`$CONFIG/relay/relay.toml`)은 그 머신의 사람이 쓰거나, 처음 「체크아웃 추가」 때 Desktop 이 사람에게 물어 SSH 로 쓴다 — RPC 로는 쓰지 않는다. `[idle] exit_after`(기본 30분)(18-m7-plan M7-04 · M7-06). 지금 읽는 키는 `schema` · `name` · `roots` · `[idle]` 이다 — 모르는 키 · 틀린 값이면 데몬이 뜨지 않는다. `[listen]` 은 M7-24 가 더할 때까지 경고만 남기고 무시한다(네트워크로 받지 않는다). `roots` 를 좁히면 이미 등록된 밖의 프로젝트는 지우지 않고 숨긴다 — 목록 · 열기 · 경로 풀기에 나오지 않고, 데몬이 시작할 때 그 수와 루트를 경고로 남긴다. `roots` 를 다시 넓히면 보인다(18-m7-plan M7-12).
+`roots` 가 없으면 아무것도 등록하지 않는다. `relay.toml`(`$CONFIG/relay/relay.toml`)은 그 머신의 사람이 쓰거나, 처음 「체크아웃 추가」 때 Desktop 이 사람에게 물어 SSH 로 쓴다 — RPC 로는 쓰지 않는다. `[idle] exit_after`(기본 30분)(18-m7-plan M7-04 · M7-06). 지금 읽는 키는 `schema` · `name` · `roots` · `[idle]` · `[listen]`(`port` · `interfaces` — `tailscale` · `lan` · `all` · `advertise`)이다 — 모르는 키 · 틀린 값이면 데몬이 뜨지 않는다(18-m7-plan M7-24). `roots` 를 좁히면 이미 등록된 밖의 프로젝트는 지우지 않고 숨긴다 — 목록 · 열기 · 경로 풀기에 나오지 않고, 데몬이 시작할 때 그 수와 루트를 경고로 남긴다. `roots` 를 다시 넓히면 보인다(18-m7-plan M7-12).
 
 ## 5. 원격 기능 범위
 

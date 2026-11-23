@@ -282,3 +282,30 @@ async fn a_code_pairs_a_new_device_over_a_direct_connection() {
     assert!(fx.pairings.role_of(&desktop.public()).is_some());
     fx.remote(&desktop).attach().await.unwrap();
 }
+
+/// QUIC 위에서 Noise 없이 링크 핸드셰이크(`hello` · 서명)를 하면 — 페어링된 기기 키로라도 — 데몬은 받지 않고 Host 에 아무것도 닿지
+/// 않는다. QUIC 의 TLS 만으로 링크를 받는 길이 없다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_link_over_quic_without_noise_gets_nothing() {
+    let desktop = Arc::new(DeviceKey::generate().unwrap());
+    let fx = fixture(vec![paired(&desktop, Role::Owner)]);
+    fx.daemon.set_direct_timeout(Duration::from_secs(2));
+    let stream = fx.quic().open().await.unwrap();
+    let dialed = tokio::time::timeout(
+        WAIT,
+        pw_link::dial(
+            stream,
+            &DesktopIdentity {
+                key: Arc::clone(&desktop),
+                versions: pw_relay::versions(),
+            },
+            &Expect::Machine(fx.relay_key.id()),
+            LinkLimits::default(),
+        ),
+    )
+    .await
+    .expect("the relay neither linked nor closed");
+    assert!(dialed.is_err(), "a plain link stood over quic");
+    assert_eq!(fx.host.connects.load(Ordering::SeqCst), 0);
+    assert_eq!(fx.daemon.presence().links().all, 0);
+}
