@@ -14,12 +14,14 @@ pub struct Busy {
     pub links: usize,
     pub runs: usize,
     pub terminals: usize,
+    /// 열린 MCP 연결(원격 에이전트 — 18-m7-plan M7-20). 에이전트가 붙어 있는 동안 데몬이 끝나 세션이 끊기지 않게.
+    pub agents: usize,
 }
 
 impl Busy {
     /// 끝나지 못하게 하는 것이 있는가.
     pub fn holds(&self) -> bool {
-        self.links > 0 || self.runs > 0 || self.terminals > 0
+        self.links > 0 || self.runs > 0 || self.terminals > 0 || self.agents > 0
     }
 }
 

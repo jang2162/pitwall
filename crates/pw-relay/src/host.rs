@@ -33,6 +33,26 @@ pub fn assemble_with(
     askpass: pw_git::write::Askpass,
     open_requests: pw_core::open::OpenRequests,
 ) -> Assembled {
+    assemble_serving(
+        paths,
+        config,
+        tokio,
+        askpass,
+        open_requests,
+        pw_mcp::sessions::Sessions::default(),
+    )
+}
+
+/// [`assemble_with`] 에 MCP 세션 등록부를 넣은 것 — 데몬은 같은 등록부로 MCP 소켓의 세션을 연다([`crate::mcp::services`]). 링크로
+/// 붙은 Desktop 의 `mcp.approvals` · `mcp.approval.answer` 가 그 세션들의 승인 허브에 닿는다(18-m7-plan M7-20).
+pub fn assemble_serving(
+    paths: AppPaths,
+    config: &RelayConfig,
+    tokio: tokio::runtime::Handle,
+    askpass: pw_git::write::Askpass,
+    open_requests: pw_core::open::OpenRequests,
+    mcp_sessions: pw_mcp::sessions::Sessions,
+) -> Assembled {
     open_requests.attach(Arc::new(open_requests.desks()));
     let engine = semver::Version::parse(crate::VERSION).unwrap_or(semver::Version::new(0, 0, 0));
     let extensions = Arc::new(pw_ext::Registry::load(&pw_ext::LoadOptions::with_data_dir(
@@ -57,7 +77,7 @@ pub fn assemble_with(
         askpass,
         // 열기 요청은 붙은 Desktop 의 창이 연다(M7-15).
         open_requests,
-        mcp_sessions: pw_mcp::sessions::Sessions::default(),
+        mcp_sessions,
         // 비밀을 디스크 · 메모리에 두지 않는다(메인 판정 M7-P5) — 링크로 붙은 Desktop 의 키체인에 묻는다(18-m7-plan M7-12 ②).
         secrets: Arc::new(DesktopSecrets::new()),
         db_drivers: pw_host::db::drivers(),

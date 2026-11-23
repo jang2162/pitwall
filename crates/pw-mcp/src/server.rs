@@ -539,6 +539,15 @@ impl Session {
         self.inner.services.host_kind == HostKind::Headless
     }
 
+    /// 승인을 물을 사람이 붙어 있는가(결정 M7-D10 ④ — Relay 만 거짓일 수 있다, [`crate::approval::Approvals::attended`]).
+    fn attended(&self) -> bool {
+        match &self.inner.services.approval {
+            Approval::Route(route) => route.attended(),
+            // 승인 경로가 없는 세션은 헤드리스인지로 가른다([`Self::headless`]) — 붙은 사람과 상관없다.
+            Approval::Unavailable => true,
+        }
+    }
+
     /// 이 툴의 스키마에 `checkout` 을 더하는가: 다른 머신을 아는 앱 세션이고 툴이 `worktree` 를 받는다(결정 M5-D15 —
     /// `project_info` 처럼 체크아웃을 보지 않는 툴에는 달지 않는다).
     fn offers_checkout(&self, tool: &Tool) -> bool {
@@ -694,7 +703,8 @@ impl Session {
             },
         };
         if let Decision::Deny(reason) = policy::decide(tool.tier, &self.inner.services.approval) {
-            let code = if self.headless() {
+            // 붙은 owner Desktop 이 없는 Relay 는 헤드리스와 같다(결정 M7-D10 ④ · D61) — 표지도 같다.
+            let code = if self.headless() || !self.attended() {
                 Reason::HeadlessWrite
             } else {
                 Reason::NeedsApproval
@@ -877,6 +887,14 @@ impl Session {
                 ),
             ));
         };
+        // 붙은 사람이 없는 동안(결정 M7-D10 ④)은 정책 자동 · `auto_approve` 보다 앞에서 거절한다 — 선언 등급으로 이미 거절했지만
+        // (`policy::decide`) 그 뒤 계획을 받는 사이 마지막 Desktop 이 떠났을 수 있다.
+        if !route.attended() {
+            return Err(Refusal::denied(
+                Reason::HeadlessWrite,
+                policy::unattended(plan.tier),
+            ));
+        }
         // 판정은 계획 등급이다(17-m6-plan 결정 M6-P9). 선언 등급은 상한이다 — 계획이 그보다 높으면 `planned` 가 이미 툴의 버그로
         // 거절했다(`plan_problem`). 노출 · 헤드리스 거절 · `readOnly` 표지는 선언 등급으로 이미 정해졌다.
         let tier = plan.tier;
@@ -1045,6 +1063,12 @@ impl Session {
                 ),
             ));
         };
+        if !route.attended() {
+            return Err(Refusal::denied(
+                Reason::HeadlessWrite,
+                policy::unattended(plan.tier),
+            ));
+        }
         let tier = plan.tier;
         let writes = matches!(tier, Tier::Write | Tier::Exec);
         // 신뢰는 대상 머신의 것이다. 읽지 못하면 미신뢰로 본다(매번 묻는다 — 넓히지 않는 쪽).

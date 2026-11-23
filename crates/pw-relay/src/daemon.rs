@@ -5,7 +5,8 @@
 //!   (QUIC — M7-24) 전에 반드시 있어야 하는 것이다.
 //! - **첫 틀 · 핸드셰이크 틀 상한** `pw_link::HANDSHAKE_MAX_FRAME`(64 KiB). 증명 뒤에만 링크 틀 상한으로 오른다(`pw_link`).
 //! - 첫 틀은 [`FIRST_FRAME_TIMEOUT`] 안에 와야 한다.
-//! - 증명된 링크는 [`Presence`] 에 센다 — 유휴 판정과 「붙은 owner 링크가 있는가」(M7-20 의 M7-D10 ④ 판정)가 본다.
+//! - 증명된 링크는 [`Presence`] 에 센다 — 유휴 판정과 「붙은 owner 링크가 있는가」(M7-20 의 M7-D10 ④ 판정 — `crate::mcp::services`)가 본다.
+//! - 열린 MCP 연결도 유휴 판정에 든다([`Daemon::count_agents`] — M7-20).
 
 use std::future::Future;
 use std::pin::Pin;
@@ -152,6 +153,8 @@ struct Shared {
     /// 지금 쥔 증명 전 자리 수(시험 · 로그).
     pending: AtomicUsize,
     started: std::time::Instant,
+    /// 열린 MCP 연결(18-m7-plan M7-20 — [`Daemon::count_agents`]). 유휴 판정이 본다.
+    agents: std::sync::OnceLock<pw_mcp::socket::Connections>,
 }
 
 impl Daemon {
@@ -164,12 +167,19 @@ impl Daemon {
                 unproven,
                 pending: AtomicUsize::new(0),
                 started: std::time::Instant::now(),
+                agents: std::sync::OnceLock::new(),
             }),
         }
     }
 
     pub fn presence(&self) -> Presence {
         self.shared.presence.clone()
+    }
+
+    /// MCP 소켓의 연결 수를 유휴 판정에 넣는다(18-m7-plan M7-20) — 원격 에이전트가 붙어 있는 동안은 링크가 없어도 끝나지 않는다.
+    /// 두 번째부터는 무시한다.
+    pub fn count_agents(&self, connections: pw_mcp::socket::Connections) {
+        let _ = self.shared.agents.set(connections);
     }
 
     /// 지금 증명 전 자리를 쥔 연결 수.
@@ -182,6 +192,11 @@ impl Daemon {
             links: self.shared.presence.links().all,
             runs: self.shared.parts.activity.runs(),
             terminals: self.shared.parts.activity.terminals(),
+            agents: self
+                .shared
+                .agents
+                .get()
+                .map_or(0, pw_mcp::socket::Connections::active),
         }
     }
 

@@ -16,6 +16,8 @@ pw-diag = { path = "../../crates/pw-diag" }
 # 원격 git 의 askpass 도우미(`pitwall-relay askpass` — 소켓 · 토큰 환경 · 질문 꼴은 Desktop 의 도우미와 같다, M7-15).
 pw-git = { path = "../../crates/pw-git" }
 pw-link = { path = "../../crates/pw-link" }
+# `pitwall-relay mcp` 의 stdio ↔ MCP 소켓 프록시와 데몬의 MCP 소켓(18-m7-plan M7-20).
+pw-mcp = { path = "../../crates/pw-mcp" }
 pw-relay = { path = "../../crates/pw-relay" }
 # 끝날 때 터미널 · 실행의 프로세스 트리를 끝낸다(`pw_run::shutdown`).
 pw-run = { path = "../../crates/pw-run" }

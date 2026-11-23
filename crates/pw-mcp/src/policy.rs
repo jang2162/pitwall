@@ -80,6 +80,11 @@ pub enum Decision {
 pub fn decide(tier: Tier, approval: &Approval) -> Decision {
     match (tier, approval) {
         (Tier::Read, _) => Decision::Allow,
+        (Tier::Write | Tier::Exec | Tier::Dangerous, Approval::Route(route))
+            if !route.attended() =>
+        {
+            Decision::Deny(unattended(tier))
+        }
         (Tier::Write | Tier::Exec | Tier::Dangerous, Approval::Route(_)) => Decision::Ask,
         (Tier::Write | Tier::Exec | Tier::Dangerous, Approval::Unavailable) => {
             Decision::Deny(format!(
@@ -89,6 +94,16 @@ pub fn decide(tier: Tier, approval: &Approval) -> Decision {
             ))
         }
     }
+}
+
+/// 붙은 owner Desktop 이 없는 Host(Relay)의 `write` 이상 거절 글(결정 M7-D10 ④ — `crate::approval::Approvals::attended`). 결과
+/// 표지는 헤드리스와 같은 `headless_write` 다.
+pub(crate) fn unattended(tier: Tier) -> String {
+    format!(
+        "`{}` tools need approval in a Pitwall desktop, and no Pitwall desktop is connected to this machine \
+         (open this machine's checkout in Pitwall, then call again); until one connects only `read` tools run",
+        tier_name(tier)
+    )
 }
 
 pub(crate) fn tier_name(tier: Tier) -> &'static str {

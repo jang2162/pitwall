@@ -14,6 +14,7 @@
 //! - [`idle`]: 링크 · 실행 · 터미널이 없으면 `[idle] exit_after` 뒤 끝난다.
 //! - [`host`]: Relay 부품으로 조립한 Host(`pw_host::assemble_relay`)와 `roots` 판정.
 //! - [`proxy`]: stdio ↔ 데몬 소켓. 데몬이 없으면 띄운다(`setsid`).
+//! - [`mcp`]: Relay 의 MCP 엔드포인트 — 원격 머신의 에이전트가 붙는 소켓 · 세션 부품(M7-20).
 
 // Relay 는 macOS · Linux 만이다(18-m7-plan 결정 M7-D4) — Windows 에서는 빈 크레이트다(워크스페이스 빌드만 지난다).
 #![cfg(unix)]
@@ -23,6 +24,7 @@ pub mod config;
 pub mod daemon;
 pub mod host;
 pub mod idle;
+pub mod mcp;
 pub mod narrow;
 pub mod pairings;
 pub mod paths;

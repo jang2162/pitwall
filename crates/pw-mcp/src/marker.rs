@@ -42,7 +42,8 @@ pub enum Reason {
     PlanChanged,
     /// (거절) 앱이 떠 있어야 하는 툴을 헤드리스 세션에서 불렀다(결정 M5-D3).
     NeedsApp,
-    /// (거절) 헤드리스 세션에서 `write` 이상 등급의 툴을 불렀다 — 헤드리스에는 승인 경로가 없다(결정 M5-D32).
+    /// (거절) 헤드리스 세션에서 `write` 이상 등급의 툴을 불렀다 — 헤드리스에는 승인 경로가 없다(결정 M5-D32). 원격 머신 Relay 의
+    /// 세션도 붙은 owner Desktop 이 없는 동안은 같다(18-m7-plan 결정 M7-D10 ④ — `auto_approve` 에 든 등급이어도).
     HeadlessWrite,
     /// (결과 `error`) 호출이 취소됐다 — MCP 의 취소 알림, 세션 끊김, 또는 Host 가 그 RPC 를 거뒀다.
     Cancelled,

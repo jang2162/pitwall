@@ -11,7 +11,7 @@ use tracing_subscriber::Layer as _;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt as _;
 
-const USAGE: &str = "usage: pitwall-relay <proxy|daemon|status [--json]|open <file>...|askpass <prompt>|link-command [--remove]|machine|pair --from-ssh <key> [<name>]|unpair <device id>|--verify <file> <sha256>|--version>";
+const USAGE: &str = "usage: pitwall-relay <proxy|daemon|mcp [--project <path>]|status [--json]|open <file>...|askpass <prompt>|link-command [--remove]|machine|pair --from-ssh <key> [<name>]|unpair <device id>|--verify <file> <sha256>|--version>";
 
 pub fn main() -> ExitCode {
     let mut argv = std::env::args_os();
@@ -43,7 +43,8 @@ pub fn main() -> ExitCode {
         },
         Some("link-command") => crate::shell::link_command(&args[1..]),
         Some("machine") if args.len() == 1 => machine(),
-        Some(command @ ("mcp" | "tool")) => crate::shell::not_yet(command),
+        Some("mcp") => mcp(&args[1..]),
+        Some(command @ "tool") => crate::shell::not_yet(command),
         Some("--version" | "version") => {
             println!(
                 "pitwall-relay {} ({})",
@@ -121,6 +122,77 @@ fn proxy() -> ExitCode {
             }
         }
     })
+}
+
+fn mcp_socket_path(paths: &AppPaths) -> Result<std::path::PathBuf, ExitCode> {
+    pw_relay::mcp::endpoint(
+        paths,
+        pw_relay::RELEASE_CHANNEL,
+        pw_relay::version(),
+        &std::env::temp_dir(),
+        pw_relay::socket::current_uid(),
+    )
+    .map_err(|e| {
+        eprintln!("pitwall-relay mcp: {e}");
+        ExitCode::from(1)
+    })
+}
+
+/// `mcp [--project <path>]`(18-m7-plan M7-20 ①): 원격 머신의 에이전트가 이 머신의 Relay 에 붙는다. stdio ↔ 데몬의 MCP 소켓을
+/// 잇는다(`pw_mcp::proxy` — Desktop 의 `pitwall mcp` 와 같은 프록시). 데몬이 없으면 띄운다 — 헤드리스는 없다. stdout 은 MCP 바이트만.
+fn mcp(args: &[String]) -> ExitCode {
+    let request = match crate::shell::mcp_request(args) {
+        Ok(request) => request,
+        Err(e) => {
+            eprintln!("pitwall-relay mcp: {e}\nusage: pitwall-relay mcp [--project <path>]");
+            return ExitCode::from(2);
+        }
+    };
+    let (paths, daemon_socket, mcp_socket) = match paths().and_then(|p| {
+        let daemon = socket_path(&p)?;
+        let mcp = mcp_socket_path(&p)?;
+        Ok((p, daemon, mcp))
+    }) {
+        Ok(found) => found,
+        Err(code) => return code,
+    };
+    let uid = pw_relay::socket::current_uid();
+    let rt = runtime(2);
+    let code = rt.block_on(async {
+        let spawn = || {
+            let exe = std::env::current_exe()?;
+            pw_relay::proxy::spawn_daemon(&exe, &["daemon"])
+        };
+        let stream =
+            match pw_relay::mcp::connect_or_spawn(&daemon_socket, &mcp_socket, uid, request, spawn)
+                .await
+            {
+                Ok(stream) => stream,
+                Err(e) => {
+                    eprintln!(
+                        "pitwall-relay mcp: {e}. The daemon log is under {}",
+                        pw_relay::proxy::log_hint(&paths).display()
+                    );
+                    return ExitCode::from(1);
+                }
+            };
+        let (from_daemon, to_daemon) = stream.into_split();
+        let mut stdout = tokio::io::stdout();
+        match pw_mcp::proxy::run(tokio::io::stdin(), &mut stdout, from_daemon, to_daemon).await {
+            Ok(pw_mcp::proxy::ProxyEnd::ClientClosed) => ExitCode::SUCCESS,
+            Ok(pw_mcp::proxy::ProxyEnd::AppClosed { .. }) => {
+                eprintln!("pitwall-relay mcp: the relay daemon closed the connection");
+                ExitCode::from(1)
+            }
+            Err(e) => {
+                eprintln!("pitwall-relay mcp: {e}");
+                ExitCode::from(1)
+            }
+        }
+    });
+    // stdin 이 막힌 읽기는 기다리지 않는다.
+    rt.shutdown_timeout(std::time::Duration::from_secs(2));
+    code
 }
 
 /// `pair --from-ssh <공개키> [<이름>]`(18-m7-plan M7-06 ⑧ · 결정 M7-D13): Desktop 이 SSH 로 부른다. 데몬 소켓 명령이 아니다 —
@@ -398,12 +470,15 @@ fn daemon() -> ExitCode {
         // 원격 git 의 암호 질문(M7-15 ①): 도우미 스크립트를 데몬 소켓 옆에 두고, 질문은 데몬 소켓의 좁은 명령 `askpass` 로 받는다.
         let askpass = pw_git::write::Askpass::default();
         let open_requests = pw_core::open::OpenRequests::default();
-        let assembled = pw_relay::host::assemble_with(
+        // MCP 세션 등록부 — Relay Host 의 `mcp.*` 와 MCP 소켓이 같은 것을 쓴다(링크의 창이 그 승인 허브를 듣는다, M7-20).
+        let mcp_sessions = pw_mcp::sessions::Sessions::new();
+        let assembled = pw_relay::host::assemble_serving(
             paths.clone(),
             &config,
             tokio::runtime::Handle::current(),
             askpass.clone(),
             open_requests.clone(),
+            mcp_sessions.clone(),
         );
         let _askpass = match std::env::current_exe()
             .and_then(|exe| askpass.serve_through(socket.clone(), &exe))
@@ -440,8 +515,38 @@ fn daemon() -> ExitCode {
         });
         tracing::info!(socket = %socket.display(), roots = config.roots.len(), "relay daemon listening");
         let shutdown = tokio_util::sync::CancellationToken::new();
+        // MCP 소켓(M7-20 ①). 열지 못해도 데몬은 돈다 — `pitwall-relay mcp` 가 그 까닭을 찍고 끝난다(헤드리스는 없다).
+        if let Ok(listener) = mcp_socket_path(&paths).and_then(|path| {
+            pw_mcp::socket::bind(&path, uid).map_err(|e| {
+                tracing::warn!(%e, "cannot open the relay mcp socket; agents on this machine cannot connect");
+                ExitCode::from(1)
+            })
+        }) {
+                let presence = daemon.presence();
+                let services = pw_relay::mcp::services(
+                    &host,
+                    &paths,
+                    mcp_sessions.clone(),
+                    Arc::new(move || presence.has_owner()),
+                );
+                let connections = pw_mcp::socket::Connections::default();
+                daemon.count_agents(connections.clone());
+                tracing::info!(socket = %listener.path().display(), "relay mcp socket listening");
+                tokio::spawn(pw_mcp::socket::accept_loop(
+                    listener,
+                    services,
+                    connections,
+                    shutdown.child_token(),
+                ));
+        }
         tokio::spawn(stop_on_signal(shutdown.clone()));
-        let ended = daemon.run(listener, shutdown).await;
+        let ended = daemon.run(listener, shutdown.clone()).await;
+        // 열린 MCP 세션을 닫고 대기 중인 승인을 거둔다(앱의 끝내기와 같다 — 감사 큐를 비울 때까지 잠깐 기다린다).
+        shutdown.cancel();
+        let _ = tokio::task::spawn_blocking(move || {
+            mcp_sessions.shutdown(std::time::Duration::from_secs(2))
+        })
+        .await;
         drop(host);
         Ok(ended)
     });

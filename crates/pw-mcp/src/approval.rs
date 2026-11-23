@@ -22,6 +22,10 @@
 //!   앞의 요청 하나가 끝나면 다시 받는다. 다른 세션에는 닿지 않는다.
 //! - 앱이 끝날 때 [`Approvals::shutdown`] 이 대기를 모두 거둔다.
 //!
+//! - **붙은 사람이 없는 Host**(18-m7-plan M7-20 — 결정 M7-D10 ④): 창이 없는 Host(Relay)는 [`Approvals::require_attendance`] 로
+//!   「붙은 owner Desktop 이 있는가」 를 건다. 그것이 거짓인 동안 세션은 `write` 이상을 헤드리스처럼 거절한다 — `auto_approve` ·
+//!   정책 자동도 돌지 않는다([`Approvals::attended`], 판정은 `crate::policy::decide` · `crate::server`). 걸지 않은 Host(Desktop)는 늘 참이다.
+//!
 //! 에이전트 범위 연결(MCP 세션)은 듣지도 답하지도 못한다 — `mcp.*` 의 문(`methods::WindowsOnly`)이 거절한다. 에이전트가 자기
 //! 요청에 스스로 답하는 길이 없다.
 
@@ -201,9 +205,14 @@ pub struct Approvals {
     inner: Arc<Shared>,
 }
 
+/// 「붙은 사람이 있는가」([`Approvals::require_attendance`]).
+pub type Attendance = Arc<dyn Fn() -> bool + Send + Sync>;
+
 #[derive(Default)]
 struct Shared {
     state: Mutex<State>,
+    /// 걸리지 않았으면 늘 붙은 것으로 본다(Desktop — 창이 이 프로세스 안에 있다).
+    attendance: Mutex<Option<Attendance>>,
     /// 승인을 지나는 중인 호출 수([`Approvals::hold`]) — 끝낼 때 그 호출들이 감사 기록을 큐에 넣을 때까지 기다린다.
     holding: AtomicUsize,
 }
@@ -335,6 +344,27 @@ impl Approvals {
             id,
             rx,
         }
+    }
+
+    /// 창이 없는 Host(Relay)가 「붙은 owner Desktop 이 있는가」 를 건다(결정 M7-D10 ④). 거짓인 동안 세션은 `write` 이상을 헤드리스처럼
+    /// 거절한다 — 승인을 물을 사람이 없는 동안 `auto_approve` · 정책 자동으로 쓰기가 돌지 않게(로컬의 D61 — 앱이 꺼져 있으면 코어 툴만).
+    pub fn require_attendance(&self, attended: Attendance) {
+        *self
+            .inner
+            .attendance
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(attended);
+    }
+
+    /// 붙은 사람이 있는가. [`Self::require_attendance`] 를 걸지 않았으면 참.
+    pub fn attended(&self) -> bool {
+        let attendance = self
+            .inner
+            .attendance
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        attendance.is_none_or(|attended| attended())
     }
 
     /// 창 `window` 가 앞으로 왔다(앱의 창 이벤트).

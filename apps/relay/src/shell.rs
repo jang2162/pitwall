@@ -39,7 +39,26 @@ pub fn pitwall_args(args: &[String]) -> Option<Vec<String>> {
 
 pub const PITWALL_USAGE: &str = "usage: pitwall <file>[:line[:col]]... | pitwall open <file>... | pitwall mcp | pitwall tool <name> [<json>]";
 
-/// `mcp` · `tool`(M7-20 이 채운다).
+/// `mcp` 뒤의 인자(`--project <path>` · `--project=<path>`) — Desktop 의 `pitwall mcp` 와 같다. cwd 는 이 프로세스의 것.
+pub fn mcp_request(args: &[String]) -> Result<pw_mcp::SessionRequest, String> {
+    let mut project = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--project" {
+            project = Some(PathBuf::from(iter.next().ok_or("--project needs a path")?));
+        } else if let Some(value) = arg.strip_prefix("--project=") {
+            project = Some(PathBuf::from(value));
+        } else {
+            return Err(format!("unknown argument `{arg}`"));
+        }
+    }
+    Ok(pw_mcp::SessionRequest {
+        project,
+        cwd: std::env::current_dir().ok(),
+    })
+}
+
+/// `tool` — 아직 없다(`pitwall tool` 의 CLI 는 Desktop 크레이트에 있다 — 18-m7-plan M7-20 보고 「넘기는 것」).
 pub fn not_yet(command: &str) -> ExitCode {
     eprintln!("pitwall {command}: not available on this relay yet");
     ExitCode::from(2)

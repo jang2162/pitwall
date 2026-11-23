@@ -5160,6 +5160,7 @@ dependencies = [
  "pw-git",
  "pw-host",
  "pw-link",
+ "pw-mcp",
  "pw-relay",
  "pw-release",
  "pw-rpc",
