@@ -834,12 +834,31 @@ impl Mux {
         loop {
             match self.next_outgoing(generation) {
                 Next::Frame(bytes) => {
-                    let result = tokio::select! {
-                        biased;
-                        () = stop.cancelled() => return,
-                        () = closed.cancelled() => return self.bye(&mut write, &stop).await,
-                        result = write.write_encoded(&bytes) => result,
+                    // 닫혀도 쓰던 틀은 마저 쓴다(잠깐만) — 틀 가운데서 끊고 `bye` 를 붙이면 상대는 잘린 틀(끊김)로 읽고 이어 붙기를
+                    // 기다린다.
+                    let (result, closing) = {
+                        let sending = write.write_encoded(&bytes);
+                        tokio::pin!(sending);
+                        tokio::select! {
+                            biased;
+                            () = stop.cancelled() => return,
+                            result = &mut sending => (result, false),
+                            () = closed.cancelled() => {
+                                match tokio::time::timeout(Duration::from_secs(1), &mut sending).await {
+                                    Ok(result) => (result, true),
+                                    Err(_) => (Err(std::io::Error::other("closing")), true),
+                                }
+                            }
+                        }
                     };
+                    if closing {
+                        if result.is_ok() {
+                            self.bye(&mut write, &stop).await;
+                        } else {
+                            self.shared.drained.cancel();
+                        }
+                        return;
+                    }
                     if let Err(e) = result {
                         self.transport_lost(generation, CloseReason::Io(e.to_string()));
                         return;
@@ -852,7 +871,8 @@ impl Mux {
                     () = self.shared.wake.notified() => {}
                 },
                 Next::Stale => {
-                    if closed.is_cancelled() {
+                    // 닫는 중이면(`reason` 이 `closed` 보다 먼저 선다) `bye` 를 보낸다 — 세대가 바뀌었거나 멈췄으면 보내지 않는다.
+                    if self.shared.reason.get().is_some() {
                         self.bye(&mut write, &stop).await;
                     }
                     return;
