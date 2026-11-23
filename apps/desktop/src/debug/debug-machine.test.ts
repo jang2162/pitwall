@@ -100,14 +100,110 @@ describe("a debug session's machine", () => {
     sessions.connect(client, "r1");
     await sessions.start("dev");
     expect(sessions.store.getState().sessions[0]?.machine).toBe(MINI);
-    // 창이 다른 머신의 연결로 넘어가는 중(다시 붙기 전) — 그 사이 그 세션이 멈췄다.
-    sessions.setDeps({ ...deps, machine: LOCAL_MACHINE });
     listener!({
       topic: "debug.stopped",
       payload: { runId: "d1", threadId: 1, reason: "breakpoint", description: null, session: null },
     });
     await vi.waitFor(() => expect(openFile).toHaveBeenCalled());
+    // 창이 다른 머신의 연결로 넘어가는 중(다시 붙기 전)에 사람이 그 프레임을 누른다.
+    sessions.setDeps({ ...deps, machine: LOCAL_MACHINE });
+    openFile.mockClear();
+    await sessions.selectFrame(1);
     expect(openFile.mock.calls[0]![0]).toMatchObject({ path: PATH, machine: MINI });
     expect(sessions.current.getState().frame).toEqual({ path: qualify(MINI, PATH), line: 3 });
+  });
+});
+
+/** 가짜 디버그 연결 하나: 받은 호출을 적고, `debug.start` 는 `gate` 가 풀릴 때까지 답하지 않는다(`before` 사슬을 기다림). */
+function fakeClient(frames: unknown[] = []) {
+  const calls: { method: string; params: unknown }[] = [];
+  let listener: ((e: unknown) => void) | undefined;
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((r) => (release = r));
+  const client = {
+    subscribe: vi.fn(async (_p: unknown, l: (e: unknown) => void) => {
+      listener = l;
+      return { unsubscribe: async () => {} };
+    }),
+    call: vi.fn(async (method: string, params: unknown) => {
+      calls.push({ method, params });
+      switch (method) {
+        case "run.list":
+          return { runs: [] };
+        case "debug.start":
+          await gate;
+          return {
+            run: { runId: "d1", name: "app", worktree: null, state: "running", kind: "debug" },
+            adapter: "debugpy",
+          };
+        case "debug.threads":
+          return { threads: [{ id: 1, name: "main" }] };
+        case "debug.stack":
+          return { frames, totalFrames: null };
+        default:
+          return { scopes: [] };
+      }
+    }),
+  };
+  return {
+    client: client as never,
+    calls: (method: string) => calls.filter((c) => c.method === method),
+    emit: (e: unknown) => listener!(e),
+    release: () => release!(),
+  };
+}
+
+// 리뷰 반영 2 D1: `debug.start` 가 `before` 사슬을 기다리는 사이 활성 체크아웃이 다른 머신으로 바뀌어도, 그 세션은 새 머신의 세션으로
+// 기록되지 않고 멈춤 · 스텝이 새 머신 연결로 가지 않는다.
+describe("a debug start that outlives a checkout switch", () => {
+  it("is not recorded on the machine the window moved to", async () => {
+    const mini = fakeClient();
+    const here = fakeClient();
+    const sessions = new DebugSessions();
+    const base = { projectId: "r1", openFile: vi.fn(), openOutside: vi.fn() };
+    sessions.setDeps({ ...base, client: mini.client, machine: MINI });
+    const off = sessions.connect(mini.client, "r1");
+    const starting = sessions.start("dev");
+    await vi.waitFor(() => expect(mini.calls("debug.start")).toHaveLength(1));
+    // 사람이 이 머신의 체크아웃으로 바꾼다(창이 이 머신 연결로 다시 붙는다).
+    off();
+    sessions.setDeps({ ...base, projectId: "p1", client: here.client, machine: LOCAL_MACHINE });
+    sessions.connect(here.client, "p1");
+    mini.release();
+    await starting;
+    expect(sessions.store.getState().sessions.filter((x) => x.machine !== MINI)).toEqual([]);
+    await sessions.stop().catch(() => {});
+    await sessions.control("stepOver").catch(() => {});
+    expect(here.calls("run.stop")).toHaveLength(0);
+    expect(here.calls("debug.control")).toHaveLength(0);
+  });
+
+  // 권고 R2: 세션의 머신이 지금 디버그 연결의 머신이 아니면 그 세션의 `debug.*` · `run.stop` 을 이 연결로 보내지 않는다. 권고 R1:
+  // 루트 밖 프레임도 그 세션의 머신으로 연다.
+  it("sends nothing for a session of another machine and opens its outside frame there", async () => {
+    const mini = fakeClient([
+      { id: 1, name: "lib", path: "/usr/lib/x.py", line: 2, column: 1, token: "tok-1" },
+    ]);
+    const here = fakeClient();
+    const sessions = new DebugSessions();
+    const openOutside = vi.fn();
+    const base = { projectId: "r1", openFile: vi.fn(), openOutside };
+    sessions.setDeps({ ...base, client: mini.client, machine: MINI });
+    sessions.connect(mini.client, "r1");
+    mini.release();
+    await sessions.start("dev");
+    mini.emit({
+      topic: "debug.stopped",
+      payload: { runId: "d1", threadId: 1, reason: "breakpoint", description: null, session: null },
+    });
+    await vi.waitFor(() => expect(sessions.store.getState().frames).toHaveLength(1));
+    sessions.setDeps({ ...base, client: here.client, machine: LOCAL_MACHINE });
+    await sessions.selectFrame(1);
+    expect(openOutside).toHaveBeenCalledWith(
+      expect.objectContaining({ machine: MINI, token: "tok-1" }),
+    );
+    await expect(sessions.stop()).rejects.toThrow(/another machine/);
+    expect(here.calls("run.stop")).toHaveLength(0);
+    expect(here.calls("debug.scopes")).toHaveLength(0);
   });
 });

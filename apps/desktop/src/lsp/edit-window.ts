@@ -223,6 +223,8 @@ export function createEditWindow(deps: EditWindowDeps): EditWindow {
     },
     report,
     async execute(doc, command, server, flow, send) {
+      // 명령의 편집도 이 창의 적용기로 오므로 같은 판정을 지난다(리뷰 반영 2 권고 R4 — 완성 명령 · 전구 · 빠른 수정도 이 길이다).
+      if (!editsHere(doc, win)) return;
       const flowId = `flow-${Date.now().toString(36)}-${++seq}`;
       // 기준은 명령을 보내기 전에 연다 — 서버가 편집을 계산하는 동안의 바뀜도 「요청 뒤」 다.
       flows.set(flowId, { flow: flow ?? applier.begin() });

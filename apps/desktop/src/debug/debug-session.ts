@@ -175,11 +175,13 @@ export class DebugSessions {
    */
   connect(client: DebugClient, projectId: string): () => void {
     this.forgetOtherMachines();
+    // 이 연결의 머신 — 이 연결로 받은 세션(이벤트 · `run.list`)은 이 머신의 것이다(리뷰 반영 2 D1: 기록할 때의 활성 머신이 아니다).
+    const machine = this.deps?.machine ?? LOCAL_MACHINE;
     let disposed = false;
     let unsubscribe: (() => Promise<void>) | undefined;
     void client
       .subscribe({ projectId, topics: [...DEBUG_TOPICS] }, (e) => {
-        if (!disposed) this.event(e);
+        if (!disposed) this.event(e, machine);
       })
       .then(async (s) => {
         if (disposed) {
@@ -190,7 +192,7 @@ export class DebugSessions {
         const { runs } = await client.call("run.list", { projectId });
         if (disposed) return;
         for (const run of runs)
-          if (run.kind === "debug" && run.state !== "exited") this.add(run, "");
+          if (run.kind === "debug" && run.state !== "exited") this.add(run, "", machine);
         this.store.setState({ connected: true });
       })
       .catch((e: unknown) => console.warn("[debug] could not follow debug sessions", e));
@@ -238,7 +240,11 @@ export class DebugSessions {
       sqlConfirmed?: Record<string, DbConfirmed> | null;
     } = {},
   ): Promise<DebugStarted> {
+    // 누른 순간의 연결 · 머신을 잡는다 — `before` 사슬(빌드)을 기다리는 사이 활성 체크아웃이 바뀌어도 그 세션은 이 머신의 것이다
+    // (리뷰 반영 2 D1). 답을 받았을 때 창이 이미 다른 연결로 넘어갔으면 기록하지 않는다 — 그 머신의 체크아웃을 다시 활성으로 두면
+    // `run.list` 로 보인다.
     const deps = this.need();
+    const machine = deps.machine ?? LOCAL_MACHINE;
     const started = await deps.client.call("debug.start", {
       projectId: deps.projectId,
       configId,
@@ -247,7 +253,8 @@ export class DebugSessions {
       ...(opts.confirmed != null && { confirmed: opts.confirmed }),
       ...(opts.sqlConfirmed != null && { sqlConfirmed: opts.sqlConfirmed }),
     });
-    this.add(started.run, started.adapter);
+    if (this.deps?.client !== deps.client) return started;
+    this.add(started.run, started.adapter, machine);
     this.select(started.run.runId);
     deps.reveal?.();
     return started;
@@ -264,25 +271,25 @@ export class DebugSessions {
 
   /** 스텝 · 계속 · 멈춤. 멈춘 스레드(없으면 첫 스레드)에. */
   async control(action: DebugAction): Promise<void> {
-    const deps = this.need();
     const s = this.active();
     if (!s || s.state === "ended") return;
+    const client = this.clientFor(s.runId);
     const st = this.store.getState();
     const threadId = st.threadId ?? s.stopped?.threadId ?? st.threads[0]?.id;
     let thread = threadId;
     if (thread === undefined || thread === null) {
-      const { threads } = await deps.client.call("debug.threads", this.at(s.runId));
+      const { threads } = await client.call("debug.threads", this.at(s.runId));
       thread = threads[0]?.id;
     }
     if (thread === undefined || thread === null) return;
-    await deps.client.call("debug.control", { ...this.at(s.runId), threadId: thread, action });
+    await client.call("debug.control", { ...this.at(s.runId), threadId: thread, action });
   }
 
   /** 디버그 실행을 끝낸다(`run.stop` — 디버그 실행도 실행이다). */
   async stop(): Promise<void> {
     const s = this.active();
     if (!s || s.state === "ended") return;
-    await this.need().client.call("run.stop", { runId: s.runId });
+    await this.clientFor(s.runId).call("run.stop", { runId: s.runId });
   }
 
   /** 프레임을 고른다 — 범위를 읽고, 에디터를 그 줄로. */
@@ -294,7 +301,7 @@ export class DebugSessions {
     this.store.setState({ frameId, scopes: [] });
     this.showFrame(s, frame, open);
     try {
-      const { scopes } = await this.need().client.call("debug.scopes", {
+      const { scopes } = await this.clientFor(s.runId).call("debug.scopes", {
         ...this.at(s.runId),
         frameId,
       });
@@ -310,7 +317,7 @@ export class DebugSessions {
   async variables(variablesReference: number, start: number, count: number) {
     const s = this.active();
     if (!s) return { variables: [], start, count };
-    return this.need().client.call("debug.variables", {
+    return this.clientFor(s.runId).call("debug.variables", {
       ...this.at(s.runId),
       variablesReference,
       start,
@@ -326,7 +333,7 @@ export class DebugSessions {
     this.remember(text);
     this.log(s.runId, { kind: "input", text });
     try {
-      const result = await this.need().client.call("debug.evaluate", {
+      const result = await this.clientFor(s.runId).call("debug.evaluate", {
         ...this.at(s.runId),
         expression: text,
         frameId: this.store.getState().frameId ?? null,
@@ -378,12 +385,12 @@ export class DebugSessions {
 
   // ---- 이벤트 ----------------------------------------------------------------------------------------------------------------
 
-  private event(e: EventMessage) {
+  private event(e: EventMessage, machine: string) {
     const payload = e.payload as unknown;
     switch (e.topic) {
       case "run.started": {
         const run = payload as RunInfo;
-        if (run.kind === "debug") this.add(run, "");
+        if (run.kind === "debug") this.add(run, "", machine);
         return;
       }
       case "run.exited":
@@ -422,7 +429,7 @@ export class DebugSessions {
     this.store.setState({ sessions: kept, activeRunId: active });
   }
 
-  private add(run: RunInfo, adapter: string) {
+  private add(run: RunInfo, adapter: string, machine: string) {
     const sessions = this.store.getState().sessions;
     if (sessions.some((s) => s.runId === run.runId)) {
       if (adapter) this.patch(run.runId, { adapter });
@@ -435,7 +442,7 @@ export class DebugSessions {
         ...kept,
         {
           runId: run.runId,
-          machine: this.deps?.machine ?? LOCAL_MACHINE,
+          machine,
           name: run.name,
           adapter,
           worktree: run.worktree,
@@ -475,10 +482,9 @@ export class DebugSessions {
 
   /** 멈춘 세션의 스레드 · 콜스택을 읽고 맨 위 프레임을 고른다. */
   private async refresh(runId: string, threadId: number | null) {
-    const deps = this.need();
     const epoch = ++this.epoch;
     try {
-      const { threads } = await deps.client.call("debug.threads", this.at(runId));
+      const { threads } = await this.clientFor(runId).call("debug.threads", this.at(runId));
       if (epoch !== this.epoch) return;
       const thread = threadId ?? threads[0]?.id;
       this.store.setState({ threads, threadId: thread });
@@ -499,7 +505,7 @@ export class DebugSessions {
   }
 
   private async readStack(runId: string, threadId: number, epoch: number) {
-    const { frames } = await this.need().client.call("debug.stack", {
+    const { frames } = await this.clientFor(runId).call("debug.stack", {
       ...this.at(runId),
       threadId,
       levels: STACK_LEVELS,
@@ -570,7 +576,7 @@ export class DebugSessions {
     const results = await Promise.all(
       st.watches.map(async (w): Promise<WatchValue> => {
         try {
-          const result = await this.need().client.call("debug.evaluate", {
+          const result = await this.clientFor(s.runId).call("debug.evaluate", {
             ...this.at(s.runId),
             expression: w.expression,
             frameId: st.frameId ?? null,
@@ -645,6 +651,18 @@ export class DebugSessions {
     } catch {
       // 저장소가 막혀도 워치는 이 창에 남는다.
     }
+  }
+
+  /**
+   * 그 세션의 `debug.*` · `run.stop` 을 보낼 연결 — 세션의 머신이 지금 디버그 연결의 머신일 때만(리뷰 반영 2 권고 R2). 다르면 던진다:
+   * 다른 머신 세션의 `runId` 를 이 연결로 보내지 않는다.
+   */
+  private clientFor(runId: string): DebugClient {
+    const deps = this.need();
+    const s = this.store.getState().sessions.find((x) => x.runId === runId);
+    if (s && s.machine !== (deps.machine ?? LOCAL_MACHINE))
+      throw new Error("the debug session runs on another machine");
+    return deps.client;
   }
 
   private need(): DebugDeps {

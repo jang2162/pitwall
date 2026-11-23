@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { checkoutKey, qualify } from "../checkout/checkout";
 import { editorContext } from "../editor/extensions/context";
 import { runCodeAction, showCodeActions } from "./code-actions";
-import type { EditWindow } from "./edit-window";
+import { createEditWindow, type EditWindow } from "./edit-window";
 import { createLspSessions, type LspDocument } from "./lsp-sessions";
 import { fakeLspDocuments, fakeLspServer } from "./lsp-testing";
 import { renameAt } from "./rename";
@@ -93,5 +93,34 @@ describe("edits of another machine's tab", () => {
     expect(asked(fx.here, "lsp.rename.prepare")).toBe(1);
     expect(asked(fx.here, "lsp.codeAction.list")).toBe(1);
     expect(fx.notify).not.toHaveBeenCalledWith({ level: "info", title: "REMOTE" });
+  });
+});
+
+// 리뷰 반영 2 권고 R4: 명령(완성 명령 · 전구 · 빠른 수정 · 코드 액션의 명령)의 편집도 이 창의 적용기로 온다 — `EditWindow.execute`
+// 안에서도 같은 판정을 지난다(나중에 머신마다 EditWindow 를 두어도 그 길이 열리지 않게).
+describe("a command of another machine's document", () => {
+  it("is not sent from this window's edit context", async () => {
+    const fx = await setup();
+    const notify = vi.fn(() => ({ close() {}, update() {} }));
+    const win = createEditWindow({
+      services: fx.here.services,
+      strings: () =>
+        new Proxy({} as Record<string, unknown>, {
+          get: (_t, key) => (key === "remoteEdits" ? "REMOTE" : () => String(key)),
+        }) as never,
+      notify,
+      lightbulb: () => true,
+      fs: {} as never,
+      workspace: {} as never,
+      preview: async () => false,
+    });
+    await win.execute(fx.remote, { command: "x" }, "rust-analyzer");
+    for (const s of [fx.here, fx.mini]) expect(asked(s, "lsp.command.execute")).toBe(0);
+    expect(notify).toHaveBeenCalledWith({ level: "info", title: "REMOTE" });
+    // 대조: 이 머신 문서의 명령은 보낸다.
+    fx.here.handle("lsp.command.execute", async () => ({ staleVersion: false }));
+    await win.execute(fx.local, { command: "x" }, "rust-analyzer");
+    expect(asked(fx.here, "lsp.command.execute")).toBe(1);
+    win.dispose();
   });
 });
