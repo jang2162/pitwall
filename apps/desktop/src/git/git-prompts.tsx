@@ -132,12 +132,18 @@ export function isHostKeyQuestion(text: string): boolean {
   return /^The authenticity of host '[^\n]*' can't be established\./.test(text);
 }
 
-/** askpass 질문의 다이얼로그(git · 원격 호스트의 ssh 가 같이 쓴다). */
+/**
+ * askpass 질문의 다이얼로그(git · 원격 호스트의 ssh 가 같이 쓴다). `machine` 은 질문을 낸 다른 머신의 이름(Desktop 의 별명 — Relay 가
+ * 댄 이름이 아니다, 18-m7-plan 메인 판정 M7-P19)이다. 있으면 제목 위에 「<머신> 의 git · ssh 가 묻는다」 를 글로 보인다 — 사람이
+ * 원격의 질문을 이 Mac 의 것으로 읽고 암호를 넣지 않게(M7-15). 이 머신의 질문이면 비운다.
+ */
 export function AskpassDialog({
   prompt,
+  machine,
   onAnswer,
 }: {
   prompt: AskpassPrompt;
+  machine?: string;
   onAnswer(answer: GitPromptAnswer): void;
 }) {
   const T = useProjectStrings().git.askpass;
@@ -159,6 +165,11 @@ export function AskpassDialog({
           data-testid="git-askpass-dialog"
           className="sheet-top fixed left-1/2 flex w-[460px] max-w-[94vw] -translate-x-1/2 flex-col gap-3 rounded-b-md border border-t-0 border-ui-border bg-ui-panel px-4 py-3 text-ui-foreground shadow-lg"
         >
+          {machine !== undefined && (
+            <p data-testid="git-askpass-machine" className="text-xs text-ui-muted-foreground">
+              {T.machine(machine)}
+            </p>
+          )}
           <Dialog.Title className="text-sm font-semibold">{title}</Dialog.Title>
           <Dialog.Description className="break-all whitespace-pre-line text-ui-muted-foreground">
             {prompt.text}
@@ -229,13 +240,18 @@ export function AskpassDialog({
   );
 }
 
-/** 프로젝트 창의 git 질의. 창이 떠 있는 동안 둔다. */
+/**
+ * 프로젝트 창의 git 질의. 창이 떠 있는 동안 둔다. 원격 체크아웃의 질의(그 머신 연결 — M7-11b 의 `useCheckoutHost` 가 띄운다)면
+ * `machine` 에 그 머신의 이름을 준다.
+ */
 export function GitPrompts({
   projectId,
   workspace,
+  machine,
 }: {
   projectId: string;
   workspace: UnsavedGuard;
+  machine?: string;
 }) {
   const { client } = useHost();
   // 한 번에 하나를 묻고 나머지는 차례를 기다린다.
@@ -261,5 +277,7 @@ export function GitPrompts({
         console.warn(LOG, "could not answer the git prompt", current.promptId, error),
       );
   };
-  return <AskpassDialog key={current.promptId} prompt={current} onAnswer={answer} />;
+  return (
+    <AskpassDialog key={current.promptId} prompt={current} machine={machine} onAnswer={answer} />
+  );
 }

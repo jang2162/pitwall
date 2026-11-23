@@ -144,6 +144,7 @@ fn open_target<R: Runtime>(app: &AppHandle<R>, target: OpenTarget) {
         file: Some(resolution.path),
         line: target.line,
         col: target.col,
+        checkout: None,
     };
     log_err(
         "open project window",
@@ -251,6 +252,7 @@ pub async fn open_project_window<R: Runtime>(
         file,
         line,
         col,
+        checkout: None,
     };
     tauri::async_runtime::spawn_blocking(move || open_project(&app, &project_id, &open))
         .await
@@ -690,6 +692,7 @@ mod tests {
             file: Some(wt.display().to_string()),
             line: Some(1),
             col: Some(2),
+            checkout: None,
         };
         open_project(f.app.handle(), &id, &directory).unwrap();
         assert_eq!(

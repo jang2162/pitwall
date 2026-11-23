@@ -176,6 +176,10 @@ pub struct ProjectOpen {
     pub line: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub col: Option<u32>,
+    /// 파일이 든 체크아웃(18-m7-plan M7-15 ② — 원격 셸의 `pitwall <파일>`). 있으면 **활성 체크아웃을 바꾸지 않고** 그 체크아웃의
+    /// 탭으로 연다 — 그래서 `worktree` 와 함께 오지 않는다. 다른 머신의 체크아웃 탭은 M7-11b 가 연다(그 전에는 창이 경고만 남긴다).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checkout: Option<pw_core::registry::bundle::CheckoutRef>,
 }
 
 impl ProjectOpen {
@@ -794,6 +798,7 @@ pub(crate) mod tests {
             file: Some("/wt/a.rs".into()),
             line: Some(3),
             col: Some(4),
+            checkout: None,
         };
         let window = open_project(app.handle(), "aaaa", "aaaa", &open).unwrap();
         let url = window.url().unwrap();

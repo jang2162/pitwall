@@ -27,6 +27,8 @@ pub const COMMANDS: &[(&str, &[WindowKind])] = &[
     ("open_project_window", ALL),
     ("window_close_cancelled", ALL),
     ("install_shell_command", ALL),
+    // 사람 입력 시각(src/remote-input.ts — 원격 셸의 열기 요청이 고를 Desktop, remote_open.rs).
+    ("note_input", ALL),
     // 웰컴 창의 S1 · S2(src/welcome/native.ts)와 설정 창 「MCP」 의 「파일로 열기」(src/settings/native.ts — 전역 settings.toml ·
     // 고른 프로젝트의 설정 파일, 16-m5-plan M5-15). 「Host 가 준 경로만」 은 설정 창 화면의 약속이다 — 이 명령은 웰컴 창에서처럼
     // 절대 경로의 파일인지만 본다(launch.rs).
@@ -96,6 +98,7 @@ mod tests {
         "open_project_window",
         "window_close_cancelled",
         "install_shell_command",
+        "note_input",
     ];
 
     fn allowed_in(label: &str) -> BTreeSet<&'static str> {

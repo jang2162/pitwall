@@ -189,6 +189,7 @@ pub fn install<R: Runtime>(builder: Builder<R>, router: Arc<HostRouter>) -> Buil
             crate::launch::take_pending_find_project,
             crate::launch::path_kind,
             crate::windows::take_pending_project_opens,
+            crate::remote_open::note_input,
             crate::shell_command::install_shell_command,
             crate::clipboard::write_clipboard,
             crate::drop_import::import_drop,
@@ -251,6 +252,13 @@ pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
         if let Some(notices) = window.try_state::<crate::approval_notice::ApprovalNotices>() {
             notices.focused(window.label());
         }
+    }
+    // 창이 앞에 온 것도 사람의 입력이다(원격의 열기 요청이 고를 Desktop — remote_open.rs). 시험 앱에는 없다.
+    if let (WindowEvent::Focused(true), Some(input)) = (
+        event,
+        window.try_state::<Arc<crate::remote_open::LastInput>>(),
+    ) {
+        input.note();
     }
     // MCP 승인의 「가장 최근에 앞에 있던 창」(pw_mcp::approval — 프로젝트 없는 요청이 갈 창). 시험 앱에는 없다.
     if let (WindowEvent::Focused(true), Some(mcp)) =

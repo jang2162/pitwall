@@ -576,6 +576,7 @@ db-closed-transaction-rolled-back = 연결 { $connection } 의 열린 트랜잭�
 git-askpass-title = git 이 인증 정보를 묻는다
 git-askpass-confirm-title = git 이 확인을 묻는다
 git-askpass-host-key-title = 처음 보는 호스트 키 — 이 호스트에 붙을까?
+git-askpass-machine = { $machine } 의 git · ssh 가 묻는다
 git-askpass-notice-title = git 이 보안 키를 기다린다
 git-askpass-input = 답
 git-askpass-submit = 확인

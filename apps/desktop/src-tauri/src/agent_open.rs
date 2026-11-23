@@ -26,6 +26,7 @@ impl<R: Runtime> Opener for WindowOpener<R> {
             file: request.file.as_ref().map(|f| f.display().to_string()),
             line: request.line,
             col: request.column,
+            checkout: None,
         };
         let created =
             launch::open_project_as(&self.0, &request.project_id, &open, Activation::Background)?;

@@ -310,6 +310,7 @@ export function projectStrings(t: Translate) {
         title: t("git-askpass-title"),
         confirmTitle: t("git-askpass-confirm-title"),
         hostKeyTitle: t("git-askpass-host-key-title"),
+        machine: (machine: string) => t("git-askpass-machine", { machine }),
         noticeTitle: t("git-askpass-notice-title"),
         input: t("git-askpass-input"),
         submit: t("git-askpass-submit"),

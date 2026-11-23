@@ -34,6 +34,7 @@ mod perf;
 #[cfg(feature = "perf-fake-db")]
 mod perf_fake_db;
 mod remote;
+mod remote_open;
 mod shell_command;
 mod tool_cli;
 mod update;
@@ -394,6 +395,9 @@ fn main() {
     if let Some(remote) = &remote {
         remote.attach_router(Arc::clone(&router));
     }
+    // 원격 셸의 `pitwall <파일>` 이 고를 「마지막 사람 입력」(remote_open.rs — M7-15).
+    let last_input = Arc::new(remote_open::LastInput::default());
+    let follow_router = Arc::clone(&router);
 
     let mut context = context();
     let identifier = single_instance_key(&context.config().identifier, &paths);
@@ -426,6 +430,7 @@ fn main() {
         .manage(perf)
         .manage(update_settings)
         .manage(mcp_sessions.clone())
+        .manage(Arc::clone(&last_input))
         // 메뉴(`menu::build`)가 지금 언어로 글자를 만든다 — 메뉴보다 먼저 등록한다.
         .manage(i18n)
         .menu(menu::build)
@@ -469,6 +474,16 @@ fn main() {
             // 원격 호스트의 SSH 백엔드: 기기 키는 이 인스턴스 키의 키체인 항목, ssh 의 질문은 같은 askpass 로 창에(M7-08).
             if let Some(remote) = &remote {
                 remote::attach(remote, &askpass, &paths, &identifier);
+                // 붙은 원격 머신의 열기 요청을 묶음 창으로(remote_open.rs — M7-15 ②).
+                if let Some(registry) = host.registry().cloned() {
+                    tauri::async_runtime::spawn(remote_open::follow(
+                        remote.clone(),
+                        Arc::clone(&follow_router),
+                        registry,
+                        Arc::clone(&last_input),
+                        Arc::new(remote_open::AppWindows(app.handle().clone())),
+                    ));
+                }
             }
             Ok(())
         })
