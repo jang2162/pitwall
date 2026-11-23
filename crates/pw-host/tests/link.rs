@@ -79,6 +79,15 @@ async fn linked_as(
         })
         .unwrap()
         .id;
+    if relay {
+        // Relay 의 터미널이 Host 수명인 것은 신뢰한 프로젝트뿐이다(미신뢰는 연결 수명 — 18-m7-plan M7-09 ②).
+        assembled
+            .host
+            .registry()
+            .unwrap()
+            .set_trust(&project, true)
+            .unwrap();
+    }
     let host = Arc::new(Counted {
         inner: assembled.host,
         connects: AtomicUsize::new(0),

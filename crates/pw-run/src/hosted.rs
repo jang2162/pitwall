@@ -8,7 +8,11 @@
 //!   (`dropped`)로 알린다. 로컬 터미널과 달리 소비자가 느려도 셸을 멈추지 않는다 — 떼어진 동안에도 dev 서버가 돌아야 한다.
 //! - 붙은 스트림(`terminal.create` · `terminal.attach`)이 하나도 없으면 **떼어진** 터미널이다. 연결이 닫히거나 스트림이 취소돼도 셸은
 //!   산다. 끝내기는 `terminal.close`(사람이 탭을 닫음), 셸이 스스로 끝남, 떼어진 터미널 상한(머신당 [`DETACHED_LIMIT`] — 넘으면 가장
-//!   오래 떼어진 것부터), 신뢰 해제(그 프로젝트의 떼어진 터미널 — [`crate::Terminals::follow_trust`]), Host 의 끝([`crate::shutdown`]).
+//!   오래 떼어진 것부터), 신뢰 해제(그 프로젝트의 터미널 모두 — 붙은 것도, [`crate::Terminals::follow_trust`]), Host 의 끝
+//!   ([`crate::shutdown`]).
+//! - **미신뢰 프로젝트의 터미널은 연결 수명이다**(리뷰 2.2 · 메인 판정 2026-11-23): 셸은 사람의 로그인 셸이라 띄우기 · 입력 · 크기 ·
+//!   닫기는 로컬과 같게 받지만, 떼기 · 다시 붙기는 `PERMISSION_DENIED`(`data.reason = "untrusted"`)이고 붙은 스트림이 모두 끝나면
+//!   (연결이 닫힘) 셸을 끝낸다 — 미신뢰 프로젝트의 셸이 Host 에 남아 다른 창이 그것으로 명령을 보내지 못하게.
 //! - 셸이 끝난 터미널은 붙은 스트림이 `exited` 를 보내면 목록에서 빠진다. 떼어진 동안 끝났으면 다음 붙기가 남은 출력과 `exited` 를
 //!   받을 때까지(또는 상한으로 밀릴 때까지) 남는다.
 
@@ -241,8 +245,13 @@ pub(crate) async fn follow<E: serde::Serialize + Send + 'static>(
 }
 
 /// 한 Host 의 Host 수명 터미널들.
+/// 프로젝트를 신뢰하는가(레지스트리 — Host 를 만든 뒤 붙는다).
+pub(crate) type TrustCheck = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
 pub(crate) struct Hosting {
     terminals: Mutex<HashMap<TerminalId, Arc<Hosted>>>,
+    /// 붙기 전에는 어느 프로젝트도 신뢰하지 않는다(fail-closed).
+    trust: std::sync::OnceLock<TrustCheck>,
     /// 떼어진 순서.
     clock: AtomicU64,
     next_key: AtomicU64,
@@ -288,9 +297,32 @@ impl Hosting {
     pub(crate) fn new(max_detached: usize) -> Self {
         Self {
             terminals: Mutex::default(),
+            trust: std::sync::OnceLock::new(),
             clock: AtomicU64::new(1),
             next_key: AtomicU64::new(1),
             max_detached,
+        }
+    }
+
+    /// 두 번째부터는 무시한다.
+    pub(crate) fn set_trust(&self, check: TrustCheck) {
+        let _ = self.trust.set(check);
+    }
+
+    pub(crate) fn trusted(&self, project: &str) -> bool {
+        self.trust.get().is_some_and(|check| check(project))
+    }
+
+    /// 미신뢰 프로젝트면 떼기 · 붙기를 거절한다.
+    pub(crate) fn require_trust(&self, project: &str) -> Result<(), RpcError> {
+        if self.trusted(project) {
+            Ok(())
+        } else {
+            Err(RpcError::new(
+                code::PERMISSION_DENIED,
+                "trust the project before keeping or reattaching its terminals",
+            )
+            .with_data(json!({ "reason": "untrusted", "projectId": project })))
         }
     }
 
@@ -346,6 +378,12 @@ impl Hosting {
             }
         };
         if became_detached && lock(&self.terminals).contains_key(&hosted.id) {
+            // 미신뢰 프로젝트의 터미널은 떼어 두지 않는다(연결 수명).
+            if !self.trusted(&hosted.project) {
+                tracing::info!(target: "pw_run", terminal = hosted.id, "ending a terminal of an untrusted project with its connection");
+                self.remove(hosted.id);
+                return;
+            }
             tracing::info!(target: "pw_run", terminal = hosted.id, "terminal detached");
             self.keep_within_limit();
         }
@@ -471,27 +509,26 @@ impl Hosting {
         out
     }
 
-    /// 그 프로젝트들의 떼어진 터미널을 끝낸다(신뢰를 거둠). 끝낸 번호.
-    pub(crate) fn end_detached_of(&self, projects: &[String]) -> Vec<TerminalId> {
-        let ids: Vec<TerminalId> = self
-            .detached()
-            .into_iter()
-            .filter(|(_, t)| projects.contains(&t.project))
-            .map(|(_, t)| t.id)
+    /// 그 프로젝트들의 터미널을 모두 끝낸다(신뢰를 거둠) — 떼어진 것은 곧바로 빼고, 붙은 것은 셸을 끝내 스트림이 남은 출력과
+    /// `exited` 를 받게 한다. 끝낸 번호.
+    pub(crate) fn end_all_of(&self, projects: &[String]) -> Vec<TerminalId> {
+        let ended: Vec<Arc<Hosted>> = lock(&self.terminals)
+            .values()
+            .filter(|t| projects.contains(&t.project))
+            .cloned()
             .collect();
-        for id in &ids {
-            tracing::info!(target: "pw_run", terminal = id, "ending a detached terminal of a project that is no longer trusted");
-            self.remove(*id);
+        for t in &ended {
+            tracing::info!(target: "pw_run", terminal = t.id, "ending a terminal of a project that is no longer trusted");
+            self.close(t);
         }
-        ids
+        ended.iter().map(|t| t.id).collect()
     }
 
-    /// 떼어진 터미널이 있는 프로젝트들.
-    pub(crate) fn detached_projects(&self) -> Vec<String> {
-        let mut out: Vec<String> = self
-            .detached()
-            .into_iter()
-            .map(|(_, t)| t.project.clone())
+    /// 터미널이 있는 프로젝트들.
+    pub(crate) fn projects(&self) -> Vec<String> {
+        let mut out: Vec<String> = lock(&self.terminals)
+            .values()
+            .map(|t| t.project.clone())
             .collect();
         out.sort();
         out.dedup();

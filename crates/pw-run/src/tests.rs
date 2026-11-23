@@ -74,16 +74,19 @@ impl Fixture {
         )
     }
 
-    /// 원격 Host 의 터미널(Host 수명 — 18-m7-plan M7-09 ②). 떼어진 터미널 상한은 `max_detached`.
+    /// 원격 Host 의 터미널(Host 수명 — 18-m7-plan M7-09 ②). 떼어진 터미널 상한은 `max_detached`. 프로젝트는 신뢰한다 — 미신뢰
+    /// 프로젝트의 원격 터미널은 연결 수명이다.
     fn hosted(max_detached: usize) -> Self {
-        Self::build(
+        let f = Self::build(
             "schema = 1\n",
             LOGIN_SHELL,
             Duration::from_secs(5),
             pw_runtime::login_shell::TIMEOUT_COOLDOWN,
             None,
             Lifetime::Host { max_detached },
-        )
+        );
+        f.projects.set_trust(&f.project, true).unwrap();
+        f
     }
 
     fn build(

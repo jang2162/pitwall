@@ -49,9 +49,16 @@ async fn until(what: &str, mut check: impl FnMut() -> bool) {
     }
 }
 
-/// 다른 프로젝트 하나를 더 만든다.
+/// 다른 프로젝트 하나를 더 만든다(신뢰한다).
 fn other_project(f: &Fixture) -> String {
-    let root = f.tmp.path().join("other");
+    let id = untrusted_project(f, "other");
+    f.projects.set_trust(&id, true).unwrap();
+    id
+}
+
+/// 신뢰하지 않은 프로젝트 하나를 더 만든다.
+fn untrusted_project(f: &Fixture, name: &str) -> String {
+    let root = f.tmp.path().join(name);
     fs::create_dir_all(&root).unwrap();
     f.projects
         .create(NewProject {
@@ -307,19 +314,25 @@ async fn only_the_projects_owner_window_may_attach() {
             code::PERMISSION_DENIED,
             "input as {role:?} {scope:?}"
         );
+        // 닫기도 거절한다(없는 터미널처럼 조용히 넘기지 않는다 — 리뷰 권고 3).
+        let (code_, _) = refused(&mut x, "terminal.close", json!({"terminalId": t.terminal})).await;
+        assert_eq!(
+            code_,
+            code::PERMISSION_DENIED,
+            "close as {role:?} {scope:?}"
+        );
     }
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(!f.root.join("PWNED").exists());
     assert_eq!(f.terminals.detached_count(), 1);
 }
 
-/// 신뢰를 거둔 프로젝트의 떼어진 터미널은 끝난다. 붙어 있는 터미널과 다른 프로젝트의 것은 그대로다.
+/// 신뢰를 거둔 프로젝트의 원격 터미널은 붙은 것 · 떼어진 것 모두 끝난다(리뷰 2.2 — 붙어 있던 것이 나중에 떼어져 미신뢰 프로젝트의
+/// 셸로 남지 않게). 붙은 스트림은 남은 출력과 `exited` 를 받는다. 다른 프로젝트의 것은 그대로다.
 #[tokio::test(flavor = "multi_thread")]
-async fn revoking_trust_ends_the_projects_detached_terminals() {
+async fn revoking_trust_ends_the_projects_terminals_attached_or_not() {
     let f = Fixture::hosted(DETACHED_LIMIT);
     let other = other_project(&f);
-    f.projects.set_trust(&f.project, true).unwrap();
-    f.projects.set_trust(&other, true).unwrap();
     let follow = tokio::spawn(
         Arc::clone(&f.terminals)
             .follow_trust(Terminals::subscribe_trust(&f.bus), f.projects.clone()),
@@ -341,9 +354,49 @@ async fn revoking_trust_ends_the_projects_detached_terminals() {
     })
     .await;
     f.projects.set_trust(&f.project, false).unwrap();
-    assert_gone_within_a_second(&[detached.pid], Instant::now()).await;
-    assert!(alive(attached.pid), "an attached terminal ended");
+    assert_gone_within_a_second(&[detached.pid, attached.pid], Instant::now()).await;
+    let (_, end) = c.exit(attached.stream).await;
+    assert_eq!(end.outcome, StreamOutcome::Completed);
     assert!(alive(elsewhere.pid), "another project's terminal ended");
     assert_eq!(f.terminals.detached_count(), 1);
+    assert_eq!(f.terminals.count(), 1);
     follow.abort();
+}
+
+/// 미신뢰 프로젝트의 원격 터미널은 연결 수명이다(메인 판정 2026-11-23): 띄우기 · 입력 · 크기는 로컬과 같이 받고, 떼기 · 다시
+/// 붙기는 `PERMISSION_DENIED`(`untrusted`), 연결이 닫히면 셸이 끝난다.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_untrusted_projects_remote_terminal_lives_with_its_connection() {
+    let f = Fixture::hosted(DETACHED_LIMIT);
+    let project = untrusted_project(&f, "cloned");
+    let scope = ConnectionScope::Project(project.clone());
+    let params = json!({"projectId": project, "cols": 80, "rows": 24});
+    let mut c = f.client_in(scope.clone());
+    let t = c.open(params.clone()).await;
+    c.input(t.terminal, "echo HI-$((2+3))\n").await;
+    c.read_until(t.stream, "HI-5").await;
+    c.call(
+        "terminal.resize",
+        json!({"terminalId": t.terminal, "cols": 100, "rows": 30}),
+    )
+    .await
+    .outcome
+    .unwrap();
+    let (code_, data) = refused(&mut c, "terminal.detach", json!({"terminalId": t.terminal})).await;
+    assert_eq!(
+        (code_, data["reason"].clone()),
+        (code::PERMISSION_DENIED, json!("untrusted"))
+    );
+    let mut d = f.client_in(scope.clone());
+    let (code_, data) = refused(&mut d, "terminal.attach", json!({"terminalId": t.terminal})).await;
+    assert_eq!(
+        (code_, data["reason"].clone()),
+        (code::PERMISSION_DENIED, json!("untrusted"))
+    );
+    assert!(alive(t.pid));
+    c.session.close();
+    drop(c);
+    assert_gone_within_a_second(&[t.pid], Instant::now()).await;
+    until("the untrusted terminal stayed", || f.terminals.count() == 0).await;
+    assert_eq!(f.terminals.detached_count(), 0);
 }

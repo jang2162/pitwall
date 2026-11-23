@@ -123,6 +123,9 @@ impl Terminals {
 
     /// 두 번째부터는 무시한다.
     pub fn attach(&self, parts: HostParts) {
+        let projects = parts.projects.clone();
+        self.hosting
+            .set_trust(Arc::new(move |project: &str| projects.is_trusted(project)));
         let _ = self.host.set(parts);
     }
 
@@ -253,6 +256,8 @@ impl Terminals {
             ));
         }
         let hosted = self.hosting.find(scope, id)?;
+        // 미신뢰 프로젝트의 터미널은 연결 수명이다 — 떼어 두지 않는다.
+        self.hosting.require_trust(&hosted.project)?;
         let ended = self.hosting.detach(&hosted, owner, end_oldest)?;
         Ok(TerminalDetached { ended })
     }
@@ -282,6 +287,7 @@ impl Terminals {
         sink: StreamSink<TerminalAttachEvent>,
     ) -> Result<(), RpcError> {
         let hosted = self.hosting.find(scope, params.terminal_id)?;
+        self.hosting.require_trust(&hosted.project)?;
         let since = params.since.unwrap_or(0);
         let attachment = self.hosting.attach(&hosted, owner);
         let from = hosted.first_from(since);
@@ -320,9 +326,9 @@ impl Terminals {
         )
     }
 
-    /// 신뢰가 바뀔 때마다(`project.changed` 의 `trust`) 신뢰를 잃은 프로젝트의 떼어진 터미널을 끝낸다(18-m7-plan M7-09 ②). 그
-    /// 신뢰를 쓰는 프로젝트(워크트리 프로젝트 포함 — `Registry::trust_followers`)를 함께 본다. 이벤트를 놓치면(`Lagged`) 떼어진
-    /// 터미널이 있는 프로젝트를 모두 다시 본다. 구독이 닫히면 끝난다.
+    /// 신뢰가 바뀔 때마다(`project.changed` 의 `trust`) 신뢰를 잃은 프로젝트의 원격 터미널을 모두(붙은 것 · 떼어진 것) 끝낸다
+    /// (18-m7-plan M7-09 ② · 리뷰 2.2). 그 신뢰를 쓰는 프로젝트(워크트리 프로젝트 포함 — `Registry::trust_followers`)를 함께 본다.
+    /// 이벤트를 놓치면(`Lagged`) 터미널이 있는 프로젝트를 모두 다시 본다. 구독이 닫히면 끝난다.
     pub async fn follow_trust(
         self: Arc<Self>,
         mut events: pw_core::bus::Subscription,
@@ -346,14 +352,14 @@ impl Terminals {
                 let candidates = match changed {
                     Some(project) => registry
                         .trust_followers(&project)
-                        .unwrap_or_else(|_| this.hosting.detached_projects()),
-                    None => this.hosting.detached_projects(),
+                        .unwrap_or_else(|_| this.hosting.projects()),
+                    None => this.hosting.projects(),
                 };
                 let untrusted: Vec<String> = candidates
                     .into_iter()
                     .filter(|p| !registry.is_trusted(p))
                     .collect();
-                this.hosting.end_detached_of(&untrusted);
+                this.hosting.end_all_of(&untrusted);
             });
             if let Err(e) = done.await {
                 tracing::warn!(target: "pw_run", %e, "terminal trust handler failed");

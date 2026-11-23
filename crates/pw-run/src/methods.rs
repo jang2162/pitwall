@@ -6,7 +6,8 @@
 //!   없으므로 종료를 따로 알리는 버스 이벤트가 없다. `terminal.detach` 는 invalid params, `terminal.list` 는 늘 비었다.
 //! - **원격 Host(Relay)**: 터미널은 Host 의 것이다(18-m7-plan M7-09 ② — `crate::hosted`). 스트림이 끝나도 셸은 떼어진 터미널로 남고
 //!   `terminal.attach { terminalId, since }` 로 다시 붙는다. `output` 에 오프셋(`offset`)이 실린다. `terminalId` 를 받는 메서드는 그
-//!   프로젝트의 창만 받는다 — 다른 범위는 permission denied, 다른 프로젝트의 번호는 없는 터미널이다.
+//!   프로젝트의 창만 받는다 — 다른 범위는 permission denied, 다른 프로젝트의 번호는 없는 터미널이다. 미신뢰 프로젝트의 터미널은
+//!   연결 수명이다(떼기 · 붙기는 permission denied `untrusted`, 연결이 닫히면 끝남). 신뢰를 거두면 그 프로젝트의 터미널은 모두 끝난다.
 
 use std::sync::Arc;
 
