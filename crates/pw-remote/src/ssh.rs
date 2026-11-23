@@ -398,7 +398,7 @@ impl SshBackend {
     }
 
     /// 시험: 이 호스트의 직접 연결 주소를 안다고 둔다.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn remember_direct(&self, name: &str) {
         self.learn_direct(name, true);
     }
