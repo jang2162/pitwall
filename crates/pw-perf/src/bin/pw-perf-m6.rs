@@ -20,6 +20,8 @@
 
 /// 회 결과의 계산과 요약 글. macOS 의 `drive` 와 시험만 쓴다.
 #[cfg(any(target_os = "macos", test))]
+// macOS 밖에서는 시험 빌드만 report 를 쓴다 — `drive` 만 쓰는 것이 dead_code 로 남는다(Linux · Windows CI 의 clippy).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod report {
     use serde_json::{Value, json};
 
