@@ -48,7 +48,7 @@ pub enum DialError {
         ours: Versions,
         theirs: Option<Versions>,
     },
-    /// 기억한 머신 id 와 다른 키의 Relay(SSH 호스트 키 변경과 같은 취급 — 사람에게 보인다).
+    /// 기억한 머신 id 와 다른 키의 Relay(SSH 호스트 키 변경과 같은 취급 — 사람에게 보인다). `found` 는 서명을 확인한 키의 지문이다.
     MachineMismatch {
         expected: MachineId,
         found: MachineId,
@@ -289,15 +289,6 @@ async fn handshake(
             "the relay id is not its key".to_owned(),
         ));
     }
-    // 머신 id(메인 판정 M7-P6): 그 호스트에 기억한 id 와 다른 키의 Relay 에는 서명하지 않는다.
-    if let Expect::Machine(expected) = expect
-        && *expected != found
-    {
-        return Err(DialError::MachineMismatch {
-            expected: expected.clone(),
-            found,
-        });
-    }
     let relay_text = transcript(
         Signer::Relay,
         PROTOCOL,
@@ -312,6 +303,17 @@ async fn handshake(
         .is_some_and(|sig| theirs.key.verifies(&relay_text, sig));
     if !proven {
         return Err(DialError::BadRelaySignature);
+    }
+    // 머신 id(메인 판정 M7-P6): 그 호스트에 기억한 id 와 다른 키의 Relay 에는 서명하지 않는다. 비교는 Relay 의 서명을 확인한
+    // **뒤**다 — 그래서 `MachineMismatch.found` 는 증명된 키의 지문이다(서명 없는 hello 의 키가 「새로 믿을」 id 가 되지 않게 —
+    // M7-08 델타 리뷰 F-a). Relay 의 서명을 보는 것은 이 Desktop 이 아무것도 서명하지 않고 할 수 있다.
+    if let Expect::Machine(expected) = expect
+        && *expected != found
+    {
+        return Err(DialError::MachineMismatch {
+            expected: expected.clone(),
+            found,
+        });
     }
 
     // 서명 글에 이 Relay 의 키를 넣는다(채널 바인딩 — 다른 Relay 가 이 서명을 옮겨 쓰지 못한다).

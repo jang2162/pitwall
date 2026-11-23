@@ -2018,3 +2018,46 @@ async fn a_drained_channel_returns_its_window_for_the_next_big_message() {
         .unwrap();
     assert_eq!(big.as_str().unwrap().len(), 50 * 1024);
 }
+
+/// M7-08 델타 리뷰 F-a: 기억한 id 와 다른 키를 대더라도 서명이 맞지 않으면 「머신이 바뀜」(`MachineMismatch` — 사람이 새로 믿을 수
+/// 있는 id)이 아니라 `BadRelaySignature` 다. 남의 공개키(`victim`)만 아는 Relay 가 그 키를 대도 「새로 믿을」 id 가 되지 못한다.
+/// Desktop 은 어느 쪽에도 서명하지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn another_key_without_its_signature_is_not_a_machine_change() {
+    let (transport, acceptor) = transport::memory(64 * 1024);
+    let remembered = DeviceKey::generate().unwrap();
+    let victim = DeviceKey::generate().unwrap();
+    let attacker = DeviceKey::generate().unwrap();
+    let desktop = desktop_for(transport, &remembered);
+    let attach = tokio::spawn(async move { desktop.attach().await });
+    let mut framed = Framed::new(acceptor.accept().await.unwrap());
+    let theirs: Hello = serde_json::from_value(raw_read(&mut framed).await.unwrap().body).unwrap();
+    let challenge = Challenge(random_challenge().unwrap());
+    let text = transcript(
+        Signer::Relay,
+        PROTOCOL,
+        &theirs.challenge,
+        &challenge,
+        &theirs.key,
+        &victim.public(),
+    );
+    let hello = Hello {
+        versions: versions(),
+        device: victim.id(),
+        key: victim.public(),
+        challenge,
+        signature: Some(attacker.sign(&text)),
+    };
+    framed
+        .write
+        .write(&LinkFrame::control(Kind::Hello, json!(hello)))
+        .await
+        .unwrap();
+    let err = attach.await.unwrap().unwrap_err();
+    assert_eq!(err, DialError::BadRelaySignature, "{err:?}");
+    let after: Vec<_> = read_until_closed(&mut framed).await;
+    assert!(
+        after.iter().all(|f| f.kind != Kind::Auth),
+        "the desktop signed: {after:?}"
+    );
+}
