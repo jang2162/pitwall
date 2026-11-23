@@ -7,7 +7,8 @@
 // - 받기(`uploadId`)는 연 연결의 것이다(`UploadOwner`) — 다른 연결의 청크 · finish 는 not found.
 // - 경로가 바뀌는 `apply` 는 그 프로젝트의 `git.prompts` 를 듣는 연결에 미저장 확인을 묻는다. 듣는 연결이 없으면 `2006`(NO_WINDOW),
 //   `cancel` 이면 `-32002` 로 아무것도 하지 않는다(crates/pw-git/src/write/mod.rs).
-// - `git.reset` 은 `expected`(HEAD 커밋) · `expectedRef`(HEAD 의 ref)가 지금과 다르면 `-32004` 로 아무것도 하지 않는다.
+// - `git.reset` 은 `expected`(HEAD 커밋) · `expectedRef`(HEAD 의 ref)를 주었고 지금과 다르면 `-32004` 로 아무것도 하지 않는다(선택 칸 —
+//   주지 않으면 대조하지 않는다).
 //
 // 커밋은 「id → 부모」 표다. 묶음 바이트는 보낼 커밋들의 JSON(base64)이고, 여러 청크로 나뉜다.
 
@@ -385,7 +386,12 @@ export function createGitHost(repo: FakeRepo): FakeGitHost {
           reply({ lost: { changes: [], overwritten: [] }, fingerprint: "fp" });
           return true;
         case "git.reset": {
-          if (params.expected !== tipOfHead() || params.expectedRef !== `refs/heads/${repo.head}`) {
+          // 실제처럼 준 것만 대조한다(`expected` · `expectedRef` 는 선택 칸 — 없으면 대조하지 않는다).
+          const given = (v: unknown) => v !== undefined && v !== null;
+          if (
+            (given(params.expected) && params.expected !== tipOfHead()) ||
+            (given(params.expectedRef) && params.expectedRef !== `refs/heads/${repo.head}`)
+          ) {
             fail(error(-32004, "HEAD moved since it was read", { head: tipOfHead() }));
             return true;
           }
