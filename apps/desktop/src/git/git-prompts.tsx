@@ -124,9 +124,12 @@ export function listenGitPrompts(
 
 const CANCEL: GitPromptAnswer = { kind: "cancel" };
 
-/** ssh 의 호스트 키 확인 질문인가(OpenSSH `sshconnect.c` 의 문장 — 힌트 없이 온다). */
+/**
+ * ssh 의 호스트 키 확인 질문인가(OpenSSH `sshconnect.c` 의 문장 — 힌트 없이 온다). 글의 **맨 앞**에서만 본다 — 원격이 고르는
+ * keyboard-interactive 질문은 OpenSSH 가 `(user@host) ` 를 앞에 붙이므로 그 문장을 넣어도 여기 걸리지 않는다(리뷰 R1).
+ */
 export function isHostKeyQuestion(text: string): boolean {
-  return /The authenticity of host .* can't be established/s.test(text);
+  return /^The authenticity of host '[^\n]*' can't be established\./.test(text);
 }
 
 /** askpass 질문의 다이얼로그(git · 원격 호스트의 ssh 가 같이 쓴다). */

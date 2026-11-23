@@ -17,7 +17,7 @@ import { expect, it, vi } from "vitest";
 
 import { createDocumentStore, type DocumentSource } from "../editor/documents";
 import { createEditorWorkspace, type UnsavedAnswer } from "../editor/editor-workspace";
-import { answerUnsaved, hostPath, listenGitPrompts } from "./git-prompts";
+import { answerUnsaved, hostPath, isHostKeyQuestion, listenGitPrompts } from "./git-prompts";
 
 const WORK_TREE = "/w";
 const README = "/w/README.md";
@@ -240,4 +240,13 @@ it("joins git paths onto the work tree with the host's separator", () => {
   expect(hostPath("/w", "src/a.rs")).toBe("/w/src/a.rs");
   expect(hostPath("/w/", "a")).toBe("/w/a");
   expect(hostPath(String.raw`C:\w`, "src/a.rs")).toBe(String.raw`C:\w\src\a.rs`);
+});
+
+it("recognises the ssh host key question only at the start, so a remote keyboard-interactive prompt cannot pose as it", () => {
+  const question =
+    "The authenticity of host 'mini (192.0.2.7)' can't be established.\nED25519 key fingerprint is SHA256:fp.\nAre you sure you want to continue connecting (yes/no/[fingerprint])?";
+  expect(isHostKeyQuestion(question)).toBe(true);
+  expect(isHostKeyQuestion(`(dev@mini) ${question}`)).toBe(false);
+  expect(isHostKeyQuestion(`Password:\n${question}`)).toBe(false);
+  expect(isHostKeyQuestion("dev@mini's password: ")).toBe(false);
 });
