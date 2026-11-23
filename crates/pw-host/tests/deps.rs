@@ -5,16 +5,26 @@ use std::collections::{BTreeSet, HashMap};
 
 use serde_json::Value;
 
+/// 이 기기의 타깃(`cargo -vV` 의 `host:`).
+fn host_triple() -> String {
+    let output = std::process::Command::new(env!("CARGO"))
+        .arg("-vV")
+        .output()
+        .unwrap();
+    let text = String::from_utf8(output.stdout).unwrap();
+    text.lines()
+        .find_map(|l| l.strip_prefix("host: "))
+        .unwrap_or_else(|| panic!("no host line in {text}"))
+        .to_owned()
+}
+
 #[test]
 fn pw_host_does_not_depend_on_tauri() {
+    // `--filter-platform` 이 없으면 `cargo metadata` 는 모든 타깃의 패키지를 읽어야 해, 이 타깃만 받은 CI 캐시에서 `--offline` 이
+    // 실패한다(macOS arm64 에 없는 `curve25519-dalek-derive`). `cargo tree` 처럼 이 기기의 타깃만 본다 — CI 의 세 OS 가 저마다 본다.
     let output = std::process::Command::new(env!("CARGO"))
-        .args([
-            "metadata",
-            "--format-version",
-            "1",
-            "--offline",
-            "--manifest-path",
-        ])
+        .args(["metadata", "--format-version", "1", "--offline"])
+        .args(["--filter-platform", &host_triple(), "--manifest-path"])
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
         .output()
         .unwrap();
