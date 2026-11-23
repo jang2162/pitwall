@@ -3,6 +3,7 @@
 // `remote.connect` 스트림은 붙였다 떼고 다시 붙여도 하나만 남아야 한다. 가짜 Host 가 스트림에 상태를 보낸다.
 
 import type {
+  RemoteForward,
   ConfigView,
   HostInfo,
   KeymapFile,
@@ -39,6 +40,8 @@ const host = vi.hoisted(() => ({
   relays: null as RemoteRelays | null,
   /** 원격의 지금 옛 판 데몬(사람이 본 뒤 바뀔 수 있다 — 실제 Host 처럼 `remote.stopOld` 가 이것과 견준다). */
   remoteOld: [] as RemoteOldRelay[],
+  /** 이 Host 의 포트 포워딩(`remote.forwards.list` — 18-m7-plan M7-22). */
+  forwards: [] as RemoteForward[],
 }));
 
 vi.mock("../tauri-transport", async () => {
@@ -90,6 +93,15 @@ vi.mock("../tauri-transport", async () => {
             return reply({ kind: "ok", path: "/d/state.db" });
           case "remote.hosts.list":
             return reply({ hosts: host.hosts, warnings: [] });
+          case "remote.forwards.list": {
+            const { name } = m.params as { name: string | null };
+            return reply(host.forwards.filter((f) => name === null || f.name === name));
+          }
+          case "remote.forward.close": {
+            const { id } = m.params as { id: number };
+            host.forwards = host.forwards.filter((f) => f.id !== id);
+            return reply(null);
+          }
           case "remote.log":
             return reply([
               {
@@ -201,6 +213,7 @@ beforeEach(() => {
   host.connects.clear();
   host.relays = null;
   host.remoteOld = [];
+  host.forwards = [];
 });
 
 afterEach(() => {
@@ -557,4 +570,48 @@ it("keeps Disconnect while the link resumes", async () => {
   await vi.waitFor(() =>
     expect(host.calls.filter((c) => c.method === "remote.disconnect")).toHaveLength(1),
   );
+});
+
+// 18-m7-plan M7-22 ⑤: 호스트 줄에 그 호스트의 포트 포워딩과 [끄기]. 열지 못한 설정의 포워딩(루프백이 아닌 local_host)은 그 까닭을
+// 보인다.
+it("lists the host's port forwards with the reason a setting was not opened and turns one off", async () => {
+  host.forwards = [
+    {
+      id: 1,
+      name: "mini",
+      origin: "settings",
+      localHost: "127.0.0.1",
+      localPort: 8080,
+      remoteHost: "localhost",
+      remotePort: 8080,
+      state: { state: "listening" },
+    },
+    {
+      id: 2,
+      name: "mini",
+      origin: "settings",
+      localHost: "0.0.0.0",
+      localPort: 5005,
+      remoteHost: "localhost",
+      remotePort: 5005,
+      state: {
+        state: "failed",
+        error: { kind: "notLoopback", message: "local_host is not a loopback address" },
+      },
+    },
+  ];
+  await openRemoteTab();
+  const rows = await vi.waitFor(() => {
+    const r = [...document.querySelectorAll<HTMLElement>("[data-testid=remote-forward]")];
+    expect(r).toHaveLength(2);
+    return r;
+  });
+  expect(rows[0]!.textContent).toContain("127.0.0.1:8080");
+  expect(rows[0]!.textContent).toContain("localhost:8080");
+  expect(rows[1]!.dataset.state).toBe("failed");
+  expect(rows[1]!.querySelector("[data-testid=remote-forward-why]")?.textContent).toContain(
+    "0.0.0.0",
+  );
+  await click(rows[0]!.querySelector("[data-testid=remote-forward-off]")!);
+  expect(host.calls.find((c) => c.method === "remote.forward.close")?.params).toEqual({ id: 1 });
 });
