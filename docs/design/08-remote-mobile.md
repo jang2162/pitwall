@@ -55,12 +55,14 @@
 **방법 A. 원격에서 직접 설치** — `curl -fsSL https://.../install.sh | sh` (또는 Homebrew/apt/단일 바이너리) → 서비스 등록(v1.0 전 — 18-m7-plan 「3」. M7 에서는 릴리스 바이너리를 아래 경로 · 이름 규칙으로 직접 배치하고 `pitwall-relay pair` 코드로 페어링한다)
 
 **방법 B. Desktop에서 SSH로 설치 (Zed 방식)**
-1. 시스템 `ssh` 바이너리 사용 (사용자의 `~/.ssh/config`, 에이전트, ProxyJump, ControlMaster를 그대로 존중). 비밀번호는 설정에 저장하지 않고 키 인증 권장, 프롬프트는 GUI askpass로 처리
+1. 시스템 `ssh` 바이너리 사용 (사용자의 `~/.ssh/config`, 에이전트, ProxyJump, ControlMaster를 그대로 존중). 비밀번호는 설정에 저장하지 않고 키 인증 권장, 프롬프트는 GUI askpass로 처리. 처음 보는 호스트 키는 ssh 의 확인(askpass `confirm`)이 창으로 가고, 확인을 끄는 옵션(`StrictHostKeyChecking=no` · `UserKnownHostsFile=/dev/null` 등)은 Pitwall 이 넘기지 않으며 사람의 `ssh_args` 에 있어도 거절한다. 바뀐 호스트 키는 ssh 의 거절 원문을 보인다(18-m7-plan M7-06 · M7-P17 — 구현 `pw_link::ssh`)
 2. 원격 OS/아키텍처 감지 (`uname -sm`)
-3. `~/.local/share/pitwall/relay/pitwall-relay-{channel}-{version}` 존재 여부 확인 (원격의 `$XDG_DATA_HOME` 존중) — **Desktop 버전과 정확히 일치**해야 함
+3. `~/.local/share/pitwall/relay/pitwall-relay-{channel}-{version}` 존재 여부 확인 (원격의 `$XDG_DATA_HOME` 존중) — **Desktop 버전과 정확히 일치**해야 함. 자리는 원격 셸이 Relay 와 같은 순서로 푼다(`PITWALL_DATA_DIR` → `$XDG_DATA_HOME/pitwall` → `$HOME/.local/share/pitwall`, 그 아래 `relay/`). 있어도 해시가 매니페스트와 다르면 다시 올린다
 4. 없으면 설치:
    - 기본: Desktop 이 받아(서명 매니페스트로 검증, `$CACHE/relay-dist/`) SSH 로 올린다. 개발 빌드(debug)는 그 빌드 결과를 올린다(18-m7-plan 결정 M7-D5 · 06 D77). 릴리스 자산은 `pitwall-relay-<판>-<플랫폼>`(`linux-x86_64` · `linux-aarch64` musl 정적, `macos-aarch64` · `macos-x86_64`)과 `relay-manifest.json`(이름 · sha256 · 크기를 (OS, 아키텍처)마다) · 그 `.sig`(updater 운영 키, 서명에 판이 실린다)다. Desktop 은 앱의 updater 공개키로 서명 · 판을 본 뒤 그 (OS, 아키텍처)의 해시와 같은 바이너리만 올린다(`pw_release::relay` — 18-m7-plan M7-05). 개발 빌드 갈래(`mise run relay-build` 의 `target/relay-dist/`)는 debug 빌드에만 있다
+   - 올리기: 같은 폴더의 임시 이름(`<이름>.part.<pid>`)에 쓰고 원격에서 해시를 다시 본 뒤(`sha256sum` · `shasum -a 256`, 둘 다 없으면 올린 바이너리의 `--verify`)에만 0700 · rename. 올릴 바이트는 한 번 읽어 해시와 전송에 함께 쓴다(구현 `pw_link::install`)
    - 수동: 릴리스 바이너리를 위 경로 · 이름 규칙으로 직접 배치
+   - 페어링: SSH 로 붙을 때마다 `pitwall-relay pair --from-ssh <Desktop 공개키>` 로 그 Desktop 키를 페어링 표에 `owner` 로(없을 때만) 넣고 머신 id 를 받는다 — 데몬 소켓 명령이 아니라 페어링 표 파일에 잠금(`pairings.lock`)을 쥐고 직접 쓴다. 해제는 `pitwall-relay unpair <기기 id>`(18-m7-plan M7-06 ⑧ ⑨)
 5. 상주 서비스 등록(systemd user / launchd) 또는 SSH 세션 기반 데몬으로 기동
 6. 오래된 버전 바이너리 정리 (최근 2개 유지)
 

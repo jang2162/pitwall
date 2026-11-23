@@ -10,6 +10,7 @@
 //! - 다중화(`mux`): 링크 하나에 채널 여럿 — 채널 수 상한, 채널마다 흐름 제어 · 보내기 버퍼 상한, 하트비트.
 //! - [`desktop`]: [`dial`] · [`RemoteHost`](`pw_core::Host` 를 구현해 `HostRouter` 에 붙는다) · 링크 상태.
 //! - [`relay`]: [`serve`] — 증명된 Desktop 의 채널을 이 머신의 Host 연결로 잇고, 호출자를 링크 기기의 role 로 자른다.
+//! - `ssh` · `install`(기능 `bootstrap` — Desktop 만): 시스템 `ssh` 로 원격 명령 · 링크 전송, Relay 설치 · SSH 자동 페어링(M7-06).
 
 mod claim;
 pub mod desktop;
@@ -20,6 +21,15 @@ mod mux;
 pub mod pairing;
 pub mod relay;
 pub mod transport;
+
+#[cfg(all(unix, feature = "bootstrap", any(test, feature = "test-support")))]
+pub mod fake_ssh;
+#[cfg(feature = "bootstrap")]
+pub mod install;
+#[cfg(feature = "bootstrap")]
+pub mod remote_hosts;
+#[cfg(feature = "bootstrap")]
+pub mod ssh;
 
 pub use desktop::{DesktopIdentity, DesktopLink, DialError, Expect, LinkState, RemoteHost, dial};
 pub use device::{

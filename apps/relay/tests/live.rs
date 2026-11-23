@@ -8,8 +8,9 @@
 //! - `PW_TEST_RELAY_BIN` — 원격에 올릴 Relay 바이너리(원격 OS · 아키텍처의 것 — CI 는 x86_64 musl, `scripts/relay-build.mjs`).
 //! - `PW_TEST_RELAY_CONTAINER` — 컨테이너 이름(끊김 시나리오가 `docker pause` 한다).
 //!
-//! 올리기는 M7-06 의 설치기가 생기기 전의 손 절차다(임시 이름에 쓰고 원격 해시를 본 뒤 0700 · rename). 페어링도 M7-06 의
-//! `pair --from-ssh` 대신 페어링 표 파일을 SSH 로 쓴다. 시험마다 원격 `~/t-<이름>/` 에 따로 `PITWALL_*_DIR` 을 둔다.
+//! 시나리오 대부분은 원격 `~/t-<이름>/` 에 따로 `PITWALL_*_DIR` 을 두고 손 절차로 올린다(임시 이름 → 원격 해시 → 0700 · rename,
+//! 페어링 표 파일을 SSH 로). **설치기 시나리오**(`live_relay_the_installer_installs_pairs_and_reconnects` — M7-06)는 실제 설치기
+//! (`pw_link::install`)로 컨테이너 사용자의 기본 `$DATA/relay/` 에 올리고 `pair --from-ssh` 로 페어링한다.
 //!
 //! 시나리오: 설치 · RPC 왕복, 다시 붙기(같은 데몬 — SSH 세션이 끝나도 데몬이 남는다), 끊김(컨테이너를 얼려 링크가 조용해짐 → 링크가
 //! 끊겼다고 보고, 풀면 다시 붙어 같은 데몬), 페어링 안 된 기기 거절, 커밋 보내기(이 기기의 Relay 데몬 → 원격 체크아웃, M7-16 RPC).
@@ -577,6 +578,125 @@ fn live_relay_refuses_an_unpaired_desktop() {
         let e = host.attach().await.unwrap_err();
         assert!(format!("{e:?}").contains("Unpaired"), "{e:?}");
     });
+}
+
+/// M7-06 설치기: 시스템 ssh 로 감지 → 올리기(원격 해시 확인 · rename) → SSH 자동 페어링 → `proxy` 링크. 다시 붙으면 「이미 있음」 ·
+/// 이미 페어링됨이고 같은 머신 id 다. 호스트 키는 스크립트가 만든 known_hosts 로 확인한다(끄지 않는다).
+#[test]
+fn live_relay_the_installer_installs_pairs_and_reconnects() {
+    use pw_link::install::{Installer, Progress, RelayDist};
+    use pw_link::ssh::{Ssh, SshTarget};
+
+    struct Offline;
+    impl pw_link::install::Fetch for Offline {
+        fn get<'a>(
+            &'a self,
+            _url: &'a str,
+            _max: u64,
+        ) -> pw_core::BoxFuture<'a, std::io::Result<Vec<u8>>> {
+            Box::pin(async { Err(std::io::Error::other("offline")) })
+        }
+    }
+
+    let remote = Remote::from_env();
+    // 앞 실행이 남긴 설치 · 데몬을 치운다. relay.toml 은 짧은 유휴 시한만.
+    remote.sh(
+        "pkill -f pitwall-relay-dev 2>/dev/null; rm -rf \"$HOME/.local/share/pitwall\" && mkdir -p \"$HOME/.config/pitwall/relay\" && \
+         printf 'schema = 1\\n[idle]\\nexit_after = \"30s\"\\n' > \"$HOME/.config/pitwall/relay/relay.toml\"",
+    );
+    // 개발 빌드 폴더(서명 없는 매니페스트 — debug 설치기의 출처).
+    let dist = tempfile::tempdir().unwrap();
+    let version = semver::Version::parse(VERSION).unwrap();
+    let platform = pw_release::relay::PLATFORMS
+        .iter()
+        .find(|p| p.asset == "linux-x86_64")
+        .unwrap();
+    let name = pw_release::relay::asset_name(&version, platform);
+    std::fs::copy(env("PW_TEST_RELAY_BIN"), dist.path().join(&name)).unwrap();
+    let entry = pw_release::relay::describe(
+        &dist.path().join(&name),
+        &name,
+        pw_release::relay::MAX_BINARY_BYTES,
+    )
+    .unwrap();
+    let manifest = pw_release::relay::assemble(&version, &[entry], false).unwrap();
+    std::fs::write(
+        dist.path().join(pw_release::relay::MANIFEST_FILE),
+        manifest.to_bytes(),
+    )
+    .unwrap();
+    // SAFETY: 이 시험만 도는 프로세스다(nextest).
+    unsafe { std::env::set_var(pw_release::relay::DEV_DIST_ENV, dist.path()) };
+
+    let (user, host) = remote.user_host.split_once('@').expect("user@host");
+    let mut options = remote.options();
+    options.retain(|o| o != "-T");
+    let ssh = Ssh::new(
+        SshTarget {
+            host: host.to_owned(),
+            user: Some(user.to_owned()),
+            port: None,
+        },
+        options,
+    )
+    .unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let installer = Installer::new(
+        Arc::new(ssh),
+        pw_link::Versions::new(
+            VERSION,
+            option_env!("PITWALL_RELEASE_CHANNEL").unwrap_or("dev"),
+        ),
+        RelayDist::new(cache.path().join("relay-dist"), Arc::new(Offline)),
+    )
+    .unwrap();
+    let key = Arc::new(DeviceKey::generate().unwrap());
+    runtime().block_on(async {
+        let first = installer
+            .bootstrap(&key.public(), "relay-live", &|_| {})
+            .await
+            .unwrap();
+        assert!(first.uploaded && first.paired_now, "{first:?}");
+        let link = pw_link::dial(
+            installer.transport().open().await.unwrap(),
+            &identity(Arc::clone(&key)),
+            &Expect::Machine(first.machine.clone()),
+            quick_limits(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(link.role(), Role::Owner);
+        link.close();
+
+        let seen = std::sync::Mutex::new(Vec::new());
+        let again = installer
+            .bootstrap(&key.public(), "relay-live", &|p| {
+                seen.lock().unwrap().push(p)
+            })
+            .await
+            .unwrap();
+        assert!(!again.uploaded && !again.paired_now, "{again:?}");
+        assert_eq!(again.machine, first.machine);
+        assert!(seen.lock().unwrap().contains(&Progress::AlreadyInstalled));
+        let link = pw_link::dial(
+            installer.transport().open().await.unwrap(),
+            &identity(Arc::clone(&key)),
+            &Expect::Machine(first.machine.clone()),
+            quick_limits(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(link.role(), Role::Owner);
+        link.close();
+    });
+    let listing = remote.sh("ls -la \"$HOME/.local/share/pitwall/relay\"");
+    assert!(listing.contains("rwx------"), "{listing}");
+    assert!(!listing.contains(".part."), "{listing}");
+    let _ = remote
+        .command("pkill -f pitwall-relay-dev")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 /// 이 기기에서 Relay 데몬 하나를 띄운다(로컬 Host 자리 — Desktop 의 로컬 Host 와 같은 조립). 유닉스 소켓으로 붙는다.

@@ -18,6 +18,8 @@ pw-relay = { path = "../../crates/pw-relay" }
 # 끝날 때 터미널 · 실행의 프로세스 트리를 끝낸다(`pw_run::shutdown`).
 pw-run = { path = "../../crates/pw-run" }
 serde_json = { workspace = true }
+# `--verify`: 원격에 해시 도구가 없을 때 올린 파일의 sha256(18-m7-plan M7-06 ④). pw-link 와 같은 판이다.
+sha2 = "0.11.1"
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "signal", "time"] }
 tokio-util = { workspace = true }
 tracing = "0.1.44"
@@ -33,5 +35,9 @@ libc = "0.2.190"
 # 생성물(`TOPICS` · schema)이 Relay 바이너리가 링크한 선언을 덮는지 본다(M7-02 리뷰 권고 3).
 pw-rpc = { path = "../../crates/pw-rpc" }
 pw-host = { path = "../../crates/pw-host" }
+# 설치 · SSH 자동 페어링 시험(tests/bootstrap.rs — 가짜 ssh 로 이 Relay 를 「원격」 에 올린다, M7-06).
+pw-link = { path = "../../crates/pw-link", features = ["test-support"] }
+pw-release = { path = "../../crates/pw-release" }
+semver = "1.0.28"
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "net", "time"] }

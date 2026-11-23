@@ -6,6 +6,13 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# Desktop 쪽 SSH 부트스트랩(18-m7-plan M7-06): 시스템 `ssh` 실행(`ssh`) · Relay 설치 · SSH 자동 페어링(`install`). Relay 바이너리는
+# 켜지 않는다 — 받기(reqwest) · 매니페스트 검증(pw-release)이 원격 바이너리에 들지 않게(크기 — 메인 판정 M7-P13).
+bootstrap = ["dep:pw-release", "dep:reqwest", "dep:rustls", "tokio/process"]
+# 시험용 가짜 `ssh`(`fake_ssh` — apps/relay 의 설치 시험이 쓴다).
+test-support = ["bootstrap"]
+
 [dependencies]
 # 기기 키 · 서명 · 도전값을 글로 싣는다(틀 본문은 JSON — 18-m7-plan M7-03 ②).
 base64 = "0.22.1"
@@ -17,6 +24,15 @@ getrandom = "0.4.3"
 keyring = "4.2.0"
 pw-core = { path = "../pw-core" }
 pw-rpc = { path = "../pw-rpc" }
+# Relay 매니페스트 서명 검증 · 출처(개발 빌드 갈래는 debug 만 — `pw_release::relay::source`). M7-05 가 쓰는 쪽과 한 파일이다.
+pw-release = { path = "../pw-release", optional = true }
+# 릴리스 자산 받기(`$CACHE/relay-dist/`). 데스크톱의 업데이트 확인과 같은 판 · TLS 구성(rustls, 암호 제공자 ring)이라 크레이트가
+# 늘지 않는다. 첫 요청 전에 ring 제공자를 기본으로 건다.
+reqwest = { version = "0.13.5", default-features = false, features = [
+  "rustls-no-provider",
+  "system-proxy",
+], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring"], optional = true }
 # 링크 틀은 LSP · DAP 와 같은 `Content-Length` 틀이다(메인 판정 M7-P2).
 pw-wire = { path = "../pw-wire" }
 serde = { workspace = true, features = ["derive"] }
@@ -32,6 +48,8 @@ zeroize = "1.9.1"
 [dev-dependencies]
 # 시험 메서드(`rpc_method!`)의 입출력 타입.
 schemars = { workspace = true }
+# 설치 시험의 개발 빌드 매니페스트(`pw_release::relay::assemble`).
+semver = "1.0.28"
 specta = { workspace = true, features = ["derive"] }
 tempfile = "3.27.0"
 tokio = { workspace = true, features = [
