@@ -7,7 +7,10 @@
 //! askpass 실패면 255, 그 밖의 답이면 「Please type 'yes', 'no' or the fingerprint:」 로 다시 묻는다), `changed`(OpenSSH 의 경고
 //! 원문과 255).
 //! `FAKE_REMOTE_XDG_DATA_HOME` · `FAKE_REMOTE_PITWALL_DATA_DIR`(공백 없는 경로)를 주면 원격 환경에 `XDG_DATA_HOME` ·
-//! `PITWALL_DATA_DIR` 로 넣는다. `FAKE_SSH_CORRUPT=1` 이면 원격 명령의 stdin 끝에 한 바이트를 더한다(전송 중 바뀐 바이너리).
+//! `PITWALL_DATA_DIR` 로 넣는다. `-O <명령>`(M7-08 의 가벼운 상태 확인)은 원격에 붙지 않는다 — `FAKE_SSH_MASTER=running` 이고
+//! `check` 면 OpenSSH 처럼 「Master running」 과 0, 아니면 「No ControlPath specified」 와 255. `FAKE_SSH_PASSWORD` 를 주면 호스트 키
+//! 뒤에 암호를 askpass 로(힌트 없이) 묻고 다르면 255 — `FAKE_SSH_ECHO_ANSWER=1` 이면 받은 답을 stderr 에 찍는다(실제 ssh 는 찍지
+//! 않는다 — 답이 진단 글로 새는 길을 시험이 막는지 보려고 일부러 새게 한다). `FAKE_SSH_CORRUPT=1` 이면 원격 명령의 stdin 끝에 한 바이트를 더한다(전송 중 바뀐 바이너리).
 
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
@@ -16,6 +19,18 @@ use std::path::{Path, PathBuf};
 const SCRIPT: &str = r#"#!/bin/sh
 for a in "$@"; do printf '%s\n' "$a" >> "$FAKE_SSH_LOG"; done
 printf '%s\n' '--end--' >> "$FAKE_SSH_LOG"
+prev=; control=
+for a in "$@"; do
+  [ "$a" = "--" ] && break
+  [ "$prev" = "-O" ] && control="$a"
+  prev="$a"
+done
+if [ -n "$control" ]; then
+  if [ "$control" = check ] && [ "${FAKE_SSH_MASTER:-}" = running ]; then
+    echo "Master running (pid=4242)" >&2; exit 0
+  fi
+  echo "No ControlPath specified for \"-O\" command" >&2; exit 255
+fi
 while [ $# -gt 0 ]; do
   if [ "$1" = "--" ]; then shift; break; fi
   shift
@@ -55,6 +70,18 @@ Are you sure you want to continue connecting (yes/no/[fingerprint])?"
       done
     fi ;;
 esac
+if [ -n "${FAKE_SSH_PASSWORD:-}" ]; then
+  if [ "$SSH_ASKPASS_REQUIRE" != force ] || [ -z "$SSH_ASKPASS" ]; then
+    echo "dev@$dest: Permission denied (password)." >&2; exit 255
+  fi
+  if answer=$("$SSH_ASKPASS" "dev@$dest's password: "); then :; else
+    echo "dev@$dest: Permission denied (password)." >&2; exit 255
+  fi
+  [ "${FAKE_SSH_ECHO_ANSWER:-}" = 1 ] && echo "debug1: answer was $answer" >&2
+  if [ "$answer" != "$FAKE_SSH_PASSWORD" ]; then
+    echo "dev@$dest: Permission denied (password)." >&2; exit 255
+  fi
+fi
 if [ "${FAKE_SSH_CORRUPT:-}" = 1 ]; then
   { cat; printf x; } | env -i HOME="$FAKE_REMOTE_HOME" PATH="$FAKE_REMOTE_PATH" ${FAKE_REMOTE_XDG_DATA_HOME:+XDG_DATA_HOME=$FAKE_REMOTE_XDG_DATA_HOME} ${FAKE_REMOTE_PITWALL_DATA_DIR:+PITWALL_DATA_DIR=$FAKE_REMOTE_PITWALL_DATA_DIR} sh -c "$cmd"
   exit $?

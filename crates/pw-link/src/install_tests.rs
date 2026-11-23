@@ -514,3 +514,27 @@ fn a_version_or_channel_with_a_slash_is_refused() {
         );
     }
 }
+
+/// 가벼운 상태 확인(M7-08 ③): `ssh -O check` 는 원격 명령을 돌리지 않고, 마스터가 떠 있을 때만 참이다.
+#[tokio::test]
+async fn the_master_check_runs_no_remote_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let remote = FakeRemote::new(dir.path(), "home", true);
+    let ssh = |extra: &[(&str, &str)]| {
+        Ssh::with_program(remote.ssh.clone(), SshTarget::alias("mini"), Vec::new())
+            .unwrap()
+            .env(remote.env(extra))
+    };
+    assert!(
+        ssh(&[("FAKE_SSH_MASTER", "running")])
+            .check_master()
+            .await
+            .unwrap()
+    );
+    assert!(!ssh(&[]).check_master().await.unwrap());
+    let calls = remote.calls();
+    assert_eq!(calls.len(), 2);
+    for call in calls {
+        assert_eq!(call, ["-O", "check", "--", "mini"]);
+    }
+}

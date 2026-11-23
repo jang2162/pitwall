@@ -194,8 +194,42 @@ fn check_config_option(option: &str) -> Result<(), String> {
             ));
         }
     }
+    // 호스트 키를 known_hosts 가 아닌 명령에서 받는다 — 확인이 사람의 known_hosts 를 지나지 않는다(M7-06 리뷰 R-e, M7-08 이 넓힘).
+    if key == "knownhostscommand" && value != "none" {
+        return Err(
+            "ssh_args must not set KnownHostsCommand; Pitwall leaves host keys to ssh and your known_hosts"
+                .to_owned(),
+        );
+    }
+    for (bad_key, bad_values) in LINK_BREAKING {
+        let refused = match bad_values {
+            Some(values) => values.contains(&value.as_str()),
+            // 값이 무엇이든(`none` 만 빼고) 링크의 원격 명령 · 스트림을 바꾼다.
+            None => value != "none",
+        };
+        if key == *bad_key && refused {
+            return Err(format!(
+                "ssh_args must not carry `{key}={value}`; it breaks the relay link"
+            ));
+        }
+    }
     Ok(())
 }
+
+/// 링크를 깨뜨려 넘기지 않는 `-o` 설정(소문자 키, 거절하는 값 — `None` 이면 `none` 밖의 모든 값). 플래그 꼴의 거절
+/// ([`REFUSED_FLAGS`])과 같은 것을 `-o` 로 준 것들이다(M7-06 리뷰 R-e — M7-08 이 넓힘).
+const LINK_BREAKING: [(&str, Option<&[&str]>); 5] = [
+    // pty 를 청하면 바이트 스트림이 바뀐다(`-t`).
+    ("requesttty", Some(&["yes", "force"])),
+    // 명령 없음(`-N`) · 하위 시스템(`-s`).
+    ("sessiontype", Some(&["none", "subsystem"])),
+    // stdin 끊기(`-n`).
+    ("stdinnull", Some(&["yes", "true"])),
+    // 배경(`-f`).
+    ("forkafterauthentication", Some(&["yes", "true"])),
+    // Pitwall 의 원격 명령 대신 돈다.
+    ("remotecommand", None),
+];
 
 /// 원격 명령 인자 하나에 받는 글자: `[A-Za-z0-9._+=/:@-]`(판 · 채널 · 해시 · base64 공개키 · 기기 id), `-` 로 시작하지 않음.
 /// 인자는 홑따옴표로 감싸 넘기지만 따옴표 · 역빗금 · `$` 같은 글자는 처음부터 받지 않는다 — 사람의 로그인 셸이 무엇이든(fish 는
@@ -241,16 +275,42 @@ pub fn remote_command(script: &str, args: &[&str]) -> Result<String, SshError> {
 }
 
 /// ssh 의 인자(실행 파일 뒤): `<사람의 ssh_args> -T [-l <사용자>] [-p <포트>] -- <호스트> <원격 명령>`. **argv 를 만드는 곳은
-/// 여기 하나다.**
+/// 여기와 [`ssh_check_argv`] 뿐이고 둘 다 [`build_argv`] 하나를 지난다.**
 pub fn ssh_argv(
     target: &SshTarget,
     options: &[String],
     remote_command: &str,
 ) -> Result<Vec<OsString>, SshError> {
+    build_argv(target, options, Remote::Command(remote_command))
+}
+
+/// 링크를 열지 않는 가벼운 상태 확인의 argv(18-m7-plan M7-08 ③ — 메인 판정 M7-P6): `<사람의 ssh_args> -O check [-l <사용자>]
+/// [-p <포트>] -- <호스트>`. ssh 는 사람의 ControlMaster 소켓만 묻고 원격에 붙지 않는다(소켓이 없으면 255).
+pub fn ssh_check_argv(target: &SshTarget, options: &[String]) -> Result<Vec<OsString>, SshError> {
+    build_argv(target, options, Remote::CheckMaster)
+}
+
+/// ssh 가 원격에서 할 일.
+enum Remote<'a> {
+    Command(&'a str),
+    CheckMaster,
+}
+
+fn build_argv(
+    target: &SshTarget,
+    options: &[String],
+    remote: Remote<'_>,
+) -> Result<Vec<OsString>, SshError> {
     target.check()?;
     check_options(options).map_err(SshError::Invalid)?;
     let mut argv: Vec<OsString> = options.iter().map(OsString::from).collect();
-    argv.push("-T".into());
+    match remote {
+        Remote::Command(_) => argv.push("-T".into()),
+        Remote::CheckMaster => {
+            argv.push("-O".into());
+            argv.push("check".into());
+        }
+    }
     if let Some(user) = &target.user {
         argv.push("-l".into());
         argv.push(user.into());
@@ -261,7 +321,9 @@ pub fn ssh_argv(
     }
     argv.push("--".into());
     argv.push((&target.host).into());
-    argv.push(remote_command.into());
+    if let Remote::Command(command) = remote {
+        argv.push(command.into());
+    }
     Ok(argv)
 }
 
@@ -429,6 +491,25 @@ impl Ssh {
     /// 원격 스크립트 하나의 argv([`ssh_argv`] 그대로).
     pub fn argv(&self, script: &str, args: &[&str]) -> Result<Vec<OsString>, SshError> {
         ssh_argv(&self.target, &self.options, &remote_command(script, args)?)
+    }
+
+    /// 사람의 ControlMaster 가 이 호스트에 떠 있는가(`ssh -O check` — 원격에 붙지 않고 askpass 도 쓰지 않는다). 마스터 설정이 없거나
+    /// 떠 있지 않으면 거짓.
+    pub async fn check_master(&self) -> Result<bool, SshError> {
+        let argv = ssh_check_argv(&self.target, &self.options)?;
+        let mut command = Command::new(&self.program);
+        command.args(argv);
+        if let Some(env) = &self.env {
+            command.env_clear();
+            command.envs(env.iter().map(|(k, v)| (k, v)));
+        }
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let status = command.status().await.map_err(SshError::Spawn)?;
+        Ok(status.success())
     }
 
     fn command(
@@ -737,6 +818,17 @@ mod tests {
             &["-p"],
             &["--"],
             &["-"],
+            // M7-08 이 넓힌 `-o` 꼴(M7-06 리뷰 R-e).
+            &["-o", "KnownHostsCommand=/bin/echo mini ssh-ed25519 AAAA"],
+            &["-oKnownHostsCommand /x"],
+            &["-o", "RequestTTY=force"],
+            &["-o", "requesttty yes"],
+            &["-o", "SessionType=none"],
+            &["-o", "SessionType subsystem"],
+            &["-o", "StdinNull=yes"],
+            &["-o", "ForkAfterAuthentication=yes"],
+            &["-o", "RemoteCommand=sh"],
+            &["-O", "exit"],
         ];
         for args in refused {
             let args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
@@ -753,6 +845,11 @@ mod tests {
             &["-oStrictHostKeyChecking=yes"],
             &["-o", "UserKnownHostsFile=/home/me/known"],
             &["-o", "ProxyCommand=nc %h %p"],
+            &["-o", "KnownHostsCommand=none"],
+            &["-o", "RequestTTY=no"],
+            &["-o", "SessionType=default"],
+            &["-o", "RemoteCommand=none"],
+            &["-o", "ControlMaster=auto", "-o", "ControlPersist=60"],
         ];
         for args in accepted {
             let args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
@@ -792,5 +889,36 @@ mod tests {
             SshError::Connect { .. }
         ));
         assert_eq!(clean_text("a\u{1b}[31mb\u{202e}c\td\n"), "a[31mbc d\n");
+    }
+
+    /// 가벼운 상태 확인의 argv: 같은 거르기를 지나고(목적지 · 옵션), `-O check` 뒤 `--` 와 호스트로 끝난다 — 원격 명령이 없다.
+    #[test]
+    fn the_master_check_argv_goes_through_the_same_checks_and_carries_no_command() {
+        let target = SshTarget {
+            host: "mini".into(),
+            user: Some("dev".into()),
+            port: Some(2222),
+        };
+        let argv = strings(&ssh_check_argv(&target, &["-4".into()]).unwrap());
+        assert_eq!(
+            argv,
+            ["-4", "-O", "check", "-l", "dev", "-p", "2222", "--", "mini"]
+        );
+        for host in ["-oProxyCommand=x", "a;b", "a b", "$(id)"] {
+            assert!(
+                ssh_check_argv(&SshTarget::alias(host), &[]).is_err(),
+                "{host:?}"
+            );
+        }
+        for options in [
+            vec!["-oStrictHostKeyChecking=no".to_owned()],
+            vec!["-o".to_owned(), "RemoteCommand=id".to_owned()],
+            vec!["mini".to_owned()],
+        ] {
+            assert!(
+                ssh_check_argv(&SshTarget::alias("mini"), &options).is_err(),
+                "{options:?}"
+            );
+        }
     }
 }
