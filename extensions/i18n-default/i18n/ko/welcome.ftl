@@ -125,6 +125,7 @@ welcome-remote-failed = { $stage } 단계에서 실패
 welcome-remote-failure-host-key-changed = 호스트 키가 바뀌었다 — ssh 가 거절했다. known_hosts 는 직접 고친다.
 welcome-remote-failure-host-key-not-accepted = 호스트 키를 받지 않았다.
 welcome-remote-failure-ssh = ssh 가 붙지 못했다(연결 · 인증).
+welcome-remote-failure-auth = ssh 가 로그인하지 못했다(암호 취소 · 틀린 답 · 받는 키 없음) — [다시 시도] 로 다시 묻는다.
 welcome-remote-failure-unsupported = 지원하지 않는 원격 플랫폼이다 — 아무것도 올리지 않았다.
 welcome-remote-failure-install = Relay 설치 · 페어링이 실패했다.
 welcome-remote-failure-version-mismatch = Relay 의 판이 이 앱과 다르다.

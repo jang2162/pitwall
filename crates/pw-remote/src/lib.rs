@@ -562,6 +562,32 @@ impl RemoteHosts {
             }
         };
         let registry = self.registry().ok_or(RemoteError::Unavailable)?;
+        // `expected` 는 이 호스트에 Desktop 이 기억한 id 여야 한다 — 원격이 고른 값으로 남의 묶음 멤버를 옮기지 않는다(리뷰 B1).
+        let records = registry
+            .remote_hosts()
+            .map_err(|e| RemoteError::Conflict(e.to_string()))?;
+        let remembered = records
+            .iter()
+            .find(|r| r.host == name)
+            .and_then(|r| r.machine.as_deref());
+        if remembered != Some(expected.as_str()) {
+            return Err(RemoteError::Conflict(
+                "this host has no remembered machine id to replace; connect it again".into(),
+            ));
+        }
+        // 새 id 가 다른 호스트 이름으로 아는 머신이거나, 옛 id 를 다른 이름이 아직 기억하면 두 머신의 멤버가 섞인다(리뷰 F1).
+        if let Some(other) = records.iter().find(|r| {
+            r.host != name
+                && r.machine
+                    .as_deref()
+                    .is_some_and(|m| m == machine || m == expected)
+        }) {
+            return Err(RemoteError::Conflict(format!(
+                "machine {} is also known as host `{}`; remove that host or connect it under one name",
+                other.machine.as_deref().unwrap_or_default(),
+                other.host
+            )));
+        }
         registry
             .rename_bundle_machine(&expected, machine)
             .map_err(|e| RemoteError::Conflict(e.to_string()))?;
@@ -819,7 +845,7 @@ impl RemoteHosts {
             RemoteLogLevel::Info,
             &format!("connecting to {}", describe(&entry)),
         );
-        *lock(&self.inner.attempting) += 1;
+        let _attempting = Attempting::new(self);
         let progress = |p: Progress| match p {
             Progress::Stage(stage) => {
                 self.update(name, generation, |_| {
@@ -848,19 +874,11 @@ impl RemoteHosts {
                 Err(e)
             }
         };
-        self.done_attempting();
+        drop(_attempting);
         match result {
             Ok(Some(closed)) => Some(Ok(closed.await)),
             Ok(None) => None,
             Err(e) => Some(Err(e)),
-        }
-    }
-
-    fn done_attempting(&self) {
-        let mut attempting = lock(&self.inner.attempting);
-        *attempting = attempting.saturating_sub(1);
-        if *attempting == 0 {
-            lock(&self.inner.secrets).clear();
         }
     }
 
@@ -948,6 +966,27 @@ fn stage_line(stage: RemoteStage) -> &'static str {
         RemoteStage::Install => "install: checking the relay of this version",
         RemoteStage::Daemon => "daemon: starting the relay proxy",
         RemoteStage::Handshake => "handshake: proving this device and the machine id",
+    }
+}
+
+/// 붙기 한 바퀴. 떨어질 때(끝남 · 바퀴를 버림 — 끊기 · 놓기 · 다시 시도) 세기를 내리고, 붙는 바퀴가 없으면 가릴 askpass 답을
+/// 메모리에서 지운다(리뷰 F2 — 버린 바퀴가 세기를 남기면 답이 앱이 끝날 때까지 남는다).
+struct Attempting(Arc<Inner>);
+
+impl Attempting {
+    fn new(hosts: &RemoteHosts) -> Self {
+        *lock(&hosts.inner.attempting) += 1;
+        Self(Arc::clone(&hosts.inner))
+    }
+}
+
+impl Drop for Attempting {
+    fn drop(&mut self) {
+        let mut attempting = lock(&self.0.attempting);
+        *attempting = attempting.saturating_sub(1);
+        if *attempting == 0 {
+            lock(&self.0.secrets).clear();
+        }
     }
 }
 

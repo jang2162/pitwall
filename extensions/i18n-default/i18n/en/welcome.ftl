@@ -121,6 +121,7 @@ welcome-remote-failed = Failed at { $stage }
 welcome-remote-failure-host-key-changed = The host key changed and ssh refused. Fix known_hosts yourself.
 welcome-remote-failure-host-key-not-accepted = The host key was not accepted.
 welcome-remote-failure-ssh = ssh could not connect (network or sign-in).
+welcome-remote-failure-auth = ssh could not sign in (prompt cancelled, wrong answer or no accepted key) — Retry asks again.
 welcome-remote-failure-unsupported = The remote platform is not supported — nothing was uploaded.
 welcome-remote-failure-install = Installing or pairing the relay failed.
 welcome-remote-failure-version-mismatch = The relay's version differs from this app.

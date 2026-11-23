@@ -29,6 +29,8 @@ impl FakeLink {
 enum Outcome {
     Link(&'static str),
     Fail(ConnectError),
+    /// 붙기가 끝나지 않는다(암호 질문에 아무도 답하지 않는 중 등).
+    Hang,
 }
 
 #[derive(Default)]
@@ -85,6 +87,7 @@ impl Backend for Fake {
                 .pop_front()
                 .unwrap_or(Outcome::Link(MINI));
             match outcome {
+                Outcome::Hang => std::future::pending().await,
                 Outcome::Fail(e) => Err(e),
                 Outcome::Link(machine) => {
                     let (tx, rx) = oneshot::channel();
@@ -318,6 +321,9 @@ async fn the_machine_id_is_remembered_and_a_changed_one_waits_for_the_human() {
         Some(MINI)
     );
     tokio::time::sleep(Duration::from_secs(120)).await;
+    // 다른 창이 그 호스트를 써도 바뀐 머신에 다시 붙지 않는다(ssh · 설치 · 페어링을 되풀이하지 않는다 — 리뷰 R2).
+    let _another = s.remote.hold("mini").unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
     assert_eq!(
         s.fake.connects.load(Ordering::SeqCst),
         2,
@@ -427,7 +433,16 @@ async fn call(
     loop {
         let frame = conn.source.recv().await.unwrap();
         if frame.get("id") == Some(&serde_json::json!(1)) {
-            return frame;
+            // 스트림 메서드는 먼저 열리고 핸들러의 거절은 `stream.end` 로 온다.
+            let Some(stream) = frame["result"].get("streamId").cloned() else {
+                return frame;
+            };
+            loop {
+                let end = conn.source.recv().await.unwrap();
+                if end["method"] == "stream.end" && end["params"]["streamId"] == stream {
+                    return serde_json::json!({ "error": end["params"]["error"] });
+                }
+            }
         }
     }
 }
@@ -511,4 +526,198 @@ async fn an_answer_given_through_the_rpc_is_hidden_from_the_log_and_only_host_co
     )
     .await;
     assert_eq!(listed["result"]["hosts"][0]["name"], "mini", "{listed}");
+}
+
+fn changed(expected: &str, found: &str) -> Outcome {
+    Outcome::Fail(ConnectError {
+        machine_changed: Some((expected.into(), found.into())),
+        ..ConnectError::new(
+            RemoteStage::Handshake,
+            RemoteFailureKind::Rejected,
+            "machine id changed",
+        )
+    })
+}
+
+// 리뷰 B1: 이 호스트에 Desktop 이 기억한 id 가 없으면 「새로 믿기」 는 아무것도 옮기지 않는다 — `expected` 가 원격이 고른 값일 수
+// 있다(남의 묶음 멤버를 원격으로 옮기는 길).
+#[tokio::test(start_paused = true)]
+async fn trusting_a_new_machine_needs_the_id_this_desktop_remembered() {
+    let s = setup();
+    s.fake.push(changed("SHA256:victim", "SHA256:attacker"));
+    let _use = s.remote.hold("mini").unwrap();
+    until(&s.remote, |st| {
+        matches!(st, RemoteStatus::MachineChanged { .. })
+    })
+    .await;
+    let refused = s.remote.trust_machine("mini", "SHA256:attacker");
+    assert!(
+        matches!(refused, Err(RemoteError::Conflict(_))),
+        "{refused:?}"
+    );
+    assert_eq!(
+        s.registry
+            .remote_host("mini")
+            .unwrap()
+            .and_then(|r| r.machine),
+        None
+    );
+    assert_eq!(s.fake.connects.load(Ordering::SeqCst), 1);
+}
+
+// 리뷰 F1: 새 id 가 이미 다른 호스트 이름으로 아는 머신이거나, 옛 id 를 다른 이름이 아직 기억하면 두 머신의 멤버가 섞인다 — 거절.
+#[tokio::test(start_paused = true)]
+async fn trusting_a_machine_known_under_another_host_name_is_refused() {
+    let s = setup();
+    s.registry.remember_remote_machine("mini", MINI).unwrap();
+    s.registry.remember_remote_machine("z", "SHA256:z").unwrap();
+    s.fake.push(changed(MINI, "SHA256:z"));
+    let first = s.remote.hold("mini").unwrap();
+    until(&s.remote, |st| {
+        matches!(st, RemoteStatus::MachineChanged { .. })
+    })
+    .await;
+    let refused = s.remote.trust_machine("mini", "SHA256:z");
+    assert!(
+        matches!(&refused, Err(RemoteError::Conflict(why)) if why.contains("`z`")),
+        "{refused:?}"
+    );
+    drop(first);
+
+    // 옛 id 를 다른 이름(`mini-old`)이 아직 기억한다.
+    let s = setup();
+    s.registry.remember_remote_machine("mini", MINI).unwrap();
+    s.registry
+        .remember_remote_machine("mini-old", MINI)
+        .unwrap();
+    s.fake.push(changed(MINI, "SHA256:fresh"));
+    let _use = s.remote.hold("mini").unwrap();
+    until(
+        &s.remote,
+        |st| matches!(st, RemoteStatus::MachineChanged { found, .. } if found == "SHA256:fresh"),
+    )
+    .await;
+    let refused = s.remote.trust_machine("mini", "SHA256:fresh");
+    assert!(
+        matches!(&refused, Err(RemoteError::Conflict(why)) if why.contains("`mini-old`")),
+        "{refused:?}"
+    );
+    assert_eq!(
+        s.registry
+            .remote_host("mini")
+            .unwrap()
+            .unwrap()
+            .machine
+            .as_deref(),
+        Some(MINI)
+    );
+}
+
+// 리뷰 F2: 붙는 중(암호를 묻는 중)에 사람이 끊거나 창이 놓으면 가릴 askpass 답도 메모리에서 지운다.
+#[tokio::test(start_paused = true)]
+async fn askpass_answers_are_forgotten_when_a_connecting_host_is_dropped() {
+    for by_user in [true, false] {
+        let s = setup();
+        s.fake.push(Outcome::Hang);
+        let use_ = s.remote.hold("mini").unwrap();
+        until(&s.remote, |st| {
+            matches!(st, RemoteStatus::Connecting { .. })
+        })
+        .await;
+        tokio::task::yield_now().await;
+        s.remote.remember_secret("hunter2-secret");
+        assert!(!lock(&s.remote.inner.secrets).is_empty());
+        if by_user {
+            s.remote.disconnect("mini").unwrap();
+        } else {
+            drop(use_);
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(
+            lock(&s.remote.inner.secrets).is_empty(),
+            "the answer outlived the dropped attempt (by_user {by_user})"
+        );
+        assert_eq!(*lock(&s.remote.inner.attempting), 0);
+    }
+}
+
+// 리뷰 F4: 끊긴 뒤 다시 붙기에서 ssh 가 로그인하지 못하면(암호 질문 취소 · 틀린 답) 저절로 다시 묻지 않고 멈춘다.
+#[tokio::test(start_paused = true)]
+async fn a_failed_sign_in_while_reconnecting_is_not_asked_again() {
+    let s = setup();
+    let _use = s.remote.hold("mini").unwrap();
+    until(&s.remote, connected).await;
+    s.fake.push(Outcome::Fail(fail(
+        RemoteFailureKind::Auth,
+        Some("dev@mini: Permission denied (password)."),
+    )));
+    s.fake.last_link().drop_link();
+    let status = until(&s.remote, |st| {
+        matches!(st, RemoteStatus::Disconnected { error: Some(_), .. })
+    })
+    .await;
+    assert!(
+        matches!(&status, RemoteStatus::Disconnected { error: Some(e), .. } if e.kind == RemoteFailureKind::Auth),
+        "{status:?}"
+    );
+    tokio::time::sleep(Duration::from_secs(300)).await;
+    assert_eq!(
+        s.fake.connects.load(Ordering::SeqCst),
+        2,
+        "asked the password again"
+    );
+}
+
+// 리뷰 F3: `remote.*` 의 모든 메서드는 Host 범위 연결만 받는다(프로젝트 창 · MCP 세션은 거절) — 메서드마다 따로 있는 검사를
+// 표로 본다.
+#[tokio::test]
+async fn every_remote_method_takes_only_a_host_connection() {
+    use pw_rpc::ConnectionScope;
+
+    let s = setup();
+    let registered = s.remote.clone();
+    let host = LocalHost::builder("local")
+        .methods(move |r| methods::register(r, &registered))
+        .build();
+    let name = serde_json::json!({ "name": "mini" });
+    let table: Vec<(&str, Value)> = vec![
+        ("remote.hosts.list", Value::Null),
+        ("remote.hosts.check", name.clone()),
+        ("remote.log", name.clone()),
+        ("remote.connect", name.clone()),
+        ("remote.prompts", Value::Null),
+        ("remote.disconnect", name.clone()),
+        ("remote.retry", name.clone()),
+        (
+            "remote.trustMachine",
+            serde_json::json!({ "name": "mini", "machine": "SHA256:x" }),
+        ),
+        (
+            "remote.prompt.answer",
+            serde_json::json!({ "promptId": 1, "answer": { "kind": "cancel" } }),
+        ),
+    ];
+    let declared: std::collections::BTreeSet<&str> = host
+        .router()
+        .methods()
+        .into_iter()
+        .map(|m| m.name)
+        .filter(|n| n.starts_with("remote."))
+        .collect();
+    assert_eq!(
+        declared,
+        table.iter().map(|(m, _)| *m).collect(),
+        "the table must cover every remote.* method"
+    );
+    for (method, params) in &table {
+        for scope in [ConnectionScope::Project("p".into()), ConnectionScope::Agent] {
+            let refused = call(&host, scope.clone(), method, params.clone()).await;
+            assert_eq!(
+                refused["error"]["code"],
+                serde_json::json!(pw_rpc::code::PERMISSION_DENIED),
+                "{method} {scope:?}: {refused}"
+            );
+        }
+    }
+    assert_eq!(s.fake.connects.load(Ordering::SeqCst), 0);
 }

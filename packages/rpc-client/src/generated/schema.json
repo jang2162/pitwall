@@ -44388,7 +44388,12 @@
               },
               {
                 "const": "ssh",
-                "description": "ssh 가 붙지 못했다(연결 · 인증) 또는 ssh 를 띄우지 못했다.",
+                "description": "ssh 가 붙지 못했다(연결 · 시간 초과) 또는 ssh 를 띄우지 못했다.",
+                "type": "string"
+              },
+              {
+                "const": "auth",
+                "description": "ssh 가 로그인하지 못했다(암호 질문을 취소했거나 틀린 답 · 받는 키가 없음). 저절로 다시 하지 않는다 — 다시 하면 같은 질문을\n되풀이한다.",
                 "type": "string"
               },
               {
@@ -44736,7 +44741,12 @@
               },
               {
                 "const": "ssh",
-                "description": "ssh 가 붙지 못했다(연결 · 인증) 또는 ssh 를 띄우지 못했다.",
+                "description": "ssh 가 붙지 못했다(연결 · 시간 초과) 또는 ssh 를 띄우지 못했다.",
+                "type": "string"
+              },
+              {
+                "const": "auth",
+                "description": "ssh 가 로그인하지 못했다(암호 질문을 취소했거나 틀린 답 · 받는 키가 없음). 저절로 다시 하지 않는다 — 다시 하면 같은 질문을\n되풀이한다.",
                 "type": "string"
               },
               {

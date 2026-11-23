@@ -40,8 +40,11 @@ pub enum RemoteFailureKind {
     HostKeyChanged,
     /// 호스트 키를 받지 않았다(취소 · 답 없음).
     HostKeyNotAccepted,
-    /// ssh 가 붙지 못했다(연결 · 인증) 또는 ssh 를 띄우지 못했다.
+    /// ssh 가 붙지 못했다(연결 · 시간 초과) 또는 ssh 를 띄우지 못했다.
     Ssh,
+    /// ssh 가 로그인하지 못했다(암호 질문을 취소했거나 틀린 답 · 받는 키가 없음). 저절로 다시 하지 않는다 — 다시 하면 같은 질문을
+    /// 되풀이한다.
+    Auth,
     /// 지원 밖 플랫폼 — 아무것도 올리지 않았다.
     Unsupported,
     /// 설치 · 페어링이 실패했다.

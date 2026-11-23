@@ -147,8 +147,8 @@ pub fn register(router: &mut Router, remote: &RemoteHosts) {
         let r = r.clone();
         async move {
             host_scope(&ctx)?;
-            let mut status = r.watch(&p.name);
             let _use = r.hold(&p.name).map_err(rpc)?;
+            let mut status = r.watch(&p.name);
             loop {
                 let now = status.borrow_and_update().clone();
                 sink.send(now).await?;

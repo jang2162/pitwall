@@ -71,7 +71,10 @@ impl SshAskpass for RemoteAskpass {
             .session(PROMPTS_KEY, &self.prompts, ASKPASS_TIMEOUT)?;
         let mut env = Vec::new();
         session.apply(&mut env);
-        Some(AskpassSession::new(env, session))
+        // 창에 질문이 떠 있는 동안은 `Ssh::run` 의 시간 상한을 세지 않는다.
+        let session = Arc::new(session);
+        let asking = Arc::clone(&session);
+        Some(AskpassSession::new(env, session).with_asking(Arc::new(move || asking.asking())))
     }
 }
 
@@ -257,7 +260,7 @@ impl SshBackend {
         )
         .await;
         if let Err(e) = attached {
-            return Err(dial_error(at(), e, &transport));
+            return Err(dial_error(at(), e, &transport, expect));
         }
         progress(Progress::Stage(RemoteStage::Handshake));
         let mut state = remote.state();
@@ -277,6 +280,10 @@ impl SshBackend {
                 }
             }
         });
+        // 기억 · 라우터 id 는 핸드셰이크가 증명한 키의 지문이다(원격이 페어링 답으로 말한 값이 아니라 — 리뷰 B1).
+        let machine = remote
+            .link()
+            .map_or(machine, |link| link.machine().as_str().to_owned());
         let closer = Arc::clone(&remote);
         Ok(Link {
             host: remote,
@@ -342,7 +349,13 @@ fn ssh_error(stage: RemoteStage, e: SshError) -> ConnectError {
         SshError::HostKeyNotAccepted { stderr } => {
             (RemoteFailureKind::HostKeyNotAccepted, Some(stderr.clone()))
         }
-        SshError::Connect { stderr } => (RemoteFailureKind::Ssh, Some(stderr.clone())),
+        // 인증 실패(사람이 암호 질문을 취소했거나 틀린 답 · 받는 키가 없음)는 저절로 다시 해도 같은 질문만 되풀이한다(리뷰 F4).
+        SshError::Connect { stderr } if auth_failed(stderr) => {
+            (RemoteFailureKind::Auth, Some(stderr.clone()))
+        }
+        SshError::Connect { stderr } | SshError::TimedOut { stderr, .. } => {
+            (RemoteFailureKind::Ssh, Some(stderr.clone()))
+        }
         SshError::Invalid(_) | SshError::Spawn(_) => (RemoteFailureKind::Ssh, None),
     };
     let message = match &e {
@@ -350,13 +363,22 @@ fn ssh_error(stage: RemoteStage, e: SshError) -> ConnectError {
             "the remote host key changed; ssh refused to connect".into()
         }
         SshError::HostKeyNotAccepted { .. } => "the remote host key was not accepted".into(),
+        SshError::Connect { .. } if kind == RemoteFailureKind::Auth => {
+            "ssh could not sign in".into()
+        }
         SshError::Connect { .. } => "ssh could not connect".into(),
+        SshError::TimedOut { seconds, .. } => format!("ssh did not finish in {seconds} s"),
         other => other.to_string(),
     };
     ConnectError {
         detail,
         ..ConnectError::new(stage, kind, message)
     }
+}
+
+/// ssh 의 인증 실패 문장(OpenSSH `sshconnect2.c` — 「Permission denied (publickey,password).」).
+fn auth_failed(stderr: &str) -> bool {
+    stderr.contains("Permission denied")
 }
 
 fn install_error(stage: RemoteStage, e: InstallError) -> ConnectError {
@@ -384,7 +406,12 @@ fn install_error(stage: RemoteStage, e: InstallError) -> ConnectError {
     }
 }
 
-fn dial_error(stage: RemoteStage, e: DialError, transport: &SshTransport) -> ConnectError {
+fn dial_error(
+    stage: RemoteStage,
+    e: DialError,
+    transport: &SshTransport,
+    expect: Option<&str>,
+) -> ConnectError {
     let kind = match &e {
         DialError::VersionMismatch { .. } => RemoteFailureKind::VersionMismatch,
         DialError::Rejected(_) | DialError::BadRelaySignature => RemoteFailureKind::Rejected,
@@ -393,13 +420,23 @@ fn dial_error(stage: RemoteStage, e: DialError, transport: &SshTransport) -> Con
     };
     let stderr = transport.last_stderr();
     let mut error = ConnectError::new(stage, kind, e.to_string());
-    if let DialError::MachineMismatch { expected, found } = &e {
-        error.machine_changed = Some((expected.as_str().to_owned(), found.as_str().to_owned()));
-    }
+    error.machine_changed = machine_change(expect, &e);
     if !stderr.is_empty() {
         error.detail = Some(stderr);
     }
     error
+}
+
+/// 핸드셰이크의 머신 id 불일치를 「머신이 바뀜」(사람이 새로 믿을 수 있음)으로 볼 것인가. `expected` 는 **Desktop 이 기억한 id**
+/// (`expect`)로만 채운다 — 기억이 없는 호스트에서의 불일치는 원격이 자기 id 를 거짓으로 말한 것이라 그냥 거절이다(리뷰 B1:
+/// 페어링 답의 id 는 원격이 고른다 — 그것을 `expected` 로 두면 「새로 믿기」 가 남의 묶음 멤버를 원격으로 옮긴다).
+pub fn machine_change(expect: Option<&str>, e: &DialError) -> Option<(String, String)> {
+    match (expect, e) {
+        (Some(expected), DialError::MachineMismatch { found, .. }) => {
+            Some((expected.to_owned(), found.as_str().to_owned()))
+        }
+        _ => None,
+    }
 }
 
 impl Backend for SshBackend {

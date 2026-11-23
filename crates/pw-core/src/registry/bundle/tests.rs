@@ -918,3 +918,62 @@ async fn a_machine_behind_a_host_is_judged_through_its_rpc() {
         json!(pw_rpc::code::PERMISSION_DENIED)
     );
 }
+
+// M7-08 리뷰 F3: `machine.*` 의 모든 메서드는 Host 범위 연결만 받는다 — 메서드마다 따로 있는 검사를 표로 본다.
+#[tokio::test]
+async fn every_machine_method_takes_only_a_host_connection() {
+    use crate::{Host, LocalHost};
+    use pw_rpc::{Caller, ConnectionScope, Role};
+    use serde_json::json;
+
+    let f = Fixture::new();
+    let host = LocalHost::with_config("mini", AppPaths::under(&f.base.join("mini-app")));
+    let path = json!({ "path": f.base.display().to_string() });
+    let project = json!({ "projectId": "nope" });
+    let table = [
+        ("machine.inspect", path.clone()),
+        ("machine.projectRoot", project.clone()),
+        (
+            "machine.contained",
+            json!({ "path": f.base.display().to_string(), "commits": [] }),
+        ),
+        (
+            "machine.reachesFiles",
+            json!({ "path": f.base.display().to_string(), "limit": 1 }),
+        ),
+        ("machine.register", path),
+        ("machine.unregister", project),
+    ];
+    let declared: std::collections::BTreeSet<&str> = host
+        .router()
+        .methods()
+        .into_iter()
+        .map(|m| m.name)
+        .filter(|n| n.starts_with("machine."))
+        .collect();
+    assert_eq!(declared, table.iter().map(|(m, _)| *m).collect());
+    for (method, params) in &table {
+        for scope in [ConnectionScope::Project("x".into()), ConnectionScope::Agent] {
+            let mut conn = host
+                .connect(Caller {
+                    role: Role::Owner,
+                    scope: scope.clone(),
+                    window: None,
+                })
+                .await
+                .unwrap();
+            conn.sink
+                .send(json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}));
+            let answer = conn.source.recv().await.unwrap();
+            assert_eq!(
+                answer["error"]["code"],
+                json!(pw_rpc::code::PERMISSION_DENIED),
+                "{method} {scope:?}: {answer}"
+            );
+        }
+    }
+    assert!(
+        f.mini.list().unwrap().is_empty(),
+        "a refused register made a project"
+    );
+}

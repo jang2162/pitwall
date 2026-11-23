@@ -379,3 +379,61 @@ async fn an_unpaired_refusal_right_after_pairing_is_tried_once_more() {
         assert_eq!(result.is_ok(), ok);
     }
 }
+
+// 리뷰 B1: 핸드셰이크의 머신 id 불일치는 Desktop 이 기억한 id 가 있을 때만 「머신이 바뀜」 이다. 기억이 없으면(처음 붙는 호스트)
+// 원격이 페어링 답으로 남의 id 를 댄 것이라 그냥 거절이다 — 되돌린 자기 hello 의 키는 원격이 말한 `SHA256:fakemachine` 이 아니다.
+#[tokio::test]
+async fn a_relay_whose_key_is_not_the_id_it_reported_is_refused_unless_this_desktop_remembered_one()
+{
+    let s = setup();
+    let backend = s.backend(&[], None);
+    let (result, _) = connect(&backend, None).await;
+    let e = result.err().unwrap();
+    assert_eq!(e.machine_changed, None, "{e:?}");
+    assert_eq!(
+        (e.stage, e.kind),
+        (RemoteStage::Handshake, RemoteFailureKind::Rejected)
+    );
+
+    let (result, _) = connect(&backend, Some("SHA256:fakemachine")).await;
+    let e = result.err().unwrap();
+    let (expected, found) = e
+        .machine_changed
+        .expect("a remembered id that the key does not match");
+    assert_eq!(expected, "SHA256:fakemachine");
+    assert_ne!(found, "SHA256:fakemachine");
+}
+
+#[test]
+fn only_a_remembered_id_makes_a_machine_change() {
+    let mismatch = DialError::MachineMismatch {
+        expected: pw_link::DeviceId::from_stored("SHA256:claimed-by-the-remote"),
+        found: pw_link::DeviceId::from_stored("SHA256:its-key"),
+    };
+    assert_eq!(machine_change(None, &mismatch), None);
+    assert_eq!(
+        machine_change(Some("SHA256:remembered"), &mismatch),
+        Some(("SHA256:remembered".into(), "SHA256:its-key".into()))
+    );
+    assert_eq!(machine_change(Some("x"), &DialError::Timeout), None);
+}
+
+// 리뷰 F4: 암호 질문에 틀린 답(또는 취소)이면 ssh 는 「Permission denied」 로 끝난다 — 저절로 다시 하지 않는 로그인 실패다.
+#[tokio::test]
+async fn a_wrong_or_cancelled_password_is_a_sign_in_failure() {
+    let s = setup();
+    for answer in ["wrong-secret", ""] {
+        let backend = s.backend(
+            &[("FAKE_SSH_PASSWORD", "right-secret")],
+            Some(s.answers(answer)),
+        );
+        let (result, _) = connect(&backend, None).await;
+        let e = result.err().unwrap();
+        assert_eq!(
+            (e.stage, e.kind),
+            (RemoteStage::Ssh, RemoteFailureKind::Auth),
+            "{e:?}"
+        );
+        assert!(!e.kind.retryable());
+    }
+}

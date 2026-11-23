@@ -129,6 +129,7 @@ export function welcomeStrings(t: Translate) {
         hostKeyChanged: t("welcome-remote-failure-host-key-changed"),
         hostKeyNotAccepted: t("welcome-remote-failure-host-key-not-accepted"),
         ssh: t("welcome-remote-failure-ssh"),
+        auth: t("welcome-remote-failure-auth"),
         unsupported: t("welcome-remote-failure-unsupported"),
         install: t("welcome-remote-failure-install"),
         versionMismatch: t("welcome-remote-failure-version-mismatch"),
