@@ -20,6 +20,7 @@
 mod claim;
 pub mod desktop;
 pub mod device;
+pub mod devices;
 pub mod forward;
 pub mod frame;
 pub mod handshake;

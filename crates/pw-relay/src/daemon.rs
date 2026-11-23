@@ -52,6 +52,9 @@ impl Activity for pw_host::Activity {
     }
 }
 
+/// 링크가 증명될 때 부르는 것([`Daemon::on_proven`]).
+pub type ProvenHook = Arc<dyn Fn(&pw_link::Proven) + Send + Sync>;
+
 /// 붙은(증명된) 링크의 수.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Links {
@@ -155,6 +158,8 @@ struct Shared {
     started: std::time::Instant,
     /// 열린 MCP 연결(18-m7-plan M7-20 — [`Daemon::count_agents`]). 유휴 판정이 본다.
     agents: std::sync::OnceLock<pw_mcp::socket::Connections>,
+    /// 링크가 증명될 때마다 부른다(기기 화면의 마지막 접속 — [`Daemon::on_proven`], M7-23).
+    proven: std::sync::OnceLock<ProvenHook>,
 }
 
 impl Daemon {
@@ -168,6 +173,7 @@ impl Daemon {
                 pending: AtomicUsize::new(0),
                 started: std::time::Instant::now(),
                 agents: std::sync::OnceLock::new(),
+                proven: std::sync::OnceLock::new(),
             }),
         }
     }
@@ -180,6 +186,11 @@ impl Daemon {
     /// 두 번째부터는 무시한다.
     pub fn count_agents(&self, connections: pw_mcp::socket::Connections) {
         let _ = self.shared.agents.set(connections);
+    }
+
+    /// 링크가 증명될 때마다 `hook` 을 부른다(한 번만 붙는다). 데몬은 기기의 마지막 접속을 적는다(`crate::devices::record_seen`).
+    pub fn on_proven(&self, hook: ProvenHook) {
+        let _ = self.shared.proven.set(hook);
     }
 
     /// 지금 증명 전 자리를 쥔 연결 수.
@@ -358,9 +369,13 @@ impl Daemon {
         let attached: Arc<Mutex<Option<LinkGuard>>> = Arc::default();
         let held = Arc::clone(&attached);
         let presence = self.shared.presence.clone();
+        let hook = self.shared.proven.get().cloned();
         let result = pw_link::serve_proven(framed, first, &self.shared.parts.link, move |proven| {
             // 증명됐다 — 증명 전 자리를 놓고 붙은 링크로 센다.
             drop(slot);
+            if let Some(hook) = hook {
+                hook(proven);
+            }
             *held.lock().unwrap_or_else(PoisonError::into_inner) =
                 Some(presence.attach(proven.role));
         })

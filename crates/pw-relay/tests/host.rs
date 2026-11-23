@@ -91,7 +91,7 @@ async fn project_create_registers_only_inside_the_roots() {
 }
 
 /// Relay 의 메서드 목록은 Desktop 의 목록(`pw-host` 의 `methods.snapshot` — 이름 · 종류 · 등급 · role)에서 Desktop 전용 갈래만 뺀
-/// 것이다(`bundle.*` · `openWith.*` · `cli.*` — `pw_host::RELAY_EXCLUDED_PREFIXES`). 그래서 `relay.toml` 을 쓰는 RPC 가 없다(18-m7-plan M7-04 시험 ② · 메인 판정 M7-P5): Relay 전용 메서드는 `secret.*`(붙은 Desktop 에 비밀을 청하는 역요청 — M7-12)뿐이고, Desktop 의
+/// 것이다(`bundle.*` · `openWith.*` · `cli.*` — `pw_host::RELAY_EXCLUDED_PREFIXES`). 그래서 `relay.toml` 을 쓰는 RPC 가 없다(18-m7-plan M7-04 시험 ② · 메인 판정 M7-P5): Relay 전용 메서드는 `secret.*`(붙은 Desktop 에 비밀을 청하는 역요청 — M7-12)와 기기 관리 `relay.*`(owner 기기만 — M7-23)뿐이고, Desktop 의
 /// 설정 쓰기(`mcp.settings.set` 등)는 `settings.toml` · 프로젝트 파일만 쓴다. 메서드가 늘면 스냅숏을 다시 써야 해 리뷰에 걸린다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_relay_methods_are_the_desktop_methods_without_desktop_only_ones() {
@@ -127,16 +127,24 @@ async fn the_relay_methods_are_the_desktop_methods_without_desktop_only_ones() {
     }
     // Relay 에만 있는 것은 「Desktop 에 묻는」 비밀 저장소의 역요청 둘(`secret.*` — 18-m7-plan M7-12)이다. 비밀을 붙은 Desktop 에
     // 청하고 답을 받을 뿐 `relay.toml` 을 쓰지 않는다.
+    // 기기 관리(`relay.*` — 18-m7-plan M7-23)는 Relay 의 페어링 표를 보고 바꾼다 — owner 기기만, `relay.toml` 을 쓰지 않는다.
     let (relay_only, relay): (Vec<String>, Vec<String>) = relay.into_iter().partition(|m| {
         pw_db::desktop_secret::METHODS
             .iter()
             .any(|s| m.starts_with(&format!("{s} ")))
+            || pw_host::DESKTOP_EXCLUDED_PREFIXES
+                .iter()
+                .any(|p| m.starts_with(p))
     });
+    assert_eq!(pw_host::DESKTOP_EXCLUDED_PREFIXES, ["relay."]);
     assert_eq!(
         relay_only.len(),
-        pw_db::desktop_secret::METHODS.len(),
+        pw_db::desktop_secret::METHODS.len() + 3,
         "{relay_only:?}"
     );
+    for m in relay_only.iter().filter(|m| m.starts_with("relay.")) {
+        assert!(m.ends_with("{Owner}"), "{m}");
+    }
     assert_eq!(relay, desktop);
     assert!(
         !relay.iter().any(|m| m.to_lowercase().contains("relay")),

@@ -134,6 +134,35 @@ pub fn ensure_dir(dir: &Path) -> io::Result<()> {
     crate::device::private_dir(dir)
 }
 
+/// `$DATA/relay/` 의 다른 비공개 파일(대기 코드 · 접속 시각 — `pw_relay`)을 읽는다. 다른 사용자에게 열린 파일 · 심링크는 읽지
+/// 않는다(페어링 표와 같은 규칙).
+pub fn read_private_file(path: &Path) -> io::Result<zeroize::Zeroizing<String>> {
+    read_private(path)
+}
+
+/// `$DATA/relay/` 의 비공개 파일을 쓴다(같은 폴더의 임시 파일 0600 에 쓰고 이름을 바꾼다 — [`save`] 와 같은 규칙).
+pub fn write_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    use std::io::Write;
+    let dir = path
+        .parent()
+        .ok_or_else(|| io::Error::other("the file has no folder"))?;
+    crate::device::private_dir(dir)?;
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| io::Error::other("the file has no name"))?;
+    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(&tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&tmp, path)
+}
+
 /// 페어링 표 파일을 쓴다(같은 폴더의 임시 파일 0600 에 쓰고 이름을 바꾼다 — 읽는 쪽이 반쯤 쓴 파일을 보지 않는다). 폴더는 0700 으로
 /// 만들거나 확인한다. 동시에 쓰는 두 프로세스의 잠금은 부르는 쪽(M7-06 의 `pair`)이 건다.
 pub fn save(path: &Path, pairings: &[Pairing]) -> io::Result<()> {

@@ -75,6 +75,9 @@ pub struct Assembled {
     /// 원격 호스트 관리자(`remote.*` — 18-m7-plan M7-08). Desktop 만 `Some` 이다. 앱이 setup 에서 SSH 백엔드(`pw_remote::ssh`) ·
     /// `HostRouter` 를 붙인다 — 붙이기 전에는 목록이 비고 붙기를 할 수 없다.
     pub remote: Option<pw_remote::RemoteHosts>,
+    /// 기기 관리(`relay.*` — 18-m7-plan M7-23). Relay 만 `Some` 이다. 데몬이 페어링 표 · 대기 코드의 몸통을 붙인다
+    /// (`pw_relay::devices`) — 붙이기 전에는 「쓸 수 없음」 이다.
+    pub devices: Option<pw_link::devices::Devices>,
 }
 
 /// Host 에 남은 일. 복제하면 같은 것을 본다.
@@ -116,6 +119,11 @@ enum Flavor {
 /// - `cli.` — 「Shell 명령 설치」 안내(`cli.status`)는 Desktop 앱의 것이다. Relay 는 설치할 Shell 명령이 없다.
 /// - `remote.` — 원격 호스트 · 연결 관리(`pw_remote` — 18-m7-plan M7-08)는 Desktop 의 것이다. Relay 는 다른 머신에 붙지 않는다.
 pub const RELAY_EXCLUDED_PREFIXES: &[&str] = &["bundle.", "cli.", "openWith.", "remote."];
+
+/// Desktop 의 Host 에서 걷어 내는 메서드 갈래.
+/// - `relay.` — 기기 관리(페어링 표 · 해제 · 코드 — 18-m7-plan M7-23)는 Relay 의 것이다. Desktop 은 붙은 Relay 의 그것을
+///   `remote.devices` 등으로 중계한다(`pw_remote`).
+pub const DESKTOP_EXCLUDED_PREFIXES: &[&str] = &["relay."];
 
 /// 부품으로 Host 를 조립한다. 메서드를 모두 등록하고, Host 의 설정 · 레지스트리가 있으면 그것을 기능들에 붙인다.
 pub fn assemble(parts: HostParts) -> Assembled {
@@ -286,6 +294,9 @@ fn assemble_as(parts: HostParts, flavor: Flavor) -> Assembled {
     // 원격 호스트 · 연결 관리(`remote.*`, M7-08). Relay 는 아래에서 걷어 낸다(`RELAY_EXCLUDED_PREFIXES`).
     let remote = pw_remote::RemoteHosts::default();
     let remote_methods = remote.clone();
+    // 기기 관리(`relay.*`, M7-23). Desktop 은 아래에서 걷어 낸다(`DESKTOP_EXCLUDED_PREFIXES`).
+    let devices = pw_link::devices::Devices::default();
+    let devices_methods = devices.clone();
     let host = LocalHost::builder(id)
         .config(paths)
         .open_requests(open_requests)
@@ -332,11 +343,14 @@ fn assemble_as(parts: HostParts, flavor: Flavor) -> Assembled {
         .methods(move |router| pw_mcp::methods::register(router, mcp_status_methods))
         .methods(move |router| pw_remote::methods::register(router, &remote_methods))
         .methods(move |router| secrets_methods.register(router))
+        .methods(move |router| pw_link::devices::register(router, &devices_methods))
         .methods(move |router| {
-            if flavor == Flavor::Relay {
-                for prefix in RELAY_EXCLUDED_PREFIXES {
-                    router.remove_prefix(prefix);
-                }
+            let excluded = match flavor {
+                Flavor::Relay => RELAY_EXCLUDED_PREFIXES,
+                Flavor::Desktop => DESKTOP_EXCLUDED_PREFIXES,
+            };
+            for prefix in excluded {
+                router.remove_prefix(prefix);
             }
         })
         .build();
@@ -520,9 +534,11 @@ fn assemble_as(parts: HostParts, flavor: Flavor) -> Assembled {
         );
         remote
     });
+    let devices = (flavor == Flavor::Relay).then_some(devices);
     Assembled {
         host,
         remote,
+        devices,
         db_sessions: db_sessions_out,
         activity: Activity {
             terminals: terminals_activity,

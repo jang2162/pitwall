@@ -5,6 +5,7 @@
 //! - `pitwall-relay daemon`: 데몬(앞에서 돈다 — `proxy` 가 `setsid` 로 띄운다). 한 판에 하나.
 //! - `pitwall-relay status`: 떠 있는 데몬의 상태(JSON 한 줄).
 //! - `pitwall-relay pair --from-ssh <키> [<이름>]` · `unpair <기기 id>`: 페어링 표 파일에 직접 쓴다(데몬 소켓 명령이 아니다 — M7-06).
+//! - `pitwall-relay pair [--role <r>] [--name <n>]`: 다른 기기를 SSH 없이 붙일 6자리 코드를 터미널에 보인다(M7-23 — 대기 코드 파일).
 //! - `pitwall-relay open <파일>…` · `askpass <질문>`: 원격 셸 · git 이 데몬 소켓의 좁은 명령으로 붙은 Desktop 에 열기 · 암호 질문을
 //!   넘긴다. `link-command [--remove]`: 사람이 설치 화면에서 고를 때 `~/.local/bin/pitwall` 링크를 둔다(M7-15). 바이너리를
 //!   `pitwall` 이름으로 부르면 `open` · `mcp` · `tool` 로 읽는다(메인 판정 M7-P12).

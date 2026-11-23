@@ -50,11 +50,14 @@ snow = { version = "0.10.0", default-features = false, features = [
 ] }
 # 링크 틀은 LSP · DAP 와 같은 `Content-Length` 틀이다(메인 판정 M7-P2).
 pw-wire = { path = "../pw-wire" }
+# 기기 관리 RPC(`relay.*` — M7-23 ③)의 입출력 타입.
+schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 # raw_value: 받아 둔 채널 메시지는 원시 바이트로 두고 꺼낼 때 푼다(받기 예산이 실제 메모리 상한이 되게).
 serde_json = { workspace = true, features = ["raw_value"] }
 # 머신 id = Relay 기기 공개키의 SHA-256 지문(메인 판정 M7-P6). ed25519-dalek 이 쓰는 판과 같다.
 sha2 = "0.11.1"
+specta = { workspace = true, features = ["derive"] }
 # net: 포트 포워딩(18-m7-plan M7-22) — Desktop 은 루프백에서 듣고 Relay 는 그 머신에서 TCP 를 연다.
 tokio = { workspace = true, features = ["rt", "sync", "macros", "time", "io-util", "fs", "net"] }
 tokio-util = { workspace = true }
@@ -67,11 +70,8 @@ zeroize = "1.9.1"
 windows-sys = { version = "0.61.2", features = ["Win32_Networking_WinSock"] }
 
 [dev-dependencies]
-# 시험 메서드(`rpc_method!`)의 입출력 타입.
-schemars = { workspace = true }
 # 설치 시험의 개발 빌드 매니페스트(`pw_release::relay::assemble`).
 semver = "1.0.28"
-specta = { workspace = true, features = ["derive"] }
 tempfile = "3.27.0"
 # 코드가 로그에 실리지 않는지 본다(M7-23).
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }

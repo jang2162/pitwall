@@ -7,6 +7,7 @@
 //! - [`config`]: `$CONFIG/relay/relay.toml`(`name` · `roots` · `[idle]`). RPC 로 쓰지 않는다(메인 판정 M7-P5).
 //! - [`roots`]: `roots` 밖은 프로젝트로 등록하지 않는다(심링크를 푼 실제 경로로).
 //! - [`socket`]: 사용자 전용 유닉스 소켓(`$STATE/relay/<채널>-<판>.sock`) — 폴더 0700 · 소켓 0600 · 상대 uid.
+//! - [`codes`] · [`devices`]: 6자리 코드 페어링의 대기 코드, 기기 관리(`relay.*` — 목록 · 해제 · 코드)의 몸통과 기기 시각(M7-23).
 //! - [`command`]: 데몬 소켓의 좁은 명령(`open` · `askpass` · `status`). 첫 틀의 종류로 링크와 가른다.
 //! - [`narrow`]: 좁은 명령 `askpass` · `open` 의 몸통 — 원격 git 의 암호 질문을 붙은 Desktop 의 그 프로젝트 창으로, 원격 셸의
 //!   `pitwall <파일>` 을 마지막 입력 Desktop 으로(M7-15).
@@ -19,9 +20,11 @@
 // Relay 는 macOS · Linux 만이다(18-m7-plan 결정 M7-D4) — Windows 에서는 빈 크레이트다(워크스페이스 빌드만 지난다).
 #![cfg(unix)]
 
+pub mod codes;
 pub mod command;
 pub mod config;
 pub mod daemon;
+pub mod devices;
 pub mod host;
 pub mod idle;
 pub mod mcp;

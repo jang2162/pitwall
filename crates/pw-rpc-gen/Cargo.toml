@@ -28,6 +28,8 @@ pw-lsp = { path = "../pw-lsp" }
 pw-lsp-servers = { path = "../pw-lsp-servers" }
 # MCP 상태 RPC(16-m5-plan.md M5-10): `mcp.*`.
 pw-mcp = { path = "../pw-mcp" }
+# Relay 의 기기 관리 RPC(`relay.*` — 18-m7-plan M7-23).
+pw-link = { path = "../pw-link" }
 pw-open-with = { path = "../pw-open-with" }
 pw-remote = { path = "../pw-remote" }
 pw-rpc = { path = "../pw-rpc" }

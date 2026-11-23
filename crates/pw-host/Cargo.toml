@@ -29,6 +29,9 @@ pw-i18n = { path = "../pw-i18n" }
 # 심볼 인덱스(`index.*`, M4-15).
 pw-index = { path = "../pw-index" }
 pw-lang = { path = "../pw-lang" }
+# 기기 관리(`relay.*` — 18-m7-plan M7-23). Relay 갈래만 등록한다. pw-remote 가 이미 링크하는 크레이트다(기능 `bootstrap` 은 켜지
+# 않는다).
+pw-link = { path = "../pw-link" }
 # 언어 서버 관리자 · 문서 동기화(`lsp.document.*` · `lsp.status.*` · `lsp.server.*`, M4-05).
 pw-lsp = { path = "../pw-lsp" }
 pw-lsp-servers = { path = "../pw-lsp-servers" }
@@ -51,8 +54,6 @@ tracing = "0.1.44"
 [dev-dependencies]
 # Relay 터미널의 출력(base64)을 읽는 시험(tests/link.rs — 18-m7-plan M7-09). pw-run 과 같은 판.
 base64 = "0.23.1"
-# 조립한 Host 를 링크 너머에 두는 시험(tests/link.rs — 18-m7-plan M7-03 · M7-02 ②).
-pw-link = { path = "../pw-link" }
 pw-rpc = { path = "../pw-rpc" }
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

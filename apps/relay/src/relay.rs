@@ -11,7 +11,7 @@ use tracing_subscriber::Layer as _;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt as _;
 
-const USAGE: &str = "usage: pitwall-relay <proxy|daemon|mcp [--project <path>]|tool <name> [flags]|status [--json]|open <file>...|askpass <prompt>|link-command [--remove]|machine|pair --from-ssh <key> [<name>]|unpair <device id>|--verify <file> <sha256>|--version>";
+const USAGE: &str = "usage: pitwall-relay <proxy|daemon|mcp [--project <path>]|tool <name> [flags]|status [--json]|open <file>...|askpass <prompt>|link-command [--remove]|machine|pair [--role <owner|mobile|readonly>] [--name <name>]|pair --from-ssh <key> [<name>]|unpair <device id>|--verify <file> <sha256>|--version>";
 
 pub fn main() -> ExitCode {
     let mut argv = std::env::args_os();
@@ -264,6 +264,9 @@ fn exit_code(code: i32) -> ExitCode {
 /// 이 프로세스가 `$DATA/relay/pairings.json` 에 잠금을 쥐고 직접 쓰고, 데몬은 파일을 다시 읽는다. 표에 없는 키면 `owner` 로 넣는다.
 /// stdout 에 JSON 한 줄(`machine` — 이 머신의 id, `added`).
 fn pair(args: &[String]) -> ExitCode {
+    if args.first().is_none_or(|a| a != "--from-ssh") {
+        return pair_code(args);
+    }
     let (key, name) = match args {
         [flag, key] if flag == "--from-ssh" => (key, "desktop"),
         [flag, key, name] if flag == "--from-ssh" => (key, name.as_str()),
@@ -288,6 +291,53 @@ fn pair(args: &[String]) -> ExitCode {
             println!(
                 "{}",
                 serde_json::json!({"machine": paired.machine, "added": paired.added})
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("pitwall-relay pair: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// `pair [--role <r>] [--name <n>]`(18-m7-plan M7-23 ② — 수동 배치한 Relay): 다른 기기를 SSH 없이 붙일 6자리 코드를 만들어
+/// 터미널에 보인다(5분 · 틀린 시도 세 번이면 끝 · 한 번 쓰면 끝 — `pw_relay::codes`). 앞의 대기 코드는 끝난다. role 은 기본 `owner`.
+/// 코드는 이 터미널에만 보인다 — 로그에 쓰지 않는다. 기기는 직접 연결(Noise — M7-24)로 코드를 낸다.
+fn pair_code(args: &[String]) -> ExitCode {
+    const USAGE: &str =
+        "usage: pitwall-relay pair [--role <owner|mobile|readonly>] [--name <name>]";
+    let (mut role, mut name) = (pw_rpc::Role::Owner, None);
+    let mut rest = args.iter();
+    while let Some(flag) = rest.next() {
+        match (flag.as_str(), rest.next()) {
+            ("--role", Some(value)) => match serde_json::from_value(serde_json::json!(value)) {
+                Ok(r) => role = r,
+                Err(_) => {
+                    eprintln!("{USAGE}");
+                    return ExitCode::from(2);
+                }
+            },
+            ("--name", Some(value)) => name = Some(value.clone()),
+            _ => {
+                eprintln!("{USAGE}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let paths = match paths() {
+        Ok(paths) => paths,
+        Err(code) => return code,
+    };
+    let now = (pw_relay::codes::system_clock())();
+    match pw_relay::codes::issue(&paths.data, role, name.as_deref(), now) {
+        Ok((code, _)) => {
+            let digits = code.reveal();
+            println!(
+                "pairing code: {} {}  (role {}, valid for 5 minutes, three tries)",
+                &digits[..3],
+                &digits[3..],
+                serde_json::json!(role).as_str().unwrap_or("owner")
             );
             ExitCode::SUCCESS
         }
@@ -559,6 +609,14 @@ fn daemon() -> ExitCode {
             open_requests,
             assembled.host.registry().cloned(),
         ));
+        // 기기 관리(`relay.*` — M7-23): 페어링 표 · 대기 코드 · 기기 시각. owner 링크의 RPC 만 닿는다.
+        if let Some(devices) = &assembled.devices {
+            devices.attach(Arc::new(pw_relay::devices::RelayDevices::new(
+                paths.data.clone(),
+                pairings.clone(),
+                pw_relay::codes::system_clock(),
+            )));
+        }
         let host = Arc::new(assembled.host);
         let daemon = Daemon::new(DaemonParts {
             link: RelayParts {
@@ -578,6 +636,17 @@ fn daemon() -> ExitCode {
             name: config.name.clone(),
             max_unproven: MAX_UNPROVEN,
         });
+        // 기기 화면의 마지막 접속(M7-23).
+        {
+            let data = paths.data.clone();
+            daemon.on_proven(Arc::new(move |proven: &pw_link::Proven| {
+                let (data, device) = (data.clone(), proven.device.clone());
+                let now = (pw_relay::codes::system_clock())();
+                tokio::task::spawn_blocking(move || {
+                    pw_relay::devices::record_seen(&data, &device, now);
+                });
+            }));
+        }
         tracing::info!(socket = %socket.display(), roots = config.roots.len(), "relay daemon listening");
         let shutdown = tokio_util::sync::CancellationToken::new();
         // MCP 소켓(M7-20 ①). 열지 못해도 데몬은 돈다 — `pitwall-relay mcp` 가 그 까닭을 찍고 끝난다(헤드리스는 없다).

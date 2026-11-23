@@ -1295,6 +1295,19 @@ export type UnaryMethods = {
 	 */
 	"project.update": { params: UpdateProjectParams; result: Project };
 	/**
+	 * 이 Relay 의 페어링 표: 기기 id · 이름 · role · 페어링 시각 · 마지막 접속. owner 기기만.
+	 */
+	"relay.devices": { params: null; result: RelayDeviceList };
+	/**
+	 * 다른 기기를 이 Relay 에 붙일 6자리 코드를 만든다(5분, 틀린 시도 세 번이면 끝, 한 번 쓰면 끝). 앞의 대기 코드는 끝난다. owner
+	 * 기기만.
+	 */
+	"relay.pairCode": { params: RelayPairCodeParams; result: RelayPairCode };
+	/**
+	 * 기기 하나를 해제한다 — 그 기기의 열린 링크 · 구독 · 터미널 붙기 · 이어 붙기 토큰이 곧바로 끊긴다. owner 기기만.
+	 */
+	"relay.unpair": { params: RelayUnpairParams; result: RelayUnpairResult };
+	/**
 	 * 사람이 끊는다. 쓰는 창이 남아 있어도 다시 붙지 않는다(새 `remote.connect` · `remote.retry` 까지).
 	 */
 	"remote.disconnect": { params: RemoteHostParams; result: null };
@@ -2001,6 +2014,9 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"project.tool.register": {"name":"project.tool.register","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<ProjectRegisterToolParams>","output":"ProjectRegisterToolResult","doc":" Register a folder as a Pitwall project and return what was detected in it (build files, languages, the settings\n folder). Needs approval in Pitwall: the request shows the real path that will be registered (symbolic links and\n `..` resolved), the name and where the settings live. Refused before asking: a relative path, a folder that does\n not exist, the file system root, the home folder or a folder above it, and a folder that is already a project\n root or lies inside a registered project, including a git worktree of one (use `project_open` for those). The\n new project is not trusted: only a person can trust it in Pitwall.\n","mcp":{"group":"project","name":"project_register"},"fileScope":false},
 	"project.trust": {"name":"project.trust","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"ProjectIdParams","output":"ProjectTrust","doc":" 프로젝트의 신뢰. 워크트리 프로젝트는 메인 저장소 프로젝트의 신뢰를 따른다(`ownerId`). 없는 id 면 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"project.update": {"name":"project.update","kind":"unary","tier":"write","roles":["owner"],"params":"UpdateProjectParams","output":"Project","doc":" 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.\n","mcp":null,"fileScope":false},
+	"relay.devices": {"name":"relay.devices","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"RelayDeviceList","doc":" 이 Relay 의 페어링 표: 기기 id · 이름 · role · 페어링 시각 · 마지막 접속. owner 기기만.\n","mcp":null,"fileScope":false},
+	"relay.pairCode": {"name":"relay.pairCode","kind":"unary","tier":"write","roles":["owner"],"params":"RelayPairCodeParams","output":"RelayPairCode","doc":" 다른 기기를 이 Relay 에 붙일 6자리 코드를 만든다(5분, 틀린 시도 세 번이면 끝, 한 번 쓰면 끝). 앞의 대기 코드는 끝난다. owner\n 기기만.\n","mcp":null,"fileScope":false},
+	"relay.unpair": {"name":"relay.unpair","kind":"unary","tier":"write","roles":["owner"],"params":"RelayUnpairParams","output":"RelayUnpairResult","doc":" 기기 하나를 해제한다 — 그 기기의 열린 링크 · 구독 · 터미널 붙기 · 이어 붙기 토큰이 곧바로 끊긴다. owner 기기만.\n","mcp":null,"fileScope":false},
 	"remote.connect": {"name":"remote.connect","kind":"stream","tier":"write","roles":["owner"],"params":"RemoteHostParams","output":"RemoteStatus","doc":" 그 호스트를 쓴다: 링크가 없으면 붙고(SSH → 설치 → 데몬 → 핸드셰이크), 스트림이 열린 동안 링크를 둔다. 지금 상태부터 바뀔\n 때마다 보낸다. 사람이 끊어 둔 호스트도 다시 붙는다. 모든 스트림이 닫히면 링크를 닫는다.\n","mcp":null,"fileScope":false},
 	"remote.disconnect": {"name":"remote.disconnect","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteHostParams","output":"()","doc":" 사람이 끊는다. 쓰는 창이 남아 있어도 다시 붙지 않는다(새 `remote.connect` · `remote.retry` 까지).\n","mcp":null,"fileScope":false},
 	"remote.forward.close": {"name":"remote.forward.close","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteForwardCloseParams","output":"()","doc":" 포워딩 하나를 끈다. 실행 탭의 것이면 그 스트림이 끝나고, 설정의 것은 다음에 붙을 때 다시 연다.\n","mcp":null,"fileScope":false},
@@ -9526,6 +9542,50 @@ export type RegistryOrigin =
 "snapshot" | 
 /**  `$CACHE/registry/<판>/` 에 받아 둔 판 전체. */
 "cache";
+
+/**  페어링된 기기 하나(기기 화면의 한 줄). */
+export type RelayDevice = {
+	/**  기기 id(공개키의 지문 — `SHA256:…`). */
+	device: string,
+	/**  기기 공개키(base64). */
+	key: string,
+	name: string,
+	role: Role,
+	/**  페어링한 시각(유닉스 ms). 이 행 전에 페어링한 기기는 모른다. */
+	pairedAtMs?: number | null,
+	/**  그 기기의 링크가 마지막으로 증명된 시각(유닉스 ms). */
+	lastSeenMs?: number | null,
+	/**  이 호출을 한 기기인가. */
+	you: boolean,
+};
+
+export type RelayDeviceList = {
+	devices: RelayDevice[],
+};
+
+export type RelayPairCode = {
+	/**  6자리 코드(사람에게만 보인다 — 새 코드를 만들면 앞 코드는 끝난다). */
+	code: string,
+	/**  만료 시각(유닉스 ms — 5분 뒤). */
+	expiresAtMs: number,
+};
+
+export type RelayPairCodeParams = {
+	/**  그 코드로 페어링되는 기기가 받을 role. */
+	role: Role,
+	/**  그 기기의 이름(`[A-Za-z0-9._-]`, 64자까지). 없으면 기기가 댄 이름. */
+	name?: string | null,
+};
+
+export type RelayUnpairParams = {
+	/**  해제할 기기 id. */
+	device: string,
+};
+
+export type RelayUnpairResult = {
+	/**  표에 있었는가. */
+	removed: boolean,
+};
 
 /**  세션 허용이 기억하는 단위. */
 export type Remember = 

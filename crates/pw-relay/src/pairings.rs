@@ -1,6 +1,7 @@
-//! 페어링 표 파일(`$DATA/relay/pairings.json` — M7-03)을 따라간다. 표를 쓰는 것은 그 머신의 사람 · 설치 명령(`pair` — M7-06 ·
-//! M7-23)이고 데몬은 읽기만 한다 — 데몬 소켓으로 표를 바꾸는 길은 없다(`crate::command`). 파일이 바뀌면 다시 읽어 표를 바꾸고,
-//! 빠지거나 role 이 바뀐 기기의 링크는 `pw_link` 가 끊는다.
+//! 페어링 표 파일(`$DATA/relay/pairings.json` — M7-03)을 따라간다. 표를 쓰는 것은 그 머신의 사람 · 설치 명령(`pair` · `unpair` —
+//! M7-06), 그리고 데몬 안에서는 **기기 키를 증명한 owner 링크의 RPC**(`relay.unpair` · 코드 페어링의 완료 — M7-23, `crate::devices` ·
+//! `crate::codes`)뿐이다 — 데몬 소켓의 좁은 명령으로 표를 바꾸는 길은 없다(`crate::command`). 파일이 바뀌면 다시 읽어 표를 바꾸고,
+//! 빠지거나 role 이 바뀐 기기의 링크는 `pw_link` 가 끊는다. 데몬 안의 쓰기는 다시 읽기를 기다리지 않고 표를 곧바로 바꾼다.
 //!
 //! **쓰기**([`pair`] · [`unpair`] — `pitwall-relay pair --from-ssh` · `unpair`, 18-m7-plan M7-06 ⑧ ⑨)는 데몬 소켓 명령이 아니라
 //! 그 프로세스가 파일에 직접 쓴다. 두 프로세스(두 Desktop 이 동시에 SSH 로 붙음)가 읽고-고치고-쓰는 사이에 서로의 키를 지우지
@@ -67,6 +68,7 @@ pub fn pair(data: &Path, key: &PublicKey, name: &str) -> io::Result<Paired> {
             name: name.to_owned(),
         });
         save(&path, &devices)?;
+        crate::devices::record_paired(data, &key.id(), now_ms());
     }
     Ok(Paired { machine, added })
 }
@@ -83,7 +85,12 @@ pub fn unpair(data: &Path, device: &DeviceId) -> io::Result<bool> {
         return Ok(false);
     }
     save(&path, &devices)?;
+    crate::devices::forget(data, device);
     Ok(true)
+}
+
+fn now_ms() -> u64 {
+    (crate::codes::system_clock())()
 }
 
 /// 이 머신의 id. 키 파일이 없으면 만든다 — 막 뜬 데몬이 같은 순간 만들었으면(`AlreadyExists`) 그것을 읽는다.
@@ -96,8 +103,9 @@ fn machine_id(data: &Path) -> io::Result<MachineId> {
     .map(|key| key.id())
 }
 
-/// 쓰기 잠금을 쥔다(기다린다). 버리면 놓인다.
-fn lock(data: &Path) -> io::Result<File> {
+/// 쓰기 잠금을 쥔다(기다린다). 버리면 놓인다. 대기 코드 · 접속 시각 파일(`crate::codes` · `crate::devices`)도 같은 잠금 아래에서
+/// 쓴다.
+pub(crate) fn lock(data: &Path) -> io::Result<File> {
     // 폴더는 `RelayKeyFile` · `save` 와 같은 확인(0700 · 심링크 아님)을 지난다 — 잠금 파일을 남의 폴더에 만들지 않게.
     pw_link::pairing::ensure_dir(data)?;
     let path = data.join(PAIRINGS_LOCK);

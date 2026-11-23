@@ -45288,6 +45288,213 @@
       ],
       "tier": "write"
     },
+    "relay.devices": {
+      "description": "이 Relay 의 페어링 표: 기기 id · 이름 · role · 페어링 시각 · 마지막 접속. owner 기기만.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "result": {
+        "$defs": {
+          "RelayDevice": {
+            "description": "페어링된 기기 하나(기기 화면의 한 줄).",
+            "properties": {
+              "device": {
+                "description": "기기 id(공개키의 지문 — `SHA256:…`).",
+                "type": "string"
+              },
+              "key": {
+                "description": "기기 공개키(base64).",
+                "type": "string"
+              },
+              "lastSeenMs": {
+                "default": null,
+                "description": "그 기기의 링크가 마지막으로 증명된 시각(유닉스 ms).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "pairedAtMs": {
+                "default": null,
+                "description": "페어링한 시각(유닉스 ms). 이 행 전에 페어링한 기기는 모른다.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "role": {
+                "$ref": "#/$defs/Role"
+              },
+              "you": {
+                "description": "이 호출을 한 기기인가.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "device",
+              "key",
+              "name",
+              "role",
+              "pairedAtMs",
+              "lastSeenMs",
+              "you"
+            ],
+            "type": "object"
+          },
+          "Role": {
+            "description": "호출자(페어링 기기)의 role. 값은 `docs/design/08-remote-mobile.md` 「보안 모델」 절을 따른다.",
+            "oneOf": [
+              {
+                "const": "owner",
+                "description": "Desktop. 전체.",
+                "type": "string"
+              },
+              {
+                "const": "mobile",
+                "description": "조회 + 메서드가 명시적으로 허용한 조작.",
+                "type": "string"
+              },
+              {
+                "const": "readonly",
+                "description": "조회만.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "devices": {
+            "items": {
+              "$ref": "#/$defs/RelayDevice"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "devices"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "relay.pairCode": {
+      "description": "다른 기기를 이 Relay 에 붙일 6자리 코드를 만든다(5분, 틀린 시도 세 번이면 끝, 한 번 쓰면 끝). 앞의 대기 코드는 끝난다. owner\n기기만.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "Role": {
+            "description": "호출자(페어링 기기)의 role. 값은 `docs/design/08-remote-mobile.md` 「보안 모델」 절을 따른다.",
+            "oneOf": [
+              {
+                "const": "owner",
+                "description": "Desktop. 전체.",
+                "type": "string"
+              },
+              {
+                "const": "mobile",
+                "description": "조회 + 메서드가 명시적으로 허용한 조작.",
+                "type": "string"
+              },
+              {
+                "const": "readonly",
+                "description": "조회만.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "name": {
+            "default": null,
+            "description": "그 기기의 이름(`[A-Za-z0-9._-]`, 64자까지). 없으면 기기가 댄 이름.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "$ref": "#/$defs/Role",
+            "description": "그 코드로 페어링되는 기기가 받을 role."
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "code": {
+            "description": "6자리 코드(사람에게만 보인다 — 새 코드를 만들면 앞 코드는 끝난다).",
+            "type": "string"
+          },
+          "expiresAtMs": {
+            "description": "만료 시각(유닉스 ms — 5분 뒤).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "expiresAtMs"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "relay.unpair": {
+      "description": "기기 하나를 해제한다 — 그 기기의 열린 링크 · 구독 · 터미널 붙기 · 이어 붙기 토큰이 곧바로 끊긴다. owner 기기만.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "device": {
+            "description": "해제할 기기 id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "removed": {
+            "description": "표에 있었는가.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "removed"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
     "remote.connect": {
       "description": "그 호스트를 쓴다: 링크가 없으면 붙고(SSH → 설치 → 데몬 → 핸드셰이크), 스트림이 열린 동안 링크를 둔다. 지금 상태부터 바뀔\n때마다 보낸다. 사람이 끊어 둔 호스트도 다시 붙는다. 모든 스트림이 닫히면 링크를 닫는다.",
       "item": {

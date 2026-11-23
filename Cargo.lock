@@ -6128,6 +6128,8 @@ dependencies = [
  "tokio-util",
  "toml_edit 0.25.17+spec-1.1.0",
  "tracing",
+ "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]
@@ -6194,6 +6196,7 @@ dependencies = [
  "pw-i18n",
  "pw-index",
  "pw-lang",
+ "pw-link",
  "pw-lsp",
  "pw-lsp-servers",
  "pw-mcp",

@@ -20,6 +20,7 @@ use pw_git as _;
 use pw_i18n as _;
 use pw_index as _;
 use pw_lang as _;
+use pw_link as _;
 use pw_lsp as _;
 use pw_lsp_servers as _;
 use pw_mcp as _;
