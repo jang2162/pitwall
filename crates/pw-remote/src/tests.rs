@@ -48,6 +48,32 @@ struct Fake {
     hosts: Mutex<Option<MakeHost>>,
     /// 붙은 뒤 조사 · 정리를 부른 수.
     tidies: AtomicUsize,
+    /// 설정의 포트 포워딩(18-m7-plan M7-22).
+    port_forwards: Mutex<Vec<pw_link::forward::ForwardSetting>>,
+    /// 포워더가 이은 연결 수.
+    carried: Arc<AtomicUsize>,
+}
+
+/// 가짜 링크의 포워더: 「원격 머신」 이 이 컴퓨터라고 보고 `127.0.0.1:<원격 포트>` 로 곧바로 잇는다.
+struct DirectForwarder(Arc<AtomicUsize>);
+
+impl Forwarder for DirectForwarder {
+    fn carry(
+        &self,
+        mut socket: tokio::net::TcpStream,
+        to: pw_link::forward::ForwardTo,
+    ) -> BoxFuture<'static, Result<(), String>> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async move {
+            let mut remote = tokio::net::TcpStream::connect(("127.0.0.1", to.port))
+                .await
+                .map_err(|e| e.to_string())?;
+            tokio::io::copy_bidirectional(&mut socket, &mut remote)
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        })
+    }
 }
 
 impl Fake {
@@ -61,6 +87,22 @@ impl Fake {
 }
 
 impl Backend for Fake {
+    fn port_forwards(
+        &self,
+        _settings: Option<&Value>,
+        name: &str,
+    ) -> Vec<pw_link::forward::ForwardSetting> {
+        if name == "mini" {
+            lock(&self.port_forwards).clone()
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn forwarder(&self, _machine: &str) -> Option<Arc<dyn Forwarder>> {
+        Some(Arc::new(DirectForwarder(Arc::clone(&self.carried))))
+    }
+
     fn hosts(&self, _settings: Option<&Value>) -> (Vec<HostEntry>, Vec<String>) {
         (
             vec![HostEntry {
@@ -968,3 +1010,5 @@ async fn each_link_tidies_once_and_its_relays_go_with_it() {
     .expect("no survey after reconnecting");
     assert_eq!(s.fake.tidies.load(Ordering::SeqCst), 2);
 }
+
+mod forwards;

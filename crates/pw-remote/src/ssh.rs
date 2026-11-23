@@ -102,6 +102,25 @@ pub struct SshBackend {
     limits: LinkLimits,
     settle: Duration,
     key: tokio::sync::OnceCell<Arc<DeviceKey>>,
+    /// 증명된 머신 id 마다 지금 링크의 원격 Host(포트 포워딩이 연결을 잇는다 — 18-m7-plan M7-22). 링크가 사라지면 비어 있다.
+    links: Mutex<std::collections::HashMap<String, std::sync::Weak<RemoteHost>>>,
+}
+
+/// 원격 Host 의 링크로 포워딩 연결을 잇는다. 링크(원격 Host)가 사라졌으면 거절한다.
+struct LinkForwarder(std::sync::Weak<RemoteHost>);
+
+impl crate::Forwarder for LinkForwarder {
+    fn carry(
+        &self,
+        socket: tokio::net::TcpStream,
+        to: pw_link::forward::ForwardTo,
+    ) -> BoxFuture<'static, Result<(), String>> {
+        let remote = self.0.upgrade();
+        Box::pin(async move {
+            let remote = remote.ok_or("the link is gone")?;
+            remote.forward(to, socket).await.map_err(|e| e.to_string())
+        })
+    }
 }
 
 impl SshBackend {
@@ -114,6 +133,7 @@ impl SshBackend {
             limits: LinkLimits::default(),
             settle: PAIRING_SETTLE,
             key: tokio::sync::OnceCell::new(),
+            links: Mutex::default(),
         }
     }
 
@@ -301,6 +321,11 @@ impl SshBackend {
                 }
             }
         });
+        {
+            let mut links = self.links.lock().unwrap_or_else(PoisonError::into_inner);
+            links.retain(|_, held| held.strong_count() > 0);
+            links.insert(machine.clone(), Arc::downgrade(&remote));
+        }
         let closer = Arc::clone(&remote);
         Ok(Link {
             host: remote,
@@ -598,6 +623,29 @@ fn old_relay(daemon: &upgrade::OldDaemon) -> RemoteOldRelay {
 }
 
 impl Backend for SshBackend {
+    fn port_forwards(
+        &self,
+        settings: Option<&Value>,
+        name: &str,
+    ) -> Vec<pw_link::forward::ForwardSetting> {
+        remote_hosts::read(settings, None)
+            .0
+            .into_iter()
+            .find(|h| h.name() == name)
+            .map(|h| h.port_forwards)
+            .unwrap_or_default()
+    }
+
+    fn forwarder(&self, machine: &str) -> Option<Arc<dyn crate::Forwarder>> {
+        let held = self
+            .links
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(machine)
+            .cloned()?;
+        Some(Arc::new(LinkForwarder(held)))
+    }
+
     fn hosts(&self, settings: Option<&Value>) -> (Vec<HostEntry>, Vec<String>) {
         let (configured, warnings) = remote_hosts::read(settings, None);
         let mut entries: Vec<HostEntry> = configured

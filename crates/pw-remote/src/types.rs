@@ -370,3 +370,116 @@ pub struct RemoteLinkCommandParams {
 pub struct RemoteRelaysChanged {
     pub name: String,
 }
+
+/// 포트 포워딩이 어디서 왔나(18-m7-plan M7-22 ①).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteForwardOrigin {
+    /// 원격 호스트 설정의 `[[remote_hosts.port_forwards]]` — 붙을 때 연다.
+    Settings,
+    /// 실행 탭 포트의 「로컬로 포워딩」 — 연 창이 쥐는 동안(그 실행이 사는 동안).
+    Run,
+}
+
+/// 포워딩을 열지 못한 까닭의 종류.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteForwardFailureKind {
+    /// 설정의 `local_host` 가 루프백이 아니다 — 열지 않는다(결정 M7-D12).
+    NotLoopback,
+    /// 이 컴퓨터에서 그 로컬 포트를 이미 누가 쓴다.
+    PortInUse,
+    /// 그 밖의 듣기 실패.
+    Bind,
+}
+
+/// 포워딩을 열지 못한 까닭.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteForwardFailure {
+    pub kind: RemoteForwardFailureKind,
+    /// 영어 원문.
+    pub message: String,
+}
+
+/// 포워딩의 지금 상태.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum RemoteForwardState {
+    /// 로컬 루프백에서 듣는다.
+    Listening,
+    /// 열지 못했다(설정의 포워딩 — 실행 탭의 포워딩은 열지 못하면 목록에 남지 않고 오류로 끝난다).
+    Failed { error: RemoteForwardFailure },
+}
+
+/// 포트 포워딩 하나(`remote.forwards.list` 의 줄).
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteForward {
+    /// 이 앱이 사는 동안 유일한 번호(`remote.forward.close`).
+    #[specta(type = pw_rpc::JsNumber)]
+    pub id: u64,
+    /// 원격 호스트 이름.
+    pub name: String,
+    pub origin: RemoteForwardOrigin,
+    /// 듣는 로컬 주소(설정 그대로 — 열지 못했으면 루프백이 아닐 수 있다).
+    pub local_host: String,
+    /// 듣는 로컬 포트(OS 가 고른 포트면 고른 값).
+    pub local_port: u16,
+    pub remote_host: String,
+    pub remote_port: u16,
+    pub state: RemoteForwardState,
+}
+
+/// `remote.forwards` 이벤트 — 그 호스트의 포워딩 목록이 바뀌었다.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteForwardsChanged {
+    pub name: String,
+    pub forwards: Vec<RemoteForward>,
+}
+
+/// `remote.forwards.list` 의 입력. `name` 이 없으면 모든 호스트.
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteForwardsParams {
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// `remote.forward.open` 의 입력 — 그 호스트의 `localhost:remotePort` 를 로컬로. `localPort` 가 없으면 같은 번호, `0` 이면 OS 가
+/// 빈 포트를 고른다.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteForwardOpenParams {
+    pub name: String,
+    pub remote_port: u16,
+    #[serde(default)]
+    pub local_port: Option<u16>,
+}
+
+/// `remote.forward.close` 의 입력.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteForwardCloseParams {
+    #[specta(type = pw_rpc::JsNumber)]
+    pub id: u64,
+}

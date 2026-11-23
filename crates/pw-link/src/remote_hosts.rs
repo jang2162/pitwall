@@ -3,11 +3,14 @@
 //! 저장소의 커밋된 설정이 그것을 넣으면 안 된다(DB 의 「설정 파일은 ssh 옵션을 줄 수 없다」 — D47 과 같은 방향). 프로젝트 설정의 그
 //! 표는 효과가 없고 경고를 남긴다.
 //!
-//! 키: `nickname` · `host`(필수 — `~/.ssh/config` 의 호스트 이름 또는 호스트 이름 · 주소) · `username` · `port` · `ssh_args`.
-//! `[[remote_hosts.port_forwards]]` 는 M7-22 가 읽는다. 틀린 항목은 빼고 경고한다(다른 항목은 쓴다).
+//! 키: `nickname` · `host`(필수 — `~/.ssh/config` 의 호스트 이름 또는 호스트 이름 · 주소) · `username` · `port` · `ssh_args`,
+//! 그리고 `[[remote_hosts.port_forwards]]`(18-m7-plan M7-22 — `local_port` · `remote_port` 필수, `remote_host` · `local_host`). 틀린
+//! 항목은 빼고 경고한다(다른 항목은 쓴다) — 틀린 포워딩 하나는 그 포워딩만 뺀다. `local_host` 가 루프백인지는 여기서 보지 않는다:
+//! 항목은 남기고 열 때 열지 않은 까닭을 목록에 보인다(결정 M7-D12 — `crate::forward::local_addr`).
 
 use serde_json::Value;
 
+use crate::forward::ForwardSetting;
 use crate::ssh::{SshTarget, check_options};
 
 /// 설정의 키(`settings.toml` 의 `[[remote_hosts]]`).
@@ -21,6 +24,15 @@ pub struct RemoteHostSettings {
     pub target: SshTarget,
     /// 사람의 ssh 옵션([`check_options`] 를 지난 것).
     pub ssh_args: Vec<String>,
+    /// 붙을 때 여는 포트 포워딩(18-m7-plan M7-22 ①).
+    pub port_forwards: Vec<ForwardSetting>,
+}
+
+impl RemoteHostSettings {
+    /// 목록에 쓰는 이름(별명, 없으면 호스트 이름).
+    pub fn name(&self) -> &str {
+        self.nickname.as_deref().unwrap_or(&self.target.host)
+    }
 }
 
 /// 레이어별 `remote_hosts` 값에서 항목을 읽는다. `global` 은 전역 `settings.toml` 의 값, `project` 는 프로젝트 설정의 값(읽지 않고
@@ -44,7 +56,10 @@ pub fn read(
     };
     for (i, item) in items.iter().enumerate() {
         match entry(item) {
-            Ok(host) => hosts.push(host),
+            Ok(mut host) => {
+                host.port_forwards = forwards(item, i, &mut warnings);
+                hosts.push(host);
+            }
             Err(why) => warnings.push(format!("remote_hosts[{i}] is ignored: {why}")),
         }
     }
@@ -69,6 +84,68 @@ fn kind(value: &Value) -> &'static str {
         Value::Array(_) => "an array",
         Value::Object(_) => "a table",
     }
+}
+
+/// 항목의 `port_forwards`. 틀린 것은 빼고 경고한다.
+fn forwards(item: &Value, i: usize, warnings: &mut Vec<String>) -> Vec<ForwardSetting> {
+    let items = match item.get("port_forwards") {
+        None => return Vec::new(),
+        Some(Value::Array(items)) => items,
+        Some(other) => {
+            warnings.push(format!(
+                "remote_hosts[{i}].port_forwards must be an array of tables ([[remote_hosts.port_forwards]]), found {}",
+                kind(other)
+            ));
+            return Vec::new();
+        }
+    };
+    let mut out = Vec::new();
+    for (j, forward) in items.iter().enumerate() {
+        match port_forward(forward) {
+            Ok(forward) => out.push(forward),
+            Err(why) => warnings.push(format!(
+                "remote_hosts[{i}].port_forwards[{j}] is ignored: {why}"
+            )),
+        }
+    }
+    out
+}
+
+fn port_forward(item: &Value) -> Result<ForwardSetting, String> {
+    let Value::Object(table) = item else {
+        return Err(format!(
+            "a port forward must be a table, found {}",
+            kind(item)
+        ));
+    };
+    let port = |key: &str| -> Result<u16, String> {
+        match table.get(key) {
+            None => Err(format!("{key} is missing")),
+            Some(Value::Number(n)) => n
+                .as_u64()
+                .and_then(|p| u16::try_from(p).ok())
+                .filter(|p| *p > 0)
+                .ok_or_else(|| format!("{key} must be 1 to 65535")),
+            Some(other) => Err(format!("{key} must be a number, found {}", kind(other))),
+        }
+    };
+    let text = |key: &str| -> Result<Option<String>, String> {
+        match table.get(key) {
+            None => Ok(None),
+            Some(Value::String(s)) => Ok(Some(s.clone())),
+            Some(other) => Err(format!("{key} must be a string, found {}", kind(other))),
+        }
+    };
+    let setting = ForwardSetting {
+        local_port: port("local_port")?,
+        remote_port: port("remote_port")?,
+        remote_host: text("remote_host")?,
+        local_host: text("local_host")?,
+    };
+    if let Some(host) = &setting.remote_host {
+        crate::forward::ForwardTo::new(host.clone(), setting.remote_port).check()?;
+    }
+    Ok(setting)
 }
 
 fn entry(item: &Value) -> Result<RemoteHostSettings, String> {
@@ -118,6 +195,7 @@ fn entry(item: &Value) -> Result<RemoteHostSettings, String> {
         nickname: text("nickname")?,
         target,
         ssh_args,
+        port_forwards: Vec::new(),
     })
 }
 
@@ -174,12 +252,60 @@ mod tests {
                     port: Some(2222),
                 },
                 ssh_args: vec!["-o".into(), "ServerAliveInterval=30".into()],
+                port_forwards: Vec::new(),
             }]
         );
         assert!(
             warnings.iter().any(|w| w.contains("no effect")),
             "{warnings:?}"
         );
+    }
+
+    /// `[[remote_hosts.port_forwards]]` 를 읽는다(08 「원격 호스트 등록 예」 의 꼴). 루프백이 아닌 `local_host` 도 항목으로 남는다 —
+    /// 열지 않는 것은 여는 쪽의 판정이다. 틀린 포워딩은 그것만 빼고 경고한다.
+    #[test]
+    fn port_forwards_are_read_from_the_host_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("settings.toml"),
+            "schema = 1\n[[remote_hosts]]\nnickname = \"build\"\nhost = \"build.ts.net\"\n\
+             [[remote_hosts.port_forwards]]\nlocal_port = 8080\nremote_port = 8080\n\
+             [[remote_hosts.port_forwards]]\nlocal_port = 5005\nremote_port = 5005\nremote_host = \"localhost\"\nlocal_host = \"0.0.0.0\"\n\
+             [[remote_hosts.port_forwards]]\nlocal_port = 70000\nremote_port = 1\n",
+        )
+        .unwrap();
+        let paths = pw_core::config::AppPaths {
+            config: dir.path().to_path_buf(),
+            data: dir.path().join("data"),
+            state: dir.path().join("state"),
+            cache: dir.path().join("cache"),
+        };
+        let snapshot = ConfigSource::global(&paths)
+            .without_writes()
+            .load()
+            .unwrap();
+        let (hosts, warnings) = read(snapshot.get("settings", KEY), None);
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].name(), "build");
+        assert_eq!(
+            hosts[0].port_forwards,
+            vec![
+                ForwardSetting {
+                    local_port: 8080,
+                    remote_port: 8080,
+                    remote_host: None,
+                    local_host: None,
+                },
+                ForwardSetting {
+                    local_port: 5005,
+                    remote_port: 5005,
+                    remote_host: Some("localhost".into()),
+                    local_host: Some("0.0.0.0".into()),
+                },
+            ]
+        );
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("port_forwards[2]"), "{warnings:?}");
     }
 
     /// 틀린 항목(호스트 글자 · 호스트 키 확인을 끄는 `ssh_args` · 포트)은 빼고 경고한다 — 다른 항목은 쓴다.

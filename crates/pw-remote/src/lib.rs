@@ -31,12 +31,14 @@ use serde_json::Value;
 use tokio::sync::watch;
 use zeroize::Zeroizing;
 
+mod forwards;
 pub mod methods;
 pub mod secrets;
 #[cfg(feature = "ssh")]
 pub mod ssh;
 mod types;
 
+pub use forwards::{ForwardOpenError, ForwardUse, Forwarder, MAX_CONNECTIONS, TOPIC_FORWARDS};
 pub use types::*;
 
 /// 상태가 바뀔 때 내는 토픽(payload [`RemoteStatusChanged`]). 호스트 이름 · 머신 id 를 실으므로 owner 만.
@@ -178,6 +180,18 @@ pub trait Backend: Send + Sync {
             ))
         })
     }
+    /// 그 호스트의 `[[remote_hosts.port_forwards]]`(18-m7-plan M7-22 ①). `settings` 는 전역 설정의 `remote_hosts` 값.
+    fn port_forwards(
+        &self,
+        _settings: Option<&Value>,
+        _name: &str,
+    ) -> Vec<pw_link::forward::ForwardSetting> {
+        Vec::new()
+    }
+    /// 증명된 머신 `machine` 의 링크로 로컬 TCP 연결을 잇는 것(18-m7-plan M7-22). 포워딩이 없는 백엔드는 `None`.
+    fn forwarder(&self, _machine: &str) -> Option<Arc<dyn Forwarder>> {
+        None
+    }
     /// `pitwall` 명령 링크를 이 판 바이너리로 두거나(`on`) 걷는다. 그 뒤 링크가 있는가.
     fn link_command<'a>(
         &'a self,
@@ -274,6 +288,8 @@ struct Slot {
     relays: Option<RemoteRelays>,
     /// 조사 · 끝내기 · 링크 바꾸기를 한 번에 하나씩(원격 셸이 서로의 결과를 덮지 않게).
     upgrade: Arc<tokio::sync::Mutex<()>>,
+    /// 지금 링크로 포워딩 연결을 잇는 것(18-m7-plan M7-22 — 링크가 없으면 없다).
+    forwarder: Option<Arc<dyn Forwarder>>,
 }
 
 impl Slot {
@@ -288,6 +304,7 @@ impl Slot {
             log: VecDeque::new(),
             relays: None,
             upgrade: Arc::default(),
+            forwarder: None,
         }
     }
 }
@@ -306,6 +323,8 @@ struct Inner {
     /// 원격 Relay 의 비밀 청에 답하는 것(앱이 키체인으로 붙인다 — 18-m7-plan M7-12). 없으면 원격 Host 를 감싸지 않고 청에 답하지
     /// 않는다.
     desk: RwLock<Option<Arc<secrets::SecretDesk>>>,
+    /// 포트 포워딩 표(18-m7-plan M7-22).
+    forwards: Mutex<forwards::Forwards>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -385,6 +404,7 @@ impl RemoteHosts {
                 secrets: Mutex::default(),
                 attempting: Mutex::new(0),
                 desk: RwLock::default(),
+                forwards: Mutex::default(),
             }),
         }
     }
@@ -586,6 +606,7 @@ impl RemoteHosts {
             return;
         }
         let had_link = self.stop(name, slot);
+        self.close_host_forwards(name);
         let keep = matches!(
             &*slot.status.borrow(),
             RemoteStatus::MachineChanged { .. } | RemoteStatus::Disconnected { .. }
@@ -612,6 +633,7 @@ impl RemoteHosts {
         let slot = slots.entry(name.to_owned()).or_insert_with(Slot::new);
         slot.by_user = true;
         let had_link = self.stop(name, slot);
+        self.close_host_forwards(name);
         self.set_status(
             name,
             slot,
@@ -757,6 +779,7 @@ impl RemoteHosts {
             driver.abort();
         }
         self.set_relays(name, slot, None);
+        slot.forwarder = None;
         match slot.link.take() {
             Some((machine, close)) => {
                 close();
@@ -820,6 +843,7 @@ impl RemoteHosts {
                 Ok(closed) => {
                     // 붙었다가 닫혔다 — 다시 붙기로.
                     let alive = self.update(&name, generation, |slot| {
+                        slot.forwarder = None;
                         if let Some((machine, _)) = slot.link.take()
                             && let Some(router) = read(&self.inner.router)
                         {
@@ -1037,7 +1061,9 @@ impl RemoteHosts {
             return Err(e);
         }
         let mut close = Some(close);
+        let forwarder = self.backend().and_then(|b| b.forwarder(&machine));
         let alive = self.update(name, generation, |slot| {
+            slot.forwarder = forwarder;
             slot.link = Some((machine.clone(), close.take().expect("한 번")));
             Some(RemoteStatus::Connected {
                 machine: machine.clone(),
@@ -1062,6 +1088,11 @@ impl RemoteHosts {
             RemoteLogLevel::Info,
             &format!("connected to machine {machine}"),
         );
+        // 설정의 포트 포워딩은 붙을 때 연다(18-m7-plan M7-22 ①).
+        {
+            let (hosts, name) = (self.clone(), name.to_owned());
+            tokio::spawn(async move { hosts.open_configured_forwards(&name).await });
+        }
         // 링크가 이어 붙는 동안은 `resuming`, 이어 붙으면 다시 `connected` 다(M7-14 — 창이 그 머신 탭을 읽기 전용으로 보인다).
         let closed: BoxFuture<'static, String> = match resuming {
             None => closed,

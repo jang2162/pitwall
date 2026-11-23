@@ -25,7 +25,8 @@ schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 specta = { workspace = true, features = ["derive"] }
-tokio = { workspace = true, features = ["rt", "sync", "macros", "time"] }
+# net: 포트 포워딩의 로컬 루프백 듣기(18-m7-plan M7-22).
+tokio = { workspace = true, features = ["rt", "sync", "macros", "time", "net"] }
 tracing = "0.1.44"
 # askpass 답(진단 글에서 가릴 것)을 지울 때 메모리를 비운다.
 zeroize = "1.9.1"
@@ -43,4 +44,6 @@ tokio = { workspace = true, features = [
   "macros",
   "time",
   "test-util",
+  "net",
+  "io-util",
 ] }

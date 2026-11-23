@@ -5,14 +5,19 @@
 //!   보낸다. 스트림을 모두 닫으면 링크를 닫는다(연결은 쓰는 머신만 — 08 「창과 활성 체크아웃」).
 //! - `remote.prompts` 는 원격 호스트를 붙이는 ssh 의 askpass 질문(호스트 키 확인 · 암호)을 듣는 스트림, `remote.prompt.answer` 가
 //!   그 답이다(git 의 `git.prompts` 와 같은 꼴 — 호스트 키 질문은 힌트 없이 온다, 창이 글로 알아본다).
+//! - 포트 포워딩(18-m7-plan M7-22): `remote.forwards.list` · `remote.forward.close`(상태바 · 원격 호스트 시트), 실행 탭의
+//!   `remote.forward.open` 스트림(열린 동안 포워딩과 그 호스트를 쓴다). 원격 쪽은 늘 `localhost` 다 — 다른 `remote_host` 는 사람의
+//!   설정(`[[remote_hosts.port_forwards]]`)으로만(메인 판정 M7-P15). MCP 툴이 아니다.
 
 use pw_git::write::{AnswerError, GitPromptAnswer, GitPromptEvent};
 use pw_rpc::{ConnectionScope, Ctx, Router, RpcError, code, rpc_method};
 
 use crate::{
-    PROMPTS_KEY, RemoteError, RemoteHostCheck, RemoteHostList, RemoteHostParams, RemoteHosts,
-    RemoteLinkCommandParams, RemoteLogEntry, RemotePromptAnswerParams, RemoteRelays, RemoteStatus,
-    RemoteStopOldParams, RemoteStopOutcome, RemoteTrustMachineParams,
+    ForwardOpenError, PROMPTS_KEY, RemoteError, RemoteForward, RemoteForwardCloseParams,
+    RemoteForwardOpenParams, RemoteForwardsParams, RemoteHostCheck, RemoteHostList,
+    RemoteHostParams, RemoteHosts, RemoteLinkCommandParams, RemoteLogEntry,
+    RemotePromptAnswerParams, RemoteRelays, RemoteStatus, RemoteStopOldParams, RemoteStopOutcome,
+    RemoteTrustMachineParams,
 };
 
 rpc_method! {
@@ -124,6 +129,39 @@ rpc_method! {
     }
 }
 
+rpc_method! {
+    /// 포트 포워딩 목록(`name` 이 없으면 모든 호스트): 설정의 것(붙을 때 연다)과 실행 탭의 것, 듣는 로컬 주소 · 원격 대상 · 상태
+    /// (열지 못했으면 까닭 — 루프백이 아님 · 로컬 포트가 쓰임). 바뀌면 `remote.forwards` 이벤트.
+    pub RemoteForwardsList: "remote.forwards.list" {
+        params: RemoteForwardsParams,
+        result: Vec<RemoteForward>,
+        tier: Read,
+        roles: [Owner],
+    }
+}
+
+rpc_method! {
+    /// 실행 탭 포트의 「로컬로 포워딩」: 그 호스트의 `localhost:remotePort` 를 이 컴퓨터의 루프백(`127.0.0.1`)에서 듣는다. 스트림이
+    /// 열린 동안 포워딩과 그 호스트를 쓴다(링크가 없으면 붙는다). 처음 열린 포워딩을, 닫히면(`remote.forward.close`) 끝을 보낸다. 로컬
+    /// 포트를 이미 누가 쓰면 `conflict`(data `{ reason: "portInUse", port }`) — 다른 `localPort` 로 다시 연다.
+    pub RemoteForwardOpen: "remote.forward.open" {
+        params: RemoteForwardOpenParams,
+        stream: RemoteForward,
+        tier: Write,
+        roles: [Owner],
+    }
+}
+
+rpc_method! {
+    /// 포워딩 하나를 끈다. 실행 탭의 것이면 그 스트림이 끝나고, 설정의 것은 다음에 붙을 때 다시 연다.
+    pub RemoteForwardClose: "remote.forward.close" {
+        params: RemoteForwardCloseParams,
+        result: (),
+        tier: Write,
+        roles: [Owner],
+    }
+}
+
 /// Host 범위 연결만(웰컴 · 설정 창).
 fn host_scope(ctx: &Ctx) -> Result<(), RpcError> {
     match ctx.scope() {
@@ -144,8 +182,63 @@ fn rpc(e: RemoteError) -> RpcError {
     }
 }
 
+fn forward_rpc(e: ForwardOpenError) -> RpcError {
+    match e {
+        ForwardOpenError::Remote(e) => rpc(e),
+        ForwardOpenError::PortInUse(port) => RpcError::new(code::CONFLICT, e.to_string())
+            .with_data(serde_json::json!({ "reason": "portInUse", "port": port })),
+        ForwardOpenError::Bind(_) => RpcError::internal(e.to_string()),
+    }
+}
+
 /// 핸들러를 붙인다.
 pub fn register(router: &mut Router, remote: &RemoteHosts) {
+    let r = remote.clone();
+    router.unary(RemoteForwardsList, move |ctx, p: RemoteForwardsParams| {
+        let r = r.clone();
+        async move {
+            host_scope(&ctx)?;
+            Ok(r.forwards(p.name.as_deref()))
+        }
+    });
+    let r = remote.clone();
+    router.unary(
+        RemoteForwardClose,
+        move |ctx, p: RemoteForwardCloseParams| {
+            let r = r.clone();
+            async move {
+                host_scope(&ctx)?;
+                if r.close_forward(p.id) {
+                    Ok(())
+                } else {
+                    Err(RpcError::new(code::NOT_FOUND, "no such port forward"))
+                }
+            }
+        },
+    );
+    let r = remote.clone();
+    router.stream(
+        RemoteForwardOpen,
+        move |ctx, p: RemoteForwardOpenParams, sink| {
+            let r = r.clone();
+            async move {
+                host_scope(&ctx)?;
+                let _use = r.hold(&p.name).map_err(rpc)?;
+                let mut forward = r
+                    .open_forward(&p.name, p.remote_port, p.local_port)
+                    .await
+                    .map_err(forward_rpc)?;
+                loop {
+                    let now = forward.watch.borrow_and_update().clone();
+                    let Some(now) = now else { return Ok(()) };
+                    sink.send(now).await?;
+                    if forward.watch.changed().await.is_err() {
+                        return Ok(());
+                    }
+                }
+            }
+        },
+    );
     let r = remote.clone();
     router.unary(RemoteHostsList, move |ctx, ()| {
         let r = r.clone();

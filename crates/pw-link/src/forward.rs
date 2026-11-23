@@ -72,6 +72,18 @@ impl ForwardTo {
     }
 }
 
+/// 원격 호스트 설정의 `[[remote_hosts.port_forwards]]` 항목 하나(08 「원격 호스트 등록 예」). `local_host` 는 설정 그대로다 —
+/// 루프백인지는 열 때 [`local_addr`] 가 본다(루프백이 아니면 그 포워딩을 열지 않고 목록에 까닭을 보인다).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForwardSetting {
+    pub local_port: u16,
+    pub remote_port: u16,
+    /// 없으면 [`DEFAULT_REMOTE_HOST`].
+    pub remote_host: Option<String>,
+    /// 없으면 `127.0.0.1`.
+    pub local_host: Option<String>,
+}
+
 /// 로컬 쪽 오류.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ForwardError {
