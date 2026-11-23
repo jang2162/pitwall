@@ -249,7 +249,7 @@ async fn a_new_version_runs_its_own_daemon_beside_the_old_one() {
     std::fs::write(
         config.join("relay.toml"),
         format!(
-            "schema = 1\nroots = [\"{}\"]\n[idle]\nexit_after = \"30s\"\n",
+            "schema = 1\nroots = [\"{}\"]\n[idle]\nexit_after = \"30s\"\n[listen]\ninterfaces = []\n",
             work.display()
         ),
     )
@@ -394,7 +394,7 @@ async fn a_busy_old_daemon_keeps_its_binary() {
     std::fs::create_dir_all(&config).unwrap();
     std::fs::write(
         config.join("relay.toml"),
-        "schema = 1\n[idle]\nexit_after = \"30s\"\n",
+        "schema = 1\n[idle]\nexit_after = \"30s\"\n[listen]\ninterfaces = []\n",
     )
     .unwrap();
     let _daemons = Daemons {

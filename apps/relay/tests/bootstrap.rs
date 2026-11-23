@@ -93,7 +93,7 @@ fn short_idle(remote: &FakeRemote) {
     std::fs::create_dir_all(&config).unwrap();
     std::fs::write(
         config.join("relay.toml"),
-        "schema = 1\n[idle]\nexit_after = \"10s\"\n",
+        "schema = 1\n[idle]\nexit_after = \"10s\"\n[listen]\ninterfaces = []\n",
     )
     .unwrap();
 }

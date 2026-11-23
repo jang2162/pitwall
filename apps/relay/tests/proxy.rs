@@ -16,7 +16,11 @@ fn relay(root: &Path, args: &[&str]) -> Command {
     let config = root.join("config/relay/relay.toml");
     if !config.exists() {
         std::fs::create_dir_all(config.parent().unwrap()).unwrap();
-        std::fs::write(&config, "schema = 1\n[idle]\nexit_after = \"10s\"\n").unwrap();
+        std::fs::write(
+            &config,
+            "schema = 1\n[idle]\nexit_after = \"10s\"\n[listen]\ninterfaces = []\n",
+        )
+        .unwrap();
     }
     let mut command = Command::new(BIN);
     command.args(args);

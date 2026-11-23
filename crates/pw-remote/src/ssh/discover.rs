@@ -142,7 +142,9 @@ async fn lan() -> Result<Vec<RemoteDiscovered>, String> {
                         .map(|a| a.to_ip_addr())
                         .collect();
                     addrs.sort_by_key(|a| !a.is_ipv4());
-                    if let Some(ip) = addrs.into_iter().find(|ip| !ip.is_loopback()) {
+                    // 광고는 아무 주소나 가리킬 수 있다 — 이 LAN 의 사설 · 링크 로컬 주소만 받는다(리뷰 R4: 가짜 광고로 Desktop 이
+                    // 바깥 주소에 핸드셰이크를 보내지 않게).
+                    if let Some(ip) = addrs.into_iter().find(|ip| local_network(*ip)) {
                         seen.insert(SocketAddr::new(ip, info.get_port()), ());
                     }
                 }
@@ -165,4 +167,34 @@ async fn lan() -> Result<Vec<RemoteDiscovered>, String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// 이 LAN 의 주소인가(사설 · 링크 로컬 — 루프백 · 공인 주소는 아니다).
+fn local_network(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
+        std::net::IpAddr::V6(v6) => {
+            let first = v6.segments()[0];
+            (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn lan_results_take_local_network_addresses_only() {
+        for (ip, ok) in [
+            ("192.168.1.20", true),
+            ("10.1.2.3", true),
+            ("169.254.1.1", true),
+            ("fd12::1", true),
+            ("fe80::1", true),
+            ("127.0.0.1", false),
+            ("203.0.113.7", false),
+            ("2001:db8::1", false),
+        ] {
+            assert_eq!(super::local_network(ip.parse().unwrap()), ok, "{ip}");
+        }
+    }
 }

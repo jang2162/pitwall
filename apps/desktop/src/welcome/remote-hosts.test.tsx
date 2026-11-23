@@ -828,7 +828,7 @@ it("pairs a manually placed relay with an address picked from the search and a 6
   await click(button("검색")!);
   const picked = document.querySelector('[data-discovered="mini.tail1234.ts.net"]')!;
   expect(picked.textContent).toContain("Tailscale");
-  expect(picked.textContent).toContain("Relay 가 받는 중");
+  expect(picked.textContent).toContain("응답함(누구인지는 페어링이 확인한다)");
   expect(document.querySelector('[data-discovered="192.168.1.30"]')!.textContent).toContain(
     "응답 없음",
   );
