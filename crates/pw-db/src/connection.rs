@@ -84,9 +84,10 @@ pub async fn connect_with(
         connection_id.to_owned(),
     );
     sessions.test_hooks.before_resolve().await;
+    let asker = asker_of(grant);
     let resolved = blocking(move || {
         let trusted = c.trust_gate(&project, wt.as_deref())?;
-        c.resolve(&trusted, &id)
+        crate::secret::with_asker(asker, || c.resolve(&trusted, &id))
     })
     .await?;
     let target = DbTarget::of_resolved(&resolved);
@@ -108,6 +109,16 @@ pub async fn connect_with(
 }
 
 type Opened = (DriverInfo, DbConnection, ServerInfo, Option<DbTunnelLease>);
+
+/// 키체인을 읽게 한 흐름이 누구의 것인가([`crate::secret::SecretAsker`]) — 원격 Relay 의 비밀 저장소는 에이전트의 증거면 Desktop 에
+/// 묻지 않는다(18-m7-plan M7-12 ④).
+fn asker_of(grant: &DbGrant) -> crate::secret::SecretAsker {
+    if grant.is_agent() {
+        crate::secret::SecretAsker::Agent
+    } else {
+        crate::secret::SecretAsker::Window
+    }
+}
 
 /// 창의 증거로 저장한 연결을 열었다 — 「사람이 연 연결」 로 기록한다(에이전트의 증거는 기록하지 않는다).
 fn remember_opened(sessions: &DbSessions, grant: &DbGrant, connection_id: &str, target: DbTarget) {
@@ -243,9 +254,10 @@ impl DbSessions {
                 .clone()
                 .filter(|_| params.draft.is_none()),
         );
+        let asker = asker_of(grant);
         let resolved = blocking(move || {
             let trusted = c.trust_gate(&params.project_id, params.worktree.as_deref())?;
-            match (&params.draft, &params.connection_id) {
+            crate::secret::with_asker(asker, || match (&params.draft, &params.connection_id) {
                 (Some(draft), id) => {
                     c.resolve_draft(&trusted, id.as_deref(), draft, params.secret.clone())
                 }
@@ -253,7 +265,7 @@ impl DbSessions {
                 (None, None) => Err(RpcError::invalid_params(
                     "give connectionId or draft to test",
                 )),
-            }
+            })
         })
         .await?;
         let target = DbTarget::of_resolved(&resolved);

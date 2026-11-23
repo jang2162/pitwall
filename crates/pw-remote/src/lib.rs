@@ -32,6 +32,7 @@ use tokio::sync::watch;
 use zeroize::Zeroizing;
 
 pub mod methods;
+pub mod secrets;
 #[cfg(feature = "ssh")]
 pub mod ssh;
 mod types;
@@ -213,6 +214,9 @@ struct Inner {
     secrets: Mutex<Vec<Zeroizing<String>>>,
     /// 지금 붙기를 하는 바퀴 수.
     attempting: Mutex<usize>,
+    /// 원격 Relay 의 비밀 청에 답하는 것(앱이 키체인으로 붙인다 — 18-m7-plan M7-12). 없으면 원격 Host 를 감싸지 않고 청에 답하지
+    /// 않는다.
+    desk: RwLock<Option<Arc<secrets::SecretDesk>>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -291,6 +295,7 @@ impl RemoteHosts {
                 backoff,
                 secrets: Mutex::default(),
                 attempting: Mutex::new(0),
+                desk: RwLock::default(),
             }),
         }
     }
@@ -333,6 +338,17 @@ impl RemoteHosts {
             .router
             .write()
             .unwrap_or_else(PoisonError::into_inner) = Some(router);
+    }
+
+    /// 원격 Relay 의 비밀 청에 답할 저장소(앱은 키체인 — 18-m7-plan M7-12). 붙인 뒤에 선 링크부터 원격 Host 를 감싸고
+    /// (`secrets::SecretDesk::gate`) 그 Relay 의 청에 답한다.
+    pub fn attach_secrets(&self, store: Arc<dyn pw_db::secret::SecretStore>) {
+        *self
+            .inner
+            .desk
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) =
+            Some(Arc::new(secrets::SecretDesk::new(store)));
     }
 
     /// 원격 askpass 질문(열쇠 [`PROMPTS_KEY`]). ssh 의 askpass 세션이 이것으로 묻는다.
@@ -567,6 +583,10 @@ impl RemoteHosts {
         registry
             .trust_remote_machine(name, &expected, machine)
             .map_err(|e| RemoteError::Conflict(e.to_string()))?;
+        // 옛 id 의 키체인 비밀은 지운다(M7-P6 — 새 키의 머신이 옛 머신의 비밀을 물려받지 않는다).
+        if let Some(desk) = read(&self.inner.desk) {
+            desk.forget_machine(&expected);
+        }
         self.note(
             name,
             None,
@@ -889,6 +909,16 @@ impl RemoteHosts {
             );
             return Err(e);
         }
+        // 비밀 청에 답할 것이 있으면 원격 Host 를 감싸 그 머신 창 연결의 DB 요청을 지켜보고, 링크가 선 뒤 그 Relay 의 청에 답한다
+        // (18-m7-plan M7-12 — 열쇠의 머신 id 는 핸드셰이크가 증명한 `machine`).
+        let desk = read(&self.inner.desk);
+        let (host, answering) = match &desk {
+            Some(_) => {
+                let (gated, flights) = secrets::SecretDesk::gate(Arc::clone(&host));
+                (gated, Some((host, flights)))
+            }
+            None => (host, None),
+        };
         if let Some(router) = read(&self.inner.router)
             && let Err(HostError::DuplicateHost(_)) = router.add_host(host)
         {
@@ -921,6 +951,9 @@ impl RemoteHosts {
                 router.remove_host(&machine);
             }
             return Ok(None);
+        }
+        if let (Some(desk), Some((inner, flights))) = (desk, answering) {
+            tokio::spawn(desk.serve(machine.clone(), inner, flights));
         }
         self.mark(name, LinkMark::Connected);
         self.note(

@@ -5984,7 +5984,6 @@ dependencies = [
  "libc",
  "pw-core",
  "pw-db",
- "pw-db-types",
  "pw-diag",
  "pw-ext",
  "pw-fs",
@@ -6024,6 +6023,7 @@ version = "0.0.0"
 dependencies = [
  "pw-core",
  "pw-db",
+ "pw-db-types",
  "pw-git",
  "pw-link",
  "pw-release",

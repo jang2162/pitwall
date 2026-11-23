@@ -680,6 +680,16 @@ mod tests {
             .map(|m| m.name.to_owned())
             .collect();
         assert!(!routed.is_empty());
+        // Relay 의 Host 에만 있는 메서드(「Desktop 에 묻는」 비밀 저장소의 역요청 — 18-m7-plan M7-12). Desktop 의 Host 는 내지 않는다.
+        let relay_only: BTreeSet<String> = pw_db::desktop_secret::METHODS
+            .iter()
+            .map(|m| (*m).to_owned())
+            .collect();
+        assert!(
+            routed.is_disjoint(&relay_only),
+            "the desktop host must not take secret requests"
+        );
+        let routed: BTreeSet<String> = routed.union(&relay_only).cloned().collect();
         assert_eq!(
             generated, routed,
             "`mise run gen` 을 돌리고, 메서드를 선언한 크레이트를 pw-rpc-gen 에 링크했는지 본다"

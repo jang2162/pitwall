@@ -1,12 +1,10 @@
 //! Relay 의 Host: Desktop 과 같은 조립(`pw_host::assemble_relay` — 묶음 `bundle.*` 만 뺀다)에 Relay 부품을 넣고, 레지스트리에
 //! `roots` 판정을 붙인다(18-m7-plan M7-04 ① · ③).
 
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use pw_core::config::AppPaths;
-use pw_db::secret::{SecretStore, StoreError};
-use pw_db_types::Secret;
+use pw_db::desktop_secret::DesktopSecrets;
 use pw_host::{Assembled, CliParts, HostParts};
 
 use crate::config::RelayConfig;
@@ -60,8 +58,8 @@ pub fn assemble_with(
         // 열기 요청은 붙은 Desktop 의 창이 연다(M7-15).
         open_requests,
         mcp_sessions: pw_mcp::sessions::Sessions::default(),
-        // 비밀을 디스크에 두지 않는다(메인 판정 M7-P5). 붙은 Desktop 에 묻는 구현은 M7-12 가 넣는다.
-        secrets: Arc::new(MemoryOnlySecrets::default()),
+        // 비밀을 디스크 · 메모리에 두지 않는다(메인 판정 M7-P5) — 링크로 붙은 Desktop 의 키체인에 묻는다(18-m7-plan M7-12 ②).
+        secrets: Arc::new(DesktopSecrets::new()),
         db_drivers: pw_host::db::drivers(),
         cli: CliParts {
             target: Err("the relay installs no shell command".to_owned()),
@@ -75,37 +73,26 @@ pub fn assemble_with(
     });
     if let Some(registry) = assembled.host.registry() {
         registry.set_root_policy(Roots::new(&config.roots).policy());
+        warn_hidden(registry);
     }
     assembled
 }
 
-/// 데몬이 사는 동안만 쥐는 비밀(디스크 · 키체인에 쓰지 않는다).
-#[derive(Default)]
-pub struct MemoryOnlySecrets(Mutex<BTreeMap<String, Secret>>);
-
-impl SecretStore for MemoryOnlySecrets {
-    fn get(&self, account: &str) -> Result<Option<Secret>, StoreError> {
-        Ok(self
-            .0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(account)
-            .map(|s| Secret::new(s.expose())))
-    }
-
-    fn set(&self, account: &str, value: &Secret) -> Result<(), StoreError> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(account.to_owned(), Secret::new(value.expose()));
-        Ok(())
-    }
-
-    fn delete(&self, account: &str) -> Result<(), StoreError> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(account);
-        Ok(())
+/// `roots` 를 좁혀 밖에 남은 프로젝트는 레지스트리가 숨긴다(`Registry::set_root_policy` — M7-04 리뷰 권고 5). 시작할 때 그 수와
+/// 루트를 경고로 남긴다 — 사람이 `relay.toml` 을 고친 뒤 왜 프로젝트가 안 보이는지 로그에서 찾게.
+fn warn_hidden(registry: &pw_core::registry::Registry) {
+    match registry.hidden_by_root_policy() {
+        Ok(hidden) if !hidden.is_empty() => {
+            let roots: Vec<&str> = hidden
+                .iter()
+                .flat_map(|p| p.roots.iter().map(String::as_str))
+                .collect();
+            tracing::warn!(target: "pw_relay", count = hidden.len(), ?roots,
+                "projects registered outside `roots` in relay.toml are hidden until `roots` allows them again");
+        }
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!(target: "pw_relay", %e, "cannot check the registry against `roots`")
+        }
     }
 }

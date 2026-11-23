@@ -9,12 +9,14 @@ publish.workspace = true
 [features]
 # 실제 SSH · 설치 · 링크(`ssh` 모듈 — 18-m7-plan M7-08). 데스크톱 앱만 켠다. Relay 는 pw-host 를 거쳐 이 크레이트를 링크하지만 이
 # 기능을 켜지 않는다 — Relay 바이너리에 SSH 부트스트랩(`pw-link/bootstrap`)이 들지 않게(M7-06 의 결정, `pw-host/tests/deps.rs`).
-ssh = ["pw-link/bootstrap", "dep:pw-db"]
+ssh = ["pw-link/bootstrap"]
 
 [dependencies]
 pw-core = { path = "../pw-core" }
-# `~/.ssh/config` 의 호스트 이름 목록(`pw_db::ssh_hosts::hosts_in` — DB 터널의 SSH 탭과 같은 읽기).
-pw-db = { path = "../pw-db", optional = true }
+# `~/.ssh/config` 의 호스트 이름 목록(`pw_db::ssh_hosts::hosts_in` — DB 터널의 SSH 탭과 같은 읽기), 원격 Relay 의 비밀 청에
+# 답하는 저장소 trait · 청 타입(`pw_db::secret` · `pw_db::desktop_secret` — 18-m7-plan M7-12).
+pw-db = { path = "../pw-db" }
+pw-db-types = { path = "../pw-db-types" }
 # askpass 질문(`Prompts` · `GitPromptEvent` · `GitPromptAnswer`) — 원격 호스트를 붙이는 ssh 의 질문도 git 과 같은 askpass 다(D43).
 pw-git = { path = "../pw-git" }
 pw-link = { path = "../pw-link" }

@@ -14,7 +14,7 @@ use pw_core::config::AppPaths;
 use pw_core::registry::path::simplify;
 use pw_core::registry::{NewProject, Registry};
 use pw_db::config::{Connections, HostParts};
-use pw_db::secret::{EnvLookup, MemorySecretStore};
+use pw_db::secret::{EnvLookup, MemorySecretStore, SecretStore};
 use pw_db_types::Secret;
 use pw_rpc::protocol::{
     STREAM_CHUNK, STREAM_END, StreamChunk, StreamEnd, StreamOpened, StreamOutcome,
@@ -62,6 +62,8 @@ pub struct Fixture {
     pub projects: Registry,
     pub bus: EventBus,
     pub store: Arc<MemorySecretStore>,
+    /// 연결 관리자가 쓰는 비밀 저장소. [`Fixture::build`] 는 [`Self::store`], [`Fixture::build_with_secrets`] 는 준 것.
+    pub secrets: Arc<dyn SecretStore>,
     pub env: Arc<FakeEnv>,
     pub connections: Arc<Connections>,
     pub router: Arc<Router>,
@@ -80,14 +82,24 @@ impl Fixture {
 
     /// [`Fixture::new`] 에 메서드를 더 붙인다(실행 파이프라인 등). `extra` 는 연결 설정 메서드를 붙인 뒤에 불린다.
     pub fn build(trusted: bool, extra: impl FnOnce(&mut Router, &Arc<Connections>)) -> Self {
+        Self::build_with_secrets(trusted, None, extra)
+    }
+
+    /// [`Fixture::build`] 인데 연결 관리자의 비밀 저장소를 준다(원격 Relay 의 「Desktop 에 묻는」 저장소 등). `None` 이면 메모리 저장소.
+    pub fn build_with_secrets(
+        trusted: bool,
+        secrets: Option<Arc<dyn SecretStore>>,
+        extra: impl FnOnce(&mut Router, &Arc<Connections>),
+    ) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let base = simplify(fs::canonicalize(tmp.path()).unwrap());
         let app = AppPaths::under(&base.join("app"));
         let bus = EventBus::new(DEFAULT_CAPACITY);
         let projects = Registry::new(app.clone(), None, bus.clone());
         let store = Arc::new(MemorySecretStore::new());
+        let secrets = secrets.unwrap_or_else(|| store.clone());
         let env = Arc::new(FakeEnv::default());
-        let connections = Arc::new(Connections::new(store.clone(), env.clone()));
+        let connections = Arc::new(Connections::new(Arc::clone(&secrets), env.clone()));
         connections.attach(HostParts {
             paths: app.clone(),
             projects: projects.clone(),
@@ -120,6 +132,7 @@ impl Fixture {
             projects,
             bus,
             store,
+            secrets,
             env,
             connections,
             router: Arc::new(router),
@@ -144,7 +157,10 @@ impl Fixture {
         extra: impl FnOnce(&mut Router, &Arc<Connections>),
     ) {
         self.projects = projects;
-        let connections = Arc::new(Connections::new(self.store.clone(), self.env.clone()));
+        let connections = Arc::new(Connections::new(
+            Arc::clone(&self.secrets),
+            self.env.clone(),
+        ));
         connections.attach(HostParts {
             paths: self.app.clone(),
             projects: self.projects.clone(),

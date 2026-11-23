@@ -11,7 +11,6 @@ publish.workspace = true
 libc = "0.2.190"
 pw-core = { path = "../pw-core" }
 pw-db = { path = "../pw-db" }
-pw-db-types = { path = "../pw-db-types" }
 pw-diag = { path = "../pw-diag" }
 pw-ext = { path = "../pw-ext" }
 pw-fs = { path = "../pw-fs" }

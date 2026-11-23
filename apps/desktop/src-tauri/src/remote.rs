@@ -26,6 +26,8 @@ pub fn attach(
     paths: &AppPaths,
     instance_key: &str,
 ) {
+    // 원격 Relay 가 청하는 DB 비밀은 이 Desktop 의 키체인(로컬과 같은 서비스, 계정에 머신 id — 18-m7-plan M7-12 ②)에서 답한다.
+    remote.attach_secrets(Arc::new(pw_db::secret::KeyringStore::new()));
     let fetch = match HttpsFetch::new() {
         Ok(fetch) => fetch,
         Err(e) => {

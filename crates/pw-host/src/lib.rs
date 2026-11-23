@@ -260,6 +260,8 @@ fn assemble_as(parts: HostParts, flavor: Flavor) -> Assembled {
     let git_status_methods = Arc::clone(&git_status);
     let git_watch = pw_git::watch::GitWatch::new(Arc::clone(&git));
     // DB 연결 설정 · 비밀 · 신뢰 게이트(`db.connection.*` · `db.secret.*`, M3-02). 비밀은 OS 키체인, env 참조는 런타임 환경.
+    // 비밀 저장소가 내는 메서드(원격 Relay 의 「Desktop 에 묻는」 저장소만 `secret.*` 를 낸다 — 18-m7-plan M7-12).
+    let secrets_methods = Arc::clone(&secrets);
     let db_connections = db::connections(&runtime, secrets);
     let db_connection_methods = Arc::clone(&db_connections);
     let db_ssh_host_methods = Arc::clone(&db_connections);
@@ -329,6 +331,7 @@ fn assemble_as(parts: HostParts, flavor: Flavor) -> Assembled {
         })
         .methods(move |router| pw_mcp::methods::register(router, mcp_status_methods))
         .methods(move |router| pw_remote::methods::register(router, &remote_methods))
+        .methods(move |router| secrets_methods.register(router))
         .methods(move |router| {
             if flavor == Flavor::Relay {
                 for prefix in RELAY_EXCLUDED_PREFIXES {

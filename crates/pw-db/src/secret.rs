@@ -70,6 +70,57 @@ pub fn account(project_id: &str, connection_id: &str, key: DbSecretKey) -> Strin
     format!("{project_id}/{connection_id}/{}", key.id())
 }
 
+/// 다른 머신 체크아웃의 비밀이 Desktop 키체인에 놓이는 계정: `<머신 id>/<프로젝트 id>/<연결 id>/<키>`(결정 D47 — 머신 id 는 링크가
+/// 서명으로 증명한 Relay 키의 지문, 프로젝트 id 는 그 머신 레지스트리의 것. 18-m7-plan M7-12 ②). 묶음은 열쇠에 없다 — 멤버를 다른
+/// 묶음으로 옮겨도 비밀이 따라온다. 끝의 세 마디(프로젝트 · 연결 · 키)에 `/` 가 없어 머신 id 에 `/` 가 있어도 다른 계정과 겹치지
+/// 않고, 로컬 계정([`account`])보다 마디가 하나 많다.
+pub fn machine_account(
+    machine: &str,
+    project_id: &str,
+    connection_id: &str,
+    key: DbSecretKey,
+) -> String {
+    format!("{machine}/{}", account(project_id, connection_id, key))
+}
+
+/// 그 머신의 계정 목록을 두는 항목(값은 계정 이름의 JSON 배열 — 비밀 값이 아니다). 키체인은 계정을 나열하지 못해, 「이 머신을 새로
+/// 믿기」 가 옛 머신 id 의 비밀을 지울 때(메인 판정 M7-P6) 이것을 읽는다. 끝 마디 `index` 는 [`DbSecretKey::id`] 가 아니다.
+pub fn machine_index_account(machine: &str) -> String {
+    format!("{machine}/index")
+}
+
+/// 비밀을 읽게 한 흐름이 누구의 것인가(18-m7-plan M7-12 ② ④). 연결을 여는 자리([`crate::connection`])가 키체인을 읽는 블로킹 구간에
+/// [`with_asker`] 로 세우고, 「Desktop 에 묻는」 저장소(`crate::desktop_secret::DesktopSecrets` — 원격 Relay)가 본다. 다른 저장소는
+/// 보지 않는다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretAsker {
+    /// 그 프로젝트 창(사람)의 증거.
+    Window,
+    /// 에이전트(MCP 세션)의 증거 — Desktop 에 묻지 않는다(D48 · D60).
+    Agent,
+}
+
+thread_local! {
+    static ASKER: std::cell::Cell<Option<SecretAsker>> = const { std::cell::Cell::new(None) };
+}
+
+/// `f` 가 도는 동안 이 스레드의 [`current_asker`] 를 `asker` 로 둔다(끝나면 앞의 값으로 — 패닉해도).
+pub fn with_asker<R>(asker: SecretAsker, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<SecretAsker>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            ASKER.with(|a| a.set(self.0));
+        }
+    }
+    let _restore = Restore(ASKER.with(|a| a.replace(Some(asker))));
+    f()
+}
+
+/// 이 스레드에서 지금 비밀을 읽게 한 흐름. 세운 곳이 없으면 `None` — 묻는 저장소는 묻지 않는다(fail-closed).
+pub fn current_asker() -> Option<SecretAsker> {
+    ASKER.with(std::cell::Cell::get)
+}
+
 /// 비밀을 보내도 되는 대상. 이 중 하나라도 바뀌면 저장한 비밀을 쓰지 않는다.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
@@ -147,6 +198,10 @@ pub trait SecretStore: Send + Sync {
     fn set(&self, account: &str, value: &Secret) -> Result<(), StoreError>;
     /// 없어도 `Ok`.
     fn delete(&self, account: &str) -> Result<(), StoreError>;
+
+    /// 이 저장소가 Host 에 내는 메서드. 키체인 · 메모리 저장소는 없다. 「Desktop 에 묻는」 저장소(원격 Relay — 18-m7-plan M7-12)가
+    /// 붙은 Desktop 이 청을 받고 답하는 `secret.requests` · `secret.answer` 를 낸다. Host 조립(`pw_host::assemble`)이 부른다.
+    fn register(self: Arc<Self>, _router: &mut Router) {}
 }
 
 /// OS 키체인(`keyring` — macOS Keychain · Windows Credential Manager · Secret Service).

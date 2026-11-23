@@ -1428,6 +1428,10 @@ export type UnaryMethods = {
 	 */
 	"search.files": { params: SearchFilesParams; result: SearchFiles };
 	/**
+	 * `secret.requests` 로 받은 청의 답. 그 청을 받은 연결의 답만 받는다. Relay 의 Host 에만 있다.
+	 */
+	"secret.answer": { params: SecretAnswerParams; result: null };
+	/**
 	 * 문서를 닫는다. 없는 id 도 성공이다.
 	 */
 	"syntax.close": { params: SyntaxCloseParams; result: null };
@@ -1632,6 +1636,11 @@ export type StreamMethods = {
 	 * 글롭은 invalid params 로, 없는 경로는 `NOT_FOUND` 로 스트림이 `failed` 로 끝난다(청크 없이).
 	 */
 	"search.text": { params: SearchTextParams; item: SearchTextChunk };
+	/**
+	 * 붙은 Desktop 이 이 머신(Relay)의 비밀 청을 받는 스트림. owner · Host 범위 연결만. 청마다 같은 연결로 `secret.answer` 를 보낸다.
+	 * Relay 의 Host 에만 있다.
+	 */
+	"secret.requests": { params: null; item: SecretRequest };
 	/**
 	 * 원격 Host 의 터미널에 다시 붙어 `since` 오프셋부터 출력을 받는다(`attached` 하나 → `output` 여럿 → 끝났으면 `exited`). 스트림을
 	 * 끊어도 셸은 돈다. 그 프로젝트의 창 · owner 만 — 다른 범위는 permission denied, 다른 프로젝트의 번호 · 없는 터미널은 invalid
@@ -1937,6 +1946,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"runtime.reload": {"name":"runtime.reload","kind":"unary","tier":"write","roles":["owner"],"params":"RuntimeReloadParams","output":"()","doc":" 「환경 다시 읽기」: 로그인 셸 환경과 디렉터리별 캐시를 잊고 `runtime.changed` 를 낸다. 셸은 다음 요청에서 다시 돈다\n (백그라운드로 미리 시작한다). 이미 띄운 프로세스(열린 터미널)의 환경은 바뀌지 않는다.\n","mcp":null,"fileScope":false},
 	"search.files": {"name":"search.files","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SearchFilesParams","output":"SearchFiles","doc":" 프로젝트의 파일을 이름 · 경로로 퍼지 매칭한다(`⌘⇧O` · Search Everywhere). 목록은 창이 `fs.watch` 로 보는 루트마다 메모리에\n 있고 변경을 따라간다(`pw_fs::index` 머리 주석). 처음 만드는 중이면 다 만들 때까지 기다린다. 빈 질의는 경로순 앞에서부터다.\n","mcp":null,"fileScope":false},
 	"search.text": {"name":"search.text","kind":"stream","tier":"read","roles":["owner","mobile","readonly"],"params":"SearchTextParams","output":"SearchTextChunk","doc":" 프로젝트 안의 텍스트 검색. 결과를 파일별 묶음 청크로 보내고 마지막에 `done` 청크 하나를 보낸다. 규칙(ignore · 심링크 ·\n 바이너리 · 50 MiB · 벤더/생성 제외 · 결과 상한)은 `pw_fs::search` 머리 주석. 루트 밖 경로 · 빈 질의 · 잘못된 정규식 ·\n 글롭은 invalid params 로, 없는 경로는 `NOT_FOUND` 로 스트림이 `failed` 로 끝난다(청크 없이).\n","mcp":null,"fileScope":false},
+	"secret.answer": {"name":"secret.answer","kind":"unary","tier":"write","roles":["owner"],"params":"SecretAnswerParams","output":"()","doc":" `secret.requests` 로 받은 청의 답. 그 청을 받은 연결의 답만 받는다. Relay 의 Host 에만 있다.\n","mcp":null,"fileScope":false},
+	"secret.requests": {"name":"secret.requests","kind":"stream","tier":"read","roles":["owner"],"params":"()","output":"SecretRequest","doc":" 붙은 Desktop 이 이 머신(Relay)의 비밀 청을 받는 스트림. owner · Host 범위 연결만. 청마다 같은 연결로 `secret.answer` 를 보낸다.\n Relay 의 Host 에만 있다.\n","mcp":null,"fileScope":false},
 	"syntax.close": {"name":"syntax.close","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SyntaxCloseParams","output":"()","doc":" 문서를 닫는다. 없는 id 도 성공이다.\n","mcp":null,"fileScope":true},
 	"syntax.edit": {"name":"syntax.edit","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SyntaxEditParams","output":"SyntaxEditResult","doc":" 문서에 편집을 적용한다(다시 파싱은 다음 `syntax.highlights` 때 바뀐 곳만 한다). 열지 않은 문서는 not found,\n 이미 지난 버전 · 기다리는 편집이 너무 많음 · 앞당겨 온 편집을 버렸음이면 conflict(`data.version` 에 지금 버전 — 다시\n 연다), 범위가 텍스트 밖이면 invalid params(아무것도 바꾸지 않는다). 편집으로 크기 상한을 넘으면 그 문서의 강조를 끄고\n `off` 로 알린다.\n","mcp":null,"fileScope":true},
 	"syntax.highlights": {"name":"syntax.highlights","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"SyntaxHighlightsParams","output":"SyntaxHighlightsResult","doc":" 범위 안의 강조 구간. 열지 않은 문서는 not found, `from > to` 는 invalid params.\n","mcp":null,"fileScope":true},
@@ -10588,6 +10599,24 @@ export type SearchTextParams = {
 	maxResults?: number | null,
 };
 
+/**  Desktop 의 답. */
+export type SecretAnswer = 
+/**  답하지 않는다(그 창이 그 연결로 기다리는 요청이 없다 등). */
+{ kind: "declined" } | 
+/**  키체인에 없다. */
+{ kind: "missing" } | 
+/**  읽은 항목(값과 대상의 JSON). */
+{ kind: "value"; item: string } | 
+/**  두었다 · 지웠다. */
+{ kind: "done" } | 
+/**  키체인을 쓸 수 없다. 값을 싣지 않는다. */
+{ kind: "failed"; message: string };
+
+export type SecretAnswerParams = {
+	id: number,
+	answer: SecretAnswer,
+};
+
 /**  비밀을 쓰지 못하는 이유. */
 export type SecretMissing = 
 /**  키체인에 항목이 없다(또는 읽을 수 없는 항목). */
@@ -10596,6 +10625,26 @@ export type SecretMissing =
 "targetChanged" | 
 /**  키체인을 쓸 수 없다(잠김 · 서비스 없음 등). */
 "unavailable";
+
+/**  Relay → Desktop 청 하나(`secret.requests` 의 항목). */
+export type SecretRequest = {
+	/**  답(`secret.answer`)에 싣는 id. 받는 Desktop 마다 다르다. */
+	id: number,
+	/**  그 머신(Relay) 레지스트리의 프로젝트 id. */
+	projectId: string,
+	connectionId: string,
+	key: DbSecretKey,
+	op: SecretRequestOp,
+};
+
+/**  청의 종류. */
+export type SecretRequestOp = 
+/**  연결을 열려고 비밀을 읽는다. */
+{ kind: "read" } | 
+/**  그 창이 넣은 비밀(`db.secret.set`)을 키체인에 둔다. `item` 은 값과 대상의 JSON(`crate::secret` 의 키체인 항목)이다. */
+{ kind: "store"; item: string } | 
+/**  지운다(`db.secret.clear` · 연결 지우기). */
+{ kind: "remove" };
 
 /**  연결을 연 결과(연결 테스트의 답이기도 하다). */
 export type ServerInfo = {
