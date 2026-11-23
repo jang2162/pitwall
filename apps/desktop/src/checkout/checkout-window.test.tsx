@@ -15,7 +15,7 @@ import { App } from "../App";
 import { openTab } from "../editor/editor-tabs";
 import { resetWindowFileTree } from "../file-tree/project-view";
 import type { KeymapNative } from "../keymap/native";
-import { activeWorktreeStore } from "../open-with/active-worktree";
+import { activeWorktree, activeWorktreeStore } from "../open-with/active-worktree";
 import { projectOpenInbox } from "../project-open";
 import { act, endTest, it } from "../test-support/ended-test";
 import { createThemeStore } from "../theme/theme-store";
@@ -452,10 +452,23 @@ it("opens a file from the active remote checkout's file tree on that machine and
   });
   for (const spy of layout) spy.mockRestore();
   expect(viewWith("local text")).toBeUndefined();
-  expect(fake.calls.get("local")!.filter((c) => c.method === "fs.read")).toHaveLength(0);
+  const localFileCalls = () =>
+    fake.calls.get("local")!.filter((c) => ["fs.stat", "fs.read", "fs.write"].includes(c.method));
+  expect(localFileCalls()).toHaveLength(0);
   await save(view, "edited ");
   expect(writes(MINI)).toHaveLength(1);
   expect(writes(MINI)[0]).toMatchObject({ projectId: "r1", path: FILE });
   expect(writes("local")).toHaveLength(0);
   expect(fake.files.get("local")!.get(FILE)).toBe("local text");
+
+  // 탭을 바로 여는 자리(`openTab` — DB · git 문서 말고 파일 탭)도 같은 규칙이다(리뷰어의 탐침 P2): 그 머신의 다른 파일.
+  fake.files.get(MINI)!.set("/work/demo/src/other.rs", "remote other");
+  fake.files.get("local")!.set("/work/demo/src/other.rs", "local other");
+  await act(
+    async () =>
+      void openTab(dock!, { path: "/work/demo/src/other.rs", worktree: activeWorktree() }),
+  );
+  await vi.waitFor(() => expect(viewWith("remote other")).toBeDefined());
+  expect(viewWith("local other")).toBeUndefined();
+  expect(localFileCalls()).toHaveLength(0);
 });
