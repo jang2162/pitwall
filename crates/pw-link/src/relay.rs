@@ -459,7 +459,7 @@ fn connect(mux: &Mux, frame: LinkFrame, proven: &Proven, host: &Arc<dyn Host>) {
 }
 
 /// 포트 포워딩 채널 하나(18-m7-plan M7-22 — [`crate::forward`]). **owner 링크만**(메인 판정 M7-P15): 다른 role 의 기기는
-/// 거절하고 TCP 를 열지 않는다. 대상은 꼴만 본다 — 어느 호스트로 갈지는 owner 기기(사람의 설정)가 정한다.
+/// 거절하고 TCP 를 열지 않는다. 대상은 이 머신의 루프백만이다([`crate::forward::ForwardTo::check`] — 메인 판정 2026-11-24).
 fn forward(mux: &Mux, frame: LinkFrame, proven: &Proven) {
     let channel = frame.channel;
     if proven.role != Role::Owner {
@@ -494,9 +494,11 @@ fn forward(mux: &Mux, frame: LinkFrame, proven: &Proven) {
     };
     let mux = mux.clone();
     tokio::spawn(async move {
+        // `check` 를 지난 대상은 루프백 주소다(이름을 풀지 않는다).
+        let addrs = to.addrs().unwrap_or_default();
         let connecting = tokio::time::timeout(
             crate::forward::CONNECT_TIMEOUT,
-            tokio::net::TcpStream::connect((to.host.as_str(), to.port)),
+            tokio::net::TcpStream::connect(addrs.as_slice()),
         );
         let tcp = tokio::select! {
             () = cancel.cancelled() => return,
@@ -523,7 +525,8 @@ fn forward(mux: &Mux, frame: LinkFrame, proven: &Proven) {
                 return;
             }
         };
-        mux.send_control(&LinkFrame::new(channel, Kind::Accepted, Value::Null));
+        // 연 대상을 싣는다 — Desktop 은 청한 것과 다르면 받지 않는다.
+        mux.send_control(&LinkFrame::new(channel, Kind::Accepted, json!(to)));
         crate::forward::pump(mux, channel, rx, cancel, tcp).await;
     });
 }

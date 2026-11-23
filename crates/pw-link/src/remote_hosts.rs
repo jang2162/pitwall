@@ -262,7 +262,7 @@ mod tests {
     }
 
     /// `[[remote_hosts.port_forwards]]` 를 읽는다(08 「원격 호스트 등록 예」 의 꼴). 루프백이 아닌 `local_host` 도 항목으로 남는다 —
-    /// 열지 않는 것은 여는 쪽의 판정이다. 틀린 포워딩은 그것만 빼고 경고한다.
+    /// 열지 않는 것은 여는 쪽의 판정이다. 틀린 포워딩 · 그 머신의 루프백이 아닌 `remote_host` 는 그것만 빼고 경고한다.
     #[test]
     fn port_forwards_are_read_from_the_host_entry() {
         let dir = tempfile::tempdir().unwrap();
@@ -271,7 +271,8 @@ mod tests {
             "schema = 1\n[[remote_hosts]]\nnickname = \"build\"\nhost = \"build.ts.net\"\n\
              [[remote_hosts.port_forwards]]\nlocal_port = 8080\nremote_port = 8080\n\
              [[remote_hosts.port_forwards]]\nlocal_port = 5005\nremote_port = 5005\nremote_host = \"localhost\"\nlocal_host = \"0.0.0.0\"\n\
-             [[remote_hosts.port_forwards]]\nlocal_port = 70000\nremote_port = 1\n",
+             [[remote_hosts.port_forwards]]\nlocal_port = 70000\nremote_port = 1\n\
+             [[remote_hosts.port_forwards]]\nlocal_port = 5432\nremote_port = 5432\nremote_host = \"db.internal\"\n",
         )
         .unwrap();
         let paths = pw_core::config::AppPaths {
@@ -304,8 +305,13 @@ mod tests {
                 },
             ]
         );
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
         assert!(warnings[0].contains("port_forwards[2]"), "{warnings:?}");
+        // 원격을 거쳐 다른 호스트로 가는 포워딩은 받지 않는다(메인 판정 2026-11-24).
+        assert!(
+            warnings[1].contains("port_forwards[3]") && warnings[1].contains("loopback"),
+            "{warnings:?}"
+        );
     }
 
     /// 틀린 항목(호스트 글자 · 호스트 키 확인을 끄는 `ssh_args` · 포트)은 빼고 경고한다 — 다른 항목은 쓴다.

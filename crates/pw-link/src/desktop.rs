@@ -133,7 +133,8 @@ pub struct DesktopLink {
 
 /// 답을 기다리는 채널 열기.
 enum Slot {
-    Waiting(oneshot::Sender<Result<(), String>>),
+    /// 답: `accepted` 의 본문 또는 거절 까닭.
+    Waiting(oneshot::Sender<Result<Value, String>>),
     /// 답 전에 버려진 열기 — 채널은 닫았고, 늦게 온 답은 버린다.
     Abandoned,
 }
@@ -199,7 +200,7 @@ pub async fn dial(
         tokio::spawn(async move {
             while let Some(frame) = inbox.recv().await {
                 let outcome = match frame.kind {
-                    Kind::Accepted => Ok(()),
+                    Kind::Accepted => Ok(frame.body.clone()),
                     Kind::Refused => Err(frame.body["reason"]
                         .as_str()
                         .unwrap_or("refused")
@@ -451,7 +452,7 @@ impl DesktopLink {
 
     /// 채널 하나를 연다(`Host::connect` 하나). Relay 는 호출자의 주장을 링크 기기의 role 로 자른다(M7-02 ②).
     pub async fn open(&self, caller: &Caller) -> Result<Connection, HostError> {
-        let (channel, rx, _cancel) = self
+        let (channel, rx, _cancel, _) = self
             .open_channel(Kind::Connect, json!(CallerClaim::from(caller)))
             .await?;
         Ok(Connection {
@@ -472,17 +473,25 @@ impl DesktopLink {
             ));
         }
         to.check().map_err(HostError::Refused)?;
-        let (channel, rx, cancel) = self.open_channel(Kind::Forward, json!(to)).await?;
+        let (channel, rx, cancel, accepted) = self.open_channel(Kind::Forward, json!(to)).await?;
+        // Relay 는 연 대상을 답에 싣는다. 청한 것과 다르면(털린 Relay 가 다른 곳에 이었다고 말한다) 받지 않는다(메인 판정 2026-11-24).
+        if serde_json::from_value::<ForwardTo>(accepted).ok().as_ref() != Some(to) {
+            self.mux
+                .close_channel(channel, "the relay answered another target");
+            return Err(HostError::Refused(
+                "the relay answered with another target than asked".to_owned(),
+            ));
+        }
         crate::forward::pump(self.mux.clone(), channel, rx, cancel, tcp).await;
         Ok(())
     }
 
-    /// 채널을 열고(`connect` · `forward`) Relay 의 답을 기다린다.
+    /// 채널을 열고(`connect` · `forward`) Relay 의 답을 기다린다. 받았으면 `accepted` 의 본문도 돌려준다.
     async fn open_channel(
         &self,
         kind: Kind,
         body: Value,
-    ) -> Result<(u32, ChannelRx, CancellationToken), HostError> {
+    ) -> Result<(u32, ChannelRx, CancellationToken, Value), HostError> {
         let disconnected = || HostError::Disconnected(self.machine.to_string());
         let channel = self.next_channel.fetch_add(1, Ordering::Relaxed);
         if channel == CONTROL || channel == u32::MAX {
@@ -515,19 +524,22 @@ impl DesktopLink {
             () = closed.cancelled() => Err("link closed".to_owned()),
         };
         guard.armed = false;
-        if let Err(why) = outcome {
-            take_pending(&self.pending, channel);
-            self.mux.forget_channel(channel);
-            return Err(if self.mux.reason().is_some() {
-                disconnected()
-            } else {
-                HostError::Refused(why)
-            });
-        }
+        let accepted = match outcome {
+            Ok(body) => body,
+            Err(why) => {
+                take_pending(&self.pending, channel);
+                self.mux.forget_channel(channel);
+                return Err(if self.mux.reason().is_some() {
+                    disconnected()
+                } else {
+                    HostError::Refused(why)
+                });
+            }
+        };
         if cancel.is_cancelled() {
             return Err(disconnected());
         }
-        Ok((channel, rx, cancel))
+        Ok((channel, rx, cancel, accepted))
     }
 }
 

@@ -253,3 +253,83 @@ async fn a_forward_to_a_closed_remote_port_is_refused() {
     assert!(rest.is_empty());
     assert_eq!(fx.remote.link().unwrap().channel_count(), 0);
 }
+
+/// 털린 Relay 가 청한 것과 다른 대상(원격의 다른 호스트 · 포트)에 이었다고 답하면 Desktop 은 그 채널을 받지 않는다(메인 판정
+/// 2026-11-24). 답의 대상을 보지 않으면 이 시험이 실패한다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_desktop_refuses_a_relay_that_answers_another_target() {
+    let relay_key = DeviceKey::generate().unwrap();
+    let (transport, acceptor) = transport::memory(64 * 1024);
+    let remote = Arc::new(desktop_for(transport, &relay_key));
+    let attach = {
+        let remote = Arc::clone(&remote);
+        tokio::spawn(async move { remote.attach().await })
+    };
+    let mut framed = raw_relay(&acceptor, &relay_key, Role::Owner).await;
+    attach.await.unwrap().expect("attach");
+    let (mut client, socket) = local_pair().await;
+    let forwarding = {
+        let remote = Arc::clone(&remote);
+        tokio::spawn(async move {
+            remote
+                .forward(ForwardTo::new("localhost", 5173), socket)
+                .await
+        })
+    };
+    let asked = loop {
+        let frame = raw_read(&mut framed).await.expect("the link closed");
+        if frame.kind == Kind::Forward {
+            break frame;
+        }
+    };
+    assert_eq!(asked.body, json!({"host": "localhost", "port": 5173}));
+    framed
+        .write
+        .write(&LinkFrame::new(
+            asked.channel,
+            Kind::Accepted,
+            json!({"host": "10.0.0.5", "port": 22}),
+        ))
+        .await
+        .unwrap();
+    let refused = tokio::time::timeout(WAIT, forwarding)
+        .await
+        .expect("the forward did not end")
+        .unwrap()
+        .unwrap_err();
+    assert!(matches!(refused, HostError::Refused(_)), "{refused:?}");
+    let mut rest = Vec::new();
+    client.read_to_end(&mut rest).await.unwrap();
+    assert!(rest.is_empty());
+    assert_eq!(remote.link().unwrap().channel_count(), 0);
+}
+
+/// Relay 도 원격 쪽 대상을 그 머신의 루프백으로만 받는다 — Desktop 의 판정을 건너뛴(손으로 짠) owner 링크가 원격의 다른 호스트를
+/// 청해도 열지 않는다(메인 판정 2026-11-24).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_relay_refuses_a_target_off_its_loopback() {
+    let fx = fixture(Setup::default());
+    let mut framed = raw_desktop(&fx).await;
+    for (channel, host) in [(1, "db.internal"), (3, "10.0.0.5"), (5, "0.0.0.0")] {
+        framed
+            .write
+            .write(&LinkFrame::new(
+                channel,
+                Kind::Forward,
+                json!({"host": host, "port": 5432}),
+            ))
+            .await
+            .unwrap();
+        let answer = loop {
+            let frame = raw_read(&mut framed).await.expect("the link closed");
+            if frame.channel == channel {
+                break frame;
+            }
+        };
+        assert_eq!(answer.kind, Kind::Refused, "{host}: {answer:?}");
+        assert!(
+            answer.body["reason"].as_str().unwrap().contains("loopback"),
+            "{host}: {answer:?}"
+        );
+    }
+}

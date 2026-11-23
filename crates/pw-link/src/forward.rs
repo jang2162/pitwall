@@ -4,6 +4,8 @@
 //!   머신에서 `host:port` 로 TCP 를 연다. Relay 는 Desktop 쪽으로 채널을 열지 않는다 — Desktop 은 Relay 가 보낸 `forward` ·
 //!   `connect` 를 규칙 위반으로 보고 링크를 끊는다(`desktop.rs` 의 받은 틀 갈래). 그래서 원격 머신의 프로세스가 포워딩으로 이
 //!   컴퓨터 루프백의 다른 서비스에 닿는 길(원격 → 로컬)은 없다.
+//! - **원격 쪽은 그 머신의 루프백만**([`ForwardTo::check`] — 메인 판정 2026-11-24): 원격을 거쳐 다른 호스트로 넘어가지 않는다. Relay 는
+//!   연 대상을 `accepted` 에 싣고, Desktop 은 청한 것과 다른 답을 받지 않는다.
 //! - **owner 링크만**(메인 판정 M7-P15): Relay 는 owner 가 아닌 기기의 `forward` 를 거절한다. MCP 툴은 없다 — 포워딩은 사람의
 //!   브라우저 · 도구를 위한 것이고, 에이전트가 만들면 로컬에 열린 포트로 원격 내부망에 닿는다.
 //! - **로컬은 루프백에만**(결정 M7-D12): [`local_addr`] 이 루프백이 아닌 주소를 거절하고, [`bind`] 가 한 번 더 본다.
@@ -53,22 +55,37 @@ impl ForwardTo {
         }
     }
 
-    /// 호스트 이름 · 주소의 꼴(DNS 이름 길이 · 공백 · 제어 문자 · 포트 0). 어느 호스트로 갈지는 사람의 설정이 정한다(M7-P15).
+    /// 대상은 **그 머신의 루프백만**이다 — `localhost` 또는 루프백 IP(`127.0.0.1` · `::1` 등). 원격을 거쳐 다른 호스트(원격의 내부망 ·
+    /// Docker 망)로 가는 길은 두지 않는다(메인 판정 2026-11-24 — M7-P15 를 좁힘). Relay 와 Desktop 이 둘 다 본다.
     pub fn check(&self) -> Result<(), String> {
         if self.port == 0 {
             return Err("the remote port must be 1 to 65535".to_owned());
         }
-        let host = self.host.as_str();
-        if host.is_empty() || host.len() > 253 {
-            return Err("the remote host must be 1 to 253 characters".to_owned());
-        }
-        if host
-            .chars()
-            .any(|c| c.is_whitespace() || c.is_control() || c == '/' || c == '@')
-        {
-            return Err("the remote host must be a host name or an address".to_owned());
+        if self.addrs().is_none() {
+            return Err(format!(
+                "the remote host must be localhost or a loopback address (127.0.0.1, ::1), not {:?}",
+                self.host
+            ));
         }
         Ok(())
+    }
+
+    /// Relay 가 이을 주소. `localhost` 는 이름을 풀지 않고 `127.0.0.1` 과 `::1` 로 읽는다(원격의 hosts 파일이 `localhost` 를 다른
+    /// 주소로 돌려도 루프백 밖으로 가지 않게 — 개발 서버가 `::1` 에만 듣는 경우도 닿는다). 루프백이 아니면 `None`.
+    pub fn addrs(&self) -> Option<Vec<SocketAddr>> {
+        let host = self.host.trim();
+        if host.eq_ignore_ascii_case(DEFAULT_REMOTE_HOST) {
+            return Some(vec![
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), self.port),
+                SocketAddr::new(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST), self.port),
+            ]);
+        }
+        let text = host
+            .strip_prefix('[')
+            .and_then(|t| t.strip_suffix(']'))
+            .unwrap_or(host);
+        let ip = text.parse::<IpAddr>().ok().filter(IpAddr::is_loopback)?;
+        Some(vec![SocketAddr::new(ip, self.port)])
     }
 }
 
@@ -288,13 +305,38 @@ mod tests {
         assert!(err.to_string().contains(&port.to_string()));
     }
 
+    /// 원격 쪽 대상은 그 머신의 루프백만이다 — 다른 호스트 이름 · 주소(원격의 내부망)는 거절한다(메인 판정 2026-11-24).
     #[test]
-    fn the_remote_target_is_checked() {
-        assert!(ForwardTo::new("localhost", 8080).check().is_ok());
-        assert!(ForwardTo::new("db.internal", 5432).check().is_ok());
+    fn the_remote_target_is_only_the_machines_loopback() {
+        for host in [
+            "localhost",
+            "LOCALHOST",
+            "127.0.0.1",
+            "::1",
+            "[::1]",
+            "127.0.0.2",
+        ] {
+            assert!(ForwardTo::new(host, 8080).check().is_ok(), "{host}");
+        }
+        assert_eq!(
+            ForwardTo::new("localhost", 5173).addrs().unwrap(),
+            vec![
+                "127.0.0.1:5173".parse().unwrap(),
+                "[::1]:5173".parse().unwrap()
+            ]
+        );
+        for host in [
+            "db.internal",
+            "10.0.0.5",
+            "192.168.1.1",
+            "0.0.0.0",
+            "::",
+            "host.docker.internal",
+            "localhost.evil.com",
+            "",
+        ] {
+            assert!(ForwardTo::new(host, 80).check().is_err(), "{host}");
+        }
         assert!(ForwardTo::new("localhost", 0).check().is_err());
-        assert!(ForwardTo::new("", 80).check().is_err());
-        assert!(ForwardTo::new("a b", 80).check().is_err());
-        assert!(ForwardTo::new("x\n", 80).check().is_err());
     }
 }
