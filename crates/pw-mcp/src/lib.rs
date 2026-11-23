@@ -13,6 +13,8 @@
 //! - [`methods`]: 사람의 화면이 부르는 `mcp.*` RPC(세션 목록 · 툴 목록 · 감사 로그). 에이전트에게는 열지 않는다.
 //! - [`marker`]: `tools/call` 결과의 `_meta` 에 싣는 결과 표지와 까닭 코드.
 //! - [`socket`]: 실행 중인 앱의 로컬 소켓(unix). 위치 · 권한 · 워크트리 격리 · 핸드셰이크.
+//! - [`http`]: Streamable HTTP(`http://127.0.0.1:<port>/mcp` — 18-m7-plan M7-25). 기본 꺼짐 · 루프백만 · Bearer 토큰 · `Origin` ·
+//!   `Host` 검사. HTTP 세션 하나가 [`server::serve`] 세션 하나다 — 판정은 소켓 · stdio 와 같은 `Session` 이다.
 //! - [`proxy`]: `pitwall mcp` 의 stdio ↔ 소켓 프록시.
 //! - [`cli`]: `pitwall tool` 의 몸통 — Desktop 과 Relay(`pitwall-relay tool`)가 함께 쓰는 MCP 클라이언트 CLI.
 //!
@@ -79,7 +81,9 @@ pub mod checkout;
 pub mod cli;
 mod client;
 pub mod code;
+mod connections;
 pub mod exposure;
+pub mod http;
 pub mod marker;
 pub mod methods;
 pub mod policy;
@@ -93,4 +97,5 @@ pub mod socket;
 
 pub use catalog::{Catalog, Tool};
 pub use client::{CallError, HostClient, Settled};
+pub use connections::Connections;
 pub use server::{HostKind, ServeError, Services, SessionRequest, serve};

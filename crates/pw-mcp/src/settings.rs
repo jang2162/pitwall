@@ -29,6 +29,7 @@ use serde_json::{Map, Value, json};
 use crate::audit::{self, DEFAULT_RETENTION_DAYS};
 use crate::catalog::GROUPS;
 use crate::exposure::{Exposure, KEY, Preset};
+use crate::http;
 use crate::methods::{HostParts, Mcp};
 use crate::policy::{self, AUTO_APPROVE};
 
@@ -69,6 +70,9 @@ pub struct McpSettingsView {
     pub warnings: Vec<String>,
     /// `projectId` 를 줬을 때만.
     pub project: Option<McpProjectSettings>,
+    /// Streamable HTTP(`[mcp.http]` — 18-m7-plan M7-25)의 지금 상태. 이 Host 에 HTTP 가 붙어 있지 않으면(헤드리스 · 시험) `null`.
+    /// 토큰은 싣지 않는다 — `mcp.http.token` 으로 따로 읽는다.
+    pub http: Option<crate::http::McpHttpStatus>,
 }
 
 #[derive(
@@ -145,6 +149,10 @@ pub enum McpSettingKey {
     Tool,
     /// `[mcp.audit] retention_days` — 값은 0 ~ [`MAX_RETENTION_DAYS`] 정수(0 은 지우지 않음).
     RetentionDays,
+    /// `[mcp.http] enabled` — 값은 bool(18-m7-plan M7-25 — 기본 꺼짐).
+    HttpEnabled,
+    /// `[mcp.http] port` — 값은 1 ~ 65535 정수.
+    HttpPort,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
@@ -178,6 +186,8 @@ pub enum McpSettingRefusal {
     UnknownTool,
     /// 보관 일수가 0 ~ [`MAX_RETENTION_DAYS`](3650) 정수가 아니다.
     BadRetentionDays,
+    /// 포트가 1 ~ 65535 정수가 아니다.
+    BadPort,
     /// 그 키의 꼴이 아니다(bool 자리에 글 · `name` 이 없음 등).
     BadValue,
 }
@@ -370,6 +380,25 @@ fn validate(parts: &HostParts, params: &McpSettingsSetParams) -> Result<Write, R
             };
             write(&[audit::SETTINGS_TABLE, audit::RETENTION_KEY], value)
         }
+        K::HttpEnabled => write(&[http::TABLE, http::ENABLED_KEY], bool_value()?),
+        K::HttpPort => {
+            let value = match value {
+                None => None,
+                Some(v) => match v.as_u64().and_then(|n| u16::try_from(n).ok()) {
+                    Some(port) if port != 0 => Some(toml_edit::Value::from(i64::from(port))),
+                    _ => {
+                        return Err(refused(
+                            key,
+                            R::BadPort,
+                            format!(
+                                "mcp.http.port must be a port number from 1 to 65535, found {v}"
+                            ),
+                        ));
+                    }
+                },
+            };
+            write(&[http::TABLE, http::PORT_KEY], value)
+        }
     })
 }
 
@@ -378,6 +407,7 @@ impl Mcp {
     pub fn settings(&self, params: &McpSettingsGetParams) -> Result<McpSettingsView, RpcError> {
         let parts = self.parts()?;
         let mut view = global_view(parts);
+        view.http = self.sessions().http().map(http::Http::status);
         if let Some(id) = &params.project_id {
             let project = parts
                 .projects
@@ -404,7 +434,9 @@ impl Mcp {
                 .reload()
                 .map_err(|e| RpcError::internal(e.to_string()))?;
         }
-        Ok(global_view(parts))
+        let mut view = global_view(parts);
+        view.http = self.sessions().http().map(http::Http::status);
+        Ok(view)
     }
 }
 
@@ -442,6 +474,7 @@ fn global_view(parts: &HostParts) -> McpSettingsView {
         max_retention_days: MAX_RETENTION_DAYS,
         warnings,
         project: None,
+        http: None,
     }
 }
 

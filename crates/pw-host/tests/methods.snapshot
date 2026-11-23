@@ -223,6 +223,8 @@ mcp.approval.answer Unary Write {Owner}
 mcp.approvals Stream Read {Owner}
 mcp.audit.clear Unary Write {Owner}
 mcp.audit.list Unary Read {Owner}
+mcp.http.regenerateToken Unary Write {Owner}
+mcp.http.token Unary Read {Owner}
 mcp.sessions Unary Read {Owner}
 mcp.settings.get Unary Read {Owner}
 mcp.settings.set Unary Write {Owner}

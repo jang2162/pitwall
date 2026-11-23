@@ -56,6 +56,18 @@ pub fn services(
     sessions: Sessions,
     attended: pw_mcp::approval::Attendance,
 ) -> Arc<Services> {
+    services_for(host, paths, sessions, attended, TRANSPORT)
+}
+
+/// [`services`] 를 다른 전송 이름으로 — Streamable HTTP(`pw_mcp::http::TRANSPORT`, 18-m7-plan M7-25)가 쓴다. 등록부 · 승인 허브 ·
+/// 「붙은 owner」 관문 · 감사는 소켓의 것과 같다 — 전송만 다르다.
+pub fn services_for(
+    host: &Arc<LocalHost>,
+    paths: &AppPaths,
+    sessions: Sessions,
+    attended: pw_mcp::approval::Attendance,
+    transport: &'static str,
+) -> Arc<Services> {
     let router = Arc::new(HostRouter::new());
     router
         .add_host(host.clone())
@@ -76,12 +88,41 @@ pub fn services(
         catalog: Arc::new(Catalog::linked().routed_by(host.router())),
         // Relay 는 늘 Host 다(헤드리스가 없다). 창은 링크로 붙은 Desktop 의 것이다.
         approval: Approval::for_host(HostKind::App, &sessions),
-        transport: TRANSPORT,
+        transport,
         host_kind: HostKind::App,
         sessions,
         // 세션은 그 머신만이다 — 다른 머신을 모른다.
         machines: None,
     })
+}
+
+/// Relay 의 Streamable HTTP(18-m7-plan M7-25): 그 머신 `$CONFIG/relay/settings.toml` 의 `[mcp.http] enabled` 일 때만 루프백에
+/// 듣는다(손으로 켠다 — Desktop 화면은 없다). 토큰은 `$STATE/relay/mcp/http-token`(Relay 의 `paths.state`). `connections` 는 MCP
+/// 소켓과 같은 것을 넣는다 — 인증을 지나 `initialize` 를 마친 HTTP 세션만 유휴 판정에 든다. `attended` 는 소켓과 같은 관문이다
+/// (붙은 owner Desktop 이 없으면 `write` 이상 거절 — 결정 M7-D10 ④). 등록부에 붙여 링크의 `mcp.http.*` 가 닿게 한다. tokio 런타임
+/// 안에서 부른다.
+pub fn serve_http(
+    host: &Arc<LocalHost>,
+    paths: &AppPaths,
+    sessions: Sessions,
+    attended: pw_mcp::approval::Attendance,
+    connections: pw_mcp::Connections,
+    cancel: tokio_util::sync::CancellationToken,
+) -> pw_mcp::http::Http {
+    use pw_mcp::http;
+    let services = services_for(host, paths, sessions.clone(), attended, http::TRANSPORT);
+    let endpoint = http::Http::start(
+        http::HttpParts {
+            services,
+            tokens: http::TokenFile::under_state(&paths.state),
+            default_port: http::RELAY_PORT,
+            connections,
+            limits: http::Limits::default(),
+        },
+        cancel,
+    );
+    sessions.attach_http(endpoint.clone());
+    endpoint
 }
 
 /// `pitwall-relay mcp` 가 붙는다: 데몬이 없으면 데몬 소켓으로 띄우고(`crate::proxy::connect_or_spawn` — 데몬 소켓에 붙은 연결은

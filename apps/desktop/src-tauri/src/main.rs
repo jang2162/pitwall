@@ -484,6 +484,17 @@ fn main() {
                 mcp_sessions.clone(),
                 mcp_machines.clone(),
             );
+            // Streamable HTTP(M7-25) — 켜져 있을 때만 듣는다. Windows 에도 있다(소켓은 없다).
+            mcp::serve_http(host.clone(), paths.clone(), mcp_sessions.clone(), {
+                #[cfg(unix)]
+                {
+                    mcp_machines.clone()
+                }
+                #[cfg(not(unix))]
+                {
+                    None
+                }
+            });
             // askpass 소켓도 주 인스턴스만 연다.
             #[cfg(unix)]
             serve_askpass(&askpass, &paths, &identifier);

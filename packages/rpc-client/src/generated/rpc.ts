@@ -1127,6 +1127,17 @@ export type UnaryMethods = {
 	 */
 	"mcp.audit.list": { params: McpAuditListParams; result: McpAuditPage };
 	/**
+	 * 「토큰 새로 만들기」: 새 토큰을 만들어 `$STATE/mcp/http-token` 을 바꾸고, 듣고 있으면 옛 토큰을 곧바로 거절하고 열린 HTTP
+	 * 세션을 모두 닫는다. 새 토큰을 돌려준다. 부르는 연결은 `mcp.http.token` 과 같다.
+	 */
+	"mcp.http.regenerateToken": { params: null; result: McpHttpTokenView };
+	/**
+	 * Streamable HTTP(18-m7-plan M7-25)의 Bearer 토큰(설정 창의 [보기] · [복사]). **설정 창 · 웰컴 창의 연결(Host 범위)만**
+	 * 부른다 — 프로젝트 · 파일 창과 에이전트 범위 연결은 `PERMISSION_DENIED`. 토큰은 로그 · 감사에 남지 않는다. 이 Host 에 HTTP 가
+	 * 붙어 있지 않으면 `NOT_FOUND`.
+	 */
+	"mcp.http.token": { params: null; result: McpHttpTokenView };
+	/**
 	 * 이 앱에 열린 MCP 세션(시작 순서): id · 클라이언트 · 세션 프로젝트 · 전송 · 시작 시각 · 호출 수. 열고 닫히면
 	 * `mcp.sessionsChanged`(Host 범위)가 나간다. 앱 없이 뜬 `pitwall mcp` 의 헤드리스 세션은 보이지 않는다.
 	 */
@@ -1997,6 +2008,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"mcp.approvals": {"name":"mcp.approvals","kind":"stream","tier":"read","roles":["owner"],"params":"McpApprovalsParams","output":"McpApprovalEvent","doc":" 창이 떠 있는 동안 열어 두는 승인 요청 스트림(16-m5-plan M5-12). 열 때 아직 대기 중인 그 창의 요청이 먼저 온다. 프로젝트\n 요청은 그 프로젝트 창에만, 프로젝트 없는 요청은 가장 최근에 앞에 있던 창 하나에 온다. `projectId` 는 그 프로젝트 창의\n 연결만 줄 수 있다.\n","mcp":null,"fileScope":false},
 	"mcp.audit.clear": {"name":"mcp.audit.clear","kind":"unary","tier":"write","roles":["owner"],"params":"McpAuditClearParams","output":"McpAuditCleared","doc":" 그 프로젝트의 감사 행을 모두 지운다(「에이전트 활동」 패널의 「기록 지우기」 — 화면이 확인을 받은 뒤 부른다). 그 프로젝트\n 창의 연결만 부른다(`project.state.set` 과 같은 판정). 지운 id 는 다시 쓰이지 않는다 — 앞서 받은 커서는 그 뒤의 행을 가리키지\n 않는다.\n","mcp":null,"fileScope":false},
 	"mcp.audit.list": {"name":"mcp.audit.list","kind":"unary","tier":"read","roles":["owner"],"params":"McpAuditListParams","output":"McpAuditPage","doc":" 감사 로그를 최신부터 쪽 단위로 읽는다. 다른 프로세스(헤드리스 `pitwall mcp` · `pitwall tool`)가 쓴 행도 있다 —\n 그 행은 `mcp.activity` 가 나가지 않으므로 화면이 열릴 때 · 창이 앞으로 올 때 다시 읽는다.\n","mcp":null,"fileScope":false},
+	"mcp.http.regenerateToken": {"name":"mcp.http.regenerateToken","kind":"unary","tier":"write","roles":["owner"],"params":"()","output":"McpHttpTokenView","doc":" 「토큰 새로 만들기」: 새 토큰을 만들어 `$STATE/mcp/http-token` 을 바꾸고, 듣고 있으면 옛 토큰을 곧바로 거절하고 열린 HTTP\n 세션을 모두 닫는다. 새 토큰을 돌려준다. 부르는 연결은 `mcp.http.token` 과 같다.\n","mcp":null,"fileScope":false},
+	"mcp.http.token": {"name":"mcp.http.token","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"McpHttpTokenView","doc":" Streamable HTTP(18-m7-plan M7-25)의 Bearer 토큰(설정 창의 [보기] · [복사]). **설정 창 · 웰컴 창의 연결(Host 범위)만**\n 부른다 — 프로젝트 · 파일 창과 에이전트 범위 연결은 `PERMISSION_DENIED`. 토큰은 로그 · 감사에 남지 않는다. 이 Host 에 HTTP 가\n 붙어 있지 않으면 `NOT_FOUND`.\n","mcp":null,"fileScope":false},
 	"mcp.sessions": {"name":"mcp.sessions","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"Vec<McpSessionInfo>","doc":" 이 앱에 열린 MCP 세션(시작 순서): id · 클라이언트 · 세션 프로젝트 · 전송 · 시작 시각 · 호출 수. 열고 닫히면\n `mcp.sessionsChanged`(Host 범위)가 나간다. 앱 없이 뜬 `pitwall mcp` 의 헤드리스 세션은 보이지 않는다.\n","mcp":null,"fileScope":false},
 	"mcp.settings.get": {"name":"mcp.settings.get","kind":"unary","tier":"read","roles":["owner"],"params":"McpSettingsGetParams","output":"McpSettingsView","doc":" 설정 창 「MCP」 쪽의 값: 전역 `[mcp]` 의 프리셋 · 자동 승인 · 그룹 키 · 감사 보관 일수(Host 가 판정에 쓰는 값)와 전역\n 설정 파일 경로. `projectId` 를 주면 그 프로젝트의 설정 파일들 · 그 파일들이 덮은 `[mcp]` 키 · 그 프로젝트의 자동 승인도\n 싣는다(읽기만). 툴 하나하나의 판정은 `mcp.tools.list` 다.\n","mcp":null,"fileScope":false},
 	"mcp.settings.set": {"name":"mcp.settings.set","kind":"unary","tier":"write","roles":["owner"],"params":"McpSettingsSetParams","output":"McpSettingsView","doc":" 전역 `settings.toml` 의 `[mcp]` 키 하나를 쓴다(`value: null` 이면 지운다). 프로젝트 설정은 쓰지 않는다. 값은 Host 가\n 판정한다 — 모르는 프리셋 · 그룹 · 툴, `auto_approve` 의 `dangerous`, 0 ~ 3650 정수가 아닌 보관 일수는 쓰지 않고\n `INVALID_PARAMS`(`data` 는 `McpSettingRefused`). 쓴 뒤 설정을 다시 읽어 열린 MCP 세션의 툴 목록이 바뀌고\n (`tools/list_changed`), 새 전역 값을 돌려준다.\n","mcp":null,"fileScope":false},
@@ -2286,6 +2299,8 @@ export type AuditRow = {
 	approval: AuditApproval | null,
 	/**  승인이 묶인 계획의 해시. 승인을 지나지 않은 호출은 `null`. */
 	planHash: string | null,
+	/**  세션의 전송(`socket` · `stdio` · `http` · `relay-socket`). 넷째 판 전에 쓴 행은 `null`. */
+	transport: string | null,
 };
 
 /**  `git.blame` 스트림의 항목 하나. */
@@ -8885,6 +8900,39 @@ export type McpGroupSetting = {
 	enabled: boolean | null,
 };
 
+/**  켰는데 듣지 못한 까닭(창이 번역한다). */
+export type McpHttpProblem = 
+/**  이 컴퓨터의 다른 소켓이 그 포트를 쥐고 있다(`127.0.0.1` 이나 `::1`, 와일드카드 포함). */
+"portInUse" | 
+/**  그 밖의 바인드 실패(권한 등). */
+"bindFailed" | 
+/**  `[mcp.http] port` 값이 틀렸다. */
+"invalidPort" | 
+/**  토큰 파일을 읽거나 쓰지 못했다. */
+"tokenUnavailable";
+
+/**  설정 창에 보이는 지금 상태(`mcp.settings.get` 의 `http`). */
+export type McpHttpStatus = {
+	/**  `[mcp.http] enabled`. */
+	enabled: boolean,
+	/**  설정의 포트(없으면 기본). 값이 틀렸으면 `null`. */
+	port: number | null,
+	/**  클라이언트 설정에 넣는 주소(`http://127.0.0.1:<port>/mcp`). 포트가 틀렸으면 `null`. */
+	url: string | null,
+	/**  지금 듣고 있는가. */
+	listening: boolean,
+	/**  켰는데 듣지 못한 까닭. */
+	problem: McpHttpProblem | null,
+	/**  토큰 파일(`$STATE/mcp/http-token`). */
+	tokenFile: string,
+};
+
+/**  `mcp.http.token` · `mcp.http.regenerateToken` 의 결과. */
+export type McpHttpTokenView = {
+	/**  지금 Bearer 토큰. 한 번도 켜지 않아 아직 없으면 `null`. */
+	token: string | null,
+};
+
 /**  프로젝트가 덮은 `[mcp]`(읽기만). */
 export type McpProjectSettings = {
 	projectId: string,
@@ -8934,7 +8982,11 @@ export type McpSettingKey =
 /**  `[mcp.tools] <name>` — 값은 bool. `name` 은 이 Host 의 툴 이름(glob 은 받지 않는다). */
 "tool" | 
 /**  `[mcp.audit] retention_days` — 값은 0 ~ [`MAX_RETENTION_DAYS`] 정수(0 은 지우지 않음). */
-"retentionDays";
+"retentionDays" | 
+/**  `[mcp.http] enabled` — 값은 bool(18-m7-plan M7-25 — 기본 꺼짐). */
+"httpEnabled" | 
+/**  `[mcp.http] port` — 값은 1 ~ 65535 정수. */
+"httpPort";
 
 export type McpSettingOverride = {
 	/**  `[mcp]` 아래의 점으로 이은 키(`groups.db`). */
@@ -8957,6 +9009,8 @@ export type McpSettingRefusal =
 "unknownTool" | 
 /**  보관 일수가 0 ~ [`MAX_RETENTION_DAYS`](3650) 정수가 아니다. */
 "badRetentionDays" | 
+/**  포트가 1 ~ 65535 정수가 아니다. */
+"badPort" | 
 /**  그 키의 꼴이 아니다(bool 자리에 글 · `name` 이 없음 등). */
 "badValue";
 
@@ -9012,6 +9066,11 @@ export type McpSettingsView = {
 	warnings: string[],
 	/**  `projectId` 를 줬을 때만. */
 	project: McpProjectSettings | null,
+	/**
+	 *  Streamable HTTP(`[mcp.http]` — 18-m7-plan M7-25)의 지금 상태. 이 Host 에 HTTP 가 붙어 있지 않으면(헤드리스 · 시험) `null`.
+	 *  토큰은 싣지 않는다 — `mcp.http.token` 으로 따로 읽는다.
+	 */
+	http: McpHttpStatus | null,
 };
 
 export type McpTarget = {

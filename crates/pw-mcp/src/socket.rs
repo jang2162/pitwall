@@ -23,7 +23,6 @@ use std::io;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -204,30 +203,8 @@ impl Drop for Listener {
     }
 }
 
-/// 열려 있는 세션 수. 시험과 로그가 본다.
-#[derive(Clone, Default)]
-pub struct Connections(Arc<AtomicUsize>);
-
-impl Connections {
-    pub fn active(&self) -> usize {
-        self.0.load(Ordering::SeqCst)
-    }
-}
-
-struct Counted(Connections);
-
-impl Counted {
-    fn new(c: &Connections) -> Self {
-        c.0.fetch_add(1, Ordering::SeqCst);
-        Self(c.clone())
-    }
-}
-
-impl Drop for Counted {
-    fn drop(&mut self) {
-        self.0.0.fetch_sub(1, Ordering::SeqCst);
-    }
-}
+pub use crate::connections::Connections;
+use crate::connections::Counted;
 
 /// 연결을 받아 세션마다 [`serve`] 를 돌린다. `cancel` 이 취소되면 받기를 멈추고 열린 세션도 닫는다.
 pub async fn accept_loop(

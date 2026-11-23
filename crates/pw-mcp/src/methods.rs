@@ -238,6 +238,43 @@ rpc_method! {
     }
 }
 
+/// `mcp.http.token` · `mcp.http.regenerateToken` 의 결과.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct McpHttpTokenView {
+    /// 지금 Bearer 토큰. 한 번도 켜지 않아 아직 없으면 `null`.
+    pub token: Option<String>,
+}
+
+impl std::fmt::Debug for McpHttpTokenView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpHttpTokenView")
+            .field("token", &self.token.as_ref().map(|_| "<hidden>"))
+            .finish()
+    }
+}
+
+rpc_method! {
+    /// Streamable HTTP(18-m7-plan M7-25)의 Bearer 토큰(설정 창의 [보기] · [복사]). **설정 창 · 웰컴 창의 연결(Host 범위)만**
+    /// 부른다 — 프로젝트 · 파일 창과 에이전트 범위 연결은 `PERMISSION_DENIED`. 토큰은 로그 · 감사에 남지 않는다. 이 Host 에 HTTP 가
+    /// 붙어 있지 않으면 `NOT_FOUND`.
+    pub McpHttpToken: "mcp.http.token" {
+        params: (),
+        result: McpHttpTokenView,
+        tier: Read,
+        roles: [Owner],
+    }
+
+    /// 「토큰 새로 만들기」: 새 토큰을 만들어 `$STATE/mcp/http-token` 을 바꾸고, 듣고 있으면 옛 토큰을 곧바로 거절하고 열린 HTTP
+    /// 세션을 모두 닫는다. 새 토큰을 돌려준다. 부르는 연결은 `mcp.http.token` 과 같다.
+    pub McpHttpRegenerateToken: "mcp.http.regenerateToken" {
+        params: (),
+        result: McpHttpTokenView,
+        tier: Write,
+        roles: [Owner],
+    }
+}
+
 /// Host 를 만든 뒤 붙이는 것.
 pub struct HostParts {
     pub paths: AppPaths,
@@ -579,7 +616,51 @@ pub fn register(router: &mut Router, mcp: Arc<Mcp>) {
     let settings = Arc::clone(&mcp);
     router.unary(McpSettingsSet, move |_ctx, params: McpSettingsSetParams| {
         let mcp = Arc::clone(&settings);
-        async move { blocking(move || mcp.set_setting(&params)).await }
+        async move {
+            let http_key = matches!(
+                params.key,
+                crate::settings::McpSettingKey::HttpEnabled
+                    | crate::settings::McpSettingKey::HttpPort
+            );
+            let sessions = mcp.sessions.clone();
+            let mut view = blocking(move || mcp.set_setting(&params)).await?;
+            // 켜고 끄기 · 포트는 곧바로 맞추고 그 결과(듣는가 · 포트가 쓰이는 중)를 돌려준다.
+            if let (true, Some(http)) = (http_key, sessions.http()) {
+                http.apply().await;
+                view.http = Some(http.status());
+            }
+            Ok(view)
+        }
+    });
+    let tokens = mcp.sessions.clone();
+    router.unary(McpHttpToken, move |ctx, ()| {
+        let sessions = tokens.clone();
+        async move {
+            let http = http_for(&ctx, &sessions)?;
+            let token = blocking(move || {
+                http.token()
+                    .map_err(|_| RpcError::internal("cannot read the mcp http token file"))
+            })
+            .await?;
+            Ok(McpHttpTokenView {
+                token: token.map(|t| t.reveal().to_owned()),
+            })
+        }
+    });
+    let tokens = mcp.sessions.clone();
+    router.unary(McpHttpRegenerateToken, move |ctx, ()| {
+        let sessions = tokens.clone();
+        async move {
+            let http = http_for(&ctx, &sessions)?;
+            let token = blocking(move || {
+                http.regenerate()
+                    .map_err(|_| RpcError::internal("cannot write the mcp http token file"))
+            })
+            .await?;
+            Ok(McpHttpTokenView {
+                token: Some(token.reveal().to_owned()),
+            })
+        }
     });
     let list = Arc::clone(&mcp);
     router.unary(McpAuditList, move |_ctx, params: McpAuditListParams| {
@@ -603,6 +684,24 @@ pub fn register(router: &mut Router, mcp: Arc<Mcp>) {
 }
 
 /// 그 창의 연결이 아니다(`PERMISSION_DENIED`, `data.reason = "notProjectWindow"` — `mcp.audit.clear` 와 같은 꼴).
+/// 토큰 RPC 의 문: Host 범위(설정 · 웰컴 창 — 링크로 붙은 owner Desktop 의 연결도 Host 범위다)만. 에이전트 범위는 [`WindowsOnly`]
+/// 가 먼저 막는다.
+fn http_for(ctx: &Ctx, sessions: &Sessions) -> Result<crate::http::Http, RpcError> {
+    if *ctx.scope() != ConnectionScope::Host {
+        return Err(RpcError::new(
+            code::PERMISSION_DENIED,
+            "only the settings window reads or replaces the mcp http token",
+        )
+        .with_data(serde_json::json!({ "reason": "notSettingsWindow" })));
+    }
+    sessions.http().cloned().ok_or_else(|| {
+        RpcError::new(
+            code::NOT_FOUND,
+            "the mcp http endpoint is not part of this host",
+        )
+    })
+}
+
 fn not_project_window(what: &str) -> RpcError {
     RpcError::new(
         code::PERMISSION_DENIED,

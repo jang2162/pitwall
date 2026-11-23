@@ -96,6 +96,8 @@ struct Shared {
     approvals: Approvals,
     /// 세션 id → 그 세션의 감사 큐를 `deadline` 까지 비우는 함수([`Sessions::shutdown`]).
     flushers: Mutex<BTreeMap<String, Flusher>>,
+    /// Streamable HTTP(18-m7-plan M7-25) — 켜고 끄는 것 · 토큰. 앱 · Relay 가 붙인다(`mcp.http.*` · `mcp.settings.get` 이 읽는다).
+    http: OnceLock<crate::http::Http>,
 }
 
 /// 감사 큐를 비우는 함수. 시한 안에 비웠으면 `true`.
@@ -109,6 +111,16 @@ impl Sessions {
     /// 이벤트를 낼 버스를 붙인다(앱의 Host 버스). 두 번째부터는 무시한다.
     pub fn attach(&self, bus: EventBus) {
         let _ = self.0.bus.set(bus);
+    }
+
+    /// Streamable HTTP 를 붙인다(앱 · Relay 가 한 번). 두 번째부터는 무시한다.
+    pub fn attach_http(&self, http: crate::http::Http) {
+        let _ = self.0.http.set(http);
+    }
+
+    /// 붙은 Streamable HTTP. 헤드리스 · 시험에는 없다.
+    pub fn http(&self) -> Option<&crate::http::Http> {
+        self.0.http.get()
     }
 
     /// 승인 허브.

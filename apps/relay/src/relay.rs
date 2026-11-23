@@ -649,6 +649,21 @@ fn daemon() -> ExitCode {
         }
         tracing::info!(socket = %socket.display(), roots = config.roots.len(), "relay daemon listening");
         let shutdown = tokio_util::sync::CancellationToken::new();
+        // MCP 소켓 · HTTP 의 세션 수 — 원격 에이전트가 붙어 있는 동안 데몬이 끝나지 않는다(유휴 판정).
+        let agents = pw_mcp::Connections::default();
+        daemon.count_agents(agents.clone());
+        // Streamable HTTP(M7-25) — `[mcp.http] enabled` 일 때만 루프백에 듣는다. 판정은 MCP 소켓과 같다.
+        {
+            let presence = daemon.presence();
+            pw_relay::mcp::serve_http(
+                &host,
+                &paths,
+                mcp_sessions.clone(),
+                Arc::new(move || presence.has_owner()),
+                agents.clone(),
+                shutdown.child_token(),
+            );
+        }
         // MCP 소켓(M7-20 ①). 열지 못해도 데몬은 돈다 — `pitwall-relay mcp` 가 그 까닭을 찍고 끝난다(헤드리스는 없다).
         if let Ok(listener) = mcp_socket_path(&paths).and_then(|path| {
             pw_mcp::socket::bind(&path, uid).map_err(|e| {
@@ -663,8 +678,7 @@ fn daemon() -> ExitCode {
                     mcp_sessions.clone(),
                     Arc::new(move || presence.has_owner()),
                 );
-                let connections = pw_mcp::socket::Connections::default();
-                daemon.count_agents(connections.clone());
+                let connections = agents.clone();
                 tracing::info!(socket = %listener.path().display(), "relay mcp socket listening");
                 tokio::spawn(pw_mcp::socket::accept_loop(
                     listener,

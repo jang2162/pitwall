@@ -378,6 +378,40 @@ pub fn serve_socket(
     });
 }
 
+/// 앱 쪽 Streamable HTTP(18-m7-plan M7-25 — 결정 M7-D11): 전역 `[mcp.http] enabled` 일 때만 루프백에 듣고, 설정이 바뀌면 다시
+/// 맞춘다. 세션 부품은 소켓과 같은 등록부 · 승인 허브 · 감사 · 다른 머신 부품이고 전송 이름만 `http` 다. 설정 창(`mcp.settings.*`
+/// · `mcp.http.*`)이 상태와 토큰을 `Sessions` 에서 읽는다. 주 인스턴스만 부른다.
+pub fn serve_http(
+    host: Arc<LocalHost>,
+    paths: AppPaths,
+    sessions: Sessions,
+    machines: Option<Arc<dyn pw_mcp::checkout::Machines>>,
+) {
+    use pw_mcp::http;
+
+    tauri::async_runtime::spawn(async move {
+        let services = services_with(
+            &host,
+            &paths,
+            http::TRANSPORT,
+            HostKind::App,
+            sessions.clone(),
+            machines,
+        );
+        let endpoint = http::Http::start(
+            http::HttpParts {
+                services,
+                tokens: http::TokenFile::under_state(&paths.state),
+                default_port: http::DESKTOP_PORT,
+                connections: pw_mcp::Connections::default(),
+                limits: http::Limits::default(),
+            },
+            tokio_util::sync::CancellationToken::new(),
+        );
+        sessions.attach_http(endpoint);
+    });
+}
+
 /// 앱 없이 도는 서브커맨드(`pitwall mcp` · `pitwall tool`)의 로그: `$STATE/logs/<component>.<날짜>.log` 회전 파일, 경고 이상은
 /// stderr 에도. stdout 은 쓰지 않는다 — 두 명령 모두 stdout 이 계약이다(MCP 바이트 · 툴 결과). `program` 은 stderr 문장의 머리다.
 pub fn init_logging(paths: &AppPaths, component: &str, program: &str) {

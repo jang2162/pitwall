@@ -539,6 +539,9 @@ fn register_tools(router: &mut pw_rpc::Router, probe: &Probe) {
 #[path = "approval/remote.rs"]
 mod remote;
 
+#[path = "approval/http.rs"]
+mod http;
+
 const FAKE_LOWERED: &[(&str, &[Tier])] = &[
     ("fake_dangerous_low", &[Tier::Write]),
     ("fake_run", &[Tier::Read, Tier::Write, Tier::Exec]),

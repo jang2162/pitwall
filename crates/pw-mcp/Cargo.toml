@@ -17,6 +17,14 @@ rmcp = { version = "3.9.0", default-features = false, features = [
   "server",
   "transport-async-rw",
 ] }
+# Streamable HTTP(`http` — 18-m7-plan M7-25). rmcp 의 `server-side-http`(tower)는 세션 서비스를 동기 factory 로 만들어
+# `server::serve`(세션 열기 · 등록부 · 감사 비우기)를 지나지 않으므로 쓰지 않는다 — HTTP 세션 하나를 프로세스 안 duplex 에
+# `serve` 그대로 잇고, 앞단은 hyper(http1 서버)로 직접 둔다. axum · tower 는 없다. 판은 워크스페이스가 이미 쓰는 것.
+hyper = { version = "1.12.0", default-features = false, features = ["server", "http1"] }
+hyper-util = { version = "0.1.21", default-features = false, features = ["tokio"] }
+bytes = { workspace = true }
+# HTTP 토큰 · 세션 id(OS 난수). 판은 pw-link 와 같다.
+getrandom = "0.4.3"
 # 감사 로그 `$STATE/mcp/audit.db`. 버전 · 기능은 pw-core 와 같게 둔다.
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 schemars = { workspace = true }
@@ -42,6 +50,10 @@ toml_edit = "0.25.17"
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.190"
+
+# Windows: HTTP 의 듣는 소켓에 `SO_EXCLUSIVEADDRUSE`(`http::listen` — 다른 프로세스가 그 포트를 가로채지 못하게). pw-link 와 같은 판.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Networking_WinSock"] }
 
 [dev-dependencies]
 rmcp = { version = "3.9.0", default-features = false, features = [

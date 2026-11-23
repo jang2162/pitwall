@@ -41711,6 +41711,13 @@
               },
               "tool": {
                 "type": "string"
+              },
+              "transport": {
+                "description": "세션의 전송(`socket` · `stdio` · `http` · `relay-socket`). 넷째 판 전에 쓴 행은 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -41726,7 +41733,8 @@
               "resultSize",
               "durationMs",
               "approval",
-              "planHash"
+              "planHash",
+              "transport"
             ],
             "type": "object"
           }
@@ -41751,6 +41759,64 @@
         "required": [
           "entries",
           "nextCursor"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "mcp.http.regenerateToken": {
+      "description": "「토큰 새로 만들기」: 새 토큰을 만들어 `$STATE/mcp/http-token` 을 바꾸고, 듣고 있으면 옛 토큰을 곧바로 거절하고 열린 HTTP\n세션을 모두 닫는다. 새 토큰을 돌려준다. 부르는 연결은 `mcp.http.token` 과 같다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`mcp.http.token` · `mcp.http.regenerateToken` 의 결과.",
+        "properties": {
+          "token": {
+            "description": "지금 Bearer 토큰. 한 번도 켜지 않아 아직 없으면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "mcp.http.token": {
+      "description": "Streamable HTTP(18-m7-plan M7-25)의 Bearer 토큰(설정 창의 [보기] · [복사]). **설정 창 · 웰컴 창의 연결(Host 범위)만**\n부른다 — 프로젝트 · 파일 창과 에이전트 범위 연결은 `PERMISSION_DENIED`. 토큰은 로그 · 감사에 남지 않는다. 이 Host 에 HTTP 가\n붙어 있지 않으면 `NOT_FOUND`.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`mcp.http.token` · `mcp.http.regenerateToken` 의 결과.",
+        "properties": {
+          "token": {
+            "description": "지금 Bearer 토큰. 한 번도 켜지 않아 아직 없으면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "token"
         ],
         "type": "object"
       },
@@ -41864,6 +41930,85 @@
             ],
             "type": "object"
           },
+          "McpHttpProblem": {
+            "description": "켰는데 듣지 못한 까닭(창이 번역한다).",
+            "oneOf": [
+              {
+                "const": "portInUse",
+                "description": "이 컴퓨터의 다른 소켓이 그 포트를 쥐고 있다(`127.0.0.1` 이나 `::1`, 와일드카드 포함).",
+                "type": "string"
+              },
+              {
+                "const": "bindFailed",
+                "description": "그 밖의 바인드 실패(권한 등).",
+                "type": "string"
+              },
+              {
+                "const": "invalidPort",
+                "description": "`[mcp.http] port` 값이 틀렸다.",
+                "type": "string"
+              },
+              {
+                "const": "tokenUnavailable",
+                "description": "토큰 파일을 읽거나 쓰지 못했다.",
+                "type": "string"
+              }
+            ]
+          },
+          "McpHttpStatus": {
+            "description": "설정 창에 보이는 지금 상태(`mcp.settings.get` 의 `http`).",
+            "properties": {
+              "enabled": {
+                "description": "`[mcp.http] enabled`.",
+                "type": "boolean"
+              },
+              "listening": {
+                "description": "지금 듣고 있는가.",
+                "type": "boolean"
+              },
+              "port": {
+                "description": "설정의 포트(없으면 기본). 값이 틀렸으면 `null`.",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "problem": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/McpHttpProblem"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "켰는데 듣지 못한 까닭."
+              },
+              "tokenFile": {
+                "description": "토큰 파일(`$STATE/mcp/http-token`).",
+                "type": "string"
+              },
+              "url": {
+                "description": "클라이언트 설정에 넣는 주소(`http://127.0.0.1:<port>/mcp`). 포트가 틀렸으면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "enabled",
+              "port",
+              "url",
+              "listening",
+              "problem",
+              "tokenFile"
+            ],
+            "type": "object"
+          },
           "McpProjectSettings": {
             "description": "프로젝트가 덮은 `[mcp]`(읽기만).",
             "properties": {
@@ -42001,6 +42146,17 @@
             },
             "type": "array"
           },
+          "http": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/McpHttpStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Streamable HTTP(`[mcp.http]` — 18-m7-plan M7-25)의 지금 상태. 이 Host 에 HTTP 가 붙어 있지 않으면(헤드리스 · 시험) `null`.\n토큰은 싣지 않는다 — `mcp.http.token` 으로 따로 읽는다."
+          },
           "maxRetentionDays": {
             "description": "이 화면이 쓸 수 있는 보관 일수의 상한([`MAX_RETENTION_DAYS`]).",
             "format": "uint32",
@@ -42045,7 +42201,8 @@
           "defaultRetentionDays",
           "maxRetentionDays",
           "warnings",
-          "project"
+          "project",
+          "http"
         ],
         "type": "object"
       },
@@ -42085,6 +42242,16 @@
               {
                 "const": "retentionDays",
                 "description": "`[mcp.audit] retention_days` — 값은 0 ~ [`MAX_RETENTION_DAYS`] 정수(0 은 지우지 않음).",
+                "type": "string"
+              },
+              {
+                "const": "httpEnabled",
+                "description": "`[mcp.http] enabled` — 값은 bool(18-m7-plan M7-25 — 기본 꺼짐).",
+                "type": "string"
+              },
+              {
+                "const": "httpPort",
+                "description": "`[mcp.http] port` — 값은 1 ~ 65535 정수.",
                 "type": "string"
               }
             ]
@@ -42133,6 +42300,85 @@
             ],
             "type": "object"
           },
+          "McpHttpProblem": {
+            "description": "켰는데 듣지 못한 까닭(창이 번역한다).",
+            "oneOf": [
+              {
+                "const": "portInUse",
+                "description": "이 컴퓨터의 다른 소켓이 그 포트를 쥐고 있다(`127.0.0.1` 이나 `::1`, 와일드카드 포함).",
+                "type": "string"
+              },
+              {
+                "const": "bindFailed",
+                "description": "그 밖의 바인드 실패(권한 등).",
+                "type": "string"
+              },
+              {
+                "const": "invalidPort",
+                "description": "`[mcp.http] port` 값이 틀렸다.",
+                "type": "string"
+              },
+              {
+                "const": "tokenUnavailable",
+                "description": "토큰 파일을 읽거나 쓰지 못했다.",
+                "type": "string"
+              }
+            ]
+          },
+          "McpHttpStatus": {
+            "description": "설정 창에 보이는 지금 상태(`mcp.settings.get` 의 `http`).",
+            "properties": {
+              "enabled": {
+                "description": "`[mcp.http] enabled`.",
+                "type": "boolean"
+              },
+              "listening": {
+                "description": "지금 듣고 있는가.",
+                "type": "boolean"
+              },
+              "port": {
+                "description": "설정의 포트(없으면 기본). 값이 틀렸으면 `null`.",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "problem": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/McpHttpProblem"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "켰는데 듣지 못한 까닭."
+              },
+              "tokenFile": {
+                "description": "토큰 파일(`$STATE/mcp/http-token`).",
+                "type": "string"
+              },
+              "url": {
+                "description": "클라이언트 설정에 넣는 주소(`http://127.0.0.1:<port>/mcp`). 포트가 틀렸으면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "enabled",
+              "port",
+              "url",
+              "listening",
+              "problem",
+              "tokenFile"
+            ],
+            "type": "object"
+          },
           "McpProjectSettings": {
             "description": "프로젝트가 덮은 `[mcp]`(읽기만).",
             "properties": {
@@ -42270,6 +42516,17 @@
             },
             "type": "array"
           },
+          "http": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/McpHttpStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Streamable HTTP(`[mcp.http]` — 18-m7-plan M7-25)의 지금 상태. 이 Host 에 HTTP 가 붙어 있지 않으면(헤드리스 · 시험) `null`.\n토큰은 싣지 않는다 — `mcp.http.token` 으로 따로 읽는다."
+          },
           "maxRetentionDays": {
             "description": "이 화면이 쓸 수 있는 보관 일수의 상한([`MAX_RETENTION_DAYS`]).",
             "format": "uint32",
@@ -42314,7 +42571,8 @@
           "defaultRetentionDays",
           "maxRetentionDays",
           "warnings",
-          "project"
+          "project",
+          "http"
         ],
         "type": "object"
       },
