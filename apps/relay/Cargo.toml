@@ -19,6 +19,8 @@ pw-link = { path = "../../crates/pw-link" }
 # `pitwall-relay mcp` 의 stdio ↔ MCP 소켓 프록시와 데몬의 MCP 소켓(18-m7-plan M7-20).
 pw-mcp = { path = "../../crates/pw-mcp" }
 pw-relay = { path = "../../crates/pw-relay" }
+# `pitwall-relay pair --role <r>` 의 role(M7-23). 생성물 시험(dev)도 이것을 쓴다.
+pw-rpc = { path = "../../crates/pw-rpc" }
 # 끝날 때 터미널 · 실행의 프로세스 트리를 끝낸다(`pw_run::shutdown`).
 pw-run = { path = "../../crates/pw-run" }
 serde_json = { workspace = true }
@@ -36,8 +38,6 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 [dev-dependencies]
 # 시험이 띄운 데몬을 끝낸다(SIGTERM).
 libc = "0.2.190"
-# 생성물(`TOPICS` · schema)이 Relay 바이너리가 링크한 선언을 덮는지 본다(M7-02 리뷰 권고 3).
-pw-rpc = { path = "../../crates/pw-rpc" }
 pw-host = { path = "../../crates/pw-host" }
 # 설치 · SSH 자동 페어링 시험(tests/bootstrap.rs — 가짜 ssh 로 이 Relay 를 「원격」 에 올린다, M7-06).
 pw-link = { path = "../../crates/pw-link", features = ["test-support"] }
