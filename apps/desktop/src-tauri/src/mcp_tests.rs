@@ -730,6 +730,8 @@ fn standard_tools(host: &ToolHost) -> Vec<&'static str> {
     APP_TOOLS
         .iter()
         .copied()
+        // 세션 툴은 다른 머신을 아는 세션에만 있다 — `ToolHost::app` 의 세션에는 없다.
+        .filter(|t| !SESSION_TOOLS.contains(t))
         .filter(|t| matches!(host.tool(t).tier, pw_rpc::Tier::Read | pw_rpc::Tier::Write))
         .collect()
 }
