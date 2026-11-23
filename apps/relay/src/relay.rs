@@ -11,7 +11,7 @@ use tracing_subscriber::Layer as _;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt as _;
 
-const USAGE: &str = "usage: pitwall-relay <proxy|daemon|status [--json]|open <file>...|askpass <prompt>|link-command [--remove]|pair --from-ssh <key> [<name>]|unpair <device id>|--verify <file> <sha256>|--version>";
+const USAGE: &str = "usage: pitwall-relay <proxy|daemon|status [--json]|open <file>...|askpass <prompt>|link-command [--remove]|machine|pair --from-ssh <key> [<name>]|unpair <device id>|--verify <file> <sha256>|--version>";
 
 pub fn main() -> ExitCode {
     let mut argv = std::env::args_os();
@@ -42,6 +42,7 @@ pub fn main() -> ExitCode {
             Err(code) => code,
         },
         Some("link-command") => crate::shell::link_command(&args[1..]),
+        Some("machine") if args.len() == 1 => machine(),
         Some(command @ ("mcp" | "tool")) => crate::shell::not_yet(command),
         Some("--version" | "version") => {
             println!(
@@ -155,6 +156,30 @@ fn pair(args: &[String]) -> ExitCode {
         }
         Err(e) => {
             eprintln!("pitwall-relay pair: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// `machine`(18-m7-plan M7-07b — 리뷰 R-1): 이 머신의 id(Relay 기기 키의 지문)를 한 줄 낸다. Desktop 이 판 바꾸기 · 정리 스크립트에서
+/// 「ssh 로 닿은 곳이 링크가 증명한 그 머신인가」 를 보는 데만 쓴다(같은지 확인 — 기억 · 판정의 근거가 아니다). 키를 만들지 않는다:
+/// 키가 없으면(Relay 를 쓴 적 없는 머신) 3.
+fn machine() -> ExitCode {
+    let paths = match paths() {
+        Ok(paths) => paths,
+        Err(code) => return code,
+    };
+    let file = RelayKeyFile::in_dir(&paths.data);
+    if !file.path().exists() {
+        return ExitCode::from(3);
+    }
+    match file.load_or_create() {
+        Ok(key) => {
+            println!("{}", key.id());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("pitwall-relay machine: {e}");
             ExitCode::from(1)
         }
     }

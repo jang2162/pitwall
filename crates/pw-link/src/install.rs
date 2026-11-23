@@ -470,6 +470,11 @@ pub enum InstallError {
     },
     /// 원격의 답을 읽지 못했다.
     Protocol(String),
+    /// ssh 로 닿은 곳의 Relay 가 기대한 머신이 아니다(`Installer::expect_machine` — 판 바꾸기 · 정리). 아무것도 하지 않았다.
+    /// `found` 는 원격이 말한 id 다(확인에만 — 증명이 아니다).
+    OtherMachine {
+        found: String,
+    },
 }
 
 impl std::fmt::Display for InstallError {
@@ -486,6 +491,13 @@ impl std::fmt::Display for InstallError {
                 None => write!(f, "the remote {step} was killed: {stderr}"),
             },
             InstallError::Protocol(why) => write!(f, "{why}"),
+            InstallError::OtherMachine { found } if found.is_empty() => f.write_str(
+                "over ssh this host is not the linked machine (no relay key there); did nothing",
+            ),
+            InstallError::OtherMachine { found } => write!(
+                f,
+                "over ssh this host answered as machine {found}, not the linked one; did nothing"
+            ),
         }
     }
 }
@@ -531,6 +543,8 @@ pub struct Installer {
     ssh: Arc<Ssh>,
     versions: Versions,
     dist: RelayDist,
+    /// 판 바꾸기 · 정리 스크립트가 ssh 로 닿은 곳에서 확인할 머신 id(`crate::upgrade` — `Installer::expect_machine`).
+    pub(crate) machine: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -561,6 +575,7 @@ impl Installer {
             ssh,
             versions,
             dist,
+            machine: None,
         })
     }
 

@@ -32,7 +32,7 @@ use serde_json::Value;
 use crate::{
     Backend, ConnectError, HostEntry, Link, PROMPTS_KEY, Progress, RemoteCommandLink,
     RemoteFailureKind, RemoteHostSource, RemoteOldRelay, RemoteSilentRelay, RemoteStage,
-    RemoteStopOutcome, Tidied,
+    RemoteStopOutcome, Tidied, UpgradeError,
 };
 
 /// 이 빌드의 판(워크스페이스 판 하나 — Relay 와 같다).
@@ -443,21 +443,25 @@ pub fn machine_change(expect: Option<&str>, e: &DialError) -> Option<(String, St
 
 /// 판 바꾸기 · 정리(`pw_link::upgrade` — M7-07b). 붙기와 같은 ssh(사람의 옵션 · askpass)와 같은 판이다.
 impl SshBackend {
-    fn installer(&self, entry: &HostEntry) -> Result<Installer, String> {
-        let ssh = self.ssh(entry).map_err(|e| e.to_string())?;
+    /// 링크의 머신(`machine`)을 ssh 로 닿은 곳에서 확인하는 설치기(리뷰 R-1 — `Installer::expect_machine`).
+    fn installer(&self, entry: &HostEntry, machine: &str) -> Result<Installer, UpgradeError> {
+        let ssh = self
+            .ssh(entry)
+            .map_err(|e| UpgradeError::Failed(e.to_string()))?;
         Installer::new(
             Arc::new(ssh),
             self.versions.clone(),
             RelayDist::new(self.parts.dist.clone(), Arc::clone(&self.parts.fetch)),
         )
-        .map_err(|e| e.to_string())
+        .map(|i| i.expect_machine(machine))
+        .map_err(upgrade_failure)
     }
 
     /// 조사 → (사람이 둔 `pitwall` 링크가 옛 판이면) 이 판으로 옮김 → 정리. 링크를 옮기지 못하면 그 링크가 가리키는 바이너리는 이번
     /// 정리에서 지우지 않는다(사람의 `pitwall` 이 깨지지 않게).
-    async fn tidy_run(&self, entry: &HostEntry) -> Result<Tidied, String> {
-        let installer = self.installer(entry)?;
-        let survey = installer.survey().await.map_err(|e| e.to_string())?;
+    async fn tidy_run(&self, entry: &HostEntry, machine: &str) -> Result<Tidied, UpgradeError> {
+        let installer = self.installer(entry, machine)?;
+        let survey = installer.survey().await.map_err(upgrade_failure)?;
         let mut notes = Vec::new();
         let mut keep = survey.clone();
         let command = match &survey.command {
@@ -469,6 +473,9 @@ impl SshBackend {
                         Ok(_) => notes.push(format!(
                             "moved ~/.local/bin/pitwall from {file} to this relay version"
                         )),
+                        Err(e @ InstallError::OtherMachine { .. }) => {
+                            return Err(upgrade_failure(e));
+                        }
                         Err(e) => {
                             notes.push(format!(
                                 "could not move ~/.local/bin/pitwall to this relay version ({e}); kept {file}"
@@ -480,7 +487,7 @@ impl SshBackend {
                 RemoteCommandLink::Linked
             }
         };
-        let cleaned = installer.clean(&keep).await.map_err(|e| e.to_string())?;
+        let cleaned = installer.clean(&keep).await.map_err(upgrade_failure)?;
         notes.extend(
             cleaned
                 .running
@@ -519,9 +526,10 @@ impl SshBackend {
     async fn stop_run(
         &self,
         entry: &HostEntry,
+        machine: &str,
         seen: &RemoteOldRelay,
-    ) -> Result<RemoteStopOutcome, String> {
-        let installer = self.installer(entry)?;
+    ) -> Result<RemoteStopOutcome, UpgradeError> {
+        let installer = self.installer(entry, machine)?;
         let seen = upgrade::OldDaemon {
             file: seen.file.clone(),
             status: upgrade::DaemonStatus {
@@ -535,7 +543,7 @@ impl SshBackend {
                 terminals: seen.terminals as usize,
             },
         };
-        let outcome = installer.stop_old(&seen).await.map_err(|e| e.to_string())?;
+        let outcome = installer.stop_old(&seen).await.map_err(upgrade_failure)?;
         Ok(match outcome {
             upgrade::StopOutcome::Stopped => RemoteStopOutcome::Stopped,
             upgrade::StopOutcome::Stopping => RemoteStopOutcome::Stopping,
@@ -545,6 +553,13 @@ impl SshBackend {
                 now: old_relay(&now),
             },
         })
+    }
+}
+
+fn upgrade_failure(e: InstallError) -> UpgradeError {
+    match e {
+        InstallError::OtherMachine { found } => UpgradeError::OtherMachine { found },
+        other => UpgradeError::Failed(other.to_string()),
     }
 }
 
@@ -610,28 +625,34 @@ impl Backend for SshBackend {
         Box::pin(self.run(entry, expect, progress))
     }
 
-    fn tidy<'a>(&'a self, entry: &'a HostEntry) -> BoxFuture<'a, Result<Tidied, String>> {
-        Box::pin(self.tidy_run(entry))
+    fn tidy<'a>(
+        &'a self,
+        entry: &'a HostEntry,
+        machine: &'a str,
+    ) -> BoxFuture<'a, Result<Tidied, UpgradeError>> {
+        Box::pin(self.tidy_run(entry, machine))
     }
 
     fn stop_old<'a>(
         &'a self,
         entry: &'a HostEntry,
+        machine: &'a str,
         seen: &'a RemoteOldRelay,
-    ) -> BoxFuture<'a, Result<RemoteStopOutcome, String>> {
-        Box::pin(self.stop_run(entry, seen))
+    ) -> BoxFuture<'a, Result<RemoteStopOutcome, UpgradeError>> {
+        Box::pin(self.stop_run(entry, machine, seen))
     }
 
     fn link_command<'a>(
         &'a self,
         entry: &'a HostEntry,
+        machine: &'a str,
         on: bool,
-    ) -> BoxFuture<'a, Result<bool, String>> {
+    ) -> BoxFuture<'a, Result<bool, UpgradeError>> {
         Box::pin(async move {
-            self.installer(entry)?
+            self.installer(entry, machine)?
                 .link_command(on)
                 .await
-                .map_err(|e| e.to_string())
+                .map_err(upgrade_failure)
         })
     }
 

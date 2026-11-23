@@ -43,14 +43,27 @@ pub(crate) static TEST_LIMIT_MS: std::sync::atomic::AtomicU64 =
 /// 「모른다」 다.
 pub const STATUS_NO_DAEMON: i32 = 3;
 
+/// 판 바꾸기 · 정리 스크립트의 머리(prelude 뒤 — 리뷰 R-1): `$3` 이 `any` 가 아니면 이 판 바이너리의 `machine`(Relay 기기 키 지문)이
+/// `$3` 과 같을 때만 이어 간다. 다르면(또는 이 판이 없거나 키가 없으면) `pitwall-machine other <답>` 한 줄만 내고 아무것도 하지 않는다 —
+/// ssh 로 닿은 곳이 링크가 증명한 머신이 아니면(호스트 이름이 다른 머신을 가리키게 바뀜 등) 그 머신의 Relay 를 끝내거나 지우거나 그
+/// 머신에 링크를 두지 않는다. 그 뒤 `shift 3` — 몸통의 인자는 `$1` 부터다.
+macro_rules! machine_gate {
+    () => {
+        "x=\"$3\"; if [ \"$x\" = any ]; then :; else m=$(\"$f\" machine 2>/dev/null) || m=\"\"; \
+         if [ \"$m\" = \"$x\" ]; then :; else echo \"pitwall-machine other $m\"; exit 0; fi; fi; shift 3; "
+    };
+}
+
 /// 조사: `$DATA/relay/pitwall-relay-*` 마다 한 줄 — `current`(이 판), `running <이름> <status JSON>`, `stopped <이름> <종료 코드>`,
 /// `upload`·`upload-live <이름>`(올리기 임시 파일 — 그 셸이 살아 있으면 live). 끝 표지 `pitwall-survey end`. 이름에 빈칸이 든
 /// 파일은 건너뛰고, `pitwall-relay-<채널>-<숫자>…` 꼴이 아닌 파일은 실행하지 않는다(사람이 둔 `pitwall-relay-backup.sh` 등 —
-/// 리뷰 R3). 끝 표지 앞에 사람의 `~/.local/bin/pitwall` 이 무엇인지 한 줄(`command <심링크 대상의 파일 이름>` — POSIX `ls -l` 의 ` -> ` 뒤,
-/// `readlink` 는 POSIX 도구가 아니다), 심링크가 아닌 파일이면 `command` 만, 없으면 줄 없음 — M7-07b, `pitwall-relay link-command`
-/// 의 「Relay 의 링크」 판정과 같은 재료).
+/// 리뷰 R3). 끝 표지 앞에 사람의 `~/.local/bin/pitwall` 이 무엇인지 한 줄(M7-07b): 대상이 **정확히 `$d/pitwall-relay-<채널>-<숫자>…`**
+/// (`$d` 그대로든 `pwd -P` 로 푼 것이든 — Relay 의 `link-command` 는 `current_exe` 로 건다)이면 `command <그 이름>`, 그 밖의 심링크
+/// (사람이 손으로 둔 `…/target/release/pitwall-relay` 등)나 심링크가 아닌 파일이면 `command` 만, 없으면 줄 없음(리뷰 F1 — 대상의
+/// 이름만 보면 사람의 링크를 Pitwall 의 것으로 읽어 붙을 때 덮는다). 대상은 POSIX `ls -l` 의 ` -> ` 뒤다(`readlink` 는 POSIX 가 아니다).
 pub const SURVEY: &str = concat!(
     prelude!(),
+    machine_gate!(),
     "if [ -d \"$d\" ]; then for p in \"$d\"/pitwall-relay-*; do \
      if [ -f \"$p\" ]; then :; else continue; fi; n=\"${p##*/}\"; \
      case \"$n\" in *[[:space:]]*) continue ;; \
@@ -62,16 +75,21 @@ pub const SURVEY: &str = concat!(
      if o=$(\"$p\" status 2>/dev/null); then echo \"pitwall-survey running $n $o\"; \
      else echo \"pitwall-survey stopped $n $?\"; fi; done; fi; \
      if [ -n \"${HOME:-}\" ]; then l=\"$HOME/.local/bin/pitwall\"; \
-     if [ -L \"$l\" ]; then t=$(ls -l \"$l\" 2>/dev/null) || t=\"\"; t=\"${t##* -> }\"; echo \"pitwall-survey command ${t##*/}\"; \
+     if [ -L \"$l\" ]; then t=$(ls -l \"$l\" 2>/dev/null) || t=\"\"; t=\"${t##* -> }\"; \
+     D=$(cd \"$d\" 2>/dev/null && pwd -P) || D=\"$d\"; r=\"\"; \
+     case \"$t\" in \"$d\"/*) r=\"${t#\"$d\"/}\" ;; \"$D\"/*) r=\"${t#\"$D\"/}\" ;; esac; \
+     case \"$r\" in */*|*[[:space:]]*) r=\"\" ;; pitwall-relay-*-[0-9]*) ;; *) r=\"\" ;; esac; \
+     echo \"pitwall-survey command $r\"; \
      elif [ -e \"$l\" ]; then echo \"pitwall-survey command\"; fi; fi; echo \"pitwall-survey end\""
 );
 
-/// 정리: `$3`… 의 이름마다 — `pitwall-relay-` 로 시작하고 `/` 가 없는 것만, 이 판(`$f`)은 빼고, 지우기 직전 그 바이너리의
+/// 정리: 머리([`machine_gate`]) 뒤 `$1`… 의 이름마다 — `pitwall-relay-` 로 시작하고 `/` 가 없는 것만, 이 판(`$f`)은 빼고, 지우기 직전 그 바이너리의
 /// `status` 가 3(데몬이 없는 것이 확실함)일 때만 지운다 — 그 밖(4 답 없음 · 126 실행 못 함 등)은 남기고 `unknown`. 올리기 임시 파일은 그 셸이 끝났을 때만. 한 줄씩
 /// `pitwall-clean <결과> <이름>`, 끝 표지 `pitwall-clean end`.
 pub const CLEAN: &str = concat!(
     prelude!(),
-    "shift 2; for n in \"$@\"; do \
+    machine_gate!(),
+    "for n in \"$@\"; do \
      case \"$n\" in pitwall-relay-*) ;; *) echo \"pitwall-clean refused $n\"; continue ;; esac; \
      case \"$n\" in */*) echo \"pitwall-clean refused $n\"; continue ;; esac; \
      p=\"$d/$n\"; if [ \"$p\" = \"$f\" ]; then echo \"pitwall-clean current $n\"; continue; fi; \
@@ -84,28 +102,30 @@ pub const CLEAN: &str = concat!(
      else echo \"pitwall-clean unknown $n $c\"; fi; fi; done; echo \"pitwall-clean end\""
 );
 
-/// 옛 판 끝내기: `$3` 바이너리 이름 · `$4` 사람이 본 pid. 그 바이너리의 `status` 가 지금도 그 pid 를 낼 때만 SIGTERM 을 보내고
+/// 옛 판 끝내기: 머리 뒤 `$1` 바이너리 이름 · `$2` 사람이 본 pid. 그 바이너리의 `status` 가 지금도 그 pid 를 낼 때만 SIGTERM 을 보내고
 /// 끝날 때까지 20초 기다린다. `pitwall-stop done`·`slow`(아직 끝나는 중)·`changed`(pid 가 다르다 — 보내지 않음)·`gone`(데몬
 /// 없음이 확실함)·`unknown`(데몬이 답하지 않음 — 보내지 않음)·`current`(이 판 — 보내지 않음).
 pub const STOP: &str = concat!(
     prelude!(),
-    "n=\"$3\"; case \"$n\" in pitwall-relay-*) ;; *) echo \"pitwall: not a relay binary\" >&2; exit 64 ;; esac; \
+    machine_gate!(),
+    "n=\"$1\"; case \"$n\" in pitwall-relay-*) ;; *) echo \"pitwall: not a relay binary\" >&2; exit 64 ;; esac; \
      case \"$n\" in */*|*.part.*) echo \"pitwall: not a relay binary\" >&2; exit 64 ;; esac; \
      p=\"$d/$n\"; if [ \"$p\" = \"$f\" ]; then echo \"pitwall-stop current\"; exit 0; fi; \
      if o=$(\"$p\" status 2>/dev/null); then case \"$o\" in \
-     *?pid?:$4[,}]*) kill -TERM \"$4\"; i=0; while kill -0 \"$4\" 2>/dev/null; do \
+     *?pid?:$2[,}]*) kill -TERM \"$2\"; i=0; while kill -0 \"$2\" 2>/dev/null; do \
      if [ \"$i\" -ge 20 ]; then echo \"pitwall-stop slow\"; exit 0; fi; i=$((i+1)); sleep 1; done; \
      echo \"pitwall-stop done\" ;; \
      *) echo \"pitwall-stop changed\" ;; esac; \
      else c=$?; if [ \"$c\" = 3 ]; then echo \"pitwall-stop gone\"; else echo \"pitwall-stop unknown\"; fi; fi"
 );
 
-/// `pitwall` 명령 링크(메인 판정 M7-P12): `$3` 이 `on` 이면 이 판 바이너리의 `link-command`, `off` 면 `link-command --remove`. 이 판이
+/// `pitwall` 명령 링크(메인 판정 M7-P12): 머리 뒤 `$1` 이 `on` 이면 이 판 바이너리의 `link-command`, `off` 면 `link-command --remove`. 이 판이
 /// 깔려 있지 않으면 65. 사람의 다른 파일이 그 자리에 있으면 Relay 가 거절한다(종료 1 — 덮지 않는다). stdout 은 Relay 의 JSON 한 줄.
 pub const LINK_COMMAND: &str = concat!(
     prelude!(),
+    machine_gate!(),
     "if [ -f \"$f\" ]; then :; else echo \"pitwall: the relay of this version is not installed\" >&2; exit 65; fi; \
-     case \"$3\" in on) \"$f\" link-command ;; off) \"$f\" link-command --remove ;; \
+     case \"$1\" in on) \"$f\" link-command ;; off) \"$f\" link-command --remove ;; \
      *) echo \"pitwall: on or off\" >&2; exit 64 ;; esac"
 );
 
@@ -195,6 +215,8 @@ impl OldDaemon {
     }
 
     /// 사람이 본 것과 같은 데몬 · 같은 수인가(실행 · 터미널 · 붙은 링크 — 리뷰 R2: 다른 Desktop 이 새로 붙었으면 그 링크도 끊긴다).
+    /// `remote.stopOld`(pw-remote)는 이 칸들(이름 · pid · 실행 · 터미널 · 링크)만 실어 온다 — 칸을 늘리면 그쪽도 함께 싣게 한다(안
+    /// 그러면 늘 「바뀜」 이 된다).
     fn same_as(&self, seen: &OldDaemon) -> bool {
         self.file == seen.file
             && self.status.pid == seen.status.pid
@@ -266,7 +288,8 @@ impl Survey {
             }
             if let Some(target) = rest.strip_prefix("command") {
                 let target = target.trim();
-                command = if target.starts_with("pitwall-relay") {
+                // 스크립트가 `$d` 안의 판 이름일 때만 이름을 낸다 — 여기서도 그 꼴만 Relay 의 링크로 읽는다(리뷰 F1).
+                command = if name_ok(target) && parse_name(target).is_some() {
                     CommandLink::Relay {
                         file: target.to_owned(),
                     }
@@ -422,7 +445,11 @@ impl Installer {
         let limit = limit.min(Duration::from_millis(
             TEST_LIMIT_MS.load(std::sync::atomic::Ordering::Relaxed),
         ));
-        tokio::time::timeout(limit, self.run(step, script, args, None))
+        let machine = self.machine.as_deref().unwrap_or("any");
+        let mut more = Vec::with_capacity(args.len() + 1);
+        more.push(machine);
+        more.extend_from_slice(args);
+        let output = tokio::time::timeout(limit, self.run(step, script, &more, None))
             .await
             .unwrap_or_else(|_| {
                 Err(InstallError::Remote {
@@ -430,7 +457,21 @@ impl Installer {
                     code: None,
                     stderr: format!("no answer in {} s", limit.as_secs()),
                 })
-            })
+            })?;
+        // 머리([`machine_gate`])가 다른 머신이라고 했으면 그 셸은 아무것도 하지 않고 끝났다.
+        if let Some(found) = marked(&output.stdout, "pitwall-machine other") {
+            return Err(InstallError::OtherMachine { found });
+        }
+        Ok(output)
+    }
+
+    /// 판 바꾸기 · 정리 스크립트가 ssh 로 닿은 곳에서 이 머신 id(링크가 증명한 Relay 기기 키 지문)를 확인하게 한다(리뷰 R-1). 원격이
+    /// 다른 id 를 말하거나 이 판 · 키가 없으면 그 스크립트는 아무것도 하지 않고 [`InstallError::OtherMachine`] 이다. 원격이 말한 id 는
+    /// 「같은가」 에만 쓴다 — 기억 · 판정의 근거가 아니다. 주지 않으면(`None`) 확인하지 않는다(설치 · 시험).
+    #[must_use]
+    pub fn expect_machine(mut self, machine: &str) -> Self {
+        self.machine = Some(machine.to_owned());
+        self
     }
 
     /// 원격 `$DATA/relay/` 의 Relay 바이너리와 그 데몬들(옛 판 바이너리마다 그 바이너리의 `status`).
@@ -662,6 +703,8 @@ mod tests {
         for (line, command) in [
             ("pitwall-survey command\n", CommandLink::Other),
             ("pitwall-survey command my-tool\n", CommandLink::Other),
+            // 사람이 손으로 둔 `…/pitwall-relay`(판 이름이 아님)는 Relay 의 링크가 아니다(리뷰 F1).
+            ("pitwall-survey command pitwall-relay\n", CommandLink::Other),
             ("", CommandLink::Absent),
         ] {
             let out = format!(

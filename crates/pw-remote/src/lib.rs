@@ -153,24 +153,65 @@ pub trait Backend: Send + Sync {
     fn check<'a>(&'a self, entry: &'a HostEntry) -> BoxFuture<'a, Option<bool>>;
     /// 붙은 뒤 한 번(18-m7-plan M7-07b ①): 원격 Relay 조사 → 사람이 둔 `pitwall` 링크가 옛 판을 가리키면 이 판으로 옮김 → 정리(최근
     /// 두 판만 — 떠 있는 데몬의 바이너리는 남긴다). 판 바꾸기가 없는 백엔드는 아무것도 없다고 답한다.
-    fn tidy<'a>(&'a self, _entry: &'a HostEntry) -> BoxFuture<'a, Result<Tidied, String>> {
+    ///
+    /// 셋 모두 `machine` 은 링크가 증명한 머신 id 다 — 원격 스크립트가 ssh 로 닿은 곳의 Relay 가 그 머신일 때만 무엇이든 한다(리뷰
+    /// R-1). 아니면 [`UpgradeError::OtherMachine`].
+    fn tidy<'a>(
+        &'a self,
+        _entry: &'a HostEntry,
+        _machine: &'a str,
+    ) -> BoxFuture<'a, Result<Tidied, UpgradeError>> {
         Box::pin(async { Ok(Tidied::default()) })
     }
     /// [옛 판 끝내기]: 사람이 본 그 데몬(`seen`)이 지금도 그대로일 때만 끝낸다(`pw_link::upgrade::Installer::stop_old`).
     fn stop_old<'a>(
         &'a self,
         _entry: &'a HostEntry,
+        _machine: &'a str,
         _seen: &'a RemoteOldRelay,
-    ) -> BoxFuture<'a, Result<RemoteStopOutcome, String>> {
-        Box::pin(async { Err("this backend cannot stop old relays".to_owned()) })
+    ) -> BoxFuture<'a, Result<RemoteStopOutcome, UpgradeError>> {
+        Box::pin(async {
+            Err(UpgradeError::Failed(
+                "this backend cannot stop old relays".into(),
+            ))
+        })
     }
     /// `pitwall` 명령 링크를 이 판 바이너리로 두거나(`on`) 걷는다. 그 뒤 링크가 있는가.
     fn link_command<'a>(
         &'a self,
         _entry: &'a HostEntry,
+        _machine: &'a str,
         _on: bool,
-    ) -> BoxFuture<'a, Result<bool, String>> {
-        Box::pin(async { Err("this backend cannot link the pitwall command".to_owned()) })
+    ) -> BoxFuture<'a, Result<bool, UpgradeError>> {
+        Box::pin(async {
+            Err(UpgradeError::Failed(
+                "this backend cannot link the pitwall command".into(),
+            ))
+        })
+    }
+}
+
+/// 판 바꾸기 · 정리의 실패.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpgradeError {
+    /// ssh 로 닿은 곳의 Relay 가 링크의 머신이 아니다(리뷰 R-1) — 아무것도 하지 않았다. `found` 는 원격이 말한 id(확인에만 — 빈 값이면
+    /// 그곳에 이 판 Relay 나 키가 없다).
+    OtherMachine { found: String },
+    /// 그 밖(ssh · 원격 스크립트).
+    Failed(String),
+}
+
+impl std::fmt::Display for UpgradeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UpgradeError::OtherMachine { found } if found.is_empty() => {
+                f.write_str("over ssh this host is not the linked machine (no relay of this version or key there)")
+            }
+            UpgradeError::OtherMachine { found } => {
+                write!(f, "over ssh this host answered as machine {found}, not the linked one")
+            }
+            UpgradeError::Failed(why) => f.write_str(why),
+        }
     }
 }
 
@@ -1097,7 +1138,7 @@ impl RemoteHosts {
         entry: &HostEntry,
         machine: &str,
     ) {
-        match backend.tidy(entry).await {
+        match backend.tidy(entry, machine).await {
             Ok(tidied) => {
                 for line in &tidied.notes {
                     self.note(name, None, RemoteLogLevel::Info, line);
@@ -1136,6 +1177,8 @@ impl RemoteHosts {
                     command: tidied.command,
                     removed: tidied.removed,
                 };
+                // 바퀴가 같아도 그 링크가 그새 닫혔을 수 있다(끊긴 뒤 다시 붙기는 같은 바퀴다 — 끝내기 · 링크 바꾸기가 도는 동안 닫히면
+                // 닫힌 링크의 조사를 보이지 않는다).
                 self.update(name, generation, |slot| {
                     if slot.link.as_ref().is_some_and(|(m, _)| m == machine) {
                         self.set_relays(name, slot, Some(relays));
@@ -1143,12 +1186,21 @@ impl RemoteHosts {
                     None
                 });
             }
-            Err(e) => self.note(
-                name,
-                None,
-                RemoteLogLevel::Error,
-                &format!("could not look at the old relay versions: {e}"),
-            ),
+            Err(e) => {
+                // 다른 머신이었으면 보이던 조사도 거둔다 — 화면이 이 머신 id 를 달고 다른 머신의 것을 보이지 않게.
+                if matches!(e, UpgradeError::OtherMachine { .. }) {
+                    self.update(name, generation, |slot| {
+                        self.set_relays(name, slot, None);
+                        None
+                    });
+                }
+                self.note(
+                    name,
+                    None,
+                    RemoteLogLevel::Error,
+                    &format!("did not look at the old relay versions of machine {machine}: {e}; did nothing"),
+                );
+            }
         }
     }
 
@@ -1182,16 +1234,16 @@ impl RemoteHosts {
                 seen.file, seen.pid, seen.runs, seen.terminals, seen.links
             ),
         );
-        let outcome = match backend.stop_old(&entry, seen).await {
+        let outcome = match backend.stop_old(&entry, machine, seen).await {
             Ok(outcome) => outcome,
             Err(e) => {
                 self.note(
                     name,
                     None,
                     RemoteLogLevel::Error,
-                    &format!("could not stop the old relay {}: {e}", seen.file),
+                    &format!("did not stop the old relay {}: {e}", seen.file),
                 );
-                return Err(RemoteError::Remote(e));
+                return Err(upgrade_error(e));
             }
         };
         let said = match &outcome {
@@ -1232,7 +1284,7 @@ impl RemoteHosts {
                 "`{name}` reconnected; look again"
             )));
         }
-        let result = backend.link_command(&entry, on).await;
+        let result = backend.link_command(&entry, machine, on).await;
         match &result {
             Ok(linked) => self.note(
                 name,
@@ -1251,9 +1303,21 @@ impl RemoteHosts {
                 &format!("could not change the ~/.local/bin/pitwall link: {e}"),
             ),
         }
-        self.refresh(name, generation, &backend, &entry, machine)
-            .await;
-        result.map(|_| ()).map_err(RemoteError::Remote)
+        if !matches!(result, Err(UpgradeError::OtherMachine { .. })) {
+            self.refresh(name, generation, &backend, &entry, machine)
+                .await;
+        }
+        result.map(|_| ()).map_err(upgrade_error)
+    }
+}
+
+fn upgrade_error(e: UpgradeError) -> RemoteError {
+    match e {
+        // `CONFLICT` 와 그 글(「다른 머신」)로 — 사람이 본 머신과 ssh 로 닿은 곳이 다르다.
+        UpgradeError::OtherMachine { .. } => {
+            RemoteError::Remote(format!("{e}; did nothing (another machine)"))
+        }
+        UpgradeError::Failed(why) => RemoteError::Remote(why),
     }
 }
 

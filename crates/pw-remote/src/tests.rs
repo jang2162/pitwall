@@ -127,7 +127,11 @@ impl Backend for Fake {
         Box::pin(async { Some(false) })
     }
 
-    fn tidy<'a>(&'a self, _entry: &'a HostEntry) -> BoxFuture<'a, Result<Tidied, String>> {
+    fn tidy<'a>(
+        &'a self,
+        _entry: &'a HostEntry,
+        _machine: &'a str,
+    ) -> BoxFuture<'a, Result<Tidied, UpgradeError>> {
         let n = self.tidies.fetch_add(1, Ordering::SeqCst) as u32;
         Box::pin(async move {
             Ok(Tidied {

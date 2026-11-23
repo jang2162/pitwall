@@ -14,7 +14,7 @@ use pw_rpc::ConnectionScope;
 use serde_json::json;
 
 use super::*;
-use crate::{RemoteHosts, RemoteRelays, methods};
+use crate::{RemoteHosts, RemoteRelays, RemoteStatus, UpgradeError, methods};
 
 const VERSION: &str = "1.2.3";
 const MACHINE: &str = "SHA256:mini";
@@ -39,6 +39,28 @@ impl Fetch for Offline {
 struct Linked {
     ssh: SshBackend,
     connects: AtomicUsize,
+    /// 지금 링크를 닫는 것(`drop_link`).
+    link: Arc<Mutex<Option<tokio::sync::oneshot::Sender<String>>>>,
+    /// 참이면 끝내기가 끝난 직후(Host 가 다시 조사하기 전) 링크가 닫히고, 다시 붙기는 끝나지 않는다.
+    drop_after_stop: std::sync::atomic::AtomicBool,
+    hosts: Mutex<Option<RemoteHosts>>,
+}
+
+impl Linked {
+    /// 링크가 저절로 닫히고, 상태 기계가 다시 붙기를 기다리는 데까지 간다.
+    async fn drop_link(&self) {
+        if let Some(tx) = self.link.lock().unwrap().take() {
+            let _ = tx.send("peer closed".into());
+        }
+        let hosts = self.hosts.lock().unwrap().clone().expect("hosts");
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !matches!(hosts.status("mini"), RemoteStatus::Reconnecting { .. }) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the link did not drop");
+    }
 }
 
 impl Backend for Linked {
@@ -52,10 +74,15 @@ impl Backend for Linked {
         _expect: Option<&'a str>,
         _progress: &'a (dyn Fn(Progress) + Send + Sync),
     ) -> BoxFuture<'a, Result<Link, ConnectError>> {
-        self.connects.fetch_add(1, Ordering::SeqCst);
+        let n = self.connects.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = tokio::sync::oneshot::channel::<String>();
-        let tx = Mutex::new(Some(tx));
+        *self.link.lock().unwrap() = Some(tx);
+        let tx = Arc::clone(&self.link);
+        let hang = n > 0 && self.drop_after_stop.load(Ordering::SeqCst);
         Box::pin(async move {
+            if hang {
+                std::future::pending::<()>().await;
+            }
             Ok(Link {
                 host: Arc::new(LocalHost::new(MACHINE)),
                 machine: MACHINE.into(),
@@ -73,24 +100,36 @@ impl Backend for Linked {
         Box::pin(async { None })
     }
 
-    fn tidy<'a>(&'a self, entry: &'a HostEntry) -> BoxFuture<'a, Result<Tidied, String>> {
-        self.ssh.tidy(entry)
+    fn tidy<'a>(
+        &'a self,
+        entry: &'a HostEntry,
+        machine: &'a str,
+    ) -> BoxFuture<'a, Result<Tidied, UpgradeError>> {
+        self.ssh.tidy(entry, machine)
     }
 
     fn stop_old<'a>(
         &'a self,
         entry: &'a HostEntry,
+        machine: &'a str,
         seen: &'a RemoteOldRelay,
-    ) -> BoxFuture<'a, Result<RemoteStopOutcome, String>> {
-        self.ssh.stop_old(entry, seen)
+    ) -> BoxFuture<'a, Result<RemoteStopOutcome, UpgradeError>> {
+        Box::pin(async move {
+            let outcome = self.ssh.stop_old(entry, machine, seen).await;
+            if self.drop_after_stop.load(Ordering::SeqCst) {
+                self.drop_link().await;
+            }
+            outcome
+        })
     }
 
     fn link_command<'a>(
         &'a self,
         entry: &'a HostEntry,
+        machine: &'a str,
         on: bool,
-    ) -> BoxFuture<'a, Result<bool, String>> {
-        self.ssh.link_command(entry, on)
+    ) -> BoxFuture<'a, Result<bool, UpgradeError>> {
+        self.ssh.link_command(entry, machine, on)
     }
 }
 
@@ -121,14 +160,24 @@ impl Stub {
                 .relay_dir()
                 .join(format!("pitwall-relay-dev-{version}")),
             &format!(
-                "#!/bin/sh\ncase \"$1\" in\n  status) if [ -f '{m}' ]; then cat '{m}'; exit 0; else exit 3; fi ;;\n  link-command) echo \"$*\" >> '{m}.link'; if [ \"$2\" = --remove ]; then echo '{{\"path\":\"p\",\"linked\":false}}'; else echo '{{\"path\":\"p\",\"linked\":true}}'; fi ;;\n  *) exit 2 ;;\nesac\n",
-                m = marker.display()
+                "#!/bin/sh\ncase \"$1\" in\n  status) if [ -f '{m}' ]; then cat '{m}'; exit 0; else exit 3; fi ;;\n  machine) if [ -f '{m}.machine' ]; then cat '{m}.machine'; else echo {machine}; fi ;;\n  link-command) echo \"$*\" >> '{m}.link'; if [ \"$2\" = --remove ]; then echo '{{\"path\":\"p\",\"linked\":false}}'; else echo '{{\"path\":\"p\",\"linked\":true}}'; fi ;;\n  *) exit 2 ;;\nesac\n",
+                m = marker.display(),
+                machine = MACHINE,
             ),
         );
         Self {
             marker,
             version: version.to_owned(),
         }
+    }
+
+    /// 이 바이너리의 `machine` 이 낼 id(기본은 링크의 머신 [`MACHINE`]).
+    fn machine(&self, id: &str) {
+        std::fs::write(
+            format!("{}.machine", self.marker.display()),
+            format!("{id}\n"),
+        )
+        .unwrap();
     }
 
     fn file(&self) -> String {
@@ -220,10 +269,14 @@ fn setup() -> Setup {
     let backend = Arc::new(Linked {
         ssh,
         connects: AtomicUsize::new(0),
+        link: Arc::default(),
+        drop_after_stop: Default::default(),
+        hosts: Mutex::new(None),
     });
     let hosts = RemoteHosts::default();
     hosts.attach_host(None, pw_core::EventBus::new(64), None);
     hosts.attach_backend(backend.clone());
+    *backend.hosts.lock().unwrap() = Some(hosts.clone());
     let registered = hosts.clone();
     let rpc = LocalHost::builder("local")
         .methods(move |r| methods::register(r, &registered))
@@ -513,7 +566,9 @@ async fn a_command_link_that_cannot_move_keeps_its_binary() {
         &s.remote
             .relay_dir()
             .join(format!("pitwall-relay-dev-{VERSION}")),
-        "#!/bin/sh\ncase \"$1\" in\n  link-command) echo refused >&2; exit 1 ;;\n  *) exit 2 ;;\nesac\n",
+        &format!(
+            "#!/bin/sh\ncase \"$1\" in\n  machine) echo {MACHINE} ;;\n  link-command) echo refused >&2; exit 1 ;;\n  *) exit 2 ;;\nesac\n"
+        ),
     );
     Stub::new(s.dir.path(), &s.remote, "1.1.0");
     Stub::new(s.dir.path(), &s.remote, "1.0.5");
@@ -541,4 +596,185 @@ async fn a_command_link_that_cannot_move_keeps_its_binary() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(log.contains("could not move ~/.local/bin/pitwall"), "{log}");
+}
+
+fn log_text(s: &Setup) -> String {
+    s.hosts
+        .log("mini")
+        .into_iter()
+        .map(|l| l.text)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 리뷰 F1: 사람이 손으로 둔 `~/.local/bin/pitwall`(Relay 폴더 밖의 `pitwall-relay` · 같은 판 이름이라도 다른 폴더)은 Pitwall 의 링크가
+/// 아니다 — 붙어도 옮기지 않고(`link-command` 를 부르지 않는다) 화면은 「다른 파일」 이다.
+#[tokio::test]
+async fn a_hand_made_pitwall_link_is_left_alone() {
+    let s = setup();
+    let current = Stub::new(s.dir.path(), &s.remote, VERSION);
+    Stub::new(s.dir.path(), &s.remote, "1.0.0");
+    let bin = s.remote.home.join(".local/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let own = s.dir.path().join("src/target/release");
+    std::fs::create_dir_all(&own).unwrap();
+    for target in ["pitwall-relay", "pitwall-relay-dev-1.0.0"] {
+        write_executable(&own.join(target), "#!/bin/sh\n");
+        let link = bin.join("pitwall");
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(own.join(target), &link).unwrap();
+
+        let held = s.hosts.hold("mini").unwrap();
+        let relays = s.relays(None).await;
+        assert_eq!(relays.command, RemoteCommandLink::Other, "{target}");
+        assert!(
+            current.link_calls().is_empty(),
+            "moved the person's own {target} link"
+        );
+        assert_eq!(
+            std::fs::read_link(&link).unwrap(),
+            own.join(target),
+            "the person's link changed"
+        );
+        drop(held);
+        assert_eq!(s.hosts.relays("mini"), None);
+    }
+}
+
+/// 리뷰 R-1: ssh 로 닿은 곳의 Relay 가 링크가 증명한 머신이 아니면(호스트 이름이 다른 머신을 가리키게 바뀜 등) 붙은 뒤의 자동 정리 ·
+/// `remote.stopOld` · `remote.linkCommand` 가 아무것도 하지 않고 「다른 머신」 으로 알린다 — 화면이 링크의 id 를 달고 다른 머신의
+/// 조사를 보이지 않는다.
+#[tokio::test]
+async fn another_machine_over_ssh_gets_nothing_done() {
+    let s = setup();
+    let current = Stub::new(s.dir.path(), &s.remote, VERSION);
+    Stub::new(s.dir.path(), &s.remote, "1.1.0");
+    Stub::new(s.dir.path(), &s.remote, "1.0.5");
+    let old = Stub::new(s.dir.path(), &s.remote, "1.0.0");
+    let daemon = Sleeper::start();
+    old.run(daemon.pid, 1, 0, 0);
+    let before = s.files();
+
+    // 자동 정리: 다른 머신이면 지우지 않고 보이지 않는다.
+    current.machine("SHA256:elsewhere");
+    let held = s.hosts.hold("mini").unwrap();
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while !log_text(&s).contains("did nothing") {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("no note about another machine");
+    assert!(
+        log_text(&s).contains("SHA256:elsewhere"),
+        "{}",
+        log_text(&s)
+    );
+    assert_eq!(
+        s.hosts.relays("mini"),
+        None,
+        "showed another machine's survey"
+    );
+    assert_eq!(s.files(), before, "cleaned another machine");
+    drop(held);
+
+    // 링크의 머신에서 본 뒤 ssh 가 다른 머신에 닿으면 끝내기 · 링크 바꾸기도 아무것도 하지 않는다.
+    current.machine(MACHINE);
+    let _use = s.hosts.hold("mini").unwrap();
+    let relays = s.relays(None).await;
+    let seen = relays
+        .old
+        .iter()
+        .find(|o| o.file == old.file())
+        .unwrap()
+        .clone();
+    current.machine("SHA256:elsewhere");
+    let link = s
+        .call(
+            ConnectionScope::Host,
+            "remote.linkCommand",
+            json!({"name": "mini", "machine": MACHINE, "on": true}),
+        )
+        .await;
+    assert!(
+        link["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("another machine")),
+        "{link}"
+    );
+    assert!(
+        current.link_calls().is_empty(),
+        "linked the command on another machine"
+    );
+    let stop = s
+        .call(
+            ConnectionScope::Host,
+            "remote.stopOld",
+            json!({"name": "mini", "machine": MACHINE, "seen": seen}),
+        )
+        .await;
+    assert!(
+        stop["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("another machine")),
+        "{stop}"
+    );
+    assert!(daemon.alive(), "stopped a daemon on another machine");
+}
+
+/// 리뷰 R-2: 끝내기가 도는 동안 링크가 닫히면(같은 바퀴 — 다시 붙기를 기다림) 끝내기 뒤의 다시 조사가 닫힌 링크의 옛 판을 보이지
+/// 않는다.
+#[tokio::test]
+async fn a_link_that_closed_during_a_stop_shows_no_survey() {
+    let s = setup();
+    Stub::new(s.dir.path(), &s.remote, VERSION);
+    let old = Stub::new(s.dir.path(), &s.remote, "1.0.0");
+    let daemon = Sleeper::start();
+    old.run(daemon.pid, 0, 1, 0);
+    let _use = s.hosts.hold("mini").unwrap();
+    let relays = s.relays(None).await;
+    s.backend.drop_after_stop.store(true, Ordering::SeqCst);
+    let stopped = s
+        .call(
+            ConnectionScope::Host,
+            "remote.stopOld",
+            json!({"name": "mini", "machine": MACHINE, "seen": relays.old[0]}),
+        )
+        .await;
+    assert_eq!(stopped["result"]["outcome"], "stopped", "{stopped}");
+    assert!(matches!(
+        s.hosts.status("mini"),
+        RemoteStatus::Reconnecting { .. }
+    ));
+    assert_eq!(
+        s.hosts.relays("mini"),
+        None,
+        "showed a survey for a link that had closed"
+    );
+}
+
+/// 리뷰 R-2: 조사 때 떠 있던 옛 판 데몬이 정리 전에 끝나 정리가 그 바이너리를 지웠으면 화면에 옛 판 데몬으로 남지 않는다.
+#[tokio::test]
+async fn a_daemon_that_ended_before_the_clean_up_is_not_shown() {
+    let s = setup();
+    Stub::new(s.dir.path(), &s.remote, VERSION);
+    Stub::new(s.dir.path(), &s.remote, "1.1.0");
+    let marker = s.dir.path().join("once");
+    std::fs::write(
+        &marker,
+        "{\"pid\":4242,\"runs\":1,\"terminals\":0,\"links\":0}\n",
+    )
+    .unwrap();
+    // 첫 `status` 에만 떠 있다고 답한다(조사) — 정리의 `status` 는 3(데몬 없음).
+    write_executable(
+        &s.remote.relay_dir().join("pitwall-relay-dev-1.0.0"),
+        &format!(
+            "#!/bin/sh\ncase \"$1\" in\n  status) if [ -f '{m}' ]; then cat '{m}'; rm -f '{m}'; exit 0; else exit 3; fi ;;\n  *) exit 2 ;;\nesac\n",
+            m = marker.display()
+        ),
+    );
+    let _use = s.hosts.hold("mini").unwrap();
+    let relays = s.relays(None).await;
+    assert_eq!(relays.removed, ["pitwall-relay-dev-1.0.0"]);
+    assert!(relays.old.is_empty(), "{:?}", relays.old);
 }

@@ -8,6 +8,8 @@
 //! - `pitwall-relay open <파일>…` · `askpass <질문>`: 원격 셸 · git 이 데몬 소켓의 좁은 명령으로 붙은 Desktop 에 열기 · 암호 질문을
 //!   넘긴다. `link-command [--remove]`: 사람이 설치 화면에서 고를 때 `~/.local/bin/pitwall` 링크를 둔다(M7-15). 바이너리를
 //!   `pitwall` 이름으로 부르면 `open` · `mcp` · `tool` 로 읽는다(메인 판정 M7-P12).
+//! - `pitwall-relay machine`: 이 머신의 id(Relay 기기 키 지문) 한 줄 — Desktop 의 판 바꾸기 · 정리 스크립트가 ssh 로 닿은 곳이 링크의
+//!   머신인지 보는 데만 쓴다(M7-07b). 키를 만들지 않는다.
 //! - `pitwall-relay --verify <파일> <sha256>`: 원격에 해시 도구가 없을 때 설치기가 올린 파일을 본다(M7-06).
 //!
 //! 몸통은 `crates/pw-relay` 다. `mcp` · `tool` 은 M7-20 이 채운다.

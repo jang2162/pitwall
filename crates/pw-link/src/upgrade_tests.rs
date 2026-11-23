@@ -52,7 +52,7 @@ impl Stub {
                 .relay_dir()
                 .join(format!("pitwall-relay-dev-{version}")),
             &format!(
-                "#!/bin/sh\ncase \"$1\" in\n  status) if [ -f '{m}' ]; then cat '{m}'; exit 0; else exit 3; fi ;;\n  link-command) echo \"$*\" >> '{m}.link'; if [ \"$2\" = --remove ]; then echo '{{\"path\":\"p\",\"linked\":false}}'; else echo '{{\"path\":\"p\",\"linked\":true}}'; fi ;;\n  *) exit 2 ;;\nesac\n",
+                "#!/bin/sh\ncase \"$1\" in\n  status) if [ -f '{m}' ]; then cat '{m}'; exit 0; else exit 3; fi ;;\n  machine) if [ -f '{m}.machine' ]; then cat '{m}.machine'; else exit 3; fi ;;\n  link-command) echo \"$*\" >> '{m}.link'; if [ \"$2\" = --remove ]; then echo '{{\"path\":\"p\",\"linked\":false}}'; else echo '{{\"path\":\"p\",\"linked\":true}}'; fi ;;\n  *) exit 2 ;;\nesac\n",
                 m = marker.display()
             ),
         );
@@ -69,6 +69,15 @@ impl Stub {
                 "{{\"version\":\"{}\",\"releaseChannel\":\"dev\",\"name\":null,\"pid\":{pid},\"uptimeMs\":5,\"links\":0,\"ownerLinks\":0,\"runs\":{runs},\"terminals\":{terminals}}}\n",
                 self.version
             ),
+        )
+        .unwrap();
+    }
+
+    /// 이 바이너리의 `machine` 이 낼 id(없으면 3 — 키 없음).
+    fn machine(&self, id: &str) {
+        std::fs::write(
+            format!("{}.machine", self.marker.display()),
+            format!("{id}\n"),
         )
         .unwrap();
     }
@@ -290,7 +299,12 @@ async fn a_daemon_that_does_not_answer_is_not_gone() {
     // 조사와 끝내기 사이에 답이 끊긴 경우도 원격 셸이 「gone」 으로 읽지 않는다.
     let pid = daemon.pid.to_string();
     let output = installer
-        .run("stop", STOP, &["pitwall-relay-dev-2.0.0", &pid], None)
+        .run(
+            "stop",
+            STOP,
+            &["any", "pitwall-relay-dev-2.0.0", &pid],
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -358,6 +372,7 @@ async fn the_clean_script_refuses_anything_but_relay_binaries() {
     std::fs::write(remote.relay_dir().join("pitwall-relay-x"), b"").unwrap();
     let installer = installer(dir.path(), &remote);
     let names = [
+        "any",
         "state.db",
         "device.key",
         "pairings.json",
@@ -369,7 +384,7 @@ async fn the_clean_script_refuses_anything_but_relay_binaries() {
         .await
         .unwrap();
     let text = String::from_utf8_lossy(&output.stdout);
-    for name in &names[..4] {
+    for name in &names[1..5] {
         assert!(
             text.contains(&format!("pitwall-clean refused {name}")),
             "{text}"
@@ -443,7 +458,7 @@ async fn an_old_daemon_is_stopped_only_as_the_person_saw_it() {
         .run(
             "stop",
             STOP,
-            &[&format!("pitwall-relay-dev-{CURRENT}"), &pid],
+            &["any", &format!("pitwall-relay-dev-{CURRENT}"), &pid],
             None,
         )
         .await
@@ -469,7 +484,12 @@ async fn the_stop_script_signals_only_the_pid_the_daemon_reports() {
     let installer = installer(dir.path(), &remote);
     let pid = bystander.pid.to_string();
     let output = installer
-        .run("stop", STOP, &["pitwall-relay-dev-2.0.0", &pid], None)
+        .run(
+            "stop",
+            STOP,
+            &["any", "pitwall-relay-dev-2.0.0", &pid],
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -504,7 +524,9 @@ async fn the_stop_script_refuses_paths_and_uploads() {
         "pitwall-relay-dev-2.0.0.part.1",
         "pitwall-relay-x/../pitwall-relay-y",
     ] {
-        let refused = installer.run("stop", STOP, &[name, &pid], None).await;
+        let refused = installer
+            .run("stop", STOP, &["any", name, &pid], None)
+            .await;
         assert!(
             matches!(refused, Err(InstallError::Remote { code: Some(64), .. })),
             "{name}: {refused:?}"
@@ -540,7 +562,7 @@ async fn the_clean_script_keeps_an_upload_in_progress() {
     std::fs::write(remote.relay_dir().join(&live), b"half").unwrap();
     let installer = installer(dir.path(), &remote);
     let output = installer
-        .run("clean-up", CLEAN, &[&live], None)
+        .run("clean-up", CLEAN, &["any", &live], None)
         .await
         .unwrap();
     assert!(
@@ -599,4 +621,63 @@ async fn the_survey_reads_the_command_link_and_only_this_version_moves_it() {
         installer.survey().await.unwrap().command,
         CommandLink::Other
     );
+}
+
+/// 리뷰 R-1: ssh 로 닿은 곳의 이 판 Relay 가 링크가 증명한 머신이 아니면(다른 id · 키 없음 · 이 판 없음) 조사 · 정리 · 끝내기 · 링크
+/// 바꾸기 스크립트가 아무것도 하지 않는다 — 바이너리가 남고, 데몬이 살고, `link-command` 가 불리지 않는다. 같은 머신이면 그대로 돈다.
+#[tokio::test]
+async fn scripts_do_nothing_on_another_machine() {
+    let dir = tempfile::tempdir().unwrap();
+    let remote = FakeRemote::new(dir.path(), "home", true);
+    let current = Stub::new(dir.path(), &remote, CURRENT);
+    Stub::new(dir.path(), &remote, "2.0.0");
+    Stub::new(dir.path(), &remote, "1.0.0");
+    let old = Stub::new(dir.path(), &remote, "0.9.0");
+    let daemon = Sleeper::start();
+    old.run(daemon.pid, 1, 0);
+    let unchecked = installer(dir.path(), &remote).survey().await.unwrap();
+    assert_eq!(unchecked.to_remove().len(), 2, "{unchecked:?}");
+    let seen = unchecked.old_daemons()[0].clone();
+    let before = files(&remote);
+
+    // 키가 없는 Relay(답 없음) → 다른 id 를 말하는 Relay.
+    for (answer, found) in [(None, ""), (Some("SHA256:other"), "SHA256:other")] {
+        if let Some(id) = answer {
+            current.machine(id);
+        }
+        let on = || installer(dir.path(), &remote).expect_machine("SHA256:linked");
+        let other = |r: Result<(), InstallError>| match r {
+            Err(InstallError::OtherMachine { found: f }) => assert_eq!(f, found),
+            other => panic!("expected another machine, got {other:?}"),
+        };
+        other(on().survey().await.map(|_| ()));
+        other(on().clean(&unchecked).await.map(|_| ()));
+        other(on().stop_old(&seen).await.map(|_| ()));
+        other(on().link_command(true).await.map(|_| ()));
+        // 끝내기 스크립트 자체도(조사를 거치지 않고) 머리에서 멈춘다.
+        let pid = daemon.pid.to_string();
+        let output = on()
+            .run("stop", STOP, &["SHA256:linked", &seen.file, &pid], None)
+            .await
+            .unwrap();
+        assert!(marked(&output.stdout, "pitwall-stop ").is_none());
+        assert_eq!(
+            files(&remote),
+            before,
+            "removed a binary on another machine"
+        );
+        assert!(daemon.alive(), "stopped a daemon on another machine");
+        assert!(
+            current.link_calls().is_empty(),
+            "linked the command on another machine"
+        );
+    }
+
+    // 링크의 머신이면 그대로 돈다.
+    current.machine("SHA256:linked");
+    let same = installer(dir.path(), &remote).expect_machine("SHA256:linked");
+    let survey = same.survey().await.unwrap();
+    let cleaned = same.clean(&survey).await.unwrap();
+    assert_eq!(cleaned.removed, ["pitwall-relay-dev-1.0.0"]);
+    assert!(same.link_command(true).await.unwrap());
 }
