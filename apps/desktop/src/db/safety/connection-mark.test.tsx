@@ -136,3 +136,33 @@ describe("TlsMark", () => {
     },
   );
 });
+
+// 18-m7-plan M7-12 ③ · M7-11b: 활성 체크아웃이 다른 머신이면 그 자리의 연결 표지(탐색기 · 상태바)에 머신 이름이 글로 붙는다 — 두 머신에
+// 같은 이름의 연결이 있다. 이 머신이면 붙지 않고, 켜지 않은 자리(다른 문맥이 머신을 정하는 다이얼로그)는 붙이지 않는다.
+describe("ConnectionMark on another machine", () => {
+  const mount = async (machine: string, onMachine: boolean) => {
+    const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+    const { TargetMachineProvider } = await import("../../checkout/machine-mark");
+    return render(
+      <QueryClientProvider client={new QueryClient()}>
+        <TargetMachineProvider machine={machine}>
+          <ConnectionMark name="prod-billing" production onMachine={onMachine} />
+        </TargetMachineProvider>
+      </QueryClientProvider>,
+    );
+  };
+
+  it("names the machine only when the checkout is on another machine and the place asks for it", async () => {
+    const remote = await mount("SHA256:mini", true);
+    expect(remote.querySelector("[data-machine]")?.textContent).toBe("SHA256:mini");
+    expect(remote.querySelector("[data-machine]")?.getAttribute("aria-label")).toBe(
+      "머신: SHA256:mini",
+    );
+    act(() => root?.unmount());
+    document.body.innerHTML = "";
+    expect((await mount("local", true)).querySelector("[data-machine]")).toBeNull();
+    act(() => root?.unmount());
+    document.body.innerHTML = "";
+    expect((await mount("SHA256:mini", false)).querySelector("[data-machine]")).toBeNull();
+  });
+});

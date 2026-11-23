@@ -177,6 +177,7 @@ export function DbStatusItem() {
     >
       <Database size={11} aria-hidden />
       <ConnectionMark
+        onMachine
         name={active.name}
         production={active.production}
         readOnly={active.readOnly}

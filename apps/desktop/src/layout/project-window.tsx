@@ -165,7 +165,7 @@ import { useRemoteWindowClose } from "../terminal/remote-close";
 import { windowTerminals } from "../terminal/terminal-tabs";
 import { TerminalFeature, TerminalToolWindow } from "../terminal/terminal-tool-window";
 import { ThemeSwitcher, useTheme } from "../theme/theme-switcher";
-import { TrustProvider } from "../trust/trust";
+import { CheckoutTrustPrompt, TrustProvider } from "../trust/trust";
 import {
   applyPanelTitles,
   type Dock,
@@ -1115,6 +1115,10 @@ function ProjectWindowBody({
                     </div>
                     {/* 기능은 활성 체크아웃의 연결 · 그 머신 프로젝트로 돈다(M7-11 ①). 머신이 바뀌면 다시 그린다 — 탭(도킹 영역)은 남는다. */}
                     <Fragment key={active.machine}>
+                      {/* 다른 머신 체크아웃의 신뢰 묻기(그 머신 이름을 문장에 — M7-12 ① · M7-11b). 이 머신은 창의 `TrustProvider`. */}
+                      {activeProject !== undefined && active.machine !== LOCAL_MACHINE && (
+                        <CheckoutTrustPrompt projectId={activeProject} />
+                      )}
                       {activeProject !== undefined && <FileWatch projectId={activeProject} />}
                       {activeProject !== undefined && <GitStatusWatch projectId={activeProject} />}
                       {activeProject !== undefined && (

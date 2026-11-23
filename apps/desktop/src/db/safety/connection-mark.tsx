@@ -10,6 +10,7 @@ import type { TlsStatus } from "@pitwall/rpc-client";
 import { ShieldAlert, ShieldOff } from "lucide-react";
 import type { CSSProperties } from "react";
 
+import { MachineMark, useTargetMachine } from "../../checkout/machine-mark";
 import { DB_TAG_TOKENS, tokenCssVar } from "../../theme/tokens";
 import { type DbSafetyStrings, useDbSafetyStrings } from "./strings";
 
@@ -66,12 +67,20 @@ const LABEL_CLASS: Record<"production" | "readOnly", string> = {
  */
 export function ConnectionMark({
   name,
+  onMachine = false,
   ...input
 }: DbConnectionMarkInput & {
   /** 연결 이름. 없으면 점과 라벨만. */
   name?: string;
+  /**
+   * 그 연결이 든 체크아웃의 머신(`useTargetMachine` — 활성 체크아웃 아래)이 다른 머신이면 그 이름을 함께 단다(18-m7-plan M7-12 ③ ·
+   * M7-11b — 이름이 같은 연결이 두 머신에 있다). 활성 체크아웃 아래 그리는 자리(탐색기 · 상태바)만 켠다 — 승인 다이얼로그처럼 다른
+   * 문맥이 그 머신을 정하는 자리는 그 자리가 단다.
+   */
+  onMachine?: boolean;
 }) {
   const T = useDbSafetyStrings().label;
+  const target = useTargetMachine();
   const color = connectionColor(input);
   return (
     <span
@@ -89,6 +98,7 @@ export function ConnectionMark({
         />
       )}
       {name !== undefined && <span className="truncate">{name}</span>}
+      {onMachine && <MachineMark machine={target} />}
       {connectionLabels(input, T).map((label) => (
         <span
           key={label.kind}

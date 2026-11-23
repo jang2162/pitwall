@@ -169,6 +169,7 @@ function Label({
       return (
         <>
           <ConnectionMark
+            onMachine
             name={config?.name ?? node.connectionId}
             production={config?.production}
             readOnly={config?.readOnly}

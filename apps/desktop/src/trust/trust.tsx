@@ -24,6 +24,7 @@ import {
 import { useKeymap, useKeymapPopup, useRegisterActions } from "../keymap/keymap-provider";
 import { type ProjectStrings, useProjectStrings } from "../layout/strings";
 import { type NotificationInput, useNotify } from "../notifications/notifications";
+import { TargetMachineLine } from "../checkout/machine-mark";
 import { useHost, useRpcQuery } from "../rpc/host";
 import { STATUS_SLOTS, useStatusBarItem } from "../status-bar/status-bar";
 
@@ -144,6 +145,8 @@ function TrustDialog({
           className="sheet-top fixed left-1/2 flex w-[520px] max-w-[94vw] -translate-x-1/2 flex-col gap-3 rounded-b-md border border-t-0 border-ui-border bg-ui-panel px-4 py-3 text-ui-foreground shadow-lg"
         >
           <Dialog.Title className="text-sm font-semibold">{T.title(name)}</Dialog.Title>
+          {/* 다른 머신의 체크아웃이면 그 머신 이름(18-m7-plan M7-12 ① · M7-11b). 이 머신이면 그리지 않는다. */}
+          <TargetMachineLine />
           <Dialog.Description className="whitespace-pre-line text-ui-muted-foreground">
             {T.body}
           </Dialog.Description>
@@ -255,4 +258,41 @@ export function TrustProvider({ projectId, children }: { projectId: string; chil
       {open && <TrustDialog name={project.data?.name ?? projectId} busy={busy} onAnswer={answer} />}
     </TrustContext>
   );
+}
+
+/**
+ * 활성 체크아웃이 다른 머신일 때 그 머신 프로젝트의 신뢰 묻기(18-m7-plan M7-12 ① · M7-11b). 신뢰는 그 머신의 레지스트리에 있다 — 그
+ * 머신 연결(활성 체크아웃 연결 — `useHost`)로 `project.claimTrustPrompt` 를 부르고(한 번만 뜬다 — 위 머리 주석) 다이얼로그 문장에 그
+ * 머신 이름을 넣는다(`TargetMachineLine` — 활성 체크아웃 아래에 둔다). 이 창의 로컬 프로젝트 신뢰(상태바 항목 · 액션 —
+ * `TrustProvider`)는 그대로 둔다 — 다른 머신의 신뢰 상태바 항목 · 액션은 아직 없다.
+ */
+export function CheckoutTrustPrompt({ projectId }: { projectId: string }) {
+  const { client } = useHost();
+  const strings = useProjectStrings().trust;
+  const notify = useNotify();
+  const project = useRpcQuery("project.get", { id: projectId });
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!client) return;
+    client.call("project.claimTrustPrompt", { id: projectId }).then(
+      (first) => first && setOpen(true),
+      (e: unknown) => console.warn("[trust] cannot claim the trust prompt", e),
+    );
+  }, [client, projectId]);
+  if (!open) return null;
+  const answer = (value: boolean) => {
+    if (!client) return;
+    setBusy(true);
+    client
+      .call("project.setTrust", { id: projectId, trusted: value })
+      .catch((e: unknown) =>
+        notify({ level: "error", title: strings.saveFailed, body: errorBody(e) }),
+      )
+      .finally(() => {
+        setBusy(false);
+        setOpen(false);
+      });
+  };
+  return <TrustDialog name={project.data?.name ?? projectId} busy={busy} onAnswer={answer} />;
 }

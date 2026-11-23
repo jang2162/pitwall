@@ -43,6 +43,8 @@ const fake = vi.hoisted(() => ({
   approvals: new Map<number, { machine: string; projectId: unknown }>(),
   /** `bundle.list` 의 답(이 머신 연결만). */
   bundles: [] as unknown[],
+  /** 다른 머신이 신뢰 묻기를 처음 한 번 넘겨주는가(`project.claimTrustPrompt` — 실제 Host 는 한 번만 `true`). */
+  remoteClaim: false,
   /** 연결 대상(JSON) → 받은 호출(메서드 · 인자). */
   byTarget: new Map<string, { method: string; params: Record<string, unknown> }[]>(),
 }));
@@ -78,6 +80,37 @@ vi.mock("../tauri-transport", async () => {
           });
         const path = String(params.path ?? "");
         const version = (p: string) => `v:${files.get(p)}`;
+        // 다른 머신의 신뢰는 그 머신 레지스트리의 그 머신 프로젝트(`r1`)만 안다 — 다른 id 는 실제 Host 처럼 invalid params.
+        if (
+          machine !== "local" &&
+          m.method.startsWith("project.") &&
+          m.method !== "project.state.get"
+        ) {
+          if (params.id !== "r1")
+            return send({
+              id: m.id,
+              error: { code: -32602, message: `unknown project \`${String(params.id)}\`` },
+            });
+          if (m.method === "project.claimTrustPrompt") {
+            const first = fake.remoteClaim;
+            fake.remoteClaim = false;
+            return reply(first);
+          }
+          if (m.method === "project.setTrust") return reply(null);
+          if (m.method === "project.get")
+            return reply({
+              id: "r1",
+              name: "demo-on-mini",
+              host: "local",
+              roots: ["/work/demo"],
+              favorite: false,
+              tags: [],
+              configMode: "repository",
+              slug: "demo",
+              createdAt: 1,
+              openedAt: null,
+            });
+        }
         switch (m.method) {
           case "i18n.get":
             return reply(i18nState("ko"));
@@ -323,6 +356,7 @@ beforeEach(() => {
   fake.linkStreams = 0;
   fake.approvals = new Map();
   fake.byTarget = new Map();
+  fake.remoteClaim = false;
   fake.bundles = [
     {
       id: "b-1",
@@ -641,4 +675,33 @@ it("opens the add-checkout screen for this window's bundle from the branch popup
   expect(dialog?.textContent).toContain("「demo」 에 다른 머신의 체크아웃을 더합니다");
   // 이미 그 묶음의 멤버인 머신(mini)은 고를 수 없다 — 다른 머신이 없다.
   expect(dialog?.textContent).toContain("고를 머신이 없다");
+});
+
+// 이월(M7-12 ① — 18-m7-plan M7-11b): 활성 체크아웃이 다른 머신이면 그 머신 프로젝트의 신뢰를 묻는다. 다이얼로그 문장에 그 머신 이름이
+// 있고, 답은 **그 머신 연결로 그 머신 프로젝트**에 간다 — 이 머신 프로젝트의 신뢰를 바꾸지 않는다.
+it("asks to trust another machine's checkout naming that machine, and answers on that machine", async () => {
+  fake.remoteClaim = true;
+  await mount();
+  await push({ worktree: REMOTE_MAIN });
+  const dialog = await vi.waitFor(() => {
+    const found = document.querySelector<HTMLElement>("[data-testid=trust-dialog]");
+    expect(found).not.toBeNull();
+    return found!;
+  });
+  expect(dialog.textContent).toContain("demo-on-mini");
+  expect(dialog.querySelector("[data-testid=target-machine]")?.textContent).toBe(
+    "mini 의 체크아웃에서 합니다",
+  );
+  const trustButton = [...dialog.querySelectorAll("button")].find((b) => b.textContent === "신뢰");
+  await act(async () => trustButton!.click());
+  await settle();
+  const sets = (target: unknown) =>
+    (fake.byTarget.get(JSON.stringify(target)) ?? []).filter(
+      (c) => c.method === "project.setTrust",
+    );
+  expect(sets({ member: { host: MINI, project: "r1" } }).map((c) => c.params)).toEqual([
+    { id: "r1", trusted: true },
+  ]);
+  expect(sets({ projectId: "p1" })).toEqual([]);
+  expect(document.querySelector("[data-testid=trust-dialog]")).toBeNull();
 });
