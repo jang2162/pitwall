@@ -6,6 +6,7 @@
 // - 해제는 한 번 더 묻는다. 이 Desktop 이 그 Relay 의 마지막 owner 기기면, 해제한 뒤 그 Relay 에 닿는 길은 SSH 로 다시 페어링하는
 //   것뿐이라는 경고를 보인다(막지는 않는다 — 메인 판정).
 // - 코드는 화면에만 보인다(로그 · 콘솔에 쓰지 않는다). 칸을 닫으면 잊는다.
+// - 그 Relay 의 직접 연결 듣기(`listen` — 18-m7-plan M7-24 ②)를 보이고, `"all"`(공인 주소 포함)이면 경고한다.
 
 import type { RelayDevice, RelayPairCode, Role } from "@pitwall/rpc-client";
 import { useEffect, useMemo, useState } from "react";
@@ -90,6 +91,18 @@ export function RemoteDevices({
       className="flex flex-col gap-1 border-t border-ui-border pt-1 text-[12px]"
     >
       {devices.isError && <div role="alert">{T.unreadable}</div>}
+      {devices.data?.listen?.wide && (
+        <div role="alert" data-testid="relay-listen-wide" className="text-ui-accent">
+          {T.wide}
+        </div>
+      )}
+      {devices.data?.listen && (
+        <div data-testid="relay-listen" className="text-ui-muted-foreground">
+          {devices.data.listen.addresses.length > 0
+            ? T.listening(devices.data.listen.addresses.join(", "))
+            : T.notListening}
+        </div>
+      )}
       <ul className="flex flex-col gap-0.5">
         {list.map((device) => {
           const last = isLastOwner(list, device);

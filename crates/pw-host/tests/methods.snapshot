@@ -274,6 +274,7 @@ remote.prompt.answer Unary Write {Owner}
 remote.prompts Stream Read {Owner}
 remote.relays Unary Read {Owner}
 remote.resident Unary Write {Owner}
+remote.residentStatus Unary Read {Owner}
 remote.retry Unary Write {Owner}
 remote.stopOld Unary Write {Owner}
 remote.trustMachine Unary Write {Owner}

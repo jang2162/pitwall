@@ -4,11 +4,13 @@
 
 import type { Platform } from "@pitwall/keymap";
 import type {
+  RemoteDiscoverySource,
   RemoteFailureKind,
   RemoteHostSource,
   RemoteLastLinkState,
   RemoteStage,
   RemoteStopOutcome,
+  RemoteVia,
   Role,
 } from "@pitwall/rpc-client";
 import { useLocalization } from "@fluent/react";
@@ -111,6 +113,7 @@ export function welcomeStrings(t: Translate) {
       trust: t("welcome-remote-trust"),
       stages: t("welcome-remote-stages"),
       stage: {
+        direct: t("welcome-remote-stage-direct"),
         ssh: t("welcome-remote-stage-ssh"),
         install: t("welcome-remote-stage-install"),
         daemon: t("welcome-remote-stage-daemon"),
@@ -168,6 +171,32 @@ export function welcomeStrings(t: Translate) {
       },
       command: t("welcome-remote-command"),
       commandOther: t("welcome-remote-command-other"),
+      via: {
+        direct: t("welcome-remote-via-direct"),
+        ssh: t("welcome-remote-via-ssh"),
+      } satisfies Record<RemoteVia, string>,
+      resident: t("welcome-remote-resident"),
+      direct: {
+        open: t("welcome-remote-direct-open"),
+        title: t("welcome-remote-direct-title"),
+        hint: t("welcome-remote-direct-hint"),
+        search: t("welcome-remote-direct-search"),
+        searching: t("welcome-remote-direct-searching"),
+        source: {
+          tailscale: t("welcome-remote-direct-source-tailscale"),
+          lan: t("welcome-remote-direct-source-lan"),
+        } satisfies Record<RemoteDiscoverySource, string>,
+        listening: t("welcome-remote-direct-listening"),
+        notListening: t("welcome-remote-direct-not-listening"),
+        nothing: t("welcome-remote-direct-nothing"),
+        address: t("welcome-remote-direct-address"),
+        port: t("welcome-remote-direct-port"),
+        code: t("welcome-remote-direct-code"),
+        nickname: t("welcome-remote-direct-nickname"),
+        pair: t("welcome-remote-direct-pair"),
+        cancel: t("welcome-remote-direct-cancel"),
+        paired: (name: string) => t("welcome-remote-direct-paired", { name }),
+      },
       showDevices: t("welcome-remote-devices-show"),
       hideDevices: t("welcome-remote-devices-hide"),
       devices: {
@@ -194,6 +223,9 @@ export function welcomeStrings(t: Translate) {
         codeRole: t("welcome-remote-devices-code-role"),
         showCode: t("welcome-remote-devices-show-code"),
         codeHint: (until: string) => t("welcome-remote-devices-code-hint", { until }),
+        wide: t("welcome-remote-devices-wide"),
+        listening: (addresses: string) => t("welcome-remote-devices-listening", { addresses }),
+        notListening: t("welcome-remote-devices-not-listening"),
       },
     },
     notices: {

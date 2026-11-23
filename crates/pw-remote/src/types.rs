@@ -614,7 +614,7 @@ pub struct RemoteDiscovery {
     pub notes: Vec<String>,
 }
 
-/// 「이 머신에 상주시키기」(18-m7-plan M7-24 ⑤ — 사람이 고를 때만). `on` 이 없으면 지금 상태만 읽는다.
+/// 「이 머신에 상주시키기」(18-m7-plan M7-24 ⑤ — 사람이 고를 때만).
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
@@ -622,8 +622,17 @@ pub struct RemoteDiscovery {
 pub struct RemoteResidentParams {
     pub name: String,
     pub machine: String,
-    #[serde(default)]
-    pub on: Option<bool>,
+    pub on: bool,
+}
+
+/// 그 머신의 이 판 Relay 가 상주인가(읽기만).
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteResidentStatusParams {
+    pub name: String,
+    pub machine: String,
 }
 
 #[derive(

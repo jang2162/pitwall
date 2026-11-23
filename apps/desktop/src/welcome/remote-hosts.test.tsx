@@ -9,6 +9,7 @@ import type {
   KeymapFile,
   RemoteHostInfo,
   RelayDevice,
+  RelayListen,
   RemoteOldRelay,
   RemoteRelays,
   RemoteStatus,
@@ -47,6 +48,10 @@ const host = vi.hoisted(() => ({
   devices: [] as RelayDevice[],
   /** `remote.pairCode` 가 돌려줄 만료 시각(없으면 5분 뒤). */
   codeExpiresAt: undefined as number | undefined,
+  /** 그 Relay 의 직접 연결 듣기(`remote.devices` 의 `listen` — 18-m7-plan M7-24). */
+  listen: null as RelayListen | null,
+  /** 그 머신의 Relay 가 상주인가(`remote.residentStatus`). */
+  resident: false,
 }));
 
 vi.mock("../tauri-transport", async () => {
@@ -132,7 +137,8 @@ vi.mock("../tauri-transport", async () => {
                 id: m.id,
                 error: { code: -32602, message: "not connected to that machine" },
               });
-            if (m.method === "remote.devices") return reply({ devices: host.devices });
+            if (m.method === "remote.devices")
+              return reply({ devices: host.devices, listen: host.listen });
             if (m.method === "remote.unpairDevice") {
               const before = host.devices.length;
               host.devices = host.devices.filter((d) => d.device !== p.device);
@@ -167,6 +173,41 @@ vi.mock("../tauri-transport", async () => {
             }
             host.relays = { ...host.relays, old: host.remoteOld };
             return reply(outcome);
+          }
+          case "remote.discover":
+            return reply({
+              found: [
+                {
+                  source: "tailscale",
+                  label: "mini",
+                  address: "mini.tail1234.ts.net",
+                  port: 7420,
+                  listening: true,
+                },
+                {
+                  source: "lan",
+                  label: "192.168.1.30",
+                  address: "192.168.1.30",
+                  port: 7500,
+                  listening: false,
+                },
+              ],
+              notes: [],
+            });
+          case "remote.pairDirect": {
+            const p = m.params as { code: string; nickname: string };
+            if (p.code !== "246810")
+              return send({
+                id: m.id,
+                error: { code: -32000, message: "the relay refused the code" },
+              });
+            return reply({ name: p.nickname, machine: "SHA256:box", role: "owner" });
+          }
+          case "remote.residentStatus":
+            return reply({ resident: host.resident });
+          case "remote.resident": {
+            host.resident = (m.params as { on: boolean }).on;
+            return reply({ resident: host.resident });
           }
           case "remote.prompts": {
             const streamId = next++;
@@ -226,6 +267,9 @@ function mini(
     machine: null,
     status,
     lastLink: null,
+    via: null,
+    directPort: 7420,
+    ssh: true,
   };
 }
 
@@ -242,6 +286,8 @@ beforeEach(() => {
   host.forwards = [];
   host.devices = [];
   host.codeExpiresAt = undefined;
+  host.listen = null;
+  host.resident = false;
 });
 
 afterEach(() => {
@@ -400,6 +446,7 @@ it("asks the remote ssh host key question with 취소 focused first and answers 
 
 it("marks the stages from the status", () => {
   expect(stageMarks({ state: "connected", machine: "m" })).toEqual({
+    direct: "done",
     ssh: "done",
     install: "done",
     daemon: "done",
@@ -753,4 +800,122 @@ it("takes an expired pairing code off the screen", async () => {
     expect(document.querySelector("[data-testid=pairing-code]")?.textContent).toContain("042 917"),
   );
   await vi.waitFor(() => expect(document.querySelector("[data-testid=pairing-code]")).toBeNull());
+});
+
+// ── 직접 연결(18-m7-plan M7-24) ──────────────────────────────────────────────────────────────────────────────
+
+const pairs = () => host.calls.filter((c) => c.method === "remote.pairDirect").map((c) => c.params);
+
+async function type(input: HTMLInputElement, value: string) {
+  await act(async () => {
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    set.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await settle();
+}
+
+function field(label: string): HTMLInputElement {
+  const found = [...document.querySelectorAll("[data-testid=remote-direct] label")].find((l) =>
+    l.textContent?.startsWith(label),
+  );
+  return found!.querySelector("input")!;
+}
+
+it("pairs a manually placed relay with an address picked from the search and a 6-digit code", async () => {
+  await openRemoteTab();
+  await click(button("코드로 Relay 붙이기…")!);
+  await click(button("검색")!);
+  const picked = document.querySelector('[data-discovered="mini.tail1234.ts.net"]')!;
+  expect(picked.textContent).toContain("Tailscale");
+  expect(picked.textContent).toContain("Relay 가 받는 중");
+  expect(document.querySelector('[data-discovered="192.168.1.30"]')!.textContent).toContain(
+    "응답 없음",
+  );
+  await click(picked);
+  expect(field("주소").value).toBe("mini.tail1234.ts.net");
+  // 이미 있는 이름(mini)은 고를 수 없다 — 다른 이름을 준다.
+  expect(button("페어링")!.disabled).toBe(true);
+  await type(field("이 호스트의 이름"), "mini-direct");
+  await type(field("코드"), "135 79");
+  expect(button("페어링")!.disabled).toBe(true);
+  // 틀린 코드면 Host 의 거절을 보인다(코드는 글에 없다).
+  await type(field("코드"), "135 791");
+  await click(button("페어링")!);
+  await vi.waitFor(() =>
+    expect(document.querySelector("[data-testid=remote-direct] [role=alert]")).not.toBeNull(),
+  );
+  expect(
+    document.querySelector("[data-testid=remote-direct] [role=alert]")!.textContent,
+  ).not.toContain("135791");
+  await type(field("코드"), "246 810");
+  await click(button("페어링")!);
+  await vi.waitFor(() => expect(pairs()).toHaveLength(2));
+  expect(pairs()[1]).toEqual({
+    address: "mini.tail1234.ts.net",
+    port: null,
+    code: "246810",
+    nickname: "mini-direct",
+  });
+  await vi.waitFor(() =>
+    expect(
+      document.querySelector("[data-testid=remote-direct] [role=status]")!.textContent,
+    ).toContain("mini-direct 을 더했다"),
+  );
+  // 코드는 칸에서 지운다.
+  expect(field("코드").value).toBe("");
+});
+
+it("says whether the link stands directly or over ssh", async () => {
+  host.hosts = [{ ...mini(), via: "direct" }];
+  host.relays = relaysOf([]);
+  await connectMini();
+  const via = document.querySelector("[data-testid=remote-via]")!;
+  expect(via.getAttribute("data-via")).toBe("direct");
+  expect(via.textContent).toBe("직접 연결(QUIC)");
+});
+
+it("makes the relay resident only when the person ticks it, and really turns it off", async () => {
+  host.relays = relaysOf([]);
+  await connectMini();
+  const box = await vi.waitFor(() => {
+    const el = document.querySelector<HTMLInputElement>("[data-testid=remote-resident]");
+    expect(el).not.toBeNull();
+    return el!;
+  });
+  expect(box.checked).toBe(false);
+  expect(host.calls.some((c) => c.method === "remote.resident")).toBe(false);
+  await click(box);
+  await vi.waitFor(() => expect(host.resident).toBe(true));
+  expect(host.calls.find((c) => c.method === "remote.resident")?.params).toEqual({
+    name: "mini",
+    machine: "SHA256:abc",
+    on: true,
+  });
+  await vi.waitFor(() =>
+    expect(document.querySelector<HTMLInputElement>("[data-testid=remote-resident]")!.checked).toBe(
+      true,
+    ),
+  );
+  await click(document.querySelector("[data-testid=remote-resident]")!);
+  await vi.waitFor(() => expect(host.resident).toBe(false));
+});
+
+it("has no resident box for a direct-only host", async () => {
+  host.hosts = [{ ...mini(), ssh: false }];
+  host.relays = relaysOf([]);
+  await connectMini();
+  expect(document.querySelector("[data-testid=remote-resident]")).toBeNull();
+});
+
+it("warns in the device section when the relay listens on every interface", async () => {
+  host.devices = [device({ you: true })];
+  host.listen = { port: 7420, interfaces: ["all"], wide: true, addresses: ["203.0.113.7:7420"] };
+  await openDevices();
+  expect(document.querySelector("[data-testid=relay-listen-wide]")!.textContent).toContain(
+    "모든 인터페이스(공인 주소 포함)",
+  );
+  expect(document.querySelector("[data-testid=relay-listen]")!.textContent).toContain(
+    "203.0.113.7:7420",
+  );
 });

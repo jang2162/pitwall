@@ -19,8 +19,9 @@ use crate::{
     RemoteForward, RemoteForwardCloseParams, RemoteForwardOpenParams, RemoteForwardsParams,
     RemoteHostCheck, RemoteHostList, RemoteHostParams, RemoteHosts, RemoteLinkCommandParams,
     RemoteLogEntry, RemotePairCodeParams, RemotePairDirectParams, RemotePairDirectResult,
-    RemotePromptAnswerParams, RemoteRelays, RemoteResident, RemoteResidentParams, RemoteStatus,
-    RemoteStopOldParams, RemoteStopOutcome, RemoteTrustMachineParams, RemoteUnpairDeviceParams,
+    RemotePromptAnswerParams, RemoteRelays, RemoteResident, RemoteResidentParams,
+    RemoteResidentStatusParams, RemoteStatus, RemoteStopOldParams, RemoteStopOutcome,
+    RemoteTrustMachineParams, RemoteUnpairDeviceParams,
 };
 
 rpc_method! {
@@ -168,12 +169,20 @@ rpc_method! {
         roles: [Owner],
     }
 
-    /// 「이 머신에 상주시키기」(18-m7-plan M7-24 ⑤ — 사람이 고를 때만, 결정 M7-D2). `on` 이 없으면 지금 상태만. 그 호스트가 지금
-    /// `machine` 에 붙어 있고 SSH 로 닿을 때만.
+    /// 「이 머신에 상주시키기」(18-m7-plan M7-24 ⑤ — 사람이 고를 때만, 결정 M7-D2): 그 머신의 이 판 Relay 를 launchd · systemd user
+    /// 로 상주시키거나(`on`) 내린다. 그 호스트가 지금 `machine` 에 붙어 있고 SSH 로 닿을 때만.
     pub RemoteResidentSet: "remote.resident" {
         params: RemoteResidentParams,
         result: RemoteResident,
         tier: Write,
+        roles: [Owner],
+    }
+
+    /// 그 머신의 이 판 Relay 가 상주인가(읽기만 — 단위 파일이 있는가).
+    pub RemoteResidentStatus: "remote.residentStatus" {
+        params: RemoteResidentStatusParams,
+        result: RemoteResident,
+        tier: Read,
         roles: [Owner],
     }
 
@@ -367,9 +376,22 @@ pub fn register(router: &mut Router, remote: &RemoteHosts) {
         let r = r.clone();
         async move {
             host_scope(&ctx)?;
-            r.resident(&p.name, &p.machine, p.on).await.map_err(rpc)
+            r.resident(&p.name, &p.machine, Some(p.on))
+                .await
+                .map_err(rpc)
         }
     });
+    let r = remote.clone();
+    router.unary(
+        RemoteResidentStatus,
+        move |ctx, p: RemoteResidentStatusParams| {
+            let r = r.clone();
+            async move {
+                host_scope(&ctx)?;
+                r.resident(&p.name, &p.machine, None).await.map_err(rpc)
+            }
+        },
+    );
     let r = remote.clone();
     router.unary(RemoteDevices, move |ctx, p: RemoteDevicesParams| {
         let r = r.clone();

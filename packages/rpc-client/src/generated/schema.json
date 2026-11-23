@@ -47930,11 +47930,11 @@
       "tier": "read"
     },
     "remote.resident": {
-      "description": "「이 머신에 상주시키기」(18-m7-plan M7-24 ⑤ — 사람이 고를 때만, 결정 M7-D2). `on` 이 없으면 지금 상태만. 그 호스트가 지금\n`machine` 에 붙어 있고 SSH 로 닿을 때만.",
+      "description": "「이 머신에 상주시키기」(18-m7-plan M7-24 ⑤ — 사람이 고를 때만, 결정 M7-D2): 그 머신의 이 판 Relay 를 launchd · systemd user\n로 상주시키거나(`on`) 내린다. 그 호스트가 지금 `machine` 에 붙어 있고 SSH 로 닿을 때만.",
       "kind": "unary",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "「이 머신에 상주시키기」(18-m7-plan M7-24 ⑤ — 사람이 고를 때만). `on` 이 없으면 지금 상태만 읽는다.",
+        "description": "「이 머신에 상주시키기」(18-m7-plan M7-24 ⑤ — 사람이 고를 때만).",
         "properties": {
           "machine": {
             "type": "string"
@@ -47943,11 +47943,45 @@
             "type": "string"
           },
           "on": {
-            "default": null,
-            "type": [
-              "boolean",
-              "null"
-            ]
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "machine",
+          "on"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "resident": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "resident"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "remote.residentStatus": {
+      "description": "그 머신의 이 판 Relay 가 상주인가(읽기만 — 단위 파일이 있는가).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "그 머신의 이 판 Relay 가 상주인가(읽기만).",
+        "properties": {
+          "machine": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
           }
         },
         "required": [
@@ -47971,7 +48005,7 @@
       "roles": [
         "owner"
       ],
-      "tier": "write"
+      "tier": "read"
     },
     "remote.retry": {
       "description": "다시 시도: 쓰는 창이 있으면 기다림 없이 지금 붙는다.",

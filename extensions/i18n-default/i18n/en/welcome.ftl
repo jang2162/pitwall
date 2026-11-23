@@ -107,6 +107,7 @@ welcome-remote-show-log = Connection log
 welcome-remote-hide-log = Hide log
 welcome-remote-trust = Trust this new machine
 welcome-remote-stages = Connection stages
+welcome-remote-stage-direct = Direct
 welcome-remote-stage-ssh = SSH
 welcome-remote-stage-install = Install
 welcome-remote-stage-daemon = Daemon
@@ -184,3 +185,30 @@ welcome-remote-devices-code-role = Role of the new device
 welcome-remote-devices-show-code = Show a code
 # $until: when the code ends
 welcome-remote-devices-code-hint = Enter this code on the new device — until { $until }, three tries, one use. Showing a new code ends this one.
+
+## Direct links (18-m7-plan M7-24) — QUIC + Noise, code pairing, search, resident relay
+welcome-remote-via-direct = Direct (QUIC)
+welcome-remote-via-ssh = SSH
+welcome-remote-resident = Keep the relay running on this machine (starts with the login — off, it lives only while started over SSH)
+welcome-remote-devices-wide = This relay accepts direct links on every interface, public addresses included — relay.toml [listen] interfaces has "all".
+# $addresses: the listening addresses
+welcome-remote-devices-listening = Direct links on: { $addresses }
+welcome-remote-devices-not-listening = No direct links (SSH only).
+welcome-remote-direct-open = Add a relay with a code…
+welcome-remote-direct-title = Add a relay with a code
+welcome-remote-direct-hint = Enter the 6-digit code shown by `pitwall-relay pair` on the remote machine (or by the device section of a connected Desktop). Pick the address from the search or type it.
+welcome-remote-direct-search = Search
+welcome-remote-direct-searching = Searching…
+welcome-remote-direct-source-tailscale = Tailscale
+welcome-remote-direct-source-lan = LAN
+welcome-remote-direct-listening = Relay answering
+welcome-remote-direct-not-listening = No answer
+welcome-remote-direct-nothing = Nothing found — type the address.
+welcome-remote-direct-address = Address
+welcome-remote-direct-port = Port
+welcome-remote-direct-code = Code (6 digits)
+welcome-remote-direct-nickname = Name for this host
+welcome-remote-direct-pair = Pair
+welcome-remote-direct-cancel = Close
+# $name: the added host name
+welcome-remote-direct-paired = Added { $name } — it connects directly to that machine only.

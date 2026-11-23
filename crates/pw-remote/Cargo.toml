@@ -28,7 +28,15 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 specta = { workspace = true, features = ["derive"] }
 # net: 포트 포워딩의 로컬 루프백 듣기(18-m7-plan M7-22). process · io-util: 직접 연결 검색의 Tailscale 로컬 API · CLI(M7-24).
-tokio = { workspace = true, features = ["rt", "sync", "macros", "time", "net", "process", "io-util"] }
+tokio = { workspace = true, features = [
+  "rt",
+  "sync",
+  "macros",
+  "time",
+  "net",
+  "process",
+  "io-util",
+] }
 # 코드로 페어링한 직접 연결 호스트를 전역 설정의 `[[remote_hosts]]` 에 덧붙인다(주석 · 서식 보존 — pw-core 와 같은 판).
 toml_edit = "0.25.17"
 tracing = "0.1.44"

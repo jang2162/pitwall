@@ -944,6 +944,10 @@ async fn every_remote_method_takes_only_a_host_connection() {
             "remote.resident",
             serde_json::json!({ "name": "mini", "machine": "SHA256:x", "on": true }),
         ),
+        (
+            "remote.residentStatus",
+            serde_json::json!({ "name": "mini", "machine": "SHA256:x" }),
+        ),
     ];
     let declared: std::collections::BTreeSet<&str> = host
         .router()

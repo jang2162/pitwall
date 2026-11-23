@@ -107,6 +107,7 @@ welcome-remote-show-log = 연결 로그
 welcome-remote-hide-log = 로그 닫기
 welcome-remote-trust = 이 머신을 새로 믿기
 welcome-remote-stages = 연결 단계
+welcome-remote-stage-direct = 직접 연결
 welcome-remote-stage-ssh = SSH
 welcome-remote-stage-install = 설치
 welcome-remote-stage-daemon = 데몬
@@ -190,3 +191,30 @@ welcome-remote-devices-code-role = 새 기기의 role
 welcome-remote-devices-show-code = 코드 띄우기
 # $until: 코드가 끝나는 시각
 welcome-remote-devices-code-hint = 새 기기에서 이 코드를 입력한다 — { $until } 까지, 세 번 틀리면 끝, 한 번 쓰면 끝. 새 코드를 띄우면 이 코드는 끝난다.
+
+## 직접 연결(18-m7-plan M7-24) — QUIC + Noise · 코드 페어링 · 검색 · 상주
+welcome-remote-via-direct = 직접 연결(QUIC)
+welcome-remote-via-ssh = SSH
+welcome-remote-resident = 이 머신에 상주시키기 (로그인할 때 Relay 를 띄운다 — 끄면 SSH 로 띄울 때만 산다)
+welcome-remote-devices-wide = 이 Relay 는 모든 인터페이스(공인 주소 포함)에서 직접 연결을 받는다 — relay.toml 의 [listen] interfaces 에 "all" 이 있다.
+# $addresses: 듣는 주소들
+welcome-remote-devices-listening = 직접 연결을 받는 주소: { $addresses }
+welcome-remote-devices-not-listening = 직접 연결을 받지 않는다(SSH 만).
+welcome-remote-direct-open = 코드로 Relay 붙이기…
+welcome-remote-direct-title = 코드로 Relay 붙이기
+welcome-remote-direct-hint = 원격 머신에서 `pitwall-relay pair` 로 띄운 6자리 코드(또는 붙은 Desktop 의 기기 칸에서 띄운 코드)를 입력한다. 주소는 검색 결과에서 고르거나 친다.
+welcome-remote-direct-search = 검색
+welcome-remote-direct-searching = 찾는 중…
+welcome-remote-direct-source-tailscale = Tailscale
+welcome-remote-direct-source-lan = LAN
+welcome-remote-direct-listening = Relay 가 받는 중
+welcome-remote-direct-not-listening = 응답 없음
+welcome-remote-direct-nothing = 찾은 것이 없다 — 주소를 친다.
+welcome-remote-direct-address = 주소
+welcome-remote-direct-port = 포트
+welcome-remote-direct-code = 코드(6자리)
+welcome-remote-direct-nickname = 이 호스트의 이름
+welcome-remote-direct-pair = 페어링
+welcome-remote-direct-cancel = 닫기
+# $name: 더한 호스트 이름
+welcome-remote-direct-paired = { $name } 을 더했다 — 그 머신에만 직접 연결로 붙는다.

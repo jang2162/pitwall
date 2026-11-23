@@ -1388,10 +1388,14 @@ export type UnaryMethods = {
 	removed: string[],
 } | null };
 	/**
-	 * 「이 머신에 상주시키기」(18-m7-plan M7-24 ⑤ — 사람이 고를 때만, 결정 M7-D2). `on` 이 없으면 지금 상태만. 그 호스트가 지금
-	 * `machine` 에 붙어 있고 SSH 로 닿을 때만.
+	 * 「이 머신에 상주시키기」(18-m7-plan M7-24 ⑤ — 사람이 고를 때만, 결정 M7-D2): 그 머신의 이 판 Relay 를 launchd · systemd user
+	 * 로 상주시키거나(`on`) 내린다. 그 호스트가 지금 `machine` 에 붙어 있고 SSH 로 닿을 때만.
 	 */
 	"remote.resident": { params: RemoteResidentParams; result: RemoteResident };
+	/**
+	 * 그 머신의 이 판 Relay 가 상주인가(읽기만 — 단위 파일이 있는가).
+	 */
+	"remote.residentStatus": { params: RemoteResidentStatusParams; result: RemoteResident };
 	/**
 	 * 다시 시도: 쓰는 창이 있으면 기다림 없이 지금 붙는다.
 	 */
@@ -2076,7 +2080,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"remote.prompt.answer": {"name":"remote.prompt.answer","kind":"unary","tier":"write","roles":["owner"],"params":"RemotePromptAnswerParams","output":"()","doc":" 원격 askpass 질문의 답. 처음 온 답만 받는다.\n","mcp":null,"fileScope":false},
 	"remote.prompts": {"name":"remote.prompts","kind":"stream","tier":"read","roles":["owner"],"params":"()","output":"GitPromptEvent","doc":" 원격 호스트를 붙이는 ssh 의 질문 스트림(호스트 키 확인 · 암호). 열 때 아직 열린 질문이 먼저 온다.\n","mcp":null,"fileScope":false},
 	"remote.relays": {"name":"remote.relays","kind":"unary","tier":"read","roles":["owner"],"params":"RemoteHostParams","output":"Option<RemoteRelays>","doc":" 지금 링크에서 본 원격 Relay(18-m7-plan M7-07b ②): 떠 있는 옛 판 데몬(판 · 실행 · 터미널 · 붙은 링크 수 — 사람이 본 그대로\n `remote.stopOld` 에 싣는다) · 답하지 않는 옛 판 · `pitwall` 명령 링크 · 이번 정리에서 지운 것. 링크가 없거나 아직 보지 않았으면\n `null`. 바뀌면 `remote.relays` 이벤트.\n","mcp":null,"fileScope":false},
-	"remote.resident": {"name":"remote.resident","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteResidentParams","output":"RemoteResident","doc":" 「이 머신에 상주시키기」(18-m7-plan M7-24 ⑤ — 사람이 고를 때만, 결정 M7-D2). `on` 이 없으면 지금 상태만. 그 호스트가 지금\n `machine` 에 붙어 있고 SSH 로 닿을 때만.\n","mcp":null,"fileScope":false},
+	"remote.resident": {"name":"remote.resident","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteResidentParams","output":"RemoteResident","doc":" 「이 머신에 상주시키기」(18-m7-plan M7-24 ⑤ — 사람이 고를 때만, 결정 M7-D2): 그 머신의 이 판 Relay 를 launchd · systemd user\n 로 상주시키거나(`on`) 내린다. 그 호스트가 지금 `machine` 에 붙어 있고 SSH 로 닿을 때만.\n","mcp":null,"fileScope":false},
+	"remote.residentStatus": {"name":"remote.residentStatus","kind":"unary","tier":"read","roles":["owner"],"params":"RemoteResidentStatusParams","output":"RemoteResident","doc":" 그 머신의 이 판 Relay 가 상주인가(읽기만 — 단위 파일이 있는가).\n","mcp":null,"fileScope":false},
 	"remote.retry": {"name":"remote.retry","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteHostParams","output":"()","doc":" 다시 시도: 쓰는 창이 있으면 기다림 없이 지금 붙는다.\n","mcp":null,"fileScope":false},
 	"remote.stopOld": {"name":"remote.stopOld","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteStopOldParams","output":"RemoteStopOutcome","doc":" [옛 판 끝내기](M7-07b ③): 그 호스트가 지금 `machine` 에 붙어 있고, 원격의 그 옛 판 데몬이 사람이 본 `seen` 그대로(pid · 실행 ·\n 터미널 · 붙은 링크 수)일 때만 SIGTERM — 실행 트리는 그 데몬이 끝낸다. 바뀌었으면 끝내지 않고 `changed` 로 지금 것을 돌려준다.\n","mcp":null,"fileScope":false},
 	"remote.trustMachine": {"name":"remote.trustMachine","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteTrustMachineParams","output":"()","doc":" 「이 머신을 새로 믿기」: 그 호스트가 `machineChanged` 이고 `found` 가 `machine` 일 때만 — 묶음 멤버의 머신 id 를 옮기고 새\n id 를 기억한 뒤 다시 붙는다.\n","mcp":null,"fileScope":false},
@@ -9990,11 +9995,17 @@ export type RemoteResident = {
 	resident: boolean,
 };
 
-/**  「이 머신에 상주시키기」(18-m7-plan M7-24 ⑤ — 사람이 고를 때만). `on` 이 없으면 지금 상태만 읽는다. */
+/**  「이 머신에 상주시키기」(18-m7-plan M7-24 ⑤ — 사람이 고를 때만). */
 export type RemoteResidentParams = {
 	name: string,
 	machine: string,
-	on?: boolean | null,
+	on: boolean,
+};
+
+/**  그 머신의 이 판 Relay 가 상주인가(읽기만). */
+export type RemoteResidentStatusParams = {
+	name: string,
+	machine: string,
 };
 
 /**  답하지 않는 옛 판 Relay(데몬이 있는지 모른다 — `status` 가 3 이 아닌 오류). 끝내기 단추가 없다. */

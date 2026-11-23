@@ -11,6 +11,9 @@
 //   붙어 있으면 그 수와 「그 연결도 끊긴다」 를 보이고 단추 글도 다르다. 원격의 `pitwall` 명령 링크(`~/.local/bin/pitwall`)는 사람이
 //   고를 때만 둔다(`remote.linkCommand` — 메인 판정 M7-P12).
 // - 호스트 줄마다 그 호스트의 포트 포워딩 목록 · [끄기](`ForwardList` — 18-m7-plan M7-22 ⑤).
+// - 직접 연결(18-m7-plan M7-24): 붙으면 무엇으로 붙었는지(`via` — 직접 연결(QUIC) · SSH)를 보인다. 직접 연결이 안 되어 SSH 로
+//   떨어졌으면 SSH 다. SSH 로 닿는 호스트에는 [이 머신에 상주시키기](`remote.resident` — 사람이 고를 때만, 결정 M7-D2). 수동 배치
+//   Relay 는 [코드로 Relay 붙이기…](`DirectPair` — 검색 · 주소 · 6자리 코드)로 더한다.
 // - ssh 의 질문(호스트 키 확인 · 암호)은 `RemotePrompts` 가 `remote.prompts` 로 듣고 git 과 같은 askpass 다이얼로그로 묻는다 —
 //   호스트 키 질문은 [취소](처음 포커스) · [예](`yes`)다(git-prompts.tsx).
 
@@ -21,12 +24,14 @@ import type {
   RemoteOldRelay,
   RemoteStage,
   RemoteStatus,
+  RemoteVia,
 } from "@pitwall/rpc-client";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
 import { AddCheckoutDialog, useRefreshBundles } from "../checkout/add-checkout";
 import { RemoteDevices } from "./remote-devices";
+import { DirectPair } from "./remote-direct";
 import { type AskpassPrompt, AskpassDialog } from "../git/git-prompts";
 import { useAppStrings } from "../i18n/app-strings";
 import { useI18n } from "../i18n/i18n-provider";
@@ -40,7 +45,7 @@ const LOG = "[remote]";
 const BUTTON =
   "rounded-sm border border-ui-border bg-ui-panel px-2 py-0.5 hover:bg-ui-hover disabled:opacity-50";
 
-export const STAGES: readonly RemoteStage[] = ["ssh", "install", "daemon", "handshake"];
+export const STAGES: readonly RemoteStage[] = ["direct", "ssh", "install", "daemon", "handshake"];
 
 export type StageMark = "done" | "active" | "failed" | "pending";
 
@@ -96,10 +101,13 @@ export function holdsAfterDisconnect(status: RemoteStatus): boolean {
 /** 그 링크에서 본 원격 Relay: 옛 판 데몬과 [옛 판 끝내기], 답하지 않는 옛 판, `pitwall` 명령 링크. */
 function Relays({
   name,
+  canResident,
   T,
   onError,
 }: {
   name: string;
+  /** SSH 로 닿는 호스트인가(상주 단위는 그 머신의 셸에서 쓴다). */
+  canResident: boolean;
   T: WelcomeStrings["remote"];
   onError(message: string): void;
 }) {
@@ -169,7 +177,51 @@ function Relays({
       {data.command === "other" && (
         <span className="text-ui-muted-foreground">{T.commandOther}</span>
       )}
+      {canResident && <Resident name={name} machine={data.machine} T={T} onError={onError} />}
     </section>
+  );
+}
+
+/** [이 머신에 상주시키기](18-m7-plan M7-24 ⑤ — 사람이 고를 때만). 지금 상태는 `remote.residentStatus` 로 읽는다. */
+function Resident({
+  name,
+  machine,
+  T,
+  onError,
+}: {
+  name: string;
+  machine: string;
+  T: WelcomeStrings["remote"];
+  onError(message: string): void;
+}) {
+  const { client } = useHost();
+  const status = useRpcQuery("remote.residentStatus", { name, machine }, { retry: false });
+  const [busy, setBusy] = useState(false);
+  if (!status.data || !client) return null;
+  const set = (on: boolean) => {
+    setBusy(true);
+    client
+      .call("remote.resident", { name, machine, on })
+      .catch((e: unknown) => {
+        onError(String(e instanceof Error ? e.message : e));
+        console.warn(LOG, "remote.resident failed", e);
+      })
+      .finally(() => {
+        setBusy(false);
+        void status.refetch();
+      });
+  };
+  return (
+    <label className="flex items-center gap-1">
+      <input
+        type="checkbox"
+        data-testid="remote-resident"
+        checked={status.data.resident}
+        disabled={busy}
+        onChange={(e) => set(e.currentTarget.checked)}
+      />
+      {T.resident}
+    </label>
   );
 }
 
@@ -240,7 +292,7 @@ function ConnectionLog({ name, T }: { name: string; T: WelcomeStrings["remote"] 
       {lines.length === 0
         ? T.logEmpty
         : lines.map((line, i) => (
-            <div key={i} className={line.level === "error" ? "text-ui-accent" : ""}>
+            <div key={i} className={line.level === "info" ? "" : "text-ui-accent"}>
               {`${time.format(line.at)} ${line.text}`}
             </div>
           ))}
@@ -251,6 +303,7 @@ function ConnectionLog({ name, T }: { name: string; T: WelcomeStrings["remote"] 
 function HostRow({
   host,
   status,
+  via,
   using,
   logOpen,
   onConnect,
@@ -263,6 +316,8 @@ function HostRow({
 }: {
   host: RemoteHostInfo;
   status: RemoteStatus;
+  /** 붙어 있으면 무엇으로 붙었나(18-m7-plan M7-24 ④). */
+  via: RemoteVia | null;
   using: boolean;
   logOpen: boolean;
   onConnect(): void;
@@ -308,6 +363,15 @@ function HostRow({
         <span role="status" data-testid="remote-status" className="min-w-0 flex-1">
           {statusText(status, T)}
         </span>
+        {(status.state === "connected" || status.state === "resuming") && via && (
+          <span
+            data-testid="remote-via"
+            data-via={via}
+            className="flex-none rounded-sm border border-ui-border px-1 text-[11px]"
+          >
+            {T.via[via]}
+          </span>
+        )}
         {status.state === "machineChanged" ? (
           <button type="button" className={BUTTON} onClick={() => onTrust(status.found)}>
             {T.trust}
@@ -354,7 +418,9 @@ function HostRow({
         <span className="text-[11px] text-ui-muted-foreground">{T.disconnectHolds}</span>
       )}
       <Stages status={status} T={T} />
-      {using && status.state === "connected" && <Relays name={host.name} T={T} onError={onError} />}
+      {using && status.state === "connected" && (
+        <Relays name={host.name} canResident={host.ssh} T={T} onError={onError} />
+      )}
       {/* 그 호스트의 포트 포워딩 · [끄기](18-m7-plan M7-22 ⑤) — 설정의 것은 붙을 때 열리고, 실행 탭의 것은 그 창이 연다. */}
       <ForwardList connection={connection} name={host.name} />
       {using && status.state === "connected" && devicesOpen && (
@@ -387,6 +453,7 @@ export function RemoteHostsPanel({
   const [live, setLive] = useState<Readonly<Record<string, RemoteStatus>>>({});
   const [logOf, setLogOf] = useState<string>();
   const [error, setError] = useState<string>();
+  const [pairing, setPairing] = useState(false);
 
   // `remote.status` 는 owner 만의 토픽이라 Host 범위 묶음 구독(host.tsx)에 넣지 않고 따로 연다.
   useEffect(() => {
@@ -429,9 +496,25 @@ export function RemoteHostsPanel({
   const hosts = list.data?.hosts ?? [];
   return (
     <section aria-label={T.label} className="flex min-h-0 flex-1 flex-col">
-      <p className="flex-none border-b border-ui-border px-3 py-1 text-[12px] text-ui-muted-foreground">
-        {T.addHint}
-      </p>
+      <div className="flex flex-none items-center gap-2 border-b border-ui-border px-3 py-1 text-[12px]">
+        <p className="min-w-0 flex-1 text-ui-muted-foreground">{T.addHint}</p>
+        <button
+          type="button"
+          className={BUTTON}
+          aria-expanded={pairing}
+          onClick={() => setPairing((open) => !open)}
+        >
+          {T.direct.open}
+        </button>
+      </div>
+      {pairing && (
+        <DirectPair
+          T={T.direct}
+          taken={hosts.map((h) => h.name)}
+          onClose={() => setPairing(false)}
+          onPaired={() => void list.refetch()}
+        />
+      )}
       {using.map((name) => (
         <HostUse key={name} name={name} onStatus={onStatus(name)} />
       ))}
@@ -447,6 +530,7 @@ export function RemoteHostsPanel({
               key={host.name}
               host={host}
               status={status}
+              via={host.via ?? null}
               using={isUsing}
               logOpen={logOf === host.name}
               onConnect={() => {
