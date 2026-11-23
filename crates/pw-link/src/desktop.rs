@@ -474,7 +474,8 @@ impl DesktopLink {
         }
         to.check().map_err(HostError::Refused)?;
         let (channel, rx, cancel, accepted) = self.open_channel(Kind::Forward, json!(to)).await?;
-        // Relay 는 연 대상을 답에 싣는다. 청한 것과 다르면(털린 Relay 가 다른 곳에 이었다고 말한다) 받지 않는다(메인 판정 2026-11-24).
+        // Relay 는 연 대상을 답에 싣는다. 청한 것과 다르면 받지 않는다 — 정직한 Relay 의 버그 · 판 어긋남을 잡는 확인이다. 털린
+        // Relay 는 청한 대상을 그대로 되돌려 말하고 아무 데나 이을 수 있으므로 이것은 보호가 아니다(원격 쪽은 그 머신의 신뢰 경계).
         if serde_json::from_value::<ForwardTo>(accepted).ok().as_ref() != Some(to) {
             self.mux
                 .close_channel(channel, "the relay answered another target");

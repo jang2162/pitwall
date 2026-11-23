@@ -6,8 +6,8 @@
 //! - `remote.prompts` 는 원격 호스트를 붙이는 ssh 의 askpass 질문(호스트 키 확인 · 암호)을 듣는 스트림, `remote.prompt.answer` 가
 //!   그 답이다(git 의 `git.prompts` 와 같은 꼴 — 호스트 키 질문은 힌트 없이 온다, 창이 글로 알아본다).
 //! - 포트 포워딩(18-m7-plan M7-22): `remote.forwards.list` · `remote.forward.close`(상태바 · 원격 호스트 시트), 실행 탭의
-//!   `remote.forward.open` 스트림(열린 동안 포워딩과 그 호스트를 쓴다). 원격 쪽은 늘 `localhost` 다 — 다른 `remote_host` 는 사람의
-//!   설정(`[[remote_hosts.port_forwards]]`)으로만(메인 판정 M7-P15). MCP 툴이 아니다.
+//!   `remote.forward.open` 스트림(열린 동안 포워딩과 그 호스트를 쓴다). 원격 쪽은 늘 `localhost` 다 — 설정
+//!   (`[[remote_hosts.port_forwards]]`)의 `remote_host` 도 그 머신의 루프백만이다(메인 판정 2026-11-24). MCP 툴이 아니다.
 
 use pw_git::write::{AnswerError, GitPromptAnswer, GitPromptEvent};
 use pw_rpc::{ConnectionScope, Ctx, Router, RpcError, code, rpc_method};

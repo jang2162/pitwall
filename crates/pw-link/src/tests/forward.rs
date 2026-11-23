@@ -254,7 +254,8 @@ async fn a_forward_to_a_closed_remote_port_is_refused() {
     assert_eq!(fx.remote.link().unwrap().channel_count(), 0);
 }
 
-/// 털린 Relay 가 청한 것과 다른 대상(원격의 다른 호스트 · 포트)에 이었다고 답하면 Desktop 은 그 채널을 받지 않는다(메인 판정
+/// Relay 가 청한 것과 다른 대상(원격의 다른 호스트 · 포트)에 이었다고 답하면 Desktop 은 그 채널을 받지 않는다 — 정직한 Relay 의 버그 ·
+/// 판 어긋남을 잡는 확인이다(털린 Relay 는 그대로 되돌려 말할 수 있어 막지 못한다 — 리뷰 F2)(메인 판정
 /// 2026-11-24). 답의 대상을 보지 않으면 이 시험이 실패한다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_desktop_refuses_a_relay_that_answers_another_target() {

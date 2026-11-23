@@ -525,7 +525,7 @@ fn forward(mux: &Mux, frame: LinkFrame, proven: &Proven) {
                 return;
             }
         };
-        // 연 대상을 싣는다 — Desktop 은 청한 것과 다르면 받지 않는다.
+        // 연 대상을 싣는다 — Desktop 은 청한 것과 다르면 받지 않는다(버그 · 판 어긋남을 잡는 확인, 보호가 아니다).
         mux.send_control(&LinkFrame::new(channel, Kind::Accepted, json!(to)));
         crate::forward::pump(mux, channel, rx, cancel, tcp).await;
     });
