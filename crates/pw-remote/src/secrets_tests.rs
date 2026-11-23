@@ -610,3 +610,90 @@ async fn remote_trust_does_not_touch_local_trust() {
     assert_eq!(untrust["result"]["state"], json!("untrusted"), "{untrust}");
     assert!(remote_registry.trust(&remote_id).unwrap().trusted());
 }
+
+/// 델타 리뷰 G1 ①(털린 Relay 흉내): 기다리는 요청과 같은 창 · 요청 id · 연결을 대도 **다른 프로젝트** 의 청이면 거절 — 그 창이
+/// 프로젝트 X 의 연결을 여는 동안 Relay 가 Y 의 같은 연결 id 비밀을 읽지 못한다.
+#[test]
+fn a_request_for_another_project_is_declined_even_with_the_waiting_ids() {
+    const Y: &str = "0123ffff";
+    let store = store_with(&[
+        (machine_account(A, P, "dev", DbSecretKey::Password), ITEM),
+        (
+            machine_account(A, Y, "dev", DbSecretKey::Password),
+            "item-of-y",
+        ),
+    ]);
+    let desk = SecretDesk::new(store);
+    let flights = Flights::default();
+    sent(&flights, 1, 1, "db.session.open", "dev");
+    let mut other = request(1, SecretRequestOp::Read);
+    other.project_id = Y.into();
+    assert_eq!(desk.answer(A, &flights, &other), SecretAnswer::Declined);
+    assert_eq!(
+        desk.answer(A, &flights, &request(1, SecretRequestOp::Read)),
+        SecretAnswer::Value {
+            item: Secret::new(ITEM)
+        }
+    );
+}
+
+/// 델타 리뷰 G1 ②(털린 Relay 흉내): 창 label 이 없는 `Project` 연결이 보낸 비밀이 필요한 요청은 세지 않는다 — Relay 가 빈 label
+/// 로 그 요청 id 를 대도 거절. 같은 요청을 label 있는 창이 보내면 답한다(대조). 요청은 답하지 않는 Host 로 보내 기다림을 둔다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unlabeled_project_connection_opens_nothing_even_for_a_matching_request() {
+    let desk = SecretDesk::new(a_dev());
+    let silent: Arc<dyn Host> = Arc::new(LocalHost::new("silent"));
+    let (gated, flights) = SecretDesk::gate(silent);
+    let open = json!({ "jsonrpc": "2.0", "id": 1, "method": "db.session.open",
+                       "params": { "projectId": P, "connectionId": "dev" } });
+    let unlabeled = gated
+        .connect(Caller {
+            role: Role::Owner,
+            scope: ConnectionScope::Project(P.into()),
+            window: None,
+        })
+        .await
+        .unwrap();
+    unlabeled.sink.send(open.clone());
+    let mut forged = request(1, SecretRequestOp::Read);
+    forged.call.window = String::new();
+    assert_eq!(desk.answer(A, &flights, &forged), SecretAnswer::Declined);
+    forged.call.window = "SHA256:dev/".into();
+    assert_eq!(desk.answer(A, &flights, &forged), SecretAnswer::Declined);
+    assert!(flights.is_empty());
+
+    let labeled = gated.connect(window()).await.unwrap();
+    labeled.sink.send(open);
+    assert_eq!(
+        desk.answer(A, &flights, &request(1, SecretRequestOp::Read)),
+        SecretAnswer::Value {
+            item: Secret::new(ITEM)
+        }
+    );
+}
+
+/// 표를 못 박는다(델타 리뷰 R1): 메서드를 더하거나 빼거나 종류를 바꾸면 실패한다 — 그 행이 이 시험을 고치며 리뷰에 보이게.
+/// 판정 규칙은 표 옆 주석(그 창이 스스로 보여 주는 그 연결 하나를 위해 연결을 여는 요청만).
+#[test]
+fn the_secret_flows_are_exactly_these() {
+    use SecretUse::{Read, Remove, Store};
+    assert_eq!(
+        SECRET_FLOWS,
+        [
+            ("db.session.open", Read),
+            ("db.connection.test", Read),
+            ("db.query.page", Read),
+            ("db.schema.databases", Read),
+            ("db.schema.schemas", Read),
+            ("db.schema.objects", Read),
+            ("db.schema.columns", Read),
+            ("db.schema.indexes", Read),
+            ("db.schema.foreignKeys", Read),
+            ("db.schema.ddl", Read),
+            ("db.schema.refresh", Read),
+            ("db.secret.set", Store),
+            ("db.secret.clear", Remove),
+            ("db.connection.delete", Remove),
+        ]
+    );
+}

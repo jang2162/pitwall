@@ -53,6 +53,12 @@ impl SecretUse {
 /// 비밀이 필요한 창 요청과 그 요청 하나가 열 수 있는 청(종류 · 한 번 — 18-m7-plan M7-12 리뷰 F1). **표에 없는 메서드는 기다려도
 /// 아무 청도 열지 않는다** — 창이 저절로 보내는 읽기(`db.connection.get` · `db.connection.marks` · `db.connection.list` 등)나
 /// 연결을 열지 않는 쓰기(`upsert` · `approve` · `forgetMarks`)가 그렇다. 지우기는 사람이 비밀 · 연결을 지우는 요청에만.
+///
+/// 판정 규칙(메인 판정, 델타 리뷰 R2): **그 창이 스스로 보여 주는 그 연결 하나를 위해 연결을 여는 요청이면 받고, 여러 연결을 훑거나
+/// 연결을 열지 않는 읽기(`marks` · 목록 · `get`)는 받지 않는다.** 그래서 저절로 나가는 읽기라도 그 창이 보여 주는 연결 하나의 것
+/// — 복원된 DDL 문서의 `db.schema.ddl`, `db.schemaChanged` 뒤 탐색기가 펼친 노드를 다시 읽는 `db.schema.*` — 는 받는다. 사람이 그
+/// 창에서 그 연결을 보여 두었고, 원격은 호출마다 연결을 열어 Relay 는 그 연결을 열려면 어차피 그 비밀이 필요하다(그 요청 하나 ·
+/// 한 번 · 20초는 그대로). 바꾸면 시험 `the_secret_flows_are_exactly_these` 를 함께 고친다.
 pub const SECRET_FLOWS: &[(&str, SecretUse)] = &[
     ("db.session.open", SecretUse::Read),
     ("db.connection.test", SecretUse::Read),

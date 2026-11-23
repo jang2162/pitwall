@@ -220,7 +220,26 @@ async fn a_saved_secret_goes_to_the_desktop() {
         }
         other => panic!("{other:?}"),
     }
+    // 청은 그 창의 `db.secret.set` 요청(1 · 2 는 `db.connection.get`)을 댄다.
+    assert_eq!(
+        (seen[0].call.window.as_str(), seen[0].call.request.as_str()),
+        (LABEL, "3")
+    );
     assert!(e.f.store.accounts().is_empty());
+    // 지우기(`db.secret.clear`)도 그 창의 그 요청을 대고 Desktop 에 지우기 청을 보낸다(델타 리뷰 G2).
+    w.call(
+        "db.secret.clear",
+        json!({ "projectId": e.f.id, "connectionId": "dev", "key": "password" }),
+    )
+    .await
+    .unwrap();
+    let seen = desktop.seen();
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert_eq!(seen[1].op, SecretRequestOp::Remove);
+    assert_eq!(
+        (seen[1].call.window.as_str(), seen[1].call.request.as_str()),
+        (LABEL, "4")
+    );
     drop(desktop);
 
     let e = env();
