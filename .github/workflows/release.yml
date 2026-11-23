@@ -224,6 +224,9 @@ jobs:
           APPLE_API_KEY: ${{ matrix.platform == 'macos' && secrets.APPLE_API_KEY || '' }}
           WIX_VERSION: ${{ needs.plan.outputs.wix_version }}
           LINUX_BUNDLES: ${{ needs.plan.outputs.linux_bundles }}
+          # Desktop 도 Relay 와 같은 채널을 바이너리에 박는다(`pw_remote::ssh::RELEASE_CHANNEL`) — 원격 파일 이름
+          # `pitwall-relay-{채널}-{판}` 과 링크 핸드셰이크가 이 값으로 Relay 와 맞는다(18-m7-plan M7-08).
+          PITWALL_RELEASE_CHANNEL: ${{ needs.plan.outputs.channel }}
         run: |
           pass=$(openssl rand -hex 16)
           pnpm --filter @pitwall/desktop exec tauri signer generate --ci -p "$pass" -w "$RUNNER_TEMP/ephemeral-updater.key" > /dev/null

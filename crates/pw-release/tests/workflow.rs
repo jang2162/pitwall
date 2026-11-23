@@ -285,3 +285,14 @@ fn every_relay_binary_upload_is_for_publishing_runs_only() {
     }
     assert!(seen >= 1, "no relay binary upload found");
 }
+
+/// 18-m7-plan M7-08: Desktop 빌드도 Relay 와 같은 채널을 박는다 — 없으면 Desktop 은 `dev` 로 Relay(`stable` 등)를 찾아 원격 파일
+/// 이름 · 핸드셰이크가 갈린다.
+#[test]
+fn the_desktop_build_bakes_the_same_release_channel_as_the_relay() {
+    let build = text(&job("build"));
+    assert!(
+        build.contains("PITWALL_RELEASE_CHANNEL: ${{ needs.plan.outputs.channel }}"),
+        "{build}"
+    );
+}
