@@ -458,11 +458,13 @@ impl Session {
                 )
             }
             Err(SendFailure::Call(CallError::Rpc { code, .. })) if code == NO_WINDOW => {
+                // 받기는 끝났다 — 받은 커밋은 대상의 전용 ref 에 남는다(브랜치 · HEAD · 작업 트리는 그대로).
                 let message = format!(
-                    "the target checkout on {} has no Pitwall window to confirm its unsaved documents, so it was \
-                     not changed; open that checkout in the Pitwall window of this project (make it the active \
-                     checkout) and call again",
-                    target.describe()
+                    "the target checkout on {} has no Pitwall window to confirm its unsaved documents, so its \
+                     branch and work tree were not changed (the received commits are in `{}` there); open that \
+                     checkout in the Pitwall window of this project (make it the active checkout) and call again",
+                    target.describe(),
+                    pw_git_incoming_ref(&source_name, &branch)
                 );
                 self.audit(
                     Some(row),
@@ -836,6 +838,11 @@ impl Session {
     }
 }
 
+/// 대상 Host 가 받은 커밋을 두는 전용 ref(`pw_git::send::incoming_ref` 와 같은 이름 — pw-mcp 는 pw-git 에 의존하지 않는다).
+fn pw_git_incoming_ref(source_name: &str, branch: &str) -> String {
+    format!("refs/pitwall/incoming/{source_name}/{branch}")
+}
+
 /// 스트림의 다음 항목. 취소되면 `Cancelled`(스트림을 버리면 `stream.cancel` 이 간다).
 async fn next_item(
     stream: &mut crate::client::HostStream<'_>,
@@ -916,8 +923,17 @@ fn send_plan(
          core.hooksPath points into the work tree, those are hooks that come with the sent commits.",
         target.shown
     );
-    // 다른 머신의 커밋을 이 머신으로 가져오면 그 커밋의 훅이 이 머신에서 돈다 — `auto_approve` 가 닿지 않게(묻는다).
-    let auto_approve = !(source.remote.is_some() && target.remote.is_none());
+    // 다른 머신의 커밋을 이 머신으로 가져오면 그 커밋의 훅이 이 머신에서 돈다 — `auto_approve` 가 닿지 않게(묻는다). 「이 세션
+    // 동안 허용」 은 그 원본 머신에서의 가져오기에만 닿는다(다른 머신에서의 가져오기로 새지 않게 — m7-19 리뷰 P6).
+    let import = source.remote.is_some() && target.remote.is_none();
+    let auto_approve = !import;
+    let remember = if import {
+        Remember::Key {
+            key: format!("from:{}", source.machine),
+        }
+    } else {
+        Remember::Tool
+    };
     ToolPlan::builder(SEND_METHOD, Tier::Write, &Value::Object(args.clone()))
         .summary(format!(
             "Send branch `{branch}` ({} commit(s)) from {} to {}",
@@ -957,7 +973,7 @@ fn send_plan(
         )
         .rules(PlanRules {
             auto_approve,
-            remember: Remember::Tool,
+            remember,
             policy_auto: false,
         })
         .build()

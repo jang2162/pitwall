@@ -217,6 +217,17 @@ async fn an_approval_does_not_carry_to_another_branch_commit_or_a_moved_target()
     .await
     .unwrap_err();
     approval_required(&other, true);
+    // 같은 표로 다른 원본 머신(전용 ref 의 이름이 바뀐다 — 대상에 남는 것이다, m7-19 리뷰 F1).
+    let size = planned.items[0]["size"].as_u64().unwrap();
+    let other = agent
+        .call(
+            "git.send.receive.begin",
+            json!({"projectId": pair.dst.project, "sourceMachine": "elsewhere", "branch": "feat/x",
+                   "commit": commit, "size": size, APPROVAL_KEY: ticket(&planned.hash)}),
+        )
+        .await
+        .unwrap_err();
+    approval_required(&other, true);
     // 같은 표로 다른 커밋(원본에 그 뒤 더한 커밋).
     let later = pair.src.repo.commit_file("y.txt", "y\n", "y");
     let other = apply(
@@ -323,4 +334,34 @@ async fn compare_reads_the_tip_the_count_and_a_divergence() {
         .await
         .unwrap();
     assert_eq!(missing["commit"], Value::Null);
+}
+
+/// 관문(`agent_grant`)은 다른 무엇보다 먼저 레지스트리에 없는 프로젝트를 그 까닭으로 거절한다 — 입력 검사 · 저장소 읽기 · 계획보다
+/// 앞이다(m7-19 리뷰 F1: 뒤의 `git.open` 도 같은 오류로 거절하므로 순서로 가른다 — 틀린 원본 머신 이름을 함께 준다).
+#[tokio::test]
+async fn an_unregistered_project_is_refused_by_the_agent_gate_first() {
+    let pair = Pair::new(true);
+    let commit = feature(&pair);
+    let mut agent = Conn::open_as(&pair.dst, ConnectionScope::Agent);
+    for (method, extra) in [
+        ("git.send.receive.begin", json!({"size": 10})),
+        ("git.send.apply", json!({"expected": null})),
+    ] {
+        let mut params = json!({"projectId": "p-not-registered", "sourceMachine": ".bad",
+                                "branch": "feat/x", "commit": commit, APPROVAL_KEY: {"hash": "sha256:x"}});
+        for (k, v) in extra.as_object().unwrap() {
+            params[k] = v.clone();
+        }
+        let refused = agent.call(method, params).await.unwrap_err();
+        assert_eq!(
+            refused["code"],
+            pw_rpc::code::INVALID_PARAMS,
+            "{method}: {refused}"
+        );
+        let message = refused["data"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("p-not-registered") && !message.contains("source machine"),
+            "{method}: 관문보다 다른 판정이 먼저 돌았다: {refused}"
+        );
+    }
 }

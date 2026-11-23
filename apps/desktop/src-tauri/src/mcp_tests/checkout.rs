@@ -97,10 +97,46 @@ struct OnSend {
     inner: Box<dyn pw_core::FrameSink>,
     compares: AtomicUsize,
     hook: Hook,
+    /// [`Rewrite`] 의 메서드로 나간 요청 id(그 응답을 바꾼다).
+    asked: Arc<Mutex<Vec<Value>>>,
+    rewrite: Rewrite,
+}
+
+/// 그 메서드 응답의 `result` 를 바꾸는 덫(가짜 응답 — 세션의 방어 겹이 대상 Host 의 대조 앞에서 막는지 본다).
+type Rewrite = Arc<Mutex<Option<(&'static str, fn(&mut Value))>>>;
+
+/// 받는 쪽: [`OnSend`] 가 적은 id 의 응답에 덫을 적용한다.
+struct Rewriting {
+    inner: Box<dyn pw_core::FrameSource>,
+    asked: Arc<Mutex<Vec<Value>>>,
+    rewrite: Rewrite,
+}
+
+impl pw_core::FrameSource for Rewriting {
+    fn recv(&mut self) -> BoxFuture<'_, Option<Value>> {
+        Box::pin(async move {
+            let mut frame = self.inner.recv().await?;
+            let id = frame.get("id").cloned();
+            if frame.get("result").is_some()
+                && let Some(id) = id
+                && self.asked.lock().unwrap().contains(&id)
+                && let Some((_, change)) = *self.rewrite.lock().unwrap()
+            {
+                change(&mut frame["result"]);
+            }
+            Some(frame)
+        })
+    }
 }
 
 impl pw_core::FrameSink for OnSend {
     fn send(&self, frame: Value) {
+        if let Some((method, _)) = *self.rewrite.lock().unwrap()
+            && frame["method"] == json!(method)
+            && let Some(id) = frame.get("id")
+        {
+            self.asked.lock().unwrap().push(id.clone());
+        }
         let fire = match frame["method"].as_str() {
             Some("git.send.prepare") => true,
             Some("git.send.compare") => self.compares.fetch_add(1, Ordering::SeqCst) >= 2,
@@ -121,6 +157,7 @@ struct FakeMachines {
     connects: AtomicUsize,
     refuse: Mutex<Option<MachineError>>,
     before_prepare: Hook,
+    rewrite: Rewrite,
 }
 
 impl Machines for FakeMachines {
@@ -165,13 +202,20 @@ impl Machines for FakeMachines {
                 )
                 .await
                 .map_err(|e| MachineError::Unreachable(e.to_string()))?;
+            let asked = Arc::new(Mutex::new(Vec::new()));
             let connection = pw_core::Connection {
                 sink: Box::new(OnSend {
                     inner: connection.sink,
                     compares: AtomicUsize::new(0),
                     hook: Arc::clone(&self.before_prepare),
+                    asked: Arc::clone(&asked),
+                    rewrite: Arc::clone(&self.rewrite),
                 }),
-                source: connection.source,
+                source: Box::new(Rewriting {
+                    inner: connection.source,
+                    asked,
+                    rewrite: Arc::clone(&self.rewrite),
+                }),
             };
             Ok(MachineLink {
                 connection,
@@ -280,6 +324,7 @@ impl Bundle {
             connects: AtomicUsize::new(0),
             refuse: Mutex::new(None),
             before_prepare: Arc::new(Mutex::new(None)),
+            rewrite: Arc::new(Mutex::new(None)),
         });
         let sessions = Sessions::new();
         let services = mcp::services_with(
@@ -443,6 +488,21 @@ fn spawn_call(
     tokio::spawn(async move { session.call(name, args).await })
 }
 
+/// 승인 요청의 바뀔 것 하나(`label` 의 글).
+fn change(request: &McpApprovalRequest, label: &str) -> String {
+    request
+        .plan
+        .changes
+        .iter()
+        .find_map(|c| match c {
+            pw_core::registry::plan::PlanChange::Text { label: l, text } if l == label => {
+                Some(text.clone())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("바뀔 것에 `{label}` 이 없다: {:?}", request.plan.changes))
+}
+
 fn send_args(target: &str) -> Value {
     json!({
         "projectId": BUNDLE,
@@ -476,9 +536,25 @@ async fn a_send_to_another_machine_asks_once_per_machine_and_lands_there() {
         "{:?}",
         request.answers
     );
-    let shown = serde_json::to_string(&request.plan).unwrap();
-    assert!(shown.contains("Git hooks"), "훅이 바뀔 것에 없다: {shown}");
-    assert!(shown.contains("mini"), "{shown}");
+    // 승인 화면이 보이는 글: 두 머신 이름 · 보낼 커밋 id · 바뀔 것 · 훅(m7-19 리뷰 P1).
+    assert_eq!(
+        request.plan.summary,
+        "Send branch `feat` (1 commit(s)) from this computer to mini"
+    );
+    assert_eq!(
+        change(&request, "Target"),
+        "mini · main checkout · branch `feat`"
+    );
+    assert_eq!(
+        change(&request, "Result"),
+        format!("create branch `feat` at {} and check it out", &commit[..12])
+    );
+    let hooks = change(&request, "Git hooks");
+    assert!(
+        hooks.starts_with("Git runs the hooks of the repository on mini while it"),
+        "{hooks}"
+    );
+    assert!(hooks.contains("core.hooksPath"), "{hooks}");
     b.answer(request.id, McpApprovalAnswer::Machine);
     let result = call.await.unwrap();
     assert_eq!(mark(&result), Mark::ok(), "{}", text(&result));
@@ -516,6 +592,7 @@ async fn an_untrusted_target_asks_every_time_without_a_machine_allowance() {
     let mut b = Bundle::new(false);
     let _mini_window = prompts_window(&b.mini).await;
     let session = b.session().await;
+    let mut previous: Option<String> = None;
     for file in ["a.txt", "b.txt"] {
         let commit = b.feature(file);
         let call = spawn_call(&session, "checkout_send", send_args("mini"));
@@ -525,6 +602,18 @@ async fn an_untrusted_target_asks_every_time_without_a_machine_allowance() {
             "{:?}",
             request.answers
         );
+        // 둘째는 fast-forward — 이전 끝 → 새 끝의 커밋 id 가 화면에 있다.
+        if let Some(previous) = &previous {
+            assert_eq!(
+                change(&request, "Result"),
+                format!(
+                    "fast-forward `feat` {} → {} and check it out",
+                    &previous[..12],
+                    &commit[..12]
+                )
+            );
+        }
+        previous = Some(commit.clone());
         b.answer(request.id, McpApprovalAnswer::Once);
         let result = call.await.unwrap();
         assert_eq!(mark(&result), Mark::ok(), "{}", text(&result));
@@ -631,7 +720,8 @@ async fn a_target_without_a_window_is_not_changed() {
     let result = call.await.unwrap();
     assert_eq!(mark(&result).outcome, Outcome::Error, "{}", text(&result));
     assert!(
-        text(&result).contains("make it the active checkout"),
+        text(&result).contains("make it the active checkout")
+            && text(&result).contains("`refs/pitwall/incoming/local/feat`"),
         "{}",
         text(&result)
     );
@@ -782,4 +872,145 @@ async fn a_session_without_machines_has_no_checkout_tools() {
         .await
         .unwrap_err();
     assert!(refused.to_string().contains("unknown tool"), "{refused}");
+}
+
+/// 세션의 방어 겹(m7-19 리뷰 F1 R5): 대상 계획의 브랜치 끝이 `theirs` 의 끝과 다르면(그 사이 움직임) 묻지 않고 오류. 대상 Host 의
+/// 해시 · CAS 가 뒤에서도 막는다 — 이 시험은 그 앞의 겹을 가짜 응답으로 본다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_target_tip_that_moves_between_the_reads_is_an_error() {
+    let mut b = Bundle::new(true);
+    let _mini_window = prompts_window(&b.mini).await;
+    *b.machines.rewrite.lock().unwrap() = Some(("git.send.plan", |result| {
+        result["branchTip"] = json!("0".repeat(40));
+    }));
+    let session = b.session().await;
+    b.feature("a.txt");
+    let result = session.call("checkout_send", send_args("mini")).await;
+    assert_eq!(mark(&result).outcome, Outcome::Error, "{}", text(&result));
+    assert!(
+        text(&result).contains("moved while the send was being planned"),
+        "{}",
+        text(&result)
+    );
+    no_request(&mut b.window).await;
+    assert_eq!(b.mini.branch("feat"), None);
+}
+
+/// 세션의 방어 겹(m7-19 리뷰 F1 R6): 받기가 알린 커밋이 계획 커밋이 아니면 맞추지 않는다. 대상 Host 의 맞추기는 전용 ref 를 보고
+/// 따로 멈춘다 — 이 시험은 그 앞의 겹을 가짜 응답으로 본다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_received_commit_that_is_not_the_planned_one_is_not_applied() {
+    let mut b = Bundle::new(true);
+    let _mini_window = prompts_window(&b.mini).await;
+    *b.machines.rewrite.lock().unwrap() = Some(("git.send.receive.finish", |result| {
+        result["commit"] = json!("0".repeat(40));
+    }));
+    let session = b.session().await;
+    b.feature("a.txt");
+    let call = spawn_call(&session, "checkout_send", send_args("mini"));
+    let request = next_request(&mut b.window).await;
+    b.answer(request.id, McpApprovalAnswer::Once);
+    let result = call.await.unwrap();
+    assert_eq!(mark(&result).outcome, Outcome::Error, "{}", text(&result));
+    assert!(
+        text(&result).contains("it was not applied"),
+        "{}",
+        text(&result)
+    );
+    assert_eq!(b.mini.branch("feat"), None, "맞췄다");
+}
+
+/// 가져오기(원본 다른 머신 → 대상 이 머신)의 「이 세션 동안 허용」 은 그 원본 머신에만 닿는다 — 다른 머신에서의 가져오기는 다시
+/// 묻는다(m7-19 리뷰 P6).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_import_allowance_stays_with_its_source_machine() {
+    let mut b = Bundle::with(true, true, "");
+    let _here_window = prompts_window_on(&b.here, &b.local).await;
+    let other = b.other.as_ref().unwrap();
+    for (repo, branch) in [(&b.mini.repo, "from-mini"), (&other.repo, "from-box")] {
+        repo.git(&["switch", "--quiet", "-c", branch]);
+        repo.commit_file(&format!("{branch}.txt"), "x\n", branch);
+    }
+    let session = b.session().await;
+    let import = |machine: &str, branch: &str| json!({"projectId": BUNDLE, "source": {"machine": machine}, "target": {"machine": "local"}, "branch": branch});
+    let call = spawn_call(&session, "checkout_send", import("mini", "from-mini"));
+    let request = next_request(&mut b.window).await;
+    assert_eq!(request.machine, None, "대상은 이 머신이다");
+    assert!(
+        request.answers.contains(&McpApprovalAnswer::Session),
+        "{:?}",
+        request.answers
+    );
+    b.answer(request.id, McpApprovalAnswer::Session);
+    let result = call.await.unwrap();
+    assert_eq!(mark(&result), Mark::ok(), "{}", text(&result));
+    // 같은 원본 머신: 다시 묻지 않는다.
+    b.mini.repo.commit_file("again.txt", "x\n", "again");
+    let again = session
+        .call("checkout_send", import("mini", "from-mini"))
+        .await;
+    assert_eq!(mark(&again), Mark::ok(), "{}", text(&again));
+    no_request(&mut b.window).await;
+    // 다른 원본 머신: 묻는다.
+    let mut call = spawn_call(&session, "checkout_send", import("box", "from-box"));
+    let request = tokio::select! {
+        request = next_request(&mut b.window) => request,
+        result = &mut call => panic!("묻지 않고 끝났다: {}", text(&result.unwrap())),
+    };
+    b.answer(request.id, McpApprovalAnswer::Deny);
+    let result = call.await.unwrap();
+    assert_eq!(
+        mark(&result),
+        Mark::denied(Reason::ApprovalDenied),
+        "{}",
+        text(&result)
+    );
+}
+
+/// 세션의 `visible()` 겹(m7-19 리뷰 F1): 카탈로그에 세션 툴이 있어도 다른 머신을 모르는 세션(machines 없음)과 헤드리스 세션은 두 툴을
+/// 내지 않고 부르면 없는 툴이다. 카탈로그 겹(`mcp::services_with`)은 `mcp_tools_are_exactly_these` 가 본다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_that_does_not_know_machines_hides_cataloged_session_tools() {
+    let host = ToolHost::app();
+    let base = &host.services;
+    let machines: Arc<dyn Machines> = Arc::new(super::NoMachines);
+    for (host_kind, machines) in [(HostKind::App, None), (HostKind::Headless, Some(machines))] {
+        let services = Arc::new(pw_mcp::Services {
+            router: Arc::clone(&base.router),
+            host_id: base.host_id.clone(),
+            paths: base.paths.clone(),
+            global: base.global.clone(),
+            bus: base.bus.clone(),
+            audit: Arc::clone(&base.audit),
+            catalog: Arc::new(
+                pw_mcp::Catalog::linked()
+                    .routed_by(host.host.router())
+                    .with_session_tools()
+                    .unwrap(),
+            ),
+            approval: base.approval.clone(),
+            transport: "test",
+            host_kind,
+            sessions: base.sessions.clone(),
+            machines,
+        });
+        let session = ToolHost {
+            services,
+            ..ToolHost::app()
+        }
+        .session(SessionRequest::default())
+        .await;
+        let listed = session.list().await;
+        assert!(
+            !listed
+                .iter()
+                .any(|t| t.name == "checkout_send" || t.name == "checkout_list"),
+            "{host_kind:?}"
+        );
+        let refused = session
+            .try_call("checkout_list", json!({"projectId": BUNDLE}))
+            .await
+            .unwrap_err();
+        assert!(refused.to_string().contains("unknown tool"), "{refused}");
+    }
 }
