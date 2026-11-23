@@ -852,3 +852,69 @@ async fn attaching_refuses_when_the_members_changed_since_judging() {
     );
     assert_eq!(f.desktop.bundle(&bundle.id).unwrap(), bundle);
 }
+
+// M7-08: 다른 머신의 Host 로 묻는 `HostMachine`(`machine.*` RPC) — 가짜 머신과 같은 판정이 RPC 를 지나도 같다. 원격 머신
+// `MINI` 의 자리는 그 `$DATA` 로 뜬 Host 다. 되돌리기(`unregister`)도 RPC 로 닿는다. Host 범위가 아닌 연결은 거절한다.
+#[tokio::test]
+async fn a_machine_behind_a_host_is_judged_through_its_rpc() {
+    use crate::{Host, LocalHost};
+    use pw_rpc::{Caller, ConnectionScope, Role};
+    use serde_json::json;
+
+    let f = Fixture::new();
+    let mini_host: Arc<dyn Host> = Arc::new(LocalHost::with_config(
+        "mini",
+        AppPaths::under(&f.base.join("mini-app")),
+    ));
+    let behind = Arc::new(machine::HostMachine::new(MINI, Arc::clone(&mini_host)));
+    f.desktop
+        .set_remote_machines(Arc::new(Remotes(HashMap::from([(
+            MINI.to_owned(),
+            behind.clone() as Arc<dyn BundleMachine>,
+        )]))));
+    let local = f.repo("local/app", "one");
+    let p = f.project(&f.desktop, &local);
+    let remote = f.clone(&local, "mini/app", None);
+    let other = f.repo("mini/other", "two");
+
+    let reason = rejection(f.add(AddTo::Bundle(&p.id), MINI, &other).await);
+    assert_eq!(
+        reason,
+        AddMemberRejection::NoCommonCommit {
+            machine: LOCAL_MACHINE.into()
+        }
+    );
+    let bundle = added(f.add(AddTo::Bundle(&p.id), MINI, &remote).await);
+    let registered = f.mini.list().unwrap();
+    assert_eq!(registered.len(), 1);
+    assert_eq!(
+        bundle.member(MINI).map(|m| m.project_id.clone()),
+        Some(registered[0].id.clone())
+    );
+    assert_eq!(
+        behind.project_root(&registered[0].id).await.unwrap(),
+        Some(registered[0].roots[0].clone())
+    );
+    assert_eq!(behind.project_root("nope").await.unwrap(), None);
+    behind.unregister(&registered[0].id).await.unwrap();
+    assert!(f.mini.list().unwrap().is_empty());
+
+    // 프로젝트 창 범위의 연결은 `machine.*` 를 받지 않는다.
+    let mut conn = mini_host
+        .connect(Caller {
+            role: Role::Owner,
+            scope: ConnectionScope::Project("x".into()),
+            window: None,
+        })
+        .await
+        .unwrap();
+    conn.sink.send(
+        json!({"jsonrpc": "2.0", "id": 1, "method": "machine.inspect",
+        "params": {"path": remote.to_str().unwrap()}}),
+    );
+    let answer = conn.source.recv().await.unwrap();
+    assert_eq!(
+        answer["error"]["code"],
+        json!(pw_rpc::code::PERMISSION_DENIED)
+    );
+}

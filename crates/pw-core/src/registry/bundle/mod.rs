@@ -18,6 +18,7 @@
 
 pub mod add;
 pub mod history;
+pub mod machine;
 pub mod methods;
 
 use std::collections::HashSet;
