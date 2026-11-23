@@ -45,6 +45,8 @@ const fake = vi.hoisted(() => ({
   bundles: [] as unknown[],
   /** 다른 머신이 신뢰 묻기를 처음 한 번 넘겨주는가(`project.claimTrustPrompt` — 실제 Host 는 한 번만 `true`). */
   remoteClaim: false,
+  /** 다른 머신의 `git.prompts` 가 처음 열리면 보낼 askpass 질문(그 머신 프로젝트 `r1` 의 스트림만 — 실제 Host 처럼). */
+  remotePrompt: undefined as string | undefined,
   /** 연결 대상(JSON) → 받은 호출(메서드 · 인자). */
   byTarget: new Map<string, { method: string; params: Record<string, unknown> }[]>(),
 }));
@@ -110,6 +112,24 @@ vi.mock("../tauri-transport", async () => {
               createdAt: 1,
               openedAt: null,
             });
+        }
+        if (m.method === "git.prompts" && machine !== "local" && fake.remotePrompt !== undefined) {
+          if (params.projectId !== "r1")
+            return send({ id: m.id, error: { code: -32602, message: "unknown project" } });
+          const streamId = next++;
+          reply({ streamId });
+          // 실제 Host 처럼 듣기 시작할 때 아직 열린 질문을 다시 보낸다(StrictMode 의 다시 듣기에도).
+          const text = fake.remotePrompt;
+          return send({
+            method: "stream.chunk",
+            params: {
+              streamId,
+              data: {
+                kind: "open",
+                prompt: { promptId: 1, request: { kind: "askpass", text, hint: "secret" } },
+              },
+            },
+          });
         }
         switch (m.method) {
           case "i18n.get":
@@ -357,6 +377,7 @@ beforeEach(() => {
   fake.approvals = new Map();
   fake.byTarget = new Map();
   fake.remoteClaim = false;
+  fake.remotePrompt = undefined;
   fake.bundles = [
     {
       id: "b-1",
@@ -704,4 +725,18 @@ it("asks to trust another machine's checkout naming that machine, and answers on
   ]);
   expect(sets({ projectId: "p1" })).toEqual([]);
   expect(document.querySelector("[data-testid=trust-dialog]")).toBeNull();
+});
+
+// 이월(M7-15 — 18-m7-plan M7-11b): 활성 체크아웃이 다른 머신이면 그 머신 연결로 `git.prompts` 를 듣고, 암호 질문 다이얼로그에 그
+// 머신 이름을 글로 보인다.
+it("shows another machine's git password prompt with that machine's name", async () => {
+  fake.remotePrompt = "Password for 'https://me@git.example':";
+  await mount();
+  await push({ worktree: REMOTE_MAIN });
+  const text = await vi.waitFor(() => {
+    const found = document.body.textContent ?? "";
+    expect(found).toContain("Password for");
+    return found;
+  });
+  expect(text).toContain("mini 의 git · ssh 가 묻는다");
 });

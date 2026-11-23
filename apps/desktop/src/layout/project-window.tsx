@@ -124,7 +124,7 @@ import {
   useWindowProject,
   type WindowProject,
 } from "../checkout/checkout-hosts";
-import { MachineMark, TargetMachineProvider } from "../checkout/machine-mark";
+import { MachineMark, TargetMachineProvider, useMachineName } from "../checkout/machine-mark";
 import { AddCheckoutFeature } from "../checkout/add-checkout";
 import { type OpenWithTarget, REVEAL_TOOLS, useOpenWith } from "../open-with/open-with";
 import { DbStatus } from "../db/safety/db-status";
@@ -978,6 +978,7 @@ function ProjectWindowBody({
   useDemoTaskActions();
 
   const previewHost = useWindowPreviewHost(projectId);
+  const machineName = useMachineName();
   const windowId = windowProject?.windowId ?? projectId;
   const projectState = useWindowProjectState(windowId);
   // 원격만인 묶음 창은 이 머신 체크아웃이 없다 — 처음 활성 체크아웃은 그 묶음 첫 멤버의 메인 체크아웃이다(세션이 시작하기 전에).
@@ -1129,6 +1130,12 @@ function ProjectWindowBody({
                           projectId={activeProject}
                           workspace={workspace}
                           machineId={active.machine}
+                          // 다른 머신 git 의 암호 질문은 그 머신 이름을 글로 보인다(M7-15 · M7-11b).
+                          machine={
+                            active.machine === LOCAL_MACHINE
+                              ? undefined
+                              : machineName(active.machine)
+                          }
                         />
                       )}
                       {activeProject !== undefined && (
