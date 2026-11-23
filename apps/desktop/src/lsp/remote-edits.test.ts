@@ -108,7 +108,7 @@ describe("a command of another machine's document", () => {
         new Proxy({} as Record<string, unknown>, {
           get: (_t, key) => (key === "remoteEdits" ? "REMOTE" : () => String(key)),
         }) as never,
-      notify,
+      notify: notify as never,
       lightbulb: () => true,
       fs: {} as never,
       workspace: {} as never,
