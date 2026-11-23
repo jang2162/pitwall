@@ -995,7 +995,11 @@ function ProjectWindowBody({
                         <GitBranchFeature projectId={activeProject} state={projectState.store} />
                       )}
                       {activeProject !== undefined && (
-                        <GitPrompts projectId={activeProject} workspace={workspace} />
+                        <GitPrompts
+                          projectId={activeProject}
+                          workspace={workspace}
+                          machineId={active.machine}
+                        />
                       )}
                       {activeProject !== undefined && <McpApprovals projectId={activeProject} />}
                       {activeProject !== undefined && (

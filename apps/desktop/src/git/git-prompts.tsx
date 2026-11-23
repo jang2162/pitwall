@@ -30,6 +30,7 @@ import { joinPath, separatorOf } from "../file-tree/tree-model";
 import { useKeymapPopup } from "../keymap/keymap-provider";
 import { useProjectStrings } from "../layout/strings";
 import { useHost } from "../rpc/host";
+import { LOCAL_MACHINE, qualify } from "../checkout/checkout";
 
 const LOG = "[git]";
 const BUTTON = "rounded-sm border border-ui-border px-3 py-1 hover:bg-ui-hover";
@@ -55,15 +56,22 @@ export function hostPath(workTree: string, relative: string): string {
     .reduce((dir, part) => joinPath(dir, part, sep), workTree);
 }
 
-/** 미저장 확인의 답: 바뀔 경로와 겹치는 미저장 문서가 없으면 묻지 않고 `proceed`, 있으면 M1-13 의 확인대로. */
+/**
+ * 미저장 확인의 답: 바뀔 경로와 겹치는 미저장 문서가 없으면 묻지 않고 `proceed`, 있으면 M1-13 의 확인대로. `machine` 은 질문을 보낸
+ * Host 의 머신 id 다 — 질문의 경로는 그 머신의 경로(접두 없음)이고, 다른 머신의 탭 문서 열쇠는 `pitwall-remote://` 접두가 붙어 있어
+ * 접두를 붙여 찾는다(checkout/checkout.ts `qualify`). 붙이지 않으면 원격 미저장 문서를 못 찾아 묻지 않고 git 이 파일을 바꾼다
+ * (18-m7-plan M7-17, 메인 판정 2026-11-23).
+ */
 export async function answerUnsaved(
   request: UnsavedRequest,
   guard: UnsavedGuard,
+  machine: string = LOCAL_MACHINE,
 ): Promise<GitPromptAnswer> {
-  const targets =
+  const targets = (
     request.paths === null
       ? [request.workTree]
-      : request.paths.map((path) => hostPath(request.workTree, path));
+      : request.paths.map((path) => hostPath(request.workTree, path))
+  ).map((path) => qualify(machine, path));
   const overlapping = [...new Set(targets.flatMap((path) => guard.unsavedUnder(path)))];
   if (overlapping.length === 0) return { kind: "proceed" };
   return (await guard.settleUnsaved(overlapping)) ? { kind: "proceed" } : { kind: "cancel" };
@@ -274,10 +282,14 @@ export function GitPrompts({
   projectId,
   workspace,
   machine,
+  machineId = LOCAL_MACHINE,
 }: {
   projectId: string;
   workspace: UnsavedGuard;
+  /** 다이얼로그에 보일 머신 이름. */
   machine?: string;
+  /** 이 연결의 머신 id — 미저장 확인이 경로에 접두를 붙인다(`answerUnsaved`). */
+  machineId?: string;
 }) {
   const { client } = useHost();
   // 한 번에 하나를 묻고 나머지는 차례를 기다린다.
@@ -288,11 +300,11 @@ export function GitPrompts({
     if (!client) return;
     setAskpass([]);
     return listenGitPrompts(client, projectId, {
-      unsaved: (request) => answerUnsaved(request, latest.current),
+      unsaved: (request) => answerUnsaved(request, latest.current, machineId),
       askpass: (prompt) => setAskpass((queue) => [...queue, prompt]),
       closed: (promptId) => setAskpass((queue) => queue.filter((p) => p.promptId !== promptId)),
     });
-  }, [client, projectId]);
+  }, [client, projectId, machineId]);
   const current = askpass[0];
   if (!current || !client) return null;
   const answer = (reply: GitPromptAnswer) => {
