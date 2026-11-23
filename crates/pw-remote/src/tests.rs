@@ -4,8 +4,8 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use pw_core::LocalHost;
 use pw_core::config::AppPaths;
+use pw_core::{LocalHost, Scope};
 use tokio::sync::oneshot;
 
 use super::*;
@@ -54,6 +54,8 @@ struct Fake {
     carried: Arc<AtomicUsize>,
     /// 참이면 설정에서 호스트를 지운 것처럼 목록이 빈다.
     gone: AtomicBool,
+    /// 코드 페어링(`pair_direct`)을 부른 수.
+    direct_pairs: AtomicUsize,
 }
 
 /// 가짜 링크의 포워더: 「원격 머신」 이 이 컴퓨터라고 보고 `127.0.0.1:<원격 포트>` 로 곧바로 잇는다.
@@ -105,6 +107,16 @@ impl Backend for Fake {
         Some(Arc::new(DirectForwarder(Arc::clone(&self.carried))))
     }
 
+    fn pair_direct<'a>(
+        &'a self,
+        _address: &'a str,
+        _port: u16,
+        _code: &'a str,
+    ) -> BoxFuture<'a, Result<(String, pw_rpc::Role), String>> {
+        self.direct_pairs.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(("SHA256:boxmachine".to_owned(), pw_rpc::Role::Owner)) })
+    }
+
     fn hosts(&self, _settings: Option<&Value>) -> (Vec<HostEntry>, Vec<String>) {
         if self.gone.load(Ordering::SeqCst) {
             return (Vec::new(), Vec::new());
@@ -117,6 +129,8 @@ impl Backend for Fake {
                 port: None,
                 source: RemoteHostSource::SshConfig,
                 ssh_args: Vec::new(),
+                direct: None,
+                ssh: true,
             }],
             Vec::new(),
         )
@@ -146,6 +160,7 @@ impl Backend for Fake {
                 Outcome::Hang => std::future::pending().await,
                 Outcome::Fail(e) => Err(e),
                 Outcome::Link(machine) => {
+                    progress(Progress::Via(crate::RemoteVia::Direct));
                     let (tx, rx) = oneshot::channel();
                     let link = Arc::new(FakeLink {
                         closed_by_us: AtomicBool::new(false),
@@ -248,6 +263,91 @@ async fn until(remote: &RemoteHosts, pred: impl Fn(&RemoteStatus) -> bool) -> Re
 
 fn connected(s: &RemoteStatus) -> bool {
     matches!(s, RemoteStatus::Connected { .. })
+}
+
+/// 무엇으로 붙었는지(18-m7-plan M7-24 ④)는 붙어 있는 동안 목록 · 상태 이벤트에 보이고, 끊기면 지워진다.
+#[tokio::test(start_paused = true)]
+async fn the_list_and_the_status_event_say_how_the_link_stands() {
+    let s = setup();
+    let mut events = s
+        .bus
+        .subscribe(pw_core::bus::Filter::all().topics([crate::TOPIC_STATUS]));
+    let use_ = s.remote.hold("mini").unwrap();
+    until(&s.remote, connected).await;
+    assert_eq!(s.remote.list().hosts[0].via, Some(crate::RemoteVia::Direct));
+    let mut saw = None;
+    while let Some(pw_core::bus::Received::Event(event)) = events.try_recv() {
+        if let Ok(changed) =
+            serde_json::from_value::<crate::RemoteStatusChanged>(event.payload.clone())
+            && matches!(changed.status, RemoteStatus::Connected { .. })
+        {
+            saw = Some(changed.via);
+        }
+    }
+    assert_eq!(saw, Some(Some(crate::RemoteVia::Direct)));
+    drop(use_);
+    until(&s.remote, |st| {
+        matches!(st, RemoteStatus::Disconnected { .. })
+    })
+    .await;
+    assert_eq!(s.remote.list().hosts[0].via, None);
+}
+
+/// 코드 입력 화면(`remote.pairDirect`): 페어링이 끝나면 전역 설정에 직접 연결 전용 항목이 더해지고 그 머신 id 를 기억한다. 이미 있는
+/// 이름 · 틀린 주소는 페어링하기 전에 거절한다.
+#[tokio::test]
+async fn a_direct_pairing_adds_a_direct_only_host_and_remembers_its_machine() {
+    let s = setup();
+    let config = s._dir.path().join("config");
+    std::fs::create_dir_all(&config).unwrap();
+    let paths = AppPaths {
+        config: config.clone(),
+        ..AppPaths::under(s._dir.path())
+    };
+    let store = pw_core::config::ConfigStore::open(
+        pw_core::config::ConfigSource::global(&paths),
+        s.bus.clone(),
+        Scope::Host,
+    );
+    s.remote
+        .attach_host(Some(s.registry.clone()), s.bus.clone(), Some(store));
+    let params = |nickname: &str, address: &str| crate::RemotePairDirectParams {
+        address: address.into(),
+        port: None,
+        code: "123456".into(),
+        nickname: nickname.into(),
+    };
+    assert!(
+        s.remote
+            .pair_direct(params("mini", "10.0.0.2"))
+            .await
+            .is_err()
+    );
+    assert!(
+        s.remote
+            .pair_direct(params("box", "-oProxy=x"))
+            .await
+            .is_err()
+    );
+    assert_eq!(s.fake.direct_pairs.load(Ordering::SeqCst), 0);
+    let paired = s
+        .remote
+        .pair_direct(params("box", "192.168.1.20"))
+        .await
+        .unwrap();
+    assert_eq!(paired.machine, "SHA256:boxmachine");
+    let text = std::fs::read_to_string(config.join("settings.toml")).unwrap();
+    assert!(text.contains("nickname = \"box\""), "{text}");
+    assert!(text.contains("ssh = false"), "{text}");
+    assert_eq!(
+        s.registry
+            .remote_host("box")
+            .unwrap()
+            .unwrap()
+            .machine
+            .as_deref(),
+        Some("SHA256:boxmachine")
+    );
 }
 
 // 18-m7-plan M7-14: 링크가 이어 붙는 동안(M7-09 ①)은 상태가 `resuming` 이고 그 머신은 라우터에 남는다 — 창이 그 머신 탭을 읽기
@@ -834,6 +934,15 @@ async fn every_remote_method_takes_only_a_host_connection() {
         (
             "remote.pairCode",
             serde_json::json!({ "name": "mini", "machine": "SHA256:x", "role": "readonly" }),
+        ),
+        ("remote.discover", Value::Null),
+        (
+            "remote.pairDirect",
+            serde_json::json!({ "address": "192.168.1.20", "code": "123456", "nickname": "box" }),
+        ),
+        (
+            "remote.resident",
+            serde_json::json!({ "name": "mini", "machine": "SHA256:x", "on": true }),
         ),
     ];
     let declared: std::collections::BTreeSet<&str> = host

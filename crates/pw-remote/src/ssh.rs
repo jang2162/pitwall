@@ -8,6 +8,12 @@
 //!    기기를 페어링했는데 Relay 가 `Unpaired` 로 거절하면 한 번 더 붙어 본다**(M7-06 리뷰 R-g — 떠 있던 데몬이 페어링 파일을 다시
 //!    읽기 전일 수 있다).
 //!
+//! 0. **직접 연결 먼저**(18-m7-plan M7-24 ④ · 08 「연결 방식」 의 순서): 이 호스트에 기억한 머신 id 가 있고 항목이 직접 연결을 끄지
+//!    않았으면 QUIC + Noise(`pw_link::SecuredTransport<QuicTransport>`, 그 머신 id 만 기대한다)를 먼저 해 본다. 안 되면 SSH 로
+//!    떨어진다 — SSH 는 원래 길이라 보안이 낮아지지 않는다. **처음 붙는 호스트(기억한 id 없음)는 직접 연결을 하지 않는다**(Noise ·
+//!    링크가 처음 보는 키를 믿게 되는 길이 없게 — 처음 페어링은 SSH 나 코드로). 무엇으로 붙었는지는 상태의 `via` 로 사람에게 보인다.
+//!    직접 연결이 다른 머신(다른 키)에 닿았으면 연결 로그에 경고를 남기고 SSH 로 간다.
+//!
 //! 이 Desktop 의 기기 키는 OS 키체인(`pw_link::KeychainKeyStore::for_instance(<단일 인스턴스 키>)` — 앱이 넣는다), 판은
 //! [`versions`](워크스페이스 판 + 빌드에 박은 릴리스 채널 `PITWALL_RELEASE_CHANNEL`).
 
@@ -20,11 +26,12 @@ use pw_core::BoxFuture;
 use pw_git::write::prompt::ASKPASS_TIMEOUT;
 use pw_git::write::{Askpass, Prompts};
 use pw_link::install::{Fetch, InstallError, Installer, RelayDist};
+use pw_link::quic::QuicTransport;
 use pw_link::ssh::{AskpassSession, Ssh, SshAskpass, SshError, SshTarget, SshTransport};
 use pw_link::transport::{LinkStream, Transport};
 use pw_link::{
     DesktopIdentity, DeviceKey, DeviceKeyStore, DialError, Expect, LinkLimits, LinkState,
-    RejectReason, RemoteHost, Versions,
+    RejectReason, RemoteHost, SecuredTransport, Versions,
 };
 use pw_link::{remote_hosts, upgrade};
 use serde_json::Value;
@@ -32,8 +39,26 @@ use serde_json::Value;
 use crate::{
     Backend, ConnectError, HostEntry, Link, PROMPTS_KEY, Progress, RemoteCommandLink,
     RemoteFailureKind, RemoteHostSource, RemoteOldRelay, RemoteSilentRelay, RemoteStage,
-    RemoteStopOutcome, Tidied, UpgradeError,
+    RemoteStopOutcome, RemoteVia, Tidied, UpgradeError,
 };
+
+/// 코드 페어링 한 번의 시한.
+const PAIR_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// 코드 페어링 실패를 사람이 읽는 말로(코드는 싣지 않는다).
+fn pair_error(e: &pw_link::PairError) -> String {
+    use pw_link::PairError as E;
+    match e {
+        E::Rejected(RejectReason::Code) => {
+            "the relay refused the code (wrong, expired or used up — show a new code on the relay)".into()
+        }
+        E::RelayNotProven => "the relay at that address did not prove the code — it may not be the machine you meant; nothing was paired".into(),
+        other => format!("pairing did not finish: {other}"),
+    }
+}
+
+/// 직접 연결 한 번(QUIC 연결 · Noise · 링크 핸드셰이크)의 전체 시한. 넘으면 SSH 로 떨어진다.
+pub const DIRECT_TIMEOUT: Duration = Duration::from_secs(6);
 
 /// 이 빌드의 판(워크스페이스 판 하나 — Relay 와 같다).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -195,6 +220,44 @@ impl SshBackend {
         expect: Option<&str>,
         progress: &(dyn Fn(Progress) + Send + Sync),
     ) -> Result<Link, ConnectError> {
+        let mut direct_failed = None;
+        if let (Some(port), Some(expected)) = (entry.direct, expect) {
+            progress(Progress::Stage(RemoteStage::Direct));
+            match self.direct(entry, port, expected).await {
+                Ok(link) => {
+                    progress(Progress::Via(RemoteVia::Direct));
+                    return Ok(link);
+                }
+                Err((why, other_machine)) => {
+                    let line = format!(
+                        "direct connection to {}:{port} did not stand ({why}){}",
+                        entry.host,
+                        if entry.ssh {
+                            "; connecting over ssh"
+                        } else {
+                            ""
+                        }
+                    );
+                    progress(if other_machine {
+                        Progress::Warn(line)
+                    } else {
+                        Progress::Note(line)
+                    });
+                    direct_failed = Some(why);
+                }
+            }
+        }
+        if !entry.ssh {
+            return Err(ConnectError::new(
+                RemoteStage::Direct,
+                RemoteFailureKind::Link,
+                match (direct_failed, expect) {
+                    (Some(why), _) => format!("the direct connection did not stand: {why}"),
+                    (None, None) => "this host connects directly only, and no machine is remembered for it; pair it again with a code".to_owned(),
+                    (None, Some(_)) => "this host connects directly only, and direct connections are off for it".to_owned(),
+                },
+            ));
+        }
         let stage = Arc::new(Mutex::new(RemoteStage::Ssh));
         let at = || *stage.lock().unwrap_or_else(PoisonError::into_inner);
         progress(Progress::Stage(RemoteStage::Ssh));
@@ -285,6 +348,50 @@ impl SshBackend {
             return Err(dial_error(at(), e, &transport, expect));
         }
         progress(Progress::Stage(RemoteStage::Handshake));
+        progress(Progress::Via(RemoteVia::Ssh));
+        Ok(self.link_of(remote, machine))
+    }
+
+    /// 직접 연결 한 번: 기억한 머신 `expected` 만 기대한다. 실패하면 (까닭, 다른 머신이 답했나).
+    async fn direct(
+        &self,
+        entry: &HostEntry,
+        port: u16,
+        expected: &str,
+    ) -> Result<Link, (String, bool)> {
+        let key = self.key().await.map_err(|e| (e.message, false))?;
+        let transport = SecuredTransport::new(
+            QuicTransport::new(entry.host.clone(), port),
+            Arc::clone(&key),
+        );
+        let identity = Arc::new(DesktopIdentity {
+            key,
+            versions: self.versions.clone(),
+        });
+        let expected_id = pw_link::DeviceId::from_stored(expected);
+        let remote = Arc::new(RemoteHost::new(
+            expected.to_owned(),
+            Arc::new(transport) as Arc<dyn Transport>,
+            identity,
+            Expect::Machine(expected_id),
+            self.limits,
+        ));
+        match tokio::time::timeout(DIRECT_TIMEOUT, remote.attach()).await {
+            Ok(Ok(_)) => Ok(self.link_of(remote, expected.to_owned())),
+            Ok(Err(e)) => {
+                remote.detach();
+                let other = matches!(e, DialError::MachineMismatch { .. });
+                Err((format!("{e:?}"), other))
+            }
+            Err(_) => {
+                remote.detach();
+                Err((format!("no link in {} s", DIRECT_TIMEOUT.as_secs()), false))
+            }
+        }
+    }
+
+    /// 붙은 원격 Host 로 [`Link`] 를 만든다(SSH · 직접 연결이 같다).
+    fn link_of(&self, remote: Arc<RemoteHost>, machine: String) -> Link {
         let mut state = remote.state();
         let closed: BoxFuture<'static, String> = Box::pin(async move {
             loop {
@@ -327,13 +434,13 @@ impl SshBackend {
             links.insert(machine.clone(), Arc::downgrade(&remote));
         }
         let closer = Arc::clone(&remote);
-        Ok(Link {
+        Link {
             host: remote,
             machine,
             closed,
             resuming: Some(resuming),
             close: Box::new(move || closer.detach()),
-        })
+        }
     }
 }
 
@@ -657,6 +764,8 @@ impl Backend for SshBackend {
                 port: h.target.port,
                 source: RemoteHostSource::Settings,
                 ssh_args: h.ssh_args,
+                direct: h.direct,
+                ssh: h.ssh,
             })
             .collect();
         if let Some(home) = &self.parts.home {
@@ -674,6 +783,8 @@ impl Backend for SshBackend {
                     port: None,
                     source: RemoteHostSource::SshConfig,
                     ssh_args: Vec::new(),
+                    direct: Some(pw_link::quic::DEFAULT_PORT),
+                    ssh: true,
                 });
             }
         }
@@ -720,6 +831,57 @@ impl Backend for SshBackend {
         })
     }
 
+    fn resident<'a>(
+        &'a self,
+        entry: &'a HostEntry,
+        machine: &'a str,
+        on: Option<bool>,
+    ) -> BoxFuture<'a, Result<bool, UpgradeError>> {
+        Box::pin(async move {
+            self.installer(entry, machine)?
+                .resident(on)
+                .await
+                .map_err(upgrade_failure)
+        })
+    }
+
+    fn pair_direct<'a>(
+        &'a self,
+        address: &'a str,
+        port: u16,
+        code: &'a str,
+    ) -> BoxFuture<'a, Result<(String, pw_rpc::Role), String>> {
+        Box::pin(async move {
+            let key = self.key().await.map_err(|e| e.message)?;
+            let transport = SecuredTransport::new(
+                QuicTransport::new(address.to_owned(), port),
+                Arc::clone(&key),
+            );
+            let stream = transport
+                .open()
+                .await
+                .map_err(|e| format!("cannot reach {address}:{port} directly: {e}"))?;
+            let identity = DesktopIdentity {
+                key,
+                versions: self.versions.clone(),
+            };
+            let paired = pw_link::pair_with_code(
+                stream,
+                &identity,
+                code,
+                &self.parts.device_name,
+                PAIR_TIMEOUT,
+            )
+            .await
+            .map_err(|e| pair_error(&e))?;
+            Ok((paired.machine.as_str().to_owned(), paired.role))
+        })
+    }
+
+    fn discover(&self) -> BoxFuture<'_, crate::RemoteDiscovery> {
+        Box::pin(crate::ssh::discover::run())
+    }
+
     fn check<'a>(&'a self, entry: &'a HostEntry) -> BoxFuture<'a, Option<bool>> {
         Box::pin(async move {
             let ssh = self.ssh(entry).ok()?;
@@ -731,6 +893,8 @@ impl Backend for SshBackend {
         })
     }
 }
+
+pub mod discover;
 
 #[cfg(all(test, unix))]
 mod tests;

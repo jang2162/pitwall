@@ -4,6 +4,8 @@
 //! 표는 효과가 없고 경고를 남긴다.
 //!
 //! 키: `nickname` · `host`(필수 — `~/.ssh/config` 의 호스트 이름 또는 호스트 이름 · 주소) · `username` · `port` · `ssh_args`,
+//! 직접 연결(18-m7-plan M7-24 ④) `direct`(기본 `true` — 기억한 머신이 있으면 QUIC 를 먼저 해 본다) · `direct_port`(기본 7420) ·
+//! `ssh`(기본 `true` — `false` 면 SSH 로 떨어지지 않는다: 코드로 페어링한 수동 배치 Relay),
 //! 그리고 `[[remote_hosts.port_forwards]]`(18-m7-plan M7-22 — `local_port` · `remote_port` 필수, `remote_host` · `local_host`). 틀린
 //! 항목은 빼고 경고한다(다른 항목은 쓴다) — 틀린 포워딩 하나는 그 포워딩만 뺀다. `local_host` 가 루프백인지는 여기서 보지 않는다:
 //! 항목은 남기고 열 때 열지 않은 까닭을 목록에 보인다(결정 M7-D12 — `crate::forward::local_addr`).
@@ -26,6 +28,10 @@ pub struct RemoteHostSettings {
     pub ssh_args: Vec<String>,
     /// 붙을 때 여는 포트 포워딩(18-m7-plan M7-22 ①).
     pub port_forwards: Vec<ForwardSetting>,
+    /// 직접 연결의 포트(`None` 이면 직접 연결을 해 보지 않는다 — `direct = false`).
+    pub direct: Option<u16>,
+    /// SSH 로 붙는가(직접 연결이 안 될 때 떨어지는 길). `false` 면 직접 연결만.
+    pub ssh: bool,
 }
 
 impl RemoteHostSettings {
@@ -191,11 +197,42 @@ fn entry(item: &Value) -> Result<RemoteHostSettings, String> {
         port,
     };
     target.check().map_err(|e| e.to_string())?;
+    let flag = |key: &str| -> Result<bool, String> {
+        match table.get(key) {
+            None => Ok(true),
+            Some(Value::Bool(b)) => Ok(*b),
+            Some(other) => Err(format!(
+                "{key} must be true or false, found {}",
+                kind(other)
+            )),
+        }
+    };
+    let direct_port = match table.get("direct_port") {
+        None => crate::quic::DEFAULT_PORT,
+        Some(Value::Number(n)) => n
+            .as_u64()
+            .and_then(|p| u16::try_from(p).ok())
+            .filter(|p| *p > 0)
+            .ok_or("direct_port must be 1 to 65535")?,
+        Some(other) => {
+            return Err(format!(
+                "direct_port must be a number, found {}",
+                kind(other)
+            ));
+        }
+    };
+    let direct = flag("direct")?.then_some(direct_port);
+    let ssh = flag("ssh")?;
+    if direct.is_none() && !ssh {
+        return Err("direct = false and ssh = false leave no way to connect".into());
+    }
     Ok(RemoteHostSettings {
         nickname: text("nickname")?,
         target,
         ssh_args,
         port_forwards: Vec::new(),
+        direct,
+        ssh,
     })
 }
 
@@ -254,6 +291,8 @@ mod tests {
                 },
                 ssh_args: vec!["-o".into(), "ServerAliveInterval=30".into()],
                 port_forwards: Vec::new(),
+                direct: Some(7420),
+                ssh: true,
             }]
         );
         assert!(
@@ -322,11 +361,28 @@ mod tests {
             {"host": "-oProxyCommand=x"},
             {"host": "a", "ssh_args": ["-o", "StrictHostKeyChecking=no"]},
             {"host": "b", "port": 70000},
+            {"host": "c", "direct": false, "ssh": false},
+            {"host": "d", "direct_port": 0},
+            {"host": "e", "ssh": "no"},
             {"host": "mini"},
         ]);
         let (hosts, warnings) = read(Some(&global), None);
         assert_eq!(hosts.len(), 1);
         assert_eq!(hosts[0].target, SshTarget::alias("mini"));
-        assert_eq!(warnings.len(), 3, "{warnings:?}");
+        assert_eq!(warnings.len(), 6, "{warnings:?}");
+    }
+
+    /// 직접 연결 키: 기본은 직접 연결(7420)을 먼저 해 보고 SSH 로 떨어진다. `direct = false` 면 SSH 만, `ssh = false` 면 직접 연결만.
+    #[test]
+    fn direct_connection_keys() {
+        let global = serde_json::json!([
+            {"host": "a"},
+            {"host": "b", "direct": false},
+            {"host": "c", "ssh": false, "direct_port": 7500},
+        ]);
+        let (hosts, warnings) = read(Some(&global), None);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let got: Vec<(Option<u16>, bool)> = hosts.iter().map(|h| (h.direct, h.ssh)).collect();
+        assert_eq!(got, [(Some(7420), true), (None, true), (Some(7500), false)]);
     }
 }

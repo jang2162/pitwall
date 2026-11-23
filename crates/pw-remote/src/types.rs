@@ -20,6 +20,8 @@ pub enum RemoteHostSource {
 )]
 #[serde(rename_all = "camelCase")]
 pub enum RemoteStage {
+    /// 직접 연결(QUIC + Noise — 18-m7-plan M7-24 ④)을 먼저 해 본다. 기억한 머신이 있을 때만.
+    Direct,
     /// ssh 로 붙어 원격 OS · 아키텍처를 본다.
     Ssh,
     /// 같은 판의 Relay 를 올리고(이미 있으면 그대로) 이 기기를 페어링한다.
@@ -162,6 +164,26 @@ pub struct RemoteHostInfo {
     pub machine: Option<String>,
     pub status: RemoteStatus,
     pub last_link: Option<RemoteLastLink>,
+    /// 지금 링크가 무엇으로 붙었나(붙어 있을 때만 — 18-m7-plan M7-24 ④).
+    #[serde(default)]
+    pub via: Option<RemoteVia>,
+    /// 직접 연결의 포트(해 보지 않으면 `null`).
+    #[serde(default)]
+    pub direct_port: Option<u16>,
+    /// SSH 로 붙을 수 있는가(`false` 면 직접 연결만 — 코드로 페어링한 수동 배치 Relay).
+    pub ssh: bool,
+}
+
+/// 링크가 무엇으로 붙었나. 사람에게 보인다 — 직접 연결이 안 되어 SSH 로 떨어졌으면 `ssh` 다.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteVia {
+    /// QUIC + Noise(같은 LAN · tailnet).
+    Direct,
+    /// SSH(`pitwall-relay proxy` 의 stdio).
+    Ssh,
 }
 
 #[derive(
@@ -210,6 +232,8 @@ pub struct RemoteHostCheck {
 #[serde(rename_all = "camelCase")]
 pub enum RemoteLogLevel {
     Info,
+    /// 붙기는 됐지만 사람이 알아야 할 것(직접 연결이 다른 머신에 닿아 SSH 로 떨어짐 등).
+    Warn,
     Error,
 }
 
@@ -236,6 +260,9 @@ pub struct RemoteLogEntry {
 pub struct RemoteStatusChanged {
     pub name: String,
     pub status: RemoteStatus,
+    /// 붙어 있으면 무엇으로 붙었나.
+    #[serde(default)]
+    pub via: Option<RemoteVia>,
 }
 
 #[derive(
@@ -518,4 +545,91 @@ pub struct RemotePairCodeParams {
     /// 그 기기의 이름(없으면 기기가 댄 이름).
     #[serde(default)]
     pub device_name: Option<String>,
+}
+
+/// 직접 연결 주소와 6자리 코드로 수동 배치 Relay 에 이 Desktop 을 페어링한다(18-m7-plan M7-24 · M7-23 판정 5).
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RemotePairDirectParams {
+    /// 호스트 이름 · IP(검색 결과에서 고르거나 사람이 친다).
+    pub address: String,
+    /// 직접 연결 포트(없으면 7420).
+    #[serde(default)]
+    pub port: Option<u16>,
+    /// Relay 터미널(`pitwall-relay pair`) · 기기 칸에 보인 6자리 코드.
+    pub code: String,
+    /// 이 호스트 항목의 이름(설정 `[[remote_hosts]]` 의 `nickname`).
+    pub nickname: String,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RemotePairDirectResult {
+    /// 새 호스트 항목 이름.
+    pub name: String,
+    /// 증명된 머신 id(Relay 기기 키 지문 — 이 호스트에 기억했다).
+    pub machine: String,
+    /// 코드를 만든 사람이 고른 role.
+    pub role: pw_rpc::Role,
+}
+
+/// 검색 결과 하나(18-m7-plan M7-24 ③).
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteDiscovered {
+    pub source: RemoteDiscoverySource,
+    /// 사람이 읽는 이름(Tailscale 기기 이름 · MagicDNS). LAN 광고는 이름을 싣지 않으므로 주소다.
+    pub label: String,
+    /// 붙을 주소(호스트 이름 · IP).
+    pub address: String,
+    pub port: u16,
+    /// 그 주소에 직접 연결 받는 쪽이 있는가(QUIC 핸드셰이크만 본다 — 누구인지는 페어링 · 기억한 키가 판정한다).
+    pub listening: bool,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteDiscoverySource {
+    /// 로컬 Tailscale 의 기기 목록.
+    Tailscale,
+    /// LAN mDNS 광고.
+    Lan,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteDiscovery {
+    pub found: Vec<RemoteDiscovered>,
+    /// 검색하지 못한 까닭(Tailscale 이 없음 등 — 사람이 읽을 영어 문장).
+    pub notes: Vec<String>,
+}
+
+/// 「이 머신에 상주시키기」(18-m7-plan M7-24 ⑤ — 사람이 고를 때만). `on` 이 없으면 지금 상태만 읽는다.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteResidentParams {
+    pub name: String,
+    pub machine: String,
+    #[serde(default)]
+    pub on: Option<bool>,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteResident {
+    pub resident: bool,
 }

@@ -143,6 +143,8 @@ fn mini() -> HostEntry {
         port: None,
         source: RemoteHostSource::SshConfig,
         ssh_args: Vec::new(),
+        direct: None,
+        ssh: true,
     }
 }
 

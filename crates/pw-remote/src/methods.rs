@@ -15,10 +15,11 @@ use pw_rpc::{ConnectionScope, Ctx, Router, RpcError, code, rpc_method};
 use pw_link::devices::{RelayDeviceList, RelayPairCode, RelayUnpairResult};
 
 use crate::{
-    ForwardOpenError, PROMPTS_KEY, RemoteDevicesParams, RemoteError, RemoteForward,
-    RemoteForwardCloseParams, RemoteForwardOpenParams, RemoteForwardsParams, RemoteHostCheck,
-    RemoteHostList, RemoteHostParams, RemoteHosts, RemoteLinkCommandParams, RemoteLogEntry,
-    RemotePairCodeParams, RemotePromptAnswerParams, RemoteRelays, RemoteStatus,
+    ForwardOpenError, PROMPTS_KEY, RemoteDevicesParams, RemoteDiscovery, RemoteError,
+    RemoteForward, RemoteForwardCloseParams, RemoteForwardOpenParams, RemoteForwardsParams,
+    RemoteHostCheck, RemoteHostList, RemoteHostParams, RemoteHosts, RemoteLinkCommandParams,
+    RemoteLogEntry, RemotePairCodeParams, RemotePairDirectParams, RemotePairDirectResult,
+    RemotePromptAnswerParams, RemoteRelays, RemoteResident, RemoteResidentParams, RemoteStatus,
     RemoteStopOldParams, RemoteStopOutcome, RemoteTrustMachineParams, RemoteUnpairDeviceParams,
 };
 
@@ -145,6 +146,33 @@ rpc_method! {
     pub RemotePairCode: "remote.pairCode" {
         params: RemotePairCodeParams,
         result: RelayPairCode,
+        tier: Write,
+        roles: [Owner],
+    }
+
+    /// 직접 연결 후보 검색(18-m7-plan M7-24 ③): 로컬 Tailscale 의 온라인 기기와 LAN mDNS 광고. 그 주소에 직접 연결 받는 쪽이 있는지만
+    /// 본다(누구인지는 증명하지 않는다).
+    pub RemoteDiscover: "remote.discover" {
+        params: (),
+        result: RemoteDiscovery,
+        tier: Read,
+        roles: [Owner],
+    }
+
+    /// 코드 입력 화면(18-m7-plan M7-24 · M7-23 판정 5): 주소와 6자리 코드로 수동 배치 Relay 에 이 Desktop 을 페어링하고 직접 연결
+    /// 전용 호스트 항목으로 더한다.
+    pub RemotePairDirect: "remote.pairDirect" {
+        params: RemotePairDirectParams,
+        result: RemotePairDirectResult,
+        tier: Write,
+        roles: [Owner],
+    }
+
+    /// 「이 머신에 상주시키기」(18-m7-plan M7-24 ⑤ — 사람이 고를 때만, 결정 M7-D2). `on` 이 없으면 지금 상태만. 그 호스트가 지금
+    /// `machine` 에 붙어 있고 SSH 로 닿을 때만.
+    pub RemoteResidentSet: "remote.resident" {
+        params: RemoteResidentParams,
+        result: RemoteResident,
         tier: Write,
         roles: [Owner],
     }
@@ -316,6 +344,30 @@ pub fn register(router: &mut Router, remote: &RemoteHosts) {
         async move {
             host_scope(&ctx)?;
             r.link_command(&p.name, &p.machine, p.on).await.map_err(rpc)
+        }
+    });
+    let r = remote.clone();
+    router.unary(RemoteDiscover, move |ctx, ()| {
+        let r = r.clone();
+        async move {
+            host_scope(&ctx)?;
+            r.discover().await.map_err(rpc)
+        }
+    });
+    let r = remote.clone();
+    router.unary(RemotePairDirect, move |ctx, p: RemotePairDirectParams| {
+        let r = r.clone();
+        async move {
+            host_scope(&ctx)?;
+            r.pair_direct(p).await.map_err(rpc)
+        }
+    });
+    let r = remote.clone();
+    router.unary(RemoteResidentSet, move |ctx, p: RemoteResidentParams| {
+        let r = r.clone();
+        async move {
+            host_scope(&ctx)?;
+            r.resident(&p.name, &p.machine, p.on).await.map_err(rpc)
         }
     });
     let r = remote.clone();

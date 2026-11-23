@@ -31,6 +31,7 @@ use serde_json::Value;
 use tokio::sync::watch;
 use zeroize::Zeroizing;
 
+pub mod direct;
 mod forwards;
 pub mod methods;
 
@@ -99,6 +100,10 @@ pub struct HostEntry {
     pub source: RemoteHostSource,
     /// 사람의 ssh 옵션(전역 설정의 것만 — 거르기를 지난 것).
     pub ssh_args: Vec<String>,
+    /// 직접 연결의 포트(18-m7-plan M7-24 ④ — `None` 이면 해 보지 않는다).
+    pub direct: Option<u16>,
+    /// SSH 로 붙을 수 있는가(`false` 면 직접 연결만).
+    pub ssh: bool,
 }
 
 /// 붙는 동안 [`Backend::connect`] 가 알리는 것.
@@ -107,6 +112,10 @@ pub enum Progress {
     Stage(RemoteStage),
     /// 연결 로그에 남길 한 줄(영어).
     Note(String),
+    /// 링크가 무엇으로 붙었나(18-m7-plan M7-24 ④ — 붙기 직전에 한 번).
+    Via(RemoteVia),
+    /// 사람이 알아야 할 경고 한 줄(직접 연결이 다른 머신에 닿음 등 — 연결 로그에 경고로).
+    Warn(String),
 }
 
 /// 붙지 못한 까닭.
@@ -196,6 +205,39 @@ pub trait Backend: Send + Sync {
     /// 증명된 머신 `machine` 의 링크로 로컬 TCP 연결을 잇는 것(18-m7-plan M7-22). 포워딩이 없는 백엔드는 `None`.
     fn forwarder(&self, _machine: &str) -> Option<Arc<dyn Forwarder>> {
         None
+    }
+    /// 직접 연결 주소와 6자리 코드로 수동 배치 Relay 에 이 기기를 페어링한다(18-m7-plan M7-24 · `pw_link::pair_with_code`). 증명된
+    /// (머신 id, 코드의 role).
+    fn pair_direct<'a>(
+        &'a self,
+        _address: &'a str,
+        _port: u16,
+        _code: &'a str,
+    ) -> BoxFuture<'a, Result<(String, pw_rpc::Role), String>> {
+        Box::pin(async { Err("this backend cannot pair over a direct connection".into()) })
+    }
+    /// 직접 연결 후보 검색(Tailscale 기기 목록 · LAN mDNS — 18-m7-plan M7-24 ③).
+    fn discover(&self) -> BoxFuture<'_, RemoteDiscovery> {
+        Box::pin(async {
+            RemoteDiscovery {
+                found: Vec::new(),
+                notes: vec!["this backend cannot search for relays".into()],
+            }
+        })
+    }
+    /// 「이 머신에 상주시키기」(18-m7-plan M7-24 ⑤): 그 머신의 이 판 Relay 를 상주시키거나(`Some(true)`) 내리거나(`Some(false)`)
+    /// 지금 상태만 읽는다(`None`). 그 뒤 상주인가.
+    fn resident<'a>(
+        &'a self,
+        _entry: &'a HostEntry,
+        _machine: &'a str,
+        _on: Option<bool>,
+    ) -> BoxFuture<'a, Result<bool, UpgradeError>> {
+        Box::pin(async {
+            Err(UpgradeError::Failed(
+                "this backend cannot make a relay resident".into(),
+            ))
+        })
     }
     /// `pitwall` 명령 링크를 이 판 바이너리로 두거나(`on`) 걷는다. 그 뒤 링크가 있는가.
     fn link_command<'a>(
@@ -295,6 +337,8 @@ struct Slot {
     upgrade: Arc<tokio::sync::Mutex<()>>,
     /// 지금 링크로 포워딩 연결을 잇는 것(18-m7-plan M7-22 — 링크가 없으면 없다).
     forwarder: Option<Arc<dyn Forwarder>>,
+    /// 지금(또는 붙는 중인) 링크가 무엇으로 붙었나(18-m7-plan M7-24 ④).
+    via: Option<RemoteVia>,
 }
 
 impl Slot {
@@ -310,6 +354,7 @@ impl Slot {
             relays: None,
             upgrade: Arc::default(),
             forwarder: None,
+            via: None,
         }
     }
 }
@@ -560,8 +605,18 @@ impl RemoteHosts {
             .into_iter()
             .map(|e| {
                 let (machine, last_link) = self.last_link(&e.name);
+                let status = self.status(&e.name);
+                let via = match status {
+                    RemoteStatus::Connected { .. } | RemoteStatus::Resuming { .. } => {
+                        lock(&self.inner.slots).get(&e.name).and_then(|s| s.via)
+                    }
+                    _ => None,
+                };
                 RemoteHostInfo {
-                    status: self.status(&e.name),
+                    status,
+                    via,
+                    direct_port: e.direct,
+                    ssh: e.ssh,
                     name: e.name,
                     host: e.host,
                     user: e.user,
@@ -787,6 +842,10 @@ impl RemoteHosts {
         ) {
             self.close_host_forwards(name);
         }
+        let via = match status {
+            RemoteStatus::Connected { .. } | RemoteStatus::Resuming { .. } => slot.via,
+            _ => None,
+        };
         if let Some(host) = read(&self.inner.host) {
             let _ = host.bus.publish(
                 Scope::Host,
@@ -794,6 +853,7 @@ impl RemoteHosts {
                 &RemoteStatusChanged {
                     name: name.to_owned(),
                     status,
+                    via,
                 },
             );
         }
@@ -994,6 +1054,28 @@ impl RemoteHosts {
                     _ => None,
                 };
                 self.note(name, stage, RemoteLogLevel::Info, &text);
+            }
+            Progress::Warn(text) => {
+                let stage = match self.status(name) {
+                    RemoteStatus::Connecting { stage } => Some(stage),
+                    _ => None,
+                };
+                self.note(name, stage, RemoteLogLevel::Warn, &text);
+            }
+            Progress::Via(via) => {
+                self.update(name, generation, |slot| {
+                    slot.via = Some(via);
+                    None
+                });
+                self.note(
+                    name,
+                    None,
+                    RemoteLogLevel::Info,
+                    match via {
+                        RemoteVia::Direct => "connected directly (quic + noise)",
+                        RemoteVia::Ssh => "connected over ssh",
+                    },
+                );
             }
         };
         let result = backend.connect(&entry, expect.as_deref(), &progress).await;
@@ -1444,6 +1526,113 @@ impl RemoteHosts {
         }
         result.map(|_| ()).map_err(upgrade_error)
     }
+
+    /// 「이 머신에 상주시키기」(`remote.resident` — 18-m7-plan M7-24 ⑤). 그 호스트가 지금 `machine` 에 붙어 있고 SSH 로 닿을 수 있을
+    /// 때만(상주 단위는 그 머신의 셸에서 쓴다). `on` 이 없으면 지금 상태만 읽는다.
+    pub async fn resident(
+        &self,
+        name: &str,
+        machine: &str,
+        on: Option<bool>,
+    ) -> Result<RemoteResident, RemoteError> {
+        let entry = self.entry(name)?;
+        if !entry.ssh {
+            return Err(RemoteError::Conflict(format!(
+                "`{name}` connects directly only; make its relay resident on that machine (`pitwall-relay resident on`)"
+            )));
+        }
+        let backend = self.backend().ok_or(RemoteError::Unavailable)?;
+        let (generation, gate) = self.linked_to(name, machine)?;
+        let _one = gate.lock().await;
+        if self.linked_to(name, machine)?.0 != generation {
+            return Err(RemoteError::Conflict(format!(
+                "`{name}` reconnected; look again"
+            )));
+        }
+        let result = backend.resident(&entry, machine, on).await;
+        match (&result, on) {
+            (Ok(resident), Some(_)) => self.note(
+                name,
+                None,
+                RemoteLogLevel::Info,
+                if *resident {
+                    "the relay now stays resident on that machine (launchd / systemd user)"
+                } else {
+                    "the relay is no longer resident on that machine"
+                },
+            ),
+            (Err(e), Some(_)) => self.note(
+                name,
+                None,
+                RemoteLogLevel::Error,
+                &format!("could not change the relay residency: {e}"),
+            ),
+            _ => {}
+        }
+        result
+            .map(|resident| RemoteResident { resident })
+            .map_err(upgrade_error)
+    }
+
+    /// 직접 연결 후보 검색(`remote.discover`).
+    pub async fn discover(&self) -> Result<RemoteDiscovery, RemoteError> {
+        let backend = self.backend().ok_or(RemoteError::Unavailable)?;
+        Ok(backend.discover().await)
+    }
+
+    /// 코드 입력 화면(`remote.pairDirect` — 18-m7-plan M7-24 · M7-23 판정 5): 주소의 Relay 와 Noise 위에서 코드로 페어링하고, 그 머신을
+    /// 직접 연결 전용 호스트 항목(`[[remote_hosts]]` · `ssh = false`)으로 더하고 머신 id 를 기억한다. 그 뒤 연결은 그 머신 id 만
+    /// 받는다. 코드를 모르는 Relay(가짜 광고 · 주소 가로채기)와는 페어링되지 않는다(PAKE — `pw_link::pair`).
+    pub async fn pair_direct(
+        &self,
+        p: RemotePairDirectParams,
+    ) -> Result<RemotePairDirectResult, RemoteError> {
+        let backend = self.backend().ok_or(RemoteError::Unavailable)?;
+        if !direct::valid_nickname(&p.nickname) {
+            return Err(RemoteError::Conflict(
+                "the host name takes letters, digits, `.`, `_`, `-` (64 at most)".into(),
+            ));
+        }
+        if !direct::valid_address(&p.address) {
+            return Err(RemoteError::Conflict(format!(
+                "`{}` is not a host name or address",
+                p.address
+            )));
+        }
+        if self.entries().0.iter().any(|e| e.name == p.nickname) {
+            return Err(RemoteError::Conflict(format!(
+                "a remote host named `{}` already exists",
+                p.nickname
+            )));
+        }
+        let parts = read(&self.inner.host).ok_or(RemoteError::Unavailable)?;
+        let settings = parts.settings.clone().ok_or(RemoteError::Unavailable)?;
+        let port = p.port.unwrap_or(pw_link::quic::DEFAULT_PORT);
+        let (machine, role) = backend
+            .pair_direct(&p.address, port, &p.code)
+            .await
+            .map_err(RemoteError::Remote)?;
+        let config_dir = settings.source().dir().to_path_buf();
+        direct::add_direct_host(&config_dir, &p.nickname, &p.address, port)
+            .map_err(RemoteError::Conflict)?;
+        let _ = settings.reload();
+        if let Some(registry) = self.registry() {
+            registry
+                .remember_first_remote_machine(&p.nickname, &machine)
+                .map_err(|e| RemoteError::Conflict(e.to_string()))?;
+        }
+        self.note(
+            &p.nickname,
+            None,
+            RemoteLogLevel::Info,
+            &format!("paired this device with machine {machine} over a direct connection"),
+        );
+        Ok(RemotePairDirectResult {
+            name: p.nickname,
+            machine,
+            role,
+        })
+    }
 }
 
 fn upgrade_error(e: UpgradeError) -> RemoteError {
@@ -1457,6 +1646,14 @@ fn upgrade_error(e: UpgradeError) -> RemoteError {
 }
 
 fn describe(entry: &HostEntry) -> String {
+    if !entry.ssh {
+        return format!(
+            "{} (direct {}:{})",
+            entry.name,
+            entry.host,
+            entry.direct.unwrap_or(pw_link::quic::DEFAULT_PORT)
+        );
+    }
     let mut text = format!("{} (ssh ", entry.name);
     if let Some(user) = &entry.user {
         text.push_str(user);
@@ -1472,6 +1669,7 @@ fn describe(entry: &HostEntry) -> String {
 
 fn stage_line(stage: RemoteStage) -> &'static str {
     match stage {
+        RemoteStage::Direct => "direct: trying quic + noise to the remembered machine",
         RemoteStage::Ssh => "ssh: connecting and probing the remote platform",
         RemoteStage::Install => "install: checking the relay of this version",
         RemoteStage::Daemon => "daemon: starting the relay proxy",

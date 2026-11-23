@@ -1328,6 +1328,11 @@ export type UnaryMethods = {
 	 */
 	"remote.disconnect": { params: RemoteHostParams; result: null };
 	/**
+	 * 직접 연결 후보 검색(18-m7-plan M7-24 ③): 로컬 Tailscale 의 온라인 기기와 LAN mDNS 광고. 그 주소에 직접 연결 받는 쪽이 있는지만
+	 * 본다(누구인지는 증명하지 않는다).
+	 */
+	"remote.discover": { params: null; result: RemoteDiscovery };
+	/**
 	 * 포워딩 하나를 끈다. 실행 탭의 것이면 그 스트림이 끝나고, 설정의 것은 다음에 붙을 때 다시 연다.
 	 */
 	"remote.forward.close": { params: RemoteForwardCloseParams; result: null };
@@ -1360,6 +1365,11 @@ export type UnaryMethods = {
 	 */
 	"remote.pairCode": { params: RemotePairCodeParams; result: RelayPairCode };
 	/**
+	 * 코드 입력 화면(18-m7-plan M7-24 · M7-23 판정 5): 주소와 6자리 코드로 수동 배치 Relay 에 이 Desktop 을 페어링하고 직접 연결
+	 * 전용 호스트 항목으로 더한다.
+	 */
+	"remote.pairDirect": { params: RemotePairDirectParams; result: RemotePairDirectResult };
+	/**
 	 * 원격 askpass 질문의 답. 처음 온 답만 받는다.
 	 */
 	"remote.prompt.answer": { params: RemotePromptAnswerParams; result: null };
@@ -1377,6 +1387,11 @@ export type UnaryMethods = {
 	/**  이번 정리에서 지운 옛 판 바이너리 이름. */
 	removed: string[],
 } | null };
+	/**
+	 * 「이 머신에 상주시키기」(18-m7-plan M7-24 ⑤ — 사람이 고를 때만, 결정 M7-D2). `on` 이 없으면 지금 상태만. 그 호스트가 지금
+	 * `machine` 에 붙어 있고 SSH 로 닿을 때만.
+	 */
+	"remote.resident": { params: RemoteResidentParams; result: RemoteResident };
 	/**
 	 * 다시 시도: 쓰는 창이 있으면 기다림 없이 지금 붙는다.
 	 */
@@ -2048,6 +2063,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"remote.connect": {"name":"remote.connect","kind":"stream","tier":"write","roles":["owner"],"params":"RemoteHostParams","output":"RemoteStatus","doc":" 그 호스트를 쓴다: 링크가 없으면 붙고(SSH → 설치 → 데몬 → 핸드셰이크), 스트림이 열린 동안 링크를 둔다. 지금 상태부터 바뀔\n 때마다 보낸다. 사람이 끊어 둔 호스트도 다시 붙는다. 모든 스트림이 닫히면 링크를 닫는다.\n","mcp":null,"fileScope":false},
 	"remote.devices": {"name":"remote.devices","kind":"unary","tier":"read","roles":["owner"],"params":"RemoteDevicesParams","output":"RelayDeviceList","doc":" 기기 화면(18-m7-plan M7-23 ③): 그 호스트가 지금 `machine` 에 붙어 있으면 그 Relay 의 페어링 표(`relay.devices`)를 읽는다.\n 링크를 새로 열지 않는다. role 판정은 Relay 가 한다(owner 기기만 — 두 겹).\n","mcp":null,"fileScope":false},
 	"remote.disconnect": {"name":"remote.disconnect","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteHostParams","output":"()","doc":" 사람이 끊는다. 쓰는 창이 남아 있어도 다시 붙지 않는다(새 `remote.connect` · `remote.retry` 까지).\n","mcp":null,"fileScope":false},
+	"remote.discover": {"name":"remote.discover","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"RemoteDiscovery","doc":" 직접 연결 후보 검색(18-m7-plan M7-24 ③): 로컬 Tailscale 의 온라인 기기와 LAN mDNS 광고. 그 주소에 직접 연결 받는 쪽이 있는지만\n 본다(누구인지는 증명하지 않는다).\n","mcp":null,"fileScope":false},
 	"remote.forward.close": {"name":"remote.forward.close","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteForwardCloseParams","output":"()","doc":" 포워딩 하나를 끈다. 실행 탭의 것이면 그 스트림이 끝나고, 설정의 것은 다음에 붙을 때 다시 연다.\n","mcp":null,"fileScope":false},
 	"remote.forward.open": {"name":"remote.forward.open","kind":"stream","tier":"write","roles":["owner"],"params":"RemoteForwardOpenParams","output":"RemoteForward","doc":" 실행 탭 포트의 「로컬로 포워딩」: 그 호스트의 `localhost:remotePort` 를 이 컴퓨터의 루프백(`127.0.0.1`)에서 듣는다. 스트림이\n 열린 동안 포워딩과 그 호스트를 쓴다(링크가 없으면 붙는다). 처음 열린 포워딩을, 닫히면(`remote.forward.close`) 끝을 보낸다. 로컬\n 포트를 이미 누가 쓰면 `conflict`(data `{ reason: \"portInUse\", port }`) — 다른 `localPort` 로 다시 연다.\n","mcp":null,"fileScope":false},
 	"remote.forwards.list": {"name":"remote.forwards.list","kind":"unary","tier":"read","roles":["owner"],"params":"RemoteForwardsParams","output":"Vec<RemoteForward>","doc":" 포트 포워딩 목록(`name` 이 없으면 모든 호스트): 설정의 것(붙을 때 연다)과 실행 탭의 것, 듣는 로컬 주소 · 원격 대상 · 상태\n (열지 못했으면 까닭 — 루프백이 아님 · 로컬 포트가 쓰임). 바뀌면 `remote.forwards` 이벤트.\n","mcp":null,"fileScope":false},
@@ -2056,9 +2072,11 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"remote.linkCommand": {"name":"remote.linkCommand","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteLinkCommandParams","output":"()","doc":" 원격의 `~/.local/bin/pitwall` 링크를 이 판 Relay 로 두거나(`on`) 걷는다(메인 판정 M7-P12 — 사람이 고를 때만). 그 자리에 사람의\n 다른 파일이 있으면 Relay 가 거절한다. 그 호스트가 지금 `machine` 에 붙어 있을 때만.\n","mcp":null,"fileScope":false},
 	"remote.log": {"name":"remote.log","kind":"unary","tier":"read","roles":["owner"],"params":"RemoteHostParams","output":"Vec<RemoteLogEntry>","doc":" 그 호스트의 연결 로그(단계 · 실패 · ssh stderr 끝부분). askpass 답은 없다.\n","mcp":null,"fileScope":false},
 	"remote.pairCode": {"name":"remote.pairCode","kind":"unary","tier":"write","roles":["owner"],"params":"RemotePairCodeParams","output":"RelayPairCode","doc":" 그 Relay 에 다른 기기를 붙일 6자리 코드를 만든다(`relay.pairCode` — 5분, 세 번 틀리면 끝, 한 번 쓰면 끝). 그 호스트가 지금\n `machine` 에 붙어 있을 때만.\n","mcp":null,"fileScope":false},
+	"remote.pairDirect": {"name":"remote.pairDirect","kind":"unary","tier":"write","roles":["owner"],"params":"RemotePairDirectParams","output":"RemotePairDirectResult","doc":" 코드 입력 화면(18-m7-plan M7-24 · M7-23 판정 5): 주소와 6자리 코드로 수동 배치 Relay 에 이 Desktop 을 페어링하고 직접 연결\n 전용 호스트 항목으로 더한다.\n","mcp":null,"fileScope":false},
 	"remote.prompt.answer": {"name":"remote.prompt.answer","kind":"unary","tier":"write","roles":["owner"],"params":"RemotePromptAnswerParams","output":"()","doc":" 원격 askpass 질문의 답. 처음 온 답만 받는다.\n","mcp":null,"fileScope":false},
 	"remote.prompts": {"name":"remote.prompts","kind":"stream","tier":"read","roles":["owner"],"params":"()","output":"GitPromptEvent","doc":" 원격 호스트를 붙이는 ssh 의 질문 스트림(호스트 키 확인 · 암호). 열 때 아직 열린 질문이 먼저 온다.\n","mcp":null,"fileScope":false},
 	"remote.relays": {"name":"remote.relays","kind":"unary","tier":"read","roles":["owner"],"params":"RemoteHostParams","output":"Option<RemoteRelays>","doc":" 지금 링크에서 본 원격 Relay(18-m7-plan M7-07b ②): 떠 있는 옛 판 데몬(판 · 실행 · 터미널 · 붙은 링크 수 — 사람이 본 그대로\n `remote.stopOld` 에 싣는다) · 답하지 않는 옛 판 · `pitwall` 명령 링크 · 이번 정리에서 지운 것. 링크가 없거나 아직 보지 않았으면\n `null`. 바뀌면 `remote.relays` 이벤트.\n","mcp":null,"fileScope":false},
+	"remote.resident": {"name":"remote.resident","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteResidentParams","output":"RemoteResident","doc":" 「이 머신에 상주시키기」(18-m7-plan M7-24 ⑤ — 사람이 고를 때만, 결정 M7-D2). `on` 이 없으면 지금 상태만. 그 호스트가 지금\n `machine` 에 붙어 있고 SSH 로 닿을 때만.\n","mcp":null,"fileScope":false},
 	"remote.retry": {"name":"remote.retry","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteHostParams","output":"()","doc":" 다시 시도: 쓰는 창이 있으면 기다림 없이 지금 붙는다.\n","mcp":null,"fileScope":false},
 	"remote.stopOld": {"name":"remote.stopOld","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteStopOldParams","output":"RemoteStopOutcome","doc":" [옛 판 끝내기](M7-07b ③): 그 호스트가 지금 `machine` 에 붙어 있고, 원격의 그 옛 판 데몬이 사람이 본 `seen` 그대로(pid · 실행 ·\n 터미널 · 붙은 링크 수)일 때만 SIGTERM — 실행 트리는 그 데몬이 끝낸다. 바뀌었으면 끝내지 않고 `changed` 로 지금 것을 돌려준다.\n","mcp":null,"fileScope":false},
 	"remote.trustMachine": {"name":"remote.trustMachine","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteTrustMachineParams","output":"()","doc":" 「이 머신을 새로 믿기」: 그 호스트가 `machineChanged` 이고 `found` 가 `machine` 일 때만 — 묶음 멤버의 머신 id 를 옮기고 새\n id 를 기억한 뒤 다시 붙는다.\n","mcp":null,"fileScope":false},
@@ -9703,6 +9721,30 @@ export type RemoteDevicesParams = {
 	machine: string,
 };
 
+/**  검색 결과 하나(18-m7-plan M7-24 ③). */
+export type RemoteDiscovered = {
+	source: RemoteDiscoverySource,
+	/**  사람이 읽는 이름(Tailscale 기기 이름 · MagicDNS). LAN 광고는 이름을 싣지 않으므로 주소다. */
+	label: string,
+	/**  붙을 주소(호스트 이름 · IP). */
+	address: string,
+	port: number,
+	/**  그 주소에 직접 연결 받는 쪽이 있는가(QUIC 핸드셰이크만 본다 — 누구인지는 페어링 · 기억한 키가 판정한다). */
+	listening: boolean,
+};
+
+export type RemoteDiscovery = {
+	found: RemoteDiscovered[],
+	/**  검색하지 못한 까닭(Tailscale 이 없음 등 — 사람이 읽을 영어 문장). */
+	notes: string[],
+};
+
+export type RemoteDiscoverySource = 
+/**  로컬 Tailscale 의 기기 목록. */
+"tailscale" | 
+/**  LAN mDNS 광고. */
+"lan";
+
 /**  실패 하나. `message` 는 영어 원문(진단), 화면은 `kind` 로 말을 고른다. 비밀(askpass 답)은 들지 않는다. */
 export type RemoteFailure = {
 	stage: RemoteStage,
@@ -9824,6 +9866,12 @@ export type RemoteHostInfo = {
 	machine: string | null,
 	status: RemoteStatus,
 	lastLink: RemoteLastLink | null,
+	/**  지금 링크가 무엇으로 붙었나(붙어 있을 때만 — 18-m7-plan M7-24 ④). */
+	via?: RemoteVia | null,
+	/**  직접 연결의 포트(해 보지 않으면 `null`). */
+	directPort?: number | null,
+	/**  SSH 로 붙을 수 있는가(`false` 면 직접 연결만 — 코드로 페어링한 수동 배치 Relay). */
+	ssh: boolean,
 };
 
 export type RemoteHostList = {
@@ -9871,7 +9919,9 @@ export type RemoteLogEntry = {
 	text: string,
 };
 
-export type RemoteLogLevel = "info" | "error";
+export type RemoteLogLevel = "info" | 
+/**  붙기는 됐지만 사람이 알아야 할 것(직접 연결이 다른 머신에 닿아 SSH 로 떨어짐 등). */
+"warn" | "error";
 
 /**
  *  떠 있는 옛 판 Relay 데몬 하나(18-m7-plan M7-07b ② — 사람이 본 그대로). 이 값 그대로 `remote.stopOld` 에 실어 보낸다 — 그사이
@@ -9899,6 +9949,27 @@ export type RemotePairCodeParams = {
 	deviceName?: string | null,
 };
 
+/**  직접 연결 주소와 6자리 코드로 수동 배치 Relay 에 이 Desktop 을 페어링한다(18-m7-plan M7-24 · M7-23 판정 5). */
+export type RemotePairDirectParams = {
+	/**  호스트 이름 · IP(검색 결과에서 고르거나 사람이 친다). */
+	address: string,
+	/**  직접 연결 포트(없으면 7420). */
+	port?: number | null,
+	/**  Relay 터미널(`pitwall-relay pair`) · 기기 칸에 보인 6자리 코드. */
+	code: string,
+	/**  이 호스트 항목의 이름(설정 `[[remote_hosts]]` 의 `nickname`). */
+	nickname: string,
+};
+
+export type RemotePairDirectResult = {
+	/**  새 호스트 항목 이름. */
+	name: string,
+	/**  증명된 머신 id(Relay 기기 키 지문 — 이 호스트에 기억했다). */
+	machine: string,
+	/**  코드를 만든 사람이 고른 role. */
+	role: Role,
+};
+
 export type RemotePromptAnswerParams = {
 	promptId: number,
 	answer: GitPromptAnswer,
@@ -9915,6 +9986,17 @@ export type RemoteRelays = {
 	removed: string[],
 };
 
+export type RemoteResident = {
+	resident: boolean,
+};
+
+/**  「이 머신에 상주시키기」(18-m7-plan M7-24 ⑤ — 사람이 고를 때만). `on` 이 없으면 지금 상태만 읽는다. */
+export type RemoteResidentParams = {
+	name: string,
+	machine: string,
+	on?: boolean | null,
+};
+
 /**  답하지 않는 옛 판 Relay(데몬이 있는지 모른다 — `status` 가 3 이 아닌 오류). 끝내기 단추가 없다. */
 export type RemoteSilentRelay = {
 	file: string,
@@ -9923,6 +10005,8 @@ export type RemoteSilentRelay = {
 
 /**  붙는 단계(진단 칸의 차례 — 18-m7-plan M7-08 ②). */
 export type RemoteStage = 
+/**  직접 연결(QUIC + Noise — 18-m7-plan M7-24 ④)을 먼저 해 본다. 기억한 머신이 있을 때만. */
+"direct" | 
 /**  ssh 로 붙어 원격 OS · 아키텍처를 본다. */
 "ssh" | 
 /**  같은 판의 Relay 를 올리고(이미 있으면 그대로) 이 기기를 페어링한다. */
@@ -9987,6 +10071,13 @@ export type RemoteUnpairDeviceParams = {
 	/**  해제할 기기 id(`relay.devices` 의 `device`). */
 	device: string,
 };
+
+/**  링크가 무엇으로 붙었나. 사람에게 보인다 — 직접 연결이 안 되어 SSH 로 떨어졌으면 `ssh` 다. */
+export type RemoteVia = 
+/**  QUIC + Noise(같은 LAN · tailnet). */
+"direct" | 
+/**  SSH(`pitwall-relay proxy` 의 stdio). */
+"ssh";
 
 export type RemoveBundleMemberParams = {
 	bundleId: string,

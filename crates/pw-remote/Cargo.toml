@@ -9,9 +9,11 @@ publish.workspace = true
 [features]
 # 실제 SSH · 설치 · 링크(`ssh` 모듈 — 18-m7-plan M7-08). 데스크톱 앱만 켠다. Relay 는 pw-host 를 거쳐 이 크레이트를 링크하지만 이
 # 기능을 켜지 않는다 — Relay 바이너리에 SSH 부트스트랩(`pw-link/bootstrap`)이 들지 않게(M7-06 의 결정, `pw-host/tests/deps.rs`).
-ssh = ["pw-link/bootstrap"]
+ssh = ["pw-link/bootstrap", "dep:mdns-sd"]
 
 [dependencies]
+# LAN 검색(직접 연결 — 18-m7-plan M7-24 ③). Desktop 만(기능 `ssh`) — Relay 의 광고와 같은 판.
+mdns-sd = { version = "0.22.0", default-features = false, optional = true }
 pw-core = { path = "../pw-core" }
 # `~/.ssh/config` 의 호스트 이름 목록(`pw_db::ssh_hosts::hosts_in` — DB 터널의 SSH 탭과 같은 읽기), 원격 Relay 의 비밀 청에
 # 답하는 저장소 trait · 청 타입(`pw_db::secret` · `pw_db::desktop_secret` — 18-m7-plan M7-12).
@@ -25,8 +27,10 @@ schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 specta = { workspace = true, features = ["derive"] }
-# net: 포트 포워딩의 로컬 루프백 듣기(18-m7-plan M7-22).
-tokio = { workspace = true, features = ["rt", "sync", "macros", "time", "net"] }
+# net: 포트 포워딩의 로컬 루프백 듣기(18-m7-plan M7-22). process · io-util: 직접 연결 검색의 Tailscale 로컬 API · CLI(M7-24).
+tokio = { workspace = true, features = ["rt", "sync", "macros", "time", "net", "process", "io-util"] }
+# 코드로 페어링한 직접 연결 호스트를 전역 설정의 `[[remote_hosts]]` 에 덧붙인다(주석 · 서식 보존 — pw-core 와 같은 판).
+toml_edit = "0.25.17"
 tracing = "0.1.44"
 # askpass 답(진단 글에서 가릴 것)을 지울 때 메모리를 비운다.
 zeroize = "1.9.1"

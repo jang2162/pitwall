@@ -123,6 +123,8 @@ fn mini() -> HostEntry {
         port: None,
         source: RemoteHostSource::SshConfig,
         ssh_args: Vec::new(),
+        direct: None,
+        ssh: true,
     }
 }
 
@@ -171,7 +173,7 @@ async fn the_stages_come_in_order_and_a_relay_without_a_handshake_fails_there() 
         .iter()
         .filter_map(|p| match p {
             Progress::Note(n) => Some(n.as_str()),
-            Progress::Stage(_) => None,
+            _ => None,
         })
         .collect();
     assert!(
@@ -185,7 +187,7 @@ async fn the_stages_come_in_order_and_a_relay_without_a_handshake_fails_there() 
         .iter()
         .filter_map(|p| match p {
             Progress::Note(n) => Some(n.as_str()),
-            Progress::Stage(_) => None,
+            _ => None,
         })
         .collect();
     assert!(
@@ -442,3 +444,6 @@ async fn a_wrong_or_cancelled_password_is_a_sign_in_failure() {
         assert!(!e.kind.retryable());
     }
 }
+
+#[cfg(test)]
+mod direct;

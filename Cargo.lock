@@ -6300,6 +6300,7 @@ dependencies = [
 name = "pw-remote"
 version = "0.0.0"
 dependencies = [
+ "mdns-sd",
  "pw-core",
  "pw-db",
  "pw-db-types",
@@ -6314,6 +6315,7 @@ dependencies = [
  "specta",
  "tempfile",
  "tokio",
+ "toml_edit 0.25.17+spec-1.1.0",
  "tracing",
  "zeroize",
 ]

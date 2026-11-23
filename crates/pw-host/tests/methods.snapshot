@@ -260,6 +260,7 @@ project.update Unary Write {Owner}
 remote.connect Stream Write {Owner}
 remote.devices Unary Read {Owner}
 remote.disconnect Unary Write {Owner}
+remote.discover Unary Read {Owner}
 remote.forward.close Unary Write {Owner}
 remote.forward.open Stream Write {Owner}
 remote.forwards.list Unary Read {Owner}
@@ -268,9 +269,11 @@ remote.hosts.list Unary Read {Owner}
 remote.linkCommand Unary Write {Owner}
 remote.log Unary Read {Owner}
 remote.pairCode Unary Write {Owner}
+remote.pairDirect Unary Write {Owner}
 remote.prompt.answer Unary Write {Owner}
 remote.prompts Stream Read {Owner}
 remote.relays Unary Read {Owner}
+remote.resident Unary Write {Owner}
 remote.retry Unary Write {Owner}
 remote.stopOld Unary Write {Owner}
 remote.trustMachine Unary Write {Owner}

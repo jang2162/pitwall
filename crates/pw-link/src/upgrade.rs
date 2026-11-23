@@ -129,6 +129,16 @@ pub const LINK_COMMAND: &str = concat!(
      *) echo \"pitwall: on or off\" >&2; exit 64 ;; esac"
 );
 
+/// 「이 머신에 상주시키기」(18-m7-plan M7-24 ⑤ — 사람이 고를 때만): 이 판 Relay 의 `resident on|off|status`. 그 머신일 때만
+/// 한다(`machine_gate`). 마지막 줄이 `{"resident": bool, …}` 다.
+pub const RESIDENT: &str = concat!(
+    prelude!(),
+    machine_gate!(),
+    "if [ -f \"$f\" ]; then :; else echo \"pitwall: the relay of this version is not installed\" >&2; exit 65; fi; \
+     case \"$1\" in on|off|status) \"$f\" resident \"$1\" ;; \
+     *) echo \"pitwall: on, off or status\" >&2; exit 64 ;; esac"
+);
+
 /// [`LINK_COMMAND`] 의 ssh 한 번의 시간 상한.
 pub const LINK_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -512,6 +522,30 @@ impl Installer {
             .find_map(|line| serde_json::from_str::<Linked>(line.trim()).ok())
             .map(|l| l.linked)
             .ok_or_else(|| InstallError::Protocol("the remote command link did not answer".into()))
+    }
+
+    /// 상주 단위를 두거나(`Some(true)`) 내리거나(`Some(false)`) 지금 상태만 읽는다(`None`). 그 뒤 상주인가.
+    pub async fn resident(&self, on: Option<bool>) -> Result<bool, InstallError> {
+        let action = match on {
+            Some(true) => "on",
+            Some(false) => "off",
+            None => "status",
+        };
+        let output = self
+            .timed("resident", LINK_COMMAND_TIMEOUT, RESIDENT, &[action])
+            .await?;
+        #[derive(Deserialize)]
+        struct Resident {
+            resident: bool,
+        }
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .rev()
+            .find_map(|line| serde_json::from_str::<Resident>(line.trim()).ok())
+            .map(|r| r.resident)
+            .ok_or_else(|| {
+                InstallError::Protocol("the remote relay did not answer about residency".into())
+            })
     }
 
     /// [옛 판 끝내기]: 사람이 본 그 데몬(`seen` — [`Survey::old_daemons`] 의 것)이 지금도 같은 pid · 같은 실행 · 터미널 수일 때만
