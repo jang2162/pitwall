@@ -7,6 +7,7 @@
 //! 판정은 「이쪽의 바닥을 저쪽이 가졌나」 를 양쪽으로 묻는 것이다([`super::add`]).
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -74,8 +75,23 @@ pub fn repository(path: &Path) -> Result<Option<String>, GitReadError> {
     }))
 }
 
-/// `path` 를 담은 저장소의 역사 바닥. git 저장소가 아니면 `None`.
-pub fn bottoms(path: &Path) -> Result<Option<HistoryBottoms>, GitReadError> {
+/// 역사를 걷다 멈춘 까닭.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WalkError {
+    Git(GitReadError),
+    /// `stop` 이 섰다 — 판정이 취소되거나 시간 상한을 넘겼다(18-m7-plan M7-11, M7-10 리뷰 권고 2).
+    Stopped,
+}
+
+impl From<GitReadError> for WalkError {
+    fn from(e: GitReadError) -> Self {
+        WalkError::Git(e)
+    }
+}
+
+/// `path` 를 담은 저장소의 역사 바닥. git 저장소가 아니면 `None`. 역사 전체를 걸으므로 큰 저장소에서 오래 걸린다 — 커밋마다
+/// `stop` 을 보고 서 있으면 [`WalkError::Stopped`] 로 멈춘다(블로킹 스레드의 걷기는 future 를 버려도 저절로 멈추지 않는다).
+pub fn bottoms(path: &Path, stop: &AtomicBool) -> Result<Option<HistoryBottoms>, WalkError> {
     let Some(repo) = open(path)? else {
         return Ok(None);
     };
@@ -93,6 +109,9 @@ pub fn bottoms(path: &Path) -> Result<Option<HistoryBottoms>, GitReadError> {
     }
     let head = repo.head_id().map_err(err)?.detach();
     for info in repo.rev_walk([head]).all().map_err(err)? {
+        if stop.load(Ordering::Relaxed) {
+            return Err(WalkError::Stopped);
+        }
         let info = info.map_err(err)?;
         if info.parent_ids.is_empty() {
             commits.push(info.id.to_hex().to_string());

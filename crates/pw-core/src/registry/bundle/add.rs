@@ -25,6 +25,8 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +36,37 @@ use crate::registry::{NewProject, Registry, RegistryError};
 
 /// 이 수 이상의 파일이 있는 원격 경로는 경고한다(F9-10).
 pub const LARGE_DIRECTORY_FILES: u64 = 100_000;
+
+/// 판정(등록 전까지)의 시간 상한(18-m7-plan M7-11 — M7-10 리뷰 권고 2). 같은 저장소 판정이 역사 전체를 걸어 큰 저장소 · 느린
+/// 링크에서 오래 걸린다. 넘기면 [`AddMemberError::TimedOut`] 이고 아무 머신에도 쓰지 않는다. 리눅스 커널 크기(백만 커밋 남짓)의
+/// 걷기가 로컬 SSD 에서 수십 초라 그보다 넉넉히 둔다.
+pub const JUDGE_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// 더하기가 지금 하는 일(진행 알림 — Host 작업의 메시지).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AddStage {
+    /// 더할 경로를 읽는다(역사 바닥 걷기 포함).
+    Inspect { machine: String },
+    /// 묶음의 그 멤버와 공통 커밋을 본다.
+    Compare { machine: String },
+    /// 판정이 끝났다 — 그 머신에 등록하고 묶음에 붙인다(이 뒤로는 취소 · 시간 상한이 멈추지 않는다).
+    Attach { machine: String },
+}
+
+/// 더하기의 상한과 진행 알림.
+pub struct AddWatch<'a> {
+    pub timeout: Duration,
+    pub stage: &'a (dyn Fn(AddStage) + Send + Sync),
+}
+
+impl Default for AddWatch<'_> {
+    fn default() -> Self {
+        Self {
+            timeout: JUDGE_TIMEOUT,
+            stage: &|_| {},
+        }
+    }
+}
 
 pub type MachineFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, AddMemberError>> + Send + 'a>>;
@@ -85,6 +118,12 @@ pub enum AddMemberError {
     MachineUnavailable(String),
     /// 그 머신에서 읽지 못했다.
     Machine(String),
+    /// 판정이 [`AddWatch::timeout`] 안에 끝나지 않았다. 아무 머신에도 쓰지 않았다.
+    TimedOut {
+        seconds: u64,
+    },
+    /// 판정이 취소됐다(역사 걷기가 멈춤 — [`history::WalkError::Stopped`]).
+    Stopped,
 }
 
 impl From<RegistryError> for AddMemberError {
@@ -99,6 +138,10 @@ impl std::fmt::Display for AddMemberError {
             AddMemberError::Registry(e) => e.fmt(f),
             AddMemberError::MachineUnavailable(m) => write!(f, "machine `{m}` is not connected"),
             AddMemberError::Machine(e) => f.write_str(e),
+            AddMemberError::TimedOut { seconds } => {
+                write!(f, "checking the checkout took longer than {seconds} s")
+            }
+            AddMemberError::Stopped => f.write_str("checking the checkout was cancelled"),
         }
     }
 }
@@ -179,7 +222,7 @@ pub enum AddTo<'a> {
     NewRemote,
 }
 
-/// 「체크아웃 추가」. 규칙은 모듈 머리 주석.
+/// 「체크아웃 추가」. 규칙은 모듈 머리 주석. 상한 · 진행은 [`AddWatch::default`].
 pub async fn add_member(
     registry: &Registry,
     to: AddTo<'_>,
@@ -187,11 +230,77 @@ pub async fn add_member(
     path: &str,
     allow_large: bool,
 ) -> Result<AddMemberOutcome, AddMemberError> {
-    // 묶음마다 더하기를 하나씩 — 같은 묶음에 동시에 더한 둘째는 첫째가 붙인 멤버를 보고 판정한다.
-    let _turn = match to {
+    add_member_watched(
+        registry,
+        to,
+        machine,
+        path,
+        allow_large,
+        AddWatch::default(),
+    )
+    .await
+}
+
+/// 판정을 마친 더하기 — 이것부터는 등록 · 붙이기다.
+struct Judged {
+    bundle: Option<ProjectBundle>,
+    target: Arc<dyn BundleMachine>,
+    facts: CheckoutFacts,
+}
+
+/// [`add_member`] 에 시간 상한과 진행 알림을 단 것. **판정**(경로 읽기 · 같은 저장소 · 다른 묶음)은 `watch.timeout` 안에 끝나야
+/// 하고, 이 future 를 버리면(RPC 취소 · 작업 취소) 그 자리에서 멈춘다 — 블로킹 스레드의 역사 걷기도 멈춘다([`LocalMachine`] 의
+/// 멈춤 깃발). 판정이 끝나면 **등록 · 붙이기는 따로 띄운 태스크에서 끝까지 한다** — 버려도 등록만 남고 묶음에 안 붙는 일이 없다
+/// (붙이기가 거절되면 등록을 되돌린다).
+pub async fn add_member_watched(
+    registry: &Registry,
+    to: AddTo<'_>,
+    machine: &str,
+    path: &str,
+    allow_large: bool,
+    watch: AddWatch<'_>,
+) -> Result<AddMemberOutcome, AddMemberError> {
+    // 묶음마다 더하기를 하나씩 — 같은 묶음에 동시에 더한 둘째는 첫째가 붙인 멤버를 보고 판정한다. 붙이기가 끝날 때까지 쥔다.
+    let turn = match to {
         AddTo::Bundle(id) => Some(registry.bundle_add_lock(id).lock_owned().await),
         AddTo::NewRemote => None,
     };
+    let judged = match tokio::time::timeout(
+        watch.timeout,
+        judge(registry, to, machine, path, allow_large, watch.stage),
+    )
+    .await
+    {
+        Ok(Ok(Ok(judged))) => judged,
+        Ok(Ok(Err(outcome))) => return Ok(outcome),
+        Ok(Err(e)) => return Err(e),
+        Err(_) => {
+            return Err(AddMemberError::TimedOut {
+                seconds: watch.timeout.as_secs(),
+            });
+        }
+    };
+    (watch.stage)(AddStage::Attach {
+        machine: machine.to_owned(),
+    });
+    let (registry, machine) = (registry.clone(), machine.to_owned());
+    tokio::spawn(async move {
+        let _turn = turn;
+        attach(&registry, &machine, judged).await
+    })
+    .await
+    .map_err(|e| AddMemberError::Machine(e.to_string()))?
+}
+
+/// 판정. 더하지 않으면 `Err(그 결과)`.
+async fn judge(
+    registry: &Registry,
+    to: AddTo<'_>,
+    machine: &str,
+    path: &str,
+    allow_large: bool,
+    stage: &(dyn Fn(AddStage) + Send + Sync),
+) -> Result<Result<Judged, AddMemberOutcome>, AddMemberError> {
     let bundle = match to {
         AddTo::Bundle(id) => match blocking(registry, {
             let id = id.to_owned();
@@ -201,7 +310,9 @@ pub async fn add_member(
         {
             Ok(bundle) => Some(bundle),
             Err(bundle_id) => {
-                return Ok(rejected(AddMemberRejection::BundleChanged { bundle_id }));
+                return Ok(Err(rejected(AddMemberRejection::BundleChanged {
+                    bundle_id,
+                })));
             }
         },
         AddTo::NewRemote if machine == LOCAL_MACHINE => {
@@ -214,12 +325,15 @@ pub async fn add_member(
         AddTo::NewRemote => None,
     };
     let target = machine_for(registry, machine)?;
+    stage(AddStage::Inspect {
+        machine: machine.to_owned(),
+    });
     let facts = target.inspect(path).await?;
     let Some(repository) = facts.repository.clone() else {
-        return Ok(rejected(AddMemberRejection::NotGitRepository));
+        return Ok(Err(rejected(AddMemberRejection::NotGitRepository)));
     };
     if facts.history.commits.is_empty() {
-        return Ok(rejected(AddMemberRejection::NoCommits));
+        return Ok(Err(rejected(AddMemberRejection::NoCommits)));
     }
     if machine != LOCAL_MACHINE
         && !allow_large
@@ -227,9 +341,9 @@ pub async fn add_member(
             .reaches_files(&facts.path, LARGE_DIRECTORY_FILES)
             .await?
     {
-        return Ok(AddMemberOutcome::LargeDirectory {
+        return Ok(Err(AddMemberOutcome::LargeDirectory {
             at_least: LARGE_DIRECTORY_FILES,
-        });
+        }));
     }
     let members = bundle.as_ref().map_or(&[][..], |b| &b.members[..]);
     // 한 머신의 멤버는 하나(M7-P20).
@@ -242,16 +356,19 @@ pub async fn add_member(
             })?;
         let theirs = target.inspect(&root).await?;
         let member_project_id = same.project_id.clone();
-        return Ok(rejected(
+        return Ok(Err(rejected(
             if theirs.repository.as_deref() == Some(&repository) {
                 AddMemberRejection::AlreadyCheckout { member_project_id }
             } else {
                 AddMemberRejection::SecondClone { member_project_id }
             },
-        ));
+        )));
     }
     // 같은 저장소 — 다른 멤버 모두와.
     for member in members {
+        stage(AddStage::Compare {
+            machine: member.machine.clone(),
+        });
         let other = machine_for(registry, &member.machine)?;
         let root = other
             .project_root(&member.project_id)
@@ -270,13 +387,13 @@ pub async fn add_member(
                 .is_empty();
         if !shared {
             let machine = member.machine.clone();
-            return Ok(rejected(
+            return Ok(Err(rejected(
                 if facts.history.shallow || theirs.history.shallow {
                     AddMemberRejection::ShallowUnknown { machine }
                 } else {
                     AddMemberRejection::NoCommonCommit { machine }
                 },
-            ));
+            )));
         }
     }
     // 다른 묶음: 이미 등록된 프로젝트면 레지스트리에 쓰기 전에 본다(멤버 둘 이상인 묶음이면 거절).
@@ -290,11 +407,29 @@ pub async fn add_member(
             && Some(other.id.as_str()) != bundle.as_ref().map(|b| b.id.as_str())
             && other.members.len() >= 2
         {
-            return Ok(rejected(AddMemberRejection::InOtherBundle {
+            return Ok(Err(rejected(AddMemberRejection::InOtherBundle {
                 bundle_id: other.id,
-            }));
+            })));
         }
     }
+    Ok(Ok(Judged {
+        bundle,
+        target,
+        facts,
+    }))
+}
+
+/// 판정을 마친 더하기를 등록하고 묶음에 붙인다.
+async fn attach(
+    registry: &Registry,
+    machine: &str,
+    Judged {
+        bundle,
+        target,
+        facts,
+    }: Judged,
+) -> Result<AddMemberOutcome, AddMemberError> {
+    let members = bundle.as_ref().map_or(&[][..], |b| &b.members[..]);
     let registered = facts.project.is_none();
     let project_id = match facts.project.clone() {
         Some(id) => id,
@@ -364,6 +499,16 @@ impl LocalMachine {
     }
 }
 
+/// 버려지면 깃발을 세운다 — 블로킹 스레드의 걷기가 본다.
+#[derive(Default)]
+pub(crate) struct StopOnDrop(pub(crate) Arc<AtomicBool>);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
 fn git(e: history::GitReadError) -> AddMemberError {
     AddMemberError::Machine(e.0)
 }
@@ -382,11 +527,19 @@ fn project_at(registry: &Registry, path: &Path) -> Result<Option<String>, Regist
 impl BundleMachine for LocalMachine {
     fn inspect<'a>(&'a self, path: &'a str) -> MachineFuture<'a, CheckoutFacts> {
         let path = PathBuf::from(path);
-        self.run(move |registry| {
+        // 이 future 를 버리면(판정 취소 · 시간 상한 · `machine.inspect` 요청 취소) 블로킹 스레드의 역사 걷기도 멈춘다.
+        let stop = StopOnDrop::default();
+        let flag = Arc::clone(&stop.0);
+        let read = self.run(move |registry| {
             let path = crate::registry::existing_dir(&path)?;
             let repository = history::repository(&path).map_err(git)?;
             let history = match &repository {
-                Some(_) => history::bottoms(&path).map_err(git)?.unwrap_or_default(),
+                Some(_) => history::bottoms(&path, &flag)
+                    .map_err(|e| match e {
+                        history::WalkError::Git(e) => git(e),
+                        history::WalkError::Stopped => AddMemberError::Stopped,
+                    })?
+                    .unwrap_or_default(),
                 None => HistoryBottoms::default(),
             };
             Ok(CheckoutFacts {
@@ -395,6 +548,10 @@ impl BundleMachine for LocalMachine {
                 repository,
                 history,
             })
+        });
+        Box::pin(async move {
+            let _stop = stop;
+            read.await
         })
     }
 

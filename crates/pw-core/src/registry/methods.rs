@@ -323,8 +323,8 @@ fn refuse_agent(ctx: &pw_rpc::Ctx, project_id: &str) -> Result<(), RpcError> {
 }
 
 /// `project.*` 핸들러를 붙인다. 레지스트리는 디스크를 동기로 읽고 쓰므로 블로킹 스레드에서 돌린다.
-pub fn register(router: &mut Router, registry: &Registry) {
-    super::bundle::methods::register(router, registry);
+pub fn register(router: &mut Router, registry: &Registry, tasks: &crate::task::TaskSpawner) {
+    super::bundle::methods::register(router, registry, tasks);
     super::bundle::machine::register(router, registry);
     async fn blocking<T: Send + 'static>(
         registry: Registry,

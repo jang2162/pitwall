@@ -977,3 +977,203 @@ async fn every_machine_method_takes_only_a_host_connection() {
         "a refused register made a project"
     );
 }
+
+// 18-m7-plan M7-11(M7-10 리뷰 권고 2): 같은 저장소 판정의 시간 상한 · 취소 · 진행.
+
+/// 경로 읽기가 끝나지 않는 머신. 읽기 future 가 버려지면 `dropped` 가 선다.
+struct Hanging {
+    dropped: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl BundleMachine for Hanging {
+    fn inspect<'a>(&'a self, _path: &'a str) -> MachineFuture<'a, CheckoutFacts> {
+        let stop = super::add::StopOnDrop(Arc::clone(&self.dropped));
+        Box::pin(async move {
+            let _stop = stop;
+            std::future::pending().await
+        })
+    }
+    fn project_root<'a>(&'a self, _: &'a str) -> MachineFuture<'a, Option<String>> {
+        Box::pin(async { Ok(None) })
+    }
+    fn contained<'a>(&'a self, _: &'a str, _: &'a [String]) -> MachineFuture<'a, Vec<String>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+    fn reaches_files<'a>(&'a self, _: &'a str, _: u64) -> MachineFuture<'a, bool> {
+        Box::pin(async { Ok(false) })
+    }
+    fn register<'a>(&'a self, _: &'a str) -> MachineFuture<'a, String> {
+        Box::pin(async { panic!("a judgement that never ends must not register") })
+    }
+    fn unregister<'a>(&'a self, _: &'a str) -> MachineFuture<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+const HANG: &str = "SHA256:hanging";
+
+fn hanging_remotes() -> (Arc<Remotes>, Arc<std::sync::atomic::AtomicBool>) {
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let machine = Hanging {
+        dropped: Arc::clone(&dropped),
+    };
+    (
+        Arc::new(Remotes(HashMap::from([(
+            HANG.to_owned(),
+            Arc::new(machine) as Arc<dyn BundleMachine>,
+        )]))),
+        dropped,
+    )
+}
+
+#[tokio::test]
+async fn a_judgement_past_its_time_limit_stops_and_leaves_the_bundle_alone() {
+    let f = Fixture::new();
+    let (remotes, dropped) = hanging_remotes();
+    f.desktop.set_remote_machines(remotes);
+    let p = f.project(&f.desktop, &f.repo("local/app", "one"));
+    let stages = std::sync::Mutex::new(Vec::new());
+    let stage = |s: super::add::AddStage| stages.lock().unwrap().push(s);
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        super::add::add_member_watched(
+            &f.desktop,
+            AddTo::Bundle(&p.id),
+            HANG,
+            "/remote/app",
+            false,
+            super::add::AddWatch {
+                timeout: Duration::from_millis(200),
+                stage: &stage,
+            },
+        ),
+    )
+    .await
+    .expect("the time limit did not stop the judgement");
+    assert_eq!(
+        result,
+        Err(super::add::AddMemberError::TimedOut { seconds: 0 })
+    );
+    assert!(dropped.load(Ordering::SeqCst), "the read was not dropped");
+    assert_eq!(
+        stages.into_inner().unwrap(),
+        vec![super::add::AddStage::Inspect {
+            machine: HANG.to_owned()
+        }]
+    );
+    assert_eq!(f.desktop.bundle(&p.id).unwrap().members.len(), 1);
+}
+
+/// 역사 걷기는 멈춤 깃발을 본다 — 블로킹 스레드의 걷기는 future 를 버려도 저절로 멈추지 않는다. 깃발은 이 머신의 읽기
+/// future 가 버려질 때 선다.
+#[test]
+fn the_history_walk_stops_on_its_flag_and_the_flag_rises_when_the_read_is_dropped() {
+    let f = Fixture::new();
+    let repo = f.repo("local/app", "one");
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    assert!(history::bottoms(&repo, &stop).unwrap().is_some());
+    stop.store(true, Ordering::SeqCst);
+    assert_eq!(
+        history::bottoms(&repo, &stop),
+        Err(history::WalkError::Stopped)
+    );
+    let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    drop(super::add::StopOnDrop(Arc::clone(&flag)));
+    assert!(flag.load(Ordering::SeqCst));
+}
+
+/// `bundle.addMember` 은 Host 작업으로 돈다: 진행이 `task.progress` 로 나가고, 요청을 취소하면 작업이 취소되며, 작업을
+/// 취소하면(상태바 · `task.cancel`) 요청이 `cancelled` 로 끝난다. 끝나지 않는 판정의 읽기는 어느 쪽이든 버려진다.
+#[tokio::test]
+async fn adding_runs_as_a_host_task_that_reports_progress_and_both_cancels_reach_each_other() {
+    use crate::bus::{Filter, Scope};
+    use crate::task::{
+        TOPIC_FINISHED, TOPIC_PROGRESS, TaskFinishedEvent, TaskProgressEvent, TaskStatus,
+    };
+    use crate::{Host, LocalHost, Received};
+    use pw_rpc::{Caller, Role};
+    use serde_json::{Value, json};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let base = fs::canonicalize(tmp.path()).unwrap();
+    let host = LocalHost::with_config("local", AppPaths::under(&base.join("app")));
+    let registry = host.registry().unwrap().clone();
+    let root = base.join("app-repo");
+    fs::create_dir_all(&root).unwrap();
+    let p = registry
+        .create(NewProject {
+            root,
+            ..NewProject::default()
+        })
+        .unwrap();
+    let mut events = host.bus().subscribe(
+        Filter::all()
+            .scope(Scope::Host)
+            .topics([TOPIC_PROGRESS, TOPIC_FINISHED]),
+    );
+    let mut conn = host.connect(Caller::new(Role::Owner)).await.unwrap();
+
+    for cancel_the_task in [false, true] {
+        let (remotes, dropped) = hanging_remotes();
+        registry.set_remote_machines(remotes);
+        let id = if cancel_the_task { 2 } else { 1 };
+        conn.sink.send(
+            json!({"jsonrpc": "2.0", "id": id, "method": "bundle.addMember",
+            "params": {"bundleId": p.id, "machine": HANG, "path": "/remote/app"}}),
+        );
+        let progress = match tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .unwrap()
+        {
+            Some(Received::Event(e)) if e.topic == TOPIC_PROGRESS => {
+                serde_json::from_value::<TaskProgressEvent>(e.payload.clone()).unwrap()
+            }
+            other => panic!("expected progress, got {other:?}"),
+        };
+        assert_eq!(progress.title, super::methods::ADD_TASK_TITLE);
+        assert_eq!(progress.progress.done, 1);
+        if cancel_the_task {
+            conn.sink
+                .send(json!({"jsonrpc": "2.0", "id": 9, "method": "task.cancel",
+                "params": {"taskId": progress.task_id}}));
+        } else {
+            conn.sink
+                .send(json!({"jsonrpc": "2.0", "method": "request.cancel",
+                "params": {"id": id}}));
+        }
+        let finished = loop {
+            match tokio::time::timeout(Duration::from_secs(5), events.recv())
+                .await
+                .unwrap()
+            {
+                Some(Received::Event(e)) if e.topic == TOPIC_FINISHED => {
+                    break serde_json::from_value::<TaskFinishedEvent>(e.payload.clone()).unwrap();
+                }
+                Some(Received::Event(_)) => {}
+                other => panic!("expected the task to finish, got {other:?}"),
+            }
+        };
+        assert_eq!(finished.task_id, progress.task_id);
+        assert_eq!(
+            finished.status,
+            TaskStatus::Cancelled,
+            "cancel_the_task: {cancel_the_task}"
+        );
+        let answer: Value = loop {
+            let frame = tokio::time::timeout(Duration::from_secs(5), conn.source.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            if frame.get("id") == Some(&json!(id)) {
+                break frame;
+            }
+        };
+        assert_eq!(
+            answer["error"]["code"],
+            json!(pw_rpc::code::CANCELLED),
+            "{answer}"
+        );
+        assert!(dropped.load(Ordering::SeqCst), "the read was not dropped");
+    }
+    assert_eq!(registry.bundle(&p.id).unwrap().members.len(), 1);
+}

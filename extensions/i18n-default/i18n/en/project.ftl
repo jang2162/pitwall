@@ -385,6 +385,7 @@ task-start-failed = Could not start the task
 task-cancel-failed = Could not cancel the task
 # Background task titles sent by the host (`task-title-*` ids).
 task-title-indexing-files = Indexing files
+task-title-bundle-add-member = Checking the checkout's history
 task-title-indexing-symbols = Indexing symbols
 task-title-git-continue = Continuing the git operation
 task-title-git-abort = Aborting the git operation

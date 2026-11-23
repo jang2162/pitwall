@@ -139,7 +139,7 @@ impl LocalHost {
         let projects = Projects::default();
         let mut router = build_router(&id, &bus, &tasks, config.as_ref(), &projects);
         if let Some(registry) = &registry {
-            crate::registry::methods::register(&mut router, registry);
+            crate::registry::methods::register(&mut router, registry, &tasks);
         }
         // 코어 툴 메서드(결정 M5-D3 — 헤드리스 Host 도 처리한다).
         if let (Some(config), Some(registry)) = (&config, &registry) {
