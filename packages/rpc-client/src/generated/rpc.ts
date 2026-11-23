@@ -1236,11 +1236,13 @@ export type UnaryMethods = {
 	"project.setTrust": { params: SetTrustParams; result: ProjectTrust };
 	/**
 	 * 프로젝트 창의 상태(`$DATA/projects/<id>/state.json`). 없거나 읽지 못했으면 `state: null`(읽지 못한 이유는 `problem`).
-	 * 레지스트리에 없는 id 면 invalid params 오류.
+	 * `projectId` 는 창 id — 로컬 프로젝트 id 이거나 행 있는 묶음 id(`b-…` — 그 묶음의 로컬 멤버 프로젝트의 파일, 로컬 멤버가
+	 * 없으면 묶음 id 의 파일). 레지스트리에 없는 id 면 invalid params 오류.
 	 */
 	"project.state.get": { params: ProjectScopedParams; result: ProjectState };
 	/**
-	 * 프로젝트 창의 상태를 통째로 바꾼다. 원자적으로 쓰고, JSON 객체가 아니거나 1 MiB 를 넘으면 invalid params 오류.
+	 * 프로젝트 창의 상태를 통째로 바꾼다. 원자적으로 쓰고, JSON 객체가 아니거나 1 MiB 를 넘으면 invalid params 오류. 그 창의
+	 * 연결만 쓴다(묶음 id 면 그 묶음 창의 연결 — `Registry::may_write_project_state`), 아니면 permission denied.
 	 */
 	"project.state.set": { params: SetProjectStateParams; result: null };
 	/**
@@ -1954,8 +1956,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"project.recent": {"name":"project.recent","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"RecentParams","output":"Vec<Project>","doc":" 최근에 연 프로젝트, 최근 것부터. 연 적 없는 프로젝트는 빠진다.\n","mcp":null,"fileScope":false},
 	"project.resolve": {"name":"project.resolve","kind":"unary","tier":"read","roles":["owner"],"params":"PathParams","output":"Option<Resolution>","doc":" 경로를 포함하는 프로젝트(가장 깊은 루트). 등록되지 않은 git 워크트리 안이면 메인 저장소의 프로젝트와 그 워크트리.\n 없으면 `null` — 그때는 `project.candidates` 로 루트 후보를 보여 준다.\n","mcp":null,"fileScope":false},
 	"project.setTrust": {"name":"project.setTrust","kind":"unary","tier":"write","roles":["owner"],"params":"SetTrustParams","output":"ProjectTrust","doc":" 프로젝트를 신뢰하거나 해제한다. 신뢰를 가진 프로젝트(`ownerId`)로 `project.changed`(`kind: trust`)가 나간다.\n","mcp":null,"fileScope":false},
-	"project.state.get": {"name":"project.state.get","kind":"unary","tier":"read","roles":["owner"],"params":"ProjectScopedParams","output":"ProjectState","doc":" 프로젝트 창의 상태(`$DATA/projects/<id>/state.json`). 없거나 읽지 못했으면 `state: null`(읽지 못한 이유는 `problem`).\n 레지스트리에 없는 id 면 invalid params 오류.\n","mcp":null,"fileScope":false},
-	"project.state.set": {"name":"project.state.set","kind":"unary","tier":"write","roles":["owner"],"params":"SetProjectStateParams","output":"()","doc":" 프로젝트 창의 상태를 통째로 바꾼다. 원자적으로 쓰고, JSON 객체가 아니거나 1 MiB 를 넘으면 invalid params 오류.\n","mcp":null,"fileScope":false},
+	"project.state.get": {"name":"project.state.get","kind":"unary","tier":"read","roles":["owner"],"params":"ProjectScopedParams","output":"ProjectState","doc":" 프로젝트 창의 상태(`$DATA/projects/<id>/state.json`). 없거나 읽지 못했으면 `state: null`(읽지 못한 이유는 `problem`).\n `projectId` 는 창 id — 로컬 프로젝트 id 이거나 행 있는 묶음 id(`b-…` — 그 묶음의 로컬 멤버 프로젝트의 파일, 로컬 멤버가\n 없으면 묶음 id 의 파일). 레지스트리에 없는 id 면 invalid params 오류.\n","mcp":null,"fileScope":false},
+	"project.state.set": {"name":"project.state.set","kind":"unary","tier":"write","roles":["owner"],"params":"SetProjectStateParams","output":"()","doc":" 프로젝트 창의 상태를 통째로 바꾼다. 원자적으로 쓰고, JSON 객체가 아니거나 1 MiB 를 넘으면 invalid params 오류. 그 창의\n 연결만 쓴다(묶음 id 면 그 묶음 창의 연결 — `Registry::may_write_project_state`), 아니면 permission denied.\n","mcp":null,"fileScope":false},
 	"project.storage": {"name":"project.storage","kind":"unary","tier":"read","roles":["owner","mobile","readonly"],"params":"()","output":"StorageStatus","doc":" 레지스트리 파일(`$DATA/state.db`)의 상태. `readOnly` · `memory` 면 쓰기 메서드가 오류로 거절된다 — 웰컴 화면은 정상이 아니면\n `reason` 을 배너로 보여 준다.\n","mcp":null,"fileScope":false},
 	"project.tool.open": {"name":"project.tool.open","kind":"unary","tier":"read","roles":["owner"],"params":"ProjectOpenToolParams","output":"ProjectOpenToolResult","doc":" Open a project, file or line in the Pitwall app. Does not bring a window to the front — if the project's window\n is open, only a tab opens in it; otherwise a window is created without activating it. `path` must be inside the\n project root (relative paths are relative to the root). At most 5 calls per 10 seconds across all agents (beyond\n that `rateLimited`). The app must be running.\n","mcp":{"group":"project","name":"project_open"},"fileScope":false},
 	"project.tool.register": {"name":"project.tool.register","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<ProjectRegisterToolParams>","output":"ProjectRegisterToolResult","doc":" Register a folder as a Pitwall project and return what was detected in it (build files, languages, the settings\n folder). Needs approval in Pitwall: the request shows the real path that will be registered (symbolic links and\n `..` resolved), the name and where the settings live. Refused before asking: a relative path, a folder that does\n not exist, the file system root, the home folder or a folder above it, and a folder that is already a project\n root or lies inside a registered project, including a git worktree of one (use `project_open` for those). The\n new project is not trusted: only a person can trust it in Pitwall.\n","mcp":{"group":"project","name":"project_register"},"fileScope":false},

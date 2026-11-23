@@ -384,9 +384,9 @@ fn caller_for<R: Runtime>(
     Ok(Caller::file(Role::Owner, file).in_window(label))
 }
 
-/// 묶음 id 창(`project-b-…`, M7-11b 가 연다)의 창 연결(M7-11 리뷰 F2). 웹뷰는 창 쿼리의 id 로 `{projectId}` 를 고른다 — 묶음 id 는
-/// 라우터가 모르는 id 라, 그 묶음의 **로컬 멤버 프로젝트**로 바꾸고 로컬 멤버가 없으면(원격만인 묶음) **이 머신의 Host** 로 바꾼다.
-/// 다른 대상은 그대로다.
+/// 묶음 id 창(`project-b-…`)의 창 연결(M7-11 리뷰 F2 · M7-11b). 웹뷰는 창 쿼리의 id 로 `{projectId}` 를 고른다 — 묶음 id 는
+/// 라우터가 모르는 id 라, 그 묶음의 **로컬 멤버 프로젝트**로 바꾸고, 로컬 멤버가 없으면(원격만인 묶음) 묶음 id 를 이 머신 Host 에
+/// 묶어 그 id 범위로 연다(그 창의 상태 자리 — 아래). 다른 대상은 그대로다.
 fn window_target(state: &IpcState, label: &str, target: Target) -> Target {
     let Target::ProjectId(id) = &target else {
         return target;
@@ -394,14 +394,19 @@ fn window_target(state: &IpcState, label: &str, target: Target) -> Target {
     if !is_bundle_row_id(id) || windows::project_of_label(label) != Some(id.as_str()) {
         return target;
     }
-    let local = state
-        .registry
-        .get()
-        .and_then(|r| r.bundle(id).ok())
-        .and_then(|b| b.local_project().map(str::to_owned));
-    match local {
-        Some(project) => Target::ProjectId(project),
-        None => Target::HostId(crate::LOCAL_HOST_ID.into()),
+    let Some(bundle) = state.registry.get().and_then(|r| r.bundle(id).ok()) else {
+        // 모르는 묶음 — 그대로 두면 Router 가 모르는 프로젝트로 거절한다.
+        return target;
+    };
+    match bundle.local_project() {
+        Some(project) => Target::ProjectId(project.to_owned()),
+        // 원격만인 묶음(M7-11b): 창 연결은 이 머신 Host 에 **그 묶음 id 범위**로 연다 — 그 창의 상태(`project.state.*` 의 묶음 id
+        // 파일, pw-core `Registry::may_write_project_state`)를 쓰는 연결이다. 그 범위로 닿는 이 머신 프로젝트는 없다(묶음 id 는
+        // 레지스트리의 프로젝트가 아니다 — 프로젝트를 받는 핸들러는 모르는 프로젝트로 거절한다).
+        None => {
+            state.bind_local_project(id);
+            target
+        }
     }
 }
 
@@ -418,9 +423,15 @@ fn window_admits(registry: Option<&Registry>, window: &str, machine: &str, proje
         }
     });
     match bundle {
-        Some(bundle) => bundle
-            .member(machine)
-            .is_some_and(|member| member.project_id == project),
+        Some(bundle) => {
+            bundle
+                .member(machine)
+                .is_some_and(|member| member.project_id == project)
+                // 원격만인 묶음 창의 자기 연결(`window_target`) — 그 묶음 id 범위.
+                || (machine == LOCAL_MACHINE
+                    && project == bundle.id
+                    && bundle.local_project().is_none())
+        }
         None => machine == LOCAL_MACHINE && project == window,
     }
 }
@@ -842,6 +853,125 @@ mod tests {
             id: &str,
         ) -> Option<Arc<dyn pw_core::registry::bundle::add::BundleMachine>> {
             (id == "mini").then(|| Arc::clone(&self.0) as _)
+        }
+    }
+
+    /// 18-m7-plan M7-11b: 원격만인 묶음 창(로컬 멤버 없음)의 창 연결은 이 머신 Host 에 **그 묶음 id 범위**로 열린다 — 그 연결로 그
+    /// 창의 상태(묶음 id 의 파일)를 쓰고, 이 머신 프로젝트의 상태는 쓰지 못한다. 다른 프로젝트 창 · 웰컴 창은 그 묶음 id 로 연결하지
+    /// 못하고, 그 묶음 창도 다른 묶음 id · 이 머신 프로젝트로는 연결하지 못한다.
+    #[test]
+    fn a_remote_only_bundle_window_connects_to_its_own_bundle_and_keeps_its_state_there() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(tmp.path()).unwrap();
+        let local =
+            LocalHost::with_config("local", pw_core::config::AppPaths::under(&base.join("app")));
+        let mini = Arc::new(LocalHost::with_config(
+            "mini",
+            pw_core::config::AppPaths::under(&base.join("mini-app")),
+        ));
+        let registry = local.registry().unwrap().clone();
+        registry.set_remote_machines(Arc::new(Machines(Arc::new(
+            pw_core::registry::bundle::machine::HostMachine::new("mini", mini.clone()),
+        ))));
+        let repo = base.join("mini-repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q"]);
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        std::fs::create_dir_all(base.join("local-app")).unwrap();
+        let a = registry
+            .create(pw_core::registry::NewProject {
+                root: base.join("local-app"),
+                ..Default::default()
+            })
+            .unwrap()
+            .id;
+        let add = |path: &std::path::Path| {
+            let outcome =
+                tauri::async_runtime::block_on(pw_core::registry::bundle::add::add_member(
+                    &registry,
+                    pw_core::registry::bundle::add::AddTo::NewRemote,
+                    "mini",
+                    path.to_str().unwrap(),
+                    false,
+                ))
+                .unwrap();
+            let pw_core::registry::bundle::add::AddMemberOutcome::Added { bundle } = outcome else {
+                panic!("not added: {outcome:?}");
+            };
+            bundle
+        };
+        let bundle = add(&repo);
+        assert_eq!(bundle.local_project(), None);
+        let other_repo = base.join("mini-repo-2");
+        std::fs::create_dir_all(&other_repo).unwrap();
+        git(&other_repo, &["init", "-q"]);
+        git(&other_repo, &["commit", "-q", "--allow-empty", "-m", "two"]);
+        let other_bundle = add(&other_repo);
+
+        let f = fixture_with(local);
+        f.app.state::<IpcState>().use_registry(registry.clone());
+        f.app.state::<IpcState>().bind_local_project(&a);
+        f.app.state::<IpcState>().router.add_host(mini).unwrap();
+        let denied = json!(pw_rpc::code::PERMISSION_DENIED);
+        let mut channel = 0;
+        let mut set = |w: &WebviewWindow<MockRuntime>, target: Value, id: &str| {
+            channel += 1;
+            let conn = connect(w, channel, target);
+            send(
+                w,
+                conn,
+                json!({"jsonrpc": "2.0", "id": 1, "method": "project.state.set",
+                       "params": {"projectId": id, "state": {"by": w.label()}}}),
+            )
+            .unwrap();
+            next_frame(&f, channel)
+        };
+        let label = crate::windows::project_label(&bundle.id);
+        let w = window(&f.app, &label);
+        let saved = set(&w, json!({"projectId": bundle.id}), &bundle.id);
+        assert!(saved.get("error").is_none(), "{saved}");
+        assert_eq!(
+            set(&w, json!({"projectId": bundle.id}), &a)["error"]["code"],
+            denied
+        );
+        assert_eq!(
+            set(&w, json!({"projectId": bundle.id}), &other_bundle.id)["error"]["code"],
+            denied
+        );
+        assert_eq!(
+            registry.project_state(&bundle.id).unwrap().state,
+            Some(json!({"by": label}))
+        );
+        let refused = |w: &WebviewWindow<MockRuntime>, target: Value| {
+            let page = invoke(w, "rpc_page", json!({})).unwrap();
+            invoke(
+                w,
+                "rpc_connect",
+                json!({"target": target, "channel": "__CHANNEL__:96", "page": page}),
+            )
+            .unwrap_err()
+        };
+        for target in [
+            json!({"projectId": a}),
+            json!({"projectId": other_bundle.id}),
+        ] {
+            assert_eq!(
+                refused(&w, target.clone()),
+                json!({"kind": "projectScope"}),
+                "{target}"
+            );
+        }
+        for other in [
+            window(&f.app, &crate::windows::project_label(&a)),
+            window(&f.app, &crate::windows::project_label(&other_bundle.id)),
+            window(&f.app, "welcome"),
+        ] {
+            assert_eq!(
+                refused(&other, json!({"projectId": bundle.id})),
+                json!({"kind": "projectScope"}),
+                "{}",
+                other.label()
+            );
         }
     }
 

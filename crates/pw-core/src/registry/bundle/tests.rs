@@ -1217,3 +1217,69 @@ async fn the_stages_are_reported_in_order_up_to_attaching() {
         ]
     );
 }
+
+// M7-11b: 창 상태는 창이 보는 묶음을 따라간다. 행 있는 묶음 id 로 부르면 로컬 멤버의 파일(암묵 → 행 있는 묶음이 돼도 옮기지 않는다),
+// 원격만인 묶음은 그 묶음 id 의 파일이고, 나중에 로컬 멤버가 붙으면 그 파일을 이어 읽는다. 쓰기는 그 묶음 창의 연결만.
+#[tokio::test]
+async fn a_bundle_window_keeps_its_state_through_becoming_a_row_and_writes_only_from_its_window() {
+    use pw_rpc::ConnectionScope;
+    let f = Fixture::new();
+    let local = f.repo("local/app", "one");
+    let p = f.project(&f.desktop, &local);
+    let saved = serde_json::json!({ "layout": "before the add" });
+    f.desktop.set_project_state(&p.id, &saved).unwrap();
+
+    // 암묵 → 행 있는 묶음: 묶음 id 로도 로컬 id 로도 같은 파일이다.
+    let remote = f.clone(&local, "mini/app", None);
+    let bundle = added(f.add(AddTo::Bundle(&p.id), MINI, &remote).await);
+    assert!(is_bundle_row_id(&bundle.id));
+    assert_eq!(
+        f.desktop.project_state(&bundle.id).unwrap().state,
+        Some(saved.clone())
+    );
+    let next = serde_json::json!({ "layout": "from the bundle window" });
+    f.desktop.set_project_state(&bundle.id, &next).unwrap();
+    assert_eq!(
+        f.desktop.project_state(&p.id).unwrap().state,
+        Some(next.clone())
+    );
+
+    // 쓰기: 그 묶음 창의 연결(로컬 멤버 범위)만. 다른 프로젝트 · Host · 묶음 id 를 흉내 낸 다른 묶음 범위는 거절.
+    let other = f.project(&f.desktop, &f.repo("local/other", "two"));
+    let may =
+        |scope: ConnectionScope, id: &str| f.desktop.may_write_project_state(&scope, id).unwrap();
+    assert!(may(ConnectionScope::Project(p.id.clone()), &bundle.id));
+    assert!(may(ConnectionScope::Project(p.id.clone()), &p.id));
+    assert!(!may(ConnectionScope::Project(other.id.clone()), &bundle.id));
+    assert!(!may(ConnectionScope::Host, &bundle.id));
+    assert!(!may(
+        ConnectionScope::Project("b-0000000000000000".into()),
+        &bundle.id
+    ));
+
+    // 원격만인 묶음: 묶음 id 의 파일, 그 묶음 범위만 쓴다.
+    let pc_repo = f.repo("pc/app", "three");
+    let only = added(f.add(AddTo::NewRemote, PC, &pc_repo).await);
+    assert_eq!(only.local_project(), None);
+    assert!(may(ConnectionScope::Project(only.id.clone()), &only.id));
+    assert!(!may(ConnectionScope::Project(p.id.clone()), &only.id));
+    assert!(!may(ConnectionScope::Host, &only.id));
+    let remote_only = serde_json::json!({ "layout": "remote only" });
+    f.desktop.set_project_state(&only.id, &remote_only).unwrap();
+    assert!(state::state_file(&f.desktop.inner.paths.data, &only.id).exists());
+
+    // 그 묶음에 로컬 멤버가 붙으면 열쇠는 로컬 id 가 되고, 아직 그 파일이 없으면 묶음 id 의 파일을 이어 읽는다.
+    let joined = f.clone(&pc_repo, "local/pc-app", None);
+    let with_local = added(f.add(AddTo::Bundle(&only.id), LOCAL_MACHINE, &joined).await);
+    assert_eq!(with_local.id, only.id);
+    assert_eq!(
+        f.desktop.project_state(&only.id).unwrap().state,
+        Some(remote_only)
+    );
+
+    // 레지스트리에 없는 묶음 id 는 없는 것이다.
+    assert!(matches!(
+        f.desktop.project_state("b-ffffffffffffffff"),
+        Err(RegistryError::NotFound(_))
+    ));
+}

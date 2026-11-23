@@ -14,6 +14,7 @@ use std::path::Path;
 use std::sync::{Mutex, PoisonError};
 
 use pw_core::registry::Registry;
+use pw_core::registry::bundle::{LOCAL_MACHINE, ProjectBundle, is_bundle_row_id};
 use pw_core::registry::path::normalize;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime, State, WebviewWindow};
@@ -176,6 +177,9 @@ pub fn open_project<R: Runtime>(
 
 /// [`open_project`] 에 창 활성화([`windows::Activation`])를 고른 것. 에이전트의 `project_open`(agent_open.rs)이
 /// [`windows::Activation::Background`] 로 부른다. 돌려주는 `bool` 은 창을 새로 만들었는가.
+///
+/// `project_id` 는 로컬 프로젝트 id 이거나 행 있는 묶음 id(`b-…` — 웰컴 · 스위처의 묶음 줄, 18-m7-plan M7-11b)다. 창은 묶음마다
+/// 하나다(08-remote-mobile.md 「창과 활성 체크아웃」): 로컬 프로젝트가 행 있는 묶음의 멤버면 그 묶음의 창을 연다([`open_bundle_as`]).
 pub fn open_project_as<R: Runtime>(
     app: &AppHandle<R>,
     project_id: &str,
@@ -188,26 +192,67 @@ pub fn open_project_as<R: Runtime>(
         .as_ref()
         .ok_or_else(|| "the project registry is not available".to_owned())?;
     // 없는 id 로 창을 만들지 않는다. label 에 들어가므로 웹뷰가 넘긴 아무 문자열이 창이 되지 않게 하는 검사이기도 하다.
-    let project = registry.get(project_id).map_err(|e| e.to_string())?;
+    let bundle = if is_bundle_row_id(project_id) {
+        registry.bundle(project_id).map_err(|e| e.to_string())?
+    } else {
+        registry.get(project_id).map_err(|e| e.to_string())?;
+        registry
+            .bundle_of(LOCAL_MACHINE, project_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("unknown project `{project_id}`"))?
+    };
+    open_bundle_as(app, &bundle, open, activation)
+}
+
+/// 묶음의 창을 열거나 앞으로 가져온다(창 하나 = 묶음 하나). 창 label 은 `project-<묶음 id>` 다 — 단, 그 묶음의 로컬 멤버 프로젝트
+/// 창(`project-<로컬 id>`)이 이미 열려 있으면 그 창이다: 암묵 묶음이던 프로젝트에 체크아웃을 더하면 묶음 id 가 `b-…` 로 바뀌지만
+/// 열린 창의 label 은 바꿀 수 없다(18-m7-plan M7-11b ③). 그 창의 웹뷰 · 연결은 로컬 id 로도 그 묶음을 보고(ipc.rs `window_admits`),
+/// 창 상태는 두 id 가 같은 파일이다(pw-core `Registry::project_state`). 로컬 멤버가 있으면 그 프로젝트를 라우터에 묶고 「열었음」 을
+/// 적는다.
+pub fn open_bundle_as<R: Runtime>(
+    app: &AppHandle<R>,
+    bundle: &ProjectBundle,
+    open: &ProjectOpen,
+    activation: windows::Activation,
+) -> Result<bool, String> {
     let open = without_directory_file(open.clone());
+    let local = bundle.local_project();
     // 창은 그 프로젝트로 연결한다(ipc.rs `caller_for`) — 창을 만들기 전에 Host Router 가 그 프로젝트를 알게 한다.
-    if let Some(ipc) = app.try_state::<crate::ipc::IpcState>() {
+    if let (Some(project_id), Some(ipc)) = (local, app.try_state::<crate::ipc::IpcState>()) {
         ipc.bind_local_project(project_id);
     }
-    let (_, created) = windows::open_project_as(app, project_id, &project.name, &open, activation)
+    let window_id = window_id_for(bundle, |label| app.get_webview_window(label).is_some());
+    let (_, created) = windows::open_project_as(app, window_id, &bundle.name, &open, activation)
         .map_err(|e| e.to_string())?;
-    // 읽기 전용 레지스트리 등으로 기록하지 못해도 창은 열렸다.
-    if let Err(e) = registry.mark_opened(project_id) {
+    // 읽기 전용 레지스트리 등으로 기록하지 못해도 창은 열렸다. 원격만인 묶음은 적을 로컬 프로젝트가 없다.
+    if let (Some(project_id), Some(registry)) = (local, app.state::<Launch>().registry.as_ref())
+        && let Err(e) = registry.mark_opened(project_id)
+    {
         tracing::warn!(project_id, %e, "cannot record the project as opened");
     }
     tracing::info!(
-        project_id,
+        bundle = bundle.id,
+        window_id,
         ?open,
         ?activation,
         created,
         "project window opened"
     );
     Ok(created)
+}
+
+/// 묶음의 창 id(창 label 은 `project-<id>`). 로컬 멤버 프로젝트의 창이 이미 열려 있으면 그 id, 아니면 묶음 id([`open_bundle_as`]).
+pub fn window_id_for(bundle: &ProjectBundle, is_open: impl Fn(&str) -> bool) -> &str {
+    match bundle.local_project() {
+        Some(local)
+            if local != bundle.id
+                && !is_open(&windows::project_label(&bundle.id))
+                && is_open(&windows::project_label(local)) =>
+        {
+            local
+        }
+        _ => &bundle.id,
+    }
 }
 
 fn request_find_project<R: Runtime>(app: &AppHandle<R>, request: FindProjectRequest) {
@@ -792,5 +837,141 @@ mod tests {
         f.run(&["b.rs:2"], &root);
         assert_eq!(f.labels(), [windows::project_label(&id)]);
         assert_eq!(f.opens(&id), [open_file(&root.join("b.rs"), Some(2), None)]);
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@pitwall.invalid"])
+            .args([
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "init.defaultBranch=main",
+            ])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    struct Mini(Arc<pw_core::registry::bundle::machine::HostMachine>);
+
+    impl pw_core::registry::bundle::add::RemoteMachines for Mini {
+        fn machine(
+            &self,
+            id: &str,
+        ) -> Option<Arc<dyn pw_core::registry::bundle::add::BundleMachine>> {
+            (id == "mini").then(|| Arc::clone(&self.0) as _)
+        }
+    }
+
+    fn add_member(
+        registry: &Registry,
+        to: pw_core::registry::bundle::add::AddTo<'_>,
+        path: &Path,
+    ) -> ProjectBundle {
+        let outcome = tauri::async_runtime::block_on(pw_core::registry::bundle::add::add_member(
+            registry,
+            to,
+            "mini",
+            path.to_str().unwrap(),
+            false,
+        ))
+        .unwrap();
+        let pw_core::registry::bundle::add::AddMemberOutcome::Added { bundle } = outcome else {
+            panic!("not added: {outcome:?}");
+        };
+        bundle
+    }
+
+    /// 18-m7-plan M7-11b ② · ③: 창은 묶음마다 하나다. 묶음 id 로 열면 `project-<묶음 id>` 창(원격만인 묶음도), 행 있는 묶음의 로컬
+    /// 멤버 id 로 열어도 그 묶음 창이다. 암묵 묶음일 때 연 `project-<로컬 id>` 창이 남아 있으면 묶음이 행을 가진 뒤에도 그 창을 다시
+    /// 쓴다 — 같은 묶음의 창이 둘 생기지 않는다. 모르는 묶음 id 는 창을 만들지 않는다.
+    #[test]
+    fn a_bundle_opens_one_window_whether_it_is_reached_by_its_id_or_its_local_project() {
+        let f = Fixture::new();
+        let mini_host = Arc::new(pw_core::LocalHost::with_config(
+            "mini",
+            AppPaths::under(&f.base.join("mini-app")),
+        ));
+        f.registry.set_remote_machines(Arc::new(Mini(Arc::new(
+            pw_core::registry::bundle::machine::HostMachine::new("mini", mini_host),
+        ))));
+        let repo = f.dir("repo");
+        git(&repo, &["init", "-q"]);
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        let clone = f.base.join("mini-repo");
+        git(
+            &f.base,
+            &[
+                "clone",
+                "-q",
+                repo.to_str().unwrap(),
+                clone.to_str().unwrap(),
+            ],
+        );
+        let only_repo = f.dir("mini-only");
+        git(&only_repo, &["init", "-q"]);
+        git(&only_repo, &["commit", "-q", "--allow-empty", "-m", "two"]);
+        let p = f.add(&repo);
+
+        // 원격만인 묶음: 묶음 id 창.
+        let only = add_member(
+            &f.registry,
+            pw_core::registry::bundle::add::AddTo::NewRemote,
+            &only_repo,
+        );
+        let front = windows::Activation::Front;
+        assert!(open_project_as(f.app.handle(), &only.id, &ProjectOpen::default(), front).unwrap());
+        assert!(
+            !open_project_as(f.app.handle(), &only.id, &ProjectOpen::default(), front).unwrap()
+        );
+        let only_label = windows::project_label(&only.id);
+        assert!(
+            f.query(&only_label)
+                .contains(&("project".into(), only.id.clone()))
+        );
+
+        // 암묵 묶음일 때 연 창 → 체크아웃을 더해 행 있는 묶음이 된 뒤 묶음 id 로 · 로컬 id 로 열어도 그 창.
+        assert!(open_project_as(f.app.handle(), &p, &ProjectOpen::default(), front).unwrap());
+        let bundle = add_member(
+            &f.registry,
+            pw_core::registry::bundle::add::AddTo::Bundle(&p),
+            &clone,
+        );
+        assert!(pw_core::registry::bundle::is_bundle_row_id(&bundle.id));
+        let file = ProjectOpen {
+            file: Some(repo.join("a.txt").display().to_string()),
+            ..ProjectOpen::default()
+        };
+        assert!(!open_project_as(f.app.handle(), &bundle.id, &file, front).unwrap());
+        assert!(!open_project_as(f.app.handle(), &p, &ProjectOpen::default(), front).unwrap());
+        let mut want = vec![windows::project_label(&p), only_label.clone()];
+        want.sort();
+        assert_eq!(f.labels(), want);
+        assert_eq!(f.opens(&p), vec![file]);
+
+        // 그 창이 없으면(닫힘 — mock 앱은 창을 곧바로 지우지 않아 열림 판정으로 본다) 묶음 id 창이다. 둘 다 열려 있으면 묶음 id 창.
+        let labels = |open: &[&str]| {
+            let open: Vec<String> = open.iter().map(|id| windows::project_label(id)).collect();
+            move |label: &str| open.iter().any(|l| l == label)
+        };
+        assert_eq!(window_id_for(&bundle, labels(&[])), bundle.id);
+        assert_eq!(window_id_for(&bundle, labels(&[&p])), p);
+        assert_eq!(window_id_for(&bundle, labels(&[&p, &bundle.id])), bundle.id);
+        assert_eq!(window_id_for(&only, labels(&[&p])), only.id);
+
+        let unknown = "b-ffffffffffffffff";
+        assert!(open_project_as(f.app.handle(), unknown, &ProjectOpen::default(), front).is_err());
+        assert!(
+            f.app
+                .get_webview_window(&windows::project_label(unknown))
+                .is_none()
+        );
     }
 }

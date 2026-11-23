@@ -206,24 +206,11 @@ pub async fn listen(
     }
 }
 
-/// 다른 머신 체크아웃의 파일을 창이 탭으로 보일 수 있는가. 그 탭은 M7-11b 가 웹뷰에 넣는다 — 그때 `true` 로 바꾼다. 그 전에는
-/// 창만 열고(앞으로 가져오지 않는다) 원격에 「창은 열었지만 파일은 아직 보일 수 없다」 를 실패로 답한다(원격의 `pitwall` 이 사람에게
-/// 거짓 성공을 보이지 않게 — M7-15 리뷰 F2).
-pub const REMOTE_TABS_SHOWN: bool = false;
-
-/// 원격에 보낼 답: 실제로 한 일을 그대로. 파일을 보일 수 없으면 창을 열었어도 실패다(그 까닭에 창을 연 것을 적는다).
+/// 원격에 보낼 답: 실제로 한 일을 그대로. 파일은 창이 그 체크아웃의 탭으로 연다(M7-11b — `src/layout/worktree-session.ts`, 활성
+/// 체크아웃은 바꾸지 않는다). M7-15 리뷰 F2 때는 그 탭이 없어 창만 열고 실패로 답했다 — 원격의 `pitwall` 이 거짓 성공을 보이지 않게.
 pub fn answer_for(done: Result<(Planned, OpenedIn), String>) -> OpenAnswer {
     match done {
-        Ok((planned, opened_in)) if planned.open.file.is_none() || REMOTE_TABS_SHOWN => {
-            OpenAnswer::Opened { opened_in }
-        }
-        Ok((_, opened_in)) => OpenAnswer::Failed {
-            message: match opened_in {
-                OpenedIn::NewWindow => "Pitwall opened the project window on the desktop (in the background), but it cannot show files of this machine there yet",
-                OpenedIn::ExistingWindow => "the project window is open on the desktop, but Pitwall cannot show files of this machine there yet",
-            }
-            .to_owned(),
-        },
+        Ok((_, opened_in)) => OpenAnswer::Opened { opened_in },
         Err(message) => OpenAnswer::Failed { message },
     }
 }
@@ -362,26 +349,13 @@ pub struct AppWindows<R: tauri::Runtime>(pub tauri::AppHandle<R>);
 
 impl<R: tauri::Runtime> Windows for AppWindows<R> {
     fn open(&self, planned: &Planned) -> Result<OpenedIn, String> {
-        let created = match planned.bundle.local_project() {
-            // 로컬 멤버가 있는 묶음은 그 프로젝트의 길(신뢰 관문 · 창 연결 묶기 — launch.rs)로.
-            Some(project) if planned.bundle.implicit => crate::launch::open_project_as(
-                &self.0,
-                project,
-                &planned.open,
-                crate::windows::Activation::Background,
-            )?,
-            _ => {
-                crate::windows::open_project_as(
-                    &self.0,
-                    &planned.bundle.id,
-                    &planned.bundle.name,
-                    &planned.open,
-                    crate::windows::Activation::Background,
-                )
-                .map_err(|e| e.to_string())?
-                .1
-            }
-        };
+        // 묶음의 창(로컬 멤버의 창이 이미 열려 있으면 그 창 — launch.rs `open_bundle_as`).
+        let created = crate::launch::open_bundle_as(
+            &self.0,
+            &planned.bundle,
+            &planned.open,
+            crate::windows::Activation::Background,
+        )?;
         Ok(if created {
             OpenedIn::NewWindow
         } else {
@@ -493,8 +467,7 @@ mod tests {
         );
     }
 
-    /// 파일을 보일 수 없으면(다른 머신 체크아웃의 탭 — M7-11b 전) 창을 열었어도 원격에 실패로 답하고 창을 연 것을 적는다. 프로젝트만
-    /// 연 요청은 성공이다(리뷰 F2 — 원격 `pitwall` 이 거짓 성공을 보이지 않게).
+    /// 파일이 든 요청도 프로젝트만 연 요청도 창이 연 대로 답한다 — 파일은 그 체크아웃의 탭으로 열린다(M7-11b). 실패는 그 까닭.
     #[test]
     fn the_answer_says_what_the_desktop_really_did() {
         let planned = |path: Option<&str>| {
@@ -506,23 +479,12 @@ mod tests {
             )
             .unwrap()
         };
-        match answer_for(Ok((
-            planned(Some("/home/me/pitwall/a.rs")),
-            OpenedIn::NewWindow,
-        ))) {
-            OpenAnswer::Failed { message } => {
-                assert!(message.contains("opened the project window"), "{message}");
-                assert!(message.contains("cannot show files"), "{message}");
-            }
-            other => panic!("{other:?}"),
+        for opened_in in [OpenedIn::NewWindow, OpenedIn::ExistingWindow] {
+            assert_eq!(
+                answer_for(Ok((planned(Some("/home/me/pitwall/a.rs")), opened_in))),
+                OpenAnswer::Opened { opened_in }
+            );
         }
-        assert!(matches!(
-            answer_for(Ok((
-                planned(Some("/home/me/pitwall/a.rs")),
-                OpenedIn::ExistingWindow
-            ))),
-            OpenAnswer::Failed { .. }
-        ));
         assert_eq!(
             answer_for(Ok((planned(None), OpenedIn::ExistingWindow))),
             OpenAnswer::Opened {

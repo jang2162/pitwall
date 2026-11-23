@@ -44381,7 +44381,7 @@
       "tier": "write"
     },
     "project.state.get": {
-      "description": "프로젝트 창의 상태(`$DATA/projects/<id>/state.json`). 없거나 읽지 못했으면 `state: null`(읽지 못한 이유는 `problem`).\n레지스트리에 없는 id 면 invalid params 오류.",
+      "description": "프로젝트 창의 상태(`$DATA/projects/<id>/state.json`). 없거나 읽지 못했으면 `state: null`(읽지 못한 이유는 `problem`).\n`projectId` 는 창 id — 로컬 프로젝트 id 이거나 행 있는 묶음 id(`b-…` — 그 묶음의 로컬 멤버 프로젝트의 파일, 로컬 멤버가\n없으면 묶음 id 의 파일). 레지스트리에 없는 id 면 invalid params 오류.",
       "kind": "unary",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -44423,7 +44423,7 @@
       "tier": "read"
     },
     "project.state.set": {
-      "description": "프로젝트 창의 상태를 통째로 바꾼다. 원자적으로 쓰고, JSON 객체가 아니거나 1 MiB 를 넘으면 invalid params 오류.",
+      "description": "프로젝트 창의 상태를 통째로 바꾼다. 원자적으로 쓰고, JSON 객체가 아니거나 1 MiB 를 넘으면 invalid params 오류. 그 창의\n연결만 쓴다(묶음 id 면 그 묶음 창의 연결 — `Registry::may_write_project_state`), 아니면 permission denied.",
       "kind": "unary",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",

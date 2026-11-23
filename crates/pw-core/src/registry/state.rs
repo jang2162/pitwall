@@ -209,11 +209,37 @@ pub fn scope_may_write(scope: &ConnectionScope, project_id: &str) -> bool {
 }
 
 impl Registry {
-    /// 프로젝트의 상태(머리 주석). 레지스트리에 없는 프로젝트면 [`RegistryError::NotFound`].
-    pub fn project_state(&self, id: &str) -> Result<ProjectState, RegistryError> {
+    /// 창 상태 파일의 열쇠(`projects/<열쇠>/state.json`). 창 id 는 로컬 프로젝트 id 이거나 행 있는 묶음 id 다(18-m7-plan M7-11b).
+    ///
+    /// - 로컬 프로젝트 id: 그대로(암묵 묶음 — M7 전의 파일).
+    /// - 행 있는 묶음 id: **그 묶음의 로컬 멤버 프로젝트 id**, 로컬 멤버가 없으면(원격만) 그 묶음 id. 그래서 암묵 묶음이 행 있는 묶음이
+    ///   되거나(멤버 더하기) 다시 암묵이 되어도(멤버 빼기) 파일이 옮겨 가지 않는다 — 창 label 이 `project-<로컬 id>` 든
+    ///   `project-<묶음 id>` 든 같은 파일을 본다.
+    ///
+    /// 둘째 값은 열쇠의 파일이 없을 때 읽을 옛 자리다: 원격만이던 묶음에 로컬 멤버가 붙으면 열쇠가 묶음 id 에서 로컬 id 로 바뀐다 —
+    /// 그 묶음 id 의 파일을 이어 읽는다. 레지스트리에 없는 id 면 [`RegistryError::NotFound`].
+    fn state_key(&self, id: &str) -> Result<(String, Option<String>), RegistryError> {
         let id = checked_id(id)?;
+        if super::bundle::is_bundle_row_id(id) {
+            let bundle = self.bundle(id)?;
+            return Ok(match bundle.local_project() {
+                Some(local) => (local.to_owned(), Some(id.to_owned())),
+                None => (id.to_owned(), None),
+            });
+        }
         self.get(id)?;
-        Ok(match read_state(&state_file(&self.inner.paths.data, id)) {
+        Ok((id.to_owned(), None))
+    }
+
+    /// 프로젝트(창)의 상태(머리 주석 · [`Self::state_key`]). 레지스트리에 없는 id 면 [`RegistryError::NotFound`].
+    pub fn project_state(&self, id: &str) -> Result<ProjectState, RegistryError> {
+        let (key, earlier) = self.state_key(id)?;
+        let data = &self.inner.paths.data;
+        let mut read = read_state(&state_file(data, &key));
+        if let (Ok(None), Some(earlier)) = (&read, earlier) {
+            read = read_state(&state_file(data, &earlier));
+        }
+        Ok(match read {
             Ok(state) => ProjectState {
                 state,
                 problem: None,
@@ -225,15 +251,35 @@ impl Registry {
         })
     }
 
-    /// 프로젝트의 상태를 통째로 바꾼다.
+    /// 프로젝트(창)의 상태를 통째로 바꾼다.
     pub fn set_project_state(
         &self,
         id: &str,
         state: &serde_json::Value,
     ) -> Result<(), RegistryError> {
-        let id = checked_id(id)?;
-        self.get(id)?;
-        write_state(&state_file(&self.inner.paths.data, id), state)
+        let (key, _) = self.state_key(id)?;
+        write_state(&state_file(&self.inner.paths.data, &key), state)
+    }
+
+    /// 이 연결이 창 `id` 의 상태를 써도 되는가. 로컬 프로젝트 id 면 [`scope_may_write`] 그대로다. 행 있는 묶음 id 면 그 묶음 창의
+    /// 연결 — 범위가 그 묶음의 로컬 멤버 프로젝트(창 연결은 그 멤버로 연다 — 데스크톱 ipc.rs `window_target`)이거나, 로컬 멤버가 없는
+    /// 묶음이면 그 묶음 id(원격만인 묶음 창의 연결)다. 다른 프로젝트 창 · 웰컴 · 설정 · 파일 창 · MCP 세션은 거절한다.
+    pub fn may_write_project_state(
+        &self,
+        scope: &ConnectionScope,
+        id: &str,
+    ) -> Result<bool, RegistryError> {
+        if scope_may_write(scope, id) {
+            // 묶음 id 범위는 로컬 멤버가 없는 묶음에서만 생긴다(ipc.rs) — 그래도 지금 그 묶음이 로컬 멤버를 가졌으면 그 멤버의 창이
+            // 쓴다(창이 열린 사이 로컬 멤버가 붙은 경우 — 다음 연결부터 그 멤버 범위다). 아래 열쇠는 어느 쪽이든 같다.
+            return Ok(true);
+        }
+        // 모르는 id 는 쓰지 못하는 것이다 — 「그 창이 아니다」 를 「그런 프로젝트는 없다」 보다 먼저 답한다(M7 전과 같다).
+        match self.state_key(id) {
+            Ok((key, _)) => Ok(key != id && scope_may_write(scope, &key)),
+            Err(RegistryError::NotFound(_)) => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 }
 

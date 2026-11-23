@@ -231,7 +231,8 @@ rpc_method! {
     }
 
     /// 프로젝트 창의 상태(`$DATA/projects/<id>/state.json`). 없거나 읽지 못했으면 `state: null`(읽지 못한 이유는 `problem`).
-    /// 레지스트리에 없는 id 면 invalid params 오류.
+    /// `projectId` 는 창 id — 로컬 프로젝트 id 이거나 행 있는 묶음 id(`b-…` — 그 묶음의 로컬 멤버 프로젝트의 파일, 로컬 멤버가
+    /// 없으면 묶음 id 의 파일). 레지스트리에 없는 id 면 invalid params 오류.
     pub ProjectStateGet: "project.state.get" {
         params: ProjectScopedParams,
         result: ProjectState,
@@ -239,7 +240,8 @@ rpc_method! {
         roles: [Owner],
     }
 
-    /// 프로젝트 창의 상태를 통째로 바꾼다. 원자적으로 쓰고, JSON 객체가 아니거나 1 MiB 를 넘으면 invalid params 오류.
+    /// 프로젝트 창의 상태를 통째로 바꾼다. 원자적으로 쓰고, JSON 객체가 아니거나 1 MiB 를 넘으면 invalid params 오류. 그 창의
+    /// 연결만 쓴다(묶음 id 면 그 묶음 창의 연결 — `Registry::may_write_project_state`), 아니면 permission denied.
     pub ProjectStateSet: "project.state.set" {
         params: SetProjectStateParams,
         result: (),
@@ -409,7 +411,11 @@ pub fn register(router: &mut Router, registry: &Registry, tasks: &crate::task::T
     router.unary(ProjectStateSet, move |ctx, params| {
         let r = r.clone();
         async move {
-            if !connection_may_write(&ctx, &params.project_id) {
+            let scope = ctx.scope().clone();
+            let id = params.project_id.clone();
+            let allowed =
+                blocking(r.clone(), move |r| r.may_write_project_state(&scope, &id)).await?;
+            if !allowed {
                 return Err(RpcError::new(
                     code::PERMISSION_DENIED,
                     "only the project's own window may save its state",
