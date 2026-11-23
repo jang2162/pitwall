@@ -205,6 +205,8 @@ struct State {
     unacked_bytes: usize,
     /// 마지막으로 보낸 `ack`.
     acked: u64,
+    /// `ack` 를 보낼 차례다(하나만 — [`Mux::queue_ack`]).
+    ack_due: bool,
 }
 
 impl State {
@@ -378,6 +380,7 @@ impl Mux {
         state.suspended = true;
         state.stop.cancel();
         state.link.clear();
+        state.ack_due = false;
         let generation = state.generation;
         tracing::info!(target: "pw_link", %reason, "link transport lost; waiting for it to resume");
         self.shared.phase.send_replace(Phase::Suspended);
@@ -733,6 +736,15 @@ impl Mux {
         if let Some(frame) = state.link.pop_front() {
             return Next::Frame(frame);
         }
+        if std::mem::take(&mut state.ack_due) {
+            let ack = LinkFrame::control(
+                Kind::Ack,
+                json!(AckBody {
+                    seq: state.received
+                }),
+            );
+            return Next::Frame(ack.encode());
+        }
         if state.resend < state.replay.len() {
             let frame = state.replay[state.resend].clone();
             state.resend += 1;
@@ -988,13 +1000,9 @@ impl Mux {
     fn queue_ack(state: &mut State) {
         state.unacked_bytes = 0;
         state.acked = state.received;
-        let ack = LinkFrame::control(
-            Kind::Ack,
-            json!(AckBody {
-                seq: state.received
-            }),
-        );
-        state.link.push_back(ack.encode());
+        // `ack` 는 가장 새것 하나만 뜻이 있다 — 줄에 쌓지 않고 쓸 때 그때의 받은 수로 만든다(쓰기가 막힌 동안 쌓여 번호 없는 틀의
+        // 상한을 넘지 않게 — 리뷰 권고 1).
+        state.ack_due = true;
     }
 
     /// 상대가 `seq` 번까지 받았다 — 다시 보낼 줄에서 뺀다.
@@ -1312,6 +1320,20 @@ mod tests {
             }
         }
         assert_eq!(a.channel_count(), 0);
+    }
+
+    /// 쓰기가 막힌 동안 `ack` 를 몇 번 내도 줄에는 하나만 선다 — 번호 없는 틀의 상한(64)을 `ack` 가 채워 링크가 끊기지 않게(리뷰
+    /// 권고 1).
+    #[test]
+    fn acks_do_not_pile_up_while_the_writer_is_blocked() {
+        let mut state = super::State::default();
+        for received in 1..=200 {
+            state.received = received;
+            Mux::queue_ack(&mut state);
+        }
+        assert!(state.link.is_empty(), "{} acks queued", state.link.len());
+        assert!(state.ack_due);
+        assert_eq!(state.acked, 200);
     }
 
     /// 보낸 것보다 많이 받았다는 `ack` 는 규칙 위반이라 링크를 닫는다 — 받아들이면 다시 보낼 줄이 비어 다음 이어 붙기에서 틀을
