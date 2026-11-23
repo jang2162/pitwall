@@ -87,6 +87,8 @@ impl Backend for Linked {
                 host: Arc::new(LocalHost::new(MACHINE)),
                 machine: MACHINE.into(),
                 closed: Box::pin(async move { rx.await.unwrap_or_else(|_| "closed".into()) }),
+                // 이어 붙기(M7-14 의 `resuming`)는 이 시험이 보지 않는다.
+                resuming: None,
                 close: Box::new(move || {
                     if let Some(tx) = tx.lock().unwrap().take() {
                         let _ = tx.send("closed by us".into());
