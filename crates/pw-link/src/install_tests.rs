@@ -395,3 +395,28 @@ async fn the_transport_is_the_stdio_of_the_installed_proxy() {
             .unwrap()
     );
 }
+
+/// ⑫ 매니페스트를 쓴 뒤 바뀐 바이너리(같은 크기 · 다른 바이트)는 올리지 않는다 — 올릴 바이트 자체를 매니페스트 해시와 견준다.
+#[tokio::test]
+async fn a_binary_that_differs_from_its_manifest_is_not_uploaded() {
+    let dir = tempfile::tempdir().unwrap();
+    let remote = FakeRemote::new(dir.path(), "home", true);
+    remote.uname("Linux x86_64");
+    let dist = dev_dist(dir.path());
+    use_dev_dist(&dist);
+    let binary = dist.join(format!("pitwall-relay-{VERSION}-linux-x86_64"));
+    let mut bytes = std::fs::read(&binary).unwrap();
+    let last = bytes.len() - 2;
+    bytes[last] ^= 0x20;
+    std::fs::write(&binary, bytes).unwrap();
+    let installer = installer(&remote, &[], offline_dist(dir.path()));
+    let probe = installer.probe().await.unwrap();
+    let err = installer.install(&probe, &no_progress).await.unwrap_err();
+    assert!(matches!(err, InstallError::Dist(_)), "{err}");
+    assert_eq!(
+        remote.calls().len(),
+        1,
+        "nothing but the probe reached the remote"
+    );
+    assert!(remote_files(&remote).is_empty());
+}
