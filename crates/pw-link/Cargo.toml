@@ -35,6 +35,19 @@ reqwest = { version = "0.13.5", default-features = false, features = [
 rustls = { version = "0.23", default-features = false, features = ["ring"], optional = true }
 # 원격 Relay 바이너리의 판 차례(최근 두 판만 남기기 — 18-m7-plan M7-07 ③). 워크스페이스가 이미 쓰는 판이다.
 semver = { version = "1.0.28", optional = true }
+# 코드 페어링의 키 확인 MAC(18-m7-plan M7-23 ②). sha2 0.11 과 같은 digest 판.
+hmac = "0.13.0"
+# 6자리 코드 페어링의 PAKE(18-m7-plan M7-23 ② — 메인 판정: 코드를 psk · HMAC 로 쓰면 처음 붙는 능동 중간자가 오프라인 대입한다).
+# 0.4 는 snow 와 같은 curve25519-dalek 4 를 쓴다(ed25519-dalek 3 의 dalek 5 와 메이저가 하나 더 — 둘이 나눠 쓴다).
+spake2 = "0.4.0"
+# 직접 연결의 세션 암호(Noise XX — 18-m7-plan M7-23 ① · 08 「보안 모델」). 정적 키는 기기 Ed25519 키를 X25519 로 바꾼 것.
+# 쓰는 암호만 켠다(AES-GCM · SHA-2 · ring 갈래는 끈다).
+snow = { version = "0.10.0", default-features = false, features = [
+  "use-curve25519",
+  "use-chacha20poly1305",
+  "use-blake2",
+  "use-getrandom",
+] }
 # 링크 틀은 LSP · DAP 와 같은 `Content-Length` 틀이다(메인 판정 M7-P2).
 pw-wire = { path = "../pw-wire" }
 serde = { workspace = true, features = ["derive"] }
@@ -60,6 +73,8 @@ schemars = { workspace = true }
 semver = "1.0.28"
 specta = { workspace = true, features = ["derive"] }
 tempfile = "3.27.0"
+# 코드가 로그에 실리지 않는지 본다(M7-23).
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }
 tokio = { workspace = true, features = [
   "rt",
   "rt-multi-thread",

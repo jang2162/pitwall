@@ -224,8 +224,10 @@ pub struct Proven {
     pub role: Role,
 }
 
-/// 전송 하나를 받아 링크가 닫힐 때까지 돈다.
+/// 전송 하나를 받아 링크가 닫힐 때까지 돈다. Noise 세션 위의 스트림이면(`crate::noise`) 안쪽 `hello` 의 키가 그 세션의 상대여야
+/// 한다. 코드 페어링(`pair`)은 받지 않는다 — [`serve_noise`] 만 받는다.
 pub async fn serve(stream: LinkStream, parts: &RelayParts) -> Result<CloseReason, ServeError> {
+    let bound = stream.bound;
     let mut framed = Framed::handshake(stream);
     let first = tokio::time::timeout(parts.limits.dead_after, framed.read.read())
         .await
@@ -235,7 +237,70 @@ pub async fn serve(stream: LinkStream, parts: &RelayParts) -> Result<CloseReason
         Ok(None) => return Err(ServeError::Io("closed before the first frame".to_owned())),
         Err(e) => return Err(ServeError::Io(e.to_string())),
     };
-    serve_framed(framed, first, parts).await
+    serve_inner(framed, first, parts, bound, |_| {}).await
+}
+
+/// [`serve_noise`] 가 한 일.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Served {
+    /// 링크가 섰다가 닫혔다.
+    Link(CloseReason),
+    /// 코드로 기기 하나를 페어링했다(링크는 열지 않았다 — 그 기기는 다시 붙는다).
+    Paired { device: DeviceId, role: Role },
+}
+
+/// 직접 연결(18-m7-plan M7-23 ① — QUIC 은 M7-24)의 받기: 받은 바이트 스트림에서 Noise XX 를 하고(이 Relay 의 기기 키), 그 위의 첫
+/// 틀이 `hello` 면 M7-03 링크를([`serve_proven`] 과 같다 — 안쪽 `hello` 의 키가 Noise 상대여야 한다), `pair` 면 코드 페어링을
+/// 한다(`crate::pair` — 코드 페어링은 이 길에서만 받는다).
+pub async fn serve_noise(
+    stream: LinkStream,
+    parts: &RelayParts,
+    codes: &dyn crate::pair::CodeBook,
+    on_proven: impl FnOnce(&Proven) + Send,
+) -> Result<Served, ServeError> {
+    let limit = parts.limits.dead_after;
+    let secured = tokio::time::timeout(limit, crate::noise::respond(stream, &parts.identity.key))
+        .await
+        .map_err(|_| ServeError::Timeout)?
+        .map_err(|e| ServeError::Io(e.to_string()))?;
+    let Some(bound) = secured.bound else {
+        return Err(ServeError::Io("the noise session has no peer".to_owned()));
+    };
+    let mut framed = Framed::handshake(secured);
+    let first = match tokio::time::timeout(limit, framed.read.read())
+        .await
+        .map_err(|_| ServeError::Timeout)?
+    {
+        Ok(Some((frame, _))) => frame,
+        Ok(None) => return Err(ServeError::Io("closed before the first frame".to_owned())),
+        Err(e) => return Err(ServeError::Io(e.to_string())),
+    };
+    if first.kind == Kind::Pair && first.channel == CONTROL {
+        let paired = tokio::time::timeout(
+            limit,
+            crate::pair::serve_pair(
+                framed,
+                first,
+                bound,
+                &parts.identity.key,
+                &parts.identity.versions,
+                codes,
+            ),
+        )
+        .await
+        .map_err(|_| ServeError::Timeout)?;
+        return match paired {
+            Ok((device, role)) => Ok(Served::Paired { device, role }),
+            Err(crate::pair::PairRefused::Rejected(reason)) => Err(ServeError::Rejected {
+                reason,
+                theirs: None,
+            }),
+            Err(crate::pair::PairRefused::Io(e)) => Err(ServeError::Io(e)),
+        };
+    }
+    serve_inner(framed, first, parts, Some(bound), on_proven)
+        .await
+        .map(Served::Link)
 }
 
 /// 데몬이 첫 틀을 이미 읽은 전송. 첫 틀이 `hello` 가 아니면 거절한다.
@@ -253,9 +318,19 @@ pub async fn serve_framed(
 /// 핸드셰이크 동안은 틀 상한이 [`HANDSHAKE_MAX_FRAME`] 이고(부른 쪽이 `Framed::new` 로 만들었어도 여기서 낮춘다), 증명 뒤에만 링크 틀
 /// 상한으로 올린다.
 pub async fn serve_proven(
+    framed: Framed,
+    first: LinkFrame,
+    parts: &RelayParts,
+    on_proven: impl FnOnce(&Proven) + Send,
+) -> Result<CloseReason, ServeError> {
+    serve_inner(framed, first, parts, None, on_proven).await
+}
+
+async fn serve_inner(
     mut framed: Framed,
     first: LinkFrame,
     parts: &RelayParts,
+    bound: Option<crate::noise::Bound>,
     on_proven: impl FnOnce(&Proven) + Send,
 ) -> Result<CloseReason, ServeError> {
     framed.read.set_max_body(HANDSHAKE_MAX_FRAME);
@@ -263,7 +338,7 @@ pub async fn serve_proven(
     let mut table = parts.pairings.watch();
     let (proven, resume) = tokio::time::timeout(
         parts.limits.dead_after,
-        handshake(&mut framed, first, parts),
+        handshake(&mut framed, first, parts, bound),
     )
     .await
     .map_err(|_| ServeError::Timeout)??;
@@ -562,6 +637,7 @@ async fn handshake(
     framed: &mut Framed,
     first: LinkFrame,
     parts: &RelayParts,
+    bound: Option<crate::noise::Bound>,
 ) -> Result<(Proven, Option<Resume>), ServeError> {
     let ours = &parts.identity.versions;
     if first.kind != Kind::Hello || first.channel != CONTROL {
@@ -581,6 +657,11 @@ async fn handshake(
         .await);
     }
     if hello.device != hello.key.id() {
+        return Err(reject(framed, RejectReason::Protocol, None, None).await);
+    }
+    // Noise 위에서는 안쪽 `hello` 의 키가 그 세션이 증명한 상대여야 한다(중계 끼워 넣기 — `crate::noise` 머리 주석).
+    if bound.is_some_and(|b| !b.is_peer(&hello.key)) {
+        tracing::info!(target: "pw_link", "the hello key is not the noise peer");
         return Err(reject(framed, RejectReason::Protocol, None, None).await);
     }
     let my_key = parts.identity.key.public();

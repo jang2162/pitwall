@@ -6,6 +6,7 @@
 //! - [`transport`]: 바이트 스트림 하나를 연다(`Ssh` — M7-06, 시험용 [`transport::memory`], `Quic` — M7-24).
 //! - [`frame`]: `pw-wire` 의 `Content-Length` 틀에 JSON 머리(`LinkFrame { channel, kind, body }`).
 //! - [`handshake`]: 판 · 기기 id · 양쪽 도전 서명(채널 바인딩). 판이 다르거나 증명이 없으면 RPC 를 하나도 받지 않고 끊는다.
+//! - [`noise`]: 직접 연결(QUIC — M7-24)과 코드 페어링의 Noise XX 세션(M7-23). 안쪽 링크 핸드셰이크는 그대로다.
 //! - [`device`] · [`pairing`]: 기기 키(Desktop 은 키체인, Relay 는 `$DATA/relay/device.key`)와 Relay 의 페어링 표.
 //! - 다중화(`mux`): 링크 하나에 채널 여럿 — 채널 수 상한, 채널마다 흐름 제어 · 보내기 버퍼 상한, 하트비트.
 //! - [`desktop`]: [`dial`] · [`RemoteHost`](`pw_core::Host` 를 구현해 `HostRouter` 에 붙는다) · 링크 상태.
@@ -23,6 +24,8 @@ pub mod forward;
 pub mod frame;
 pub mod handshake;
 mod mux;
+pub mod noise;
+pub mod pair;
 pub mod pairing;
 pub mod relay;
 pub mod transport;
@@ -46,9 +49,12 @@ pub use device::{
 pub use frame::HANDSHAKE_MAX_FRAME;
 pub use handshake::{PROTOCOL, RejectReason, Versions};
 pub use mux::{CloseReason, LinkLimits};
+pub use noise::SecuredTransport;
+pub use pair::{CodeBook, CodePaired, PairError, PairingCode, pair_with_code};
 pub use pairing::{Pairing, PairingTable};
 pub use relay::{
-    Proven, RelayIdentity, RelayParts, Resumes, ServeError, serve, serve_framed, serve_proven,
+    Proven, RelayIdentity, RelayParts, Resumes, ServeError, Served, serve, serve_framed,
+    serve_noise, serve_proven,
 };
 pub use transport::{LinkStream, Transport};
 

@@ -20,6 +20,14 @@ use crate::device::{PublicKey, read_private};
 /// 페어링 표 파일의 이름(`$DATA/relay/` 아래).
 pub const PAIRINGS_FILE: &str = "pairings.json";
 
+/// 기기 이름에 받는 글자(`[A-Za-z0-9._-]`, 64자까지). 이름은 판정에 쓰지 않지만 기기 화면(M7-23)이 보이는 글이다.
+pub fn valid_name(name: &str) -> bool {
+    name.len() <= 64
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
 /// 페어링된 기기 하나.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pairing {

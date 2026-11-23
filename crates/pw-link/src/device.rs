@@ -74,6 +74,13 @@ impl PublicKey {
             .is_ok()
     }
 
+    /// 이 키의 X25519 공개키(Noise 의 정적 키 — `crate::noise`). 꼴이 틀린 키는 `None`.
+    pub fn x25519(&self) -> Option<[u8; 32]> {
+        VerifyingKey::from_bytes(&self.0)
+            .ok()
+            .map(|key| key.to_montgomery().to_bytes())
+    }
+
     /// base64 글에서(페어링 표 · 틀).
     pub fn parse(text: &str) -> Option<Self> {
         let bytes = STANDARD.decode(text.trim()).ok()?;
@@ -178,6 +185,11 @@ impl DeviceKey {
 
     pub fn sign(&self, message: &[u8]) -> Signature {
         Signature(self.key.sign(message).to_bytes())
+    }
+
+    /// Noise 정적 키의 X25519 비밀(`crate::noise` — [`PublicKey::x25519`] 의 짝). 쓴 뒤 지워진다.
+    pub(crate) fn x25519_secret(&self) -> Zeroizing<[u8; 32]> {
+        Zeroizing::new(self.key.to_scalar_bytes())
     }
 
     fn encode_seed(&self) -> Zeroizing<String> {

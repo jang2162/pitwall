@@ -178,11 +178,14 @@ pub async fn dial(
     limits: LinkLimits,
 ) -> Result<DesktopLink, DialError> {
     // Relay 를 증명하기 전에는 작은 틀만 받는다(Relay 쪽과 같은 규칙 — `HANDSHAKE_MAX_FRAME`).
+    let bound = stream.bound;
     let mut framed = Framed::handshake(stream);
-    let (role, relay_key, welcome) =
-        tokio::time::timeout(limits.dead_after, handshake(&mut framed, me, expect, None))
-            .await
-            .map_err(|_| DialError::Timeout)??;
+    let (role, relay_key, welcome) = tokio::time::timeout(
+        limits.dead_after,
+        handshake(&mut framed, me, expect, None, bound),
+    )
+    .await
+    .map_err(|_| DialError::Timeout)??;
     if welcome.resumed.is_some() {
         return Err(DialError::Protocol(
             "the relay resumed a link this desktop did not ask for".to_owned(),
@@ -267,6 +270,7 @@ pub(crate) async fn handshake(
     me: &DesktopIdentity,
     expect: &Expect,
     resume: Option<Resume>,
+    bound: Option<crate::noise::Bound>,
 ) -> Result<(Role, PublicKey, Welcome), DialError> {
     let io = |e: std::io::Error| DialError::Io(e.to_string());
     let ours = &me.versions;
@@ -322,6 +326,13 @@ pub(crate) async fn handshake(
         .is_some_and(|sig| theirs.key.verifies(&relay_text, sig));
     if !proven {
         return Err(DialError::BadRelaySignature);
+    }
+    // Noise 위에서는 안쪽 `hello` 의 Relay 키가 그 세션이 증명한 상대여야 한다 — 다른 Relay 의 hello 를 중계하는 상대에게는 서명하지
+    // 않는다(`crate::noise` 머리 주석, M7-03 리뷰 권고 3).
+    if bound.is_some_and(|b| !b.is_peer(&theirs.key)) {
+        return Err(DialError::Protocol(
+            "the relay's key is not the noise peer".to_owned(),
+        ));
     }
     // 머신 id(메인 판정 M7-P6): 그 호스트에 기억한 id 와 다른 키의 Relay 에는 서명하지 않는다. 비교는 Relay 의 서명을 확인한
     // **뒤**다 — 그래서 `MachineMismatch.found` 는 증명된 키의 지문이다(서명 없는 hello 의 키가 「새로 믿을」 id 가 되지 않게 —
@@ -410,12 +421,13 @@ impl DesktopLink {
             .ok_or(DialError::Rejected(RejectReason::Resume))?;
         let received = self.mux.received();
         let limits = *self.mux.limits();
+        let bound = stream.bound;
         let mut framed = Framed::handshake(stream);
         let expect = Expect::Machine(self.machine.clone());
         let resume = Resume { token, received };
         let (role, _, welcome) = tokio::time::timeout(
             limits.dead_after,
-            handshake(&mut framed, me, &expect, Some(resume)),
+            handshake(&mut framed, me, &expect, Some(resume), bound),
         )
         .await
         .map_err(|_| DialError::Timeout)??;

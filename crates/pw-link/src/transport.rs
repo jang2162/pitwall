@@ -14,6 +14,9 @@ pub type BoxWrite = Box<dyn AsyncWrite + Send + Unpin>;
 pub struct LinkStream {
     pub read: BoxRead,
     pub write: BoxWrite,
+    /// Noise 세션 위의 스트림이면 그 세션이 증명한 상대(`crate::noise` — `dial` · `serve` 가 안쪽 `hello` 의 키와 견준다). 이
+    /// 크레이트의 Noise 만 채운다.
+    pub(crate) bound: Option<crate::noise::Bound>,
 }
 
 impl LinkStream {
@@ -24,7 +27,13 @@ impl LinkStream {
         Self {
             read: Box::new(read),
             write: Box::new(write),
+            bound: None,
         }
+    }
+
+    /// Noise 세션 위의 스트림인가(직접 연결 · 코드 페어링 — M7-23).
+    pub fn is_secured(&self) -> bool {
+        self.bound.is_some()
     }
 
     /// 읽고 쓰는 스트림 하나(유닉스 소켓 · duplex)를 나눈다.

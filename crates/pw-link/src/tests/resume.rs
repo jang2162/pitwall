@@ -315,6 +315,7 @@ async fn try_resume(
         &me,
         &Expect::Machine(fx.relay_key.id()),
         Some(Resume { token, received: 0 }),
+        None,
     )
     .await
     .map(|_| ())

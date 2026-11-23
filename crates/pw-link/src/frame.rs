@@ -59,6 +59,10 @@ pub enum Kind {
     /// Desktop → Relay: 채널 하나를 포트 포워딩으로 연다(본문 [`crate::forward::ForwardTo`] — 18-m7-plan M7-22). 답은 `connect` 와
     /// 같이 `accepted` · `refused` 이고, 그 뒤 채널의 `msg` 는 TCP 바이트다([`crate::forward`]). Relay 는 Desktop 쪽으로 보내지 않는다.
     Forward,
+    /// 코드 페어링의 PAKE 메시지(양쪽 — `crate::pair`, Noise 세션의 첫 틀에서만).
+    Pair,
+    /// 코드 페어링의 키 확인(양쪽).
+    Confirm,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
