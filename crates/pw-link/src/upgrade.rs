@@ -424,6 +424,15 @@ mod tests {
             survey.to_remove(),
             ["pitwall-relay-dev-1.2.0", "pitwall-relay-stable-1.1.0"]
         );
+        // 1.10.0 이 1.9.0 보다 높다.
+        let survey = Survey {
+            binaries: vec![
+                binary("pitwall-relay-dev-2.0.0", BinaryState::Current),
+                stopped("pitwall-relay-dev-1.9.0"),
+                stopped("pitwall-relay-dev-1.10.0"),
+            ],
+        };
+        assert_eq!(survey.to_remove(), ["pitwall-relay-dev-1.9.0"]);
         // 판을 낮춘 Desktop: 이 판(1.0.0)과 더 높은 것 가운데 가장 높은 하나.
         let survey = Survey {
             binaries: vec![
