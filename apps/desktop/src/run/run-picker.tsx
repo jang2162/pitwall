@@ -26,6 +26,7 @@ import { useKeymapPopup, useRegisterActions } from "../keymap/keymap-provider";
 import { showPanel } from "../layout/project-layout";
 import { useNotify } from "../notifications/notifications";
 import { windowDebug } from "../debug/debug-session";
+import type { Checkout } from "../checkout/checkout";
 import { useCheckoutHost } from "../checkout/checkout-hosts";
 import { activeCheckout } from "../open-with/active-worktree";
 import { TargetMachineProvider } from "../checkout/machine-mark";
@@ -472,7 +473,13 @@ export function RunPickerFeature({
 }) {
   const strings = useRunStrings();
   // 대상 체크아웃(기본 활성 체크아웃)의 머신 연결 · 그 머신 프로젝트 · 그 머신의 워크트리로 구성을 읽고 띄운다.
-  const target = useTarget(windowTarget);
+  // 기억된 대상(툴바의 고르기)과, 「거기서 실행」(`run.chooseIn`)이 그 팝업 한 번에만 쓰는 대상(델타 리뷰 C1 — 기억된 대상을 바꾸지
+  // 않는다: 팝업을 닫으면, 실행해도, 다음 ⌃R 은 사람이 고른 원래 대상이다).
+  const remembered = useTarget(windowTarget);
+  const [once, setOnce] = useState<Checkout>();
+  // 팝업에서 골라 띄우는 동안은 그 대상을 둔다 — 띄우기의 위험 확인(3001)이 그 머신 이름을 보이게. 끝나면 놓는다.
+  const launchingOnce = useRef(false);
+  const target = once ?? remembered;
   const active = useActiveCheckout();
   const host = useCheckoutHost(target.machine);
   const client = host.client;
@@ -534,7 +541,7 @@ export function RunPickerFeature({
             console.warn("[run] chooseIn: not a checkout of this window", args);
             return;
           }
-          windowTarget.setState({ chosen: checkout });
+          setOnce(checkout);
           setChooser("run");
         },
         canStop: () => runToStop(tabs, configs.current()?.entry.id) !== undefined,
@@ -582,8 +589,20 @@ export function RunPickerFeature({
         <RunChooser
           configs={configs}
           mode={chooser}
-          onClose={() => setChooser(undefined)}
-          onRun={(entry, profile) => void launch(entry, profile)}
+          onClose={() => {
+            setChooser(undefined);
+            // 고르면 `onRun` 이 곧바로 온다 — 그때는 띄우기가 끝난 뒤에 놓는다.
+            queueMicrotask(() => {
+              if (!launchingOnce.current) setOnce(undefined);
+            });
+          }}
+          onRun={(entry, profile) => {
+            launchingOnce.current = true;
+            void launch(entry, profile).finally(() => {
+              launchingOnce.current = false;
+              setOnce(undefined);
+            });
+          }}
         />
       )}
       {/* 첫 실행 확인(7001) · 위험 확인은 띄우는 체크아웃의 머신 이름을 문장에 넣는다. */}

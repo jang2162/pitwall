@@ -67,6 +67,8 @@ const fake = vi.hoisted(() => ({
   runLogs: new Map<string, { log: string; stream?: { conn: number; streamId: number } }>(),
   /** `run.start` 가 처음에 첫 실행 확인(7001)을 낼 것인가. */
   confirm: undefined as unknown,
+  /** 다시 실행이 사슬의 sql 단계 위험 확인(3001)을 낼 것인가. */
+  sqlConfirm: false,
   /** 그 머신이 떼어 둘 수 있는 수(넘으면 conflict). */
   limit: 16,
   /** 지금 링크 상태(새 `remote.connect` 스트림의 첫 항목). */
@@ -348,6 +350,22 @@ vi.mock("../tauri-transport", async () => {
             if (!run || run.projectId !== project) return fail(-32602, "no such run");
             if (fake.confirm && params.confirmed !== (fake.confirm as { hash: string }).hash)
               return fail(7001, "not seen", fake.confirm);
+            if (fake.sqlConfirm && !params.sqlConfirmed)
+              return fail(3001, "confirm", {
+                config: "seed",
+                request: {
+                  grade: "write",
+                  statements: [],
+                  statementsHash: "s1",
+                  effects: [],
+                  nameRequired: false,
+                  rejected: null,
+                },
+                connection: { id: "lite", name: "lite", production: false, readOnly: false },
+                files: [],
+                transaction: "all",
+                sql: "UPDATE t SET v = 1;",
+              });
             return reply({ ...run, runId: "run-2", restartOf: run.runId });
           }
           case "run.stop": {
@@ -476,6 +494,7 @@ beforeEach(() => {
   fake.conns = new Map();
   fake.links = [];
   fake.confirm = undefined;
+  fake.sqlConfirm = false;
   fake.limit = 16;
   fake.status = { state: "connected", machine: MINI };
   activeWorktreeStore.setState({ top: undefined });
@@ -985,9 +1004,84 @@ it("refuses the checkout actions without a checkout or with a machine this windo
     projectId: "r1",
     worktree: "/srv/wt",
   });
+});
+
+// 델타 리뷰 C1: 「거기서 실행」(`run.chooseIn`)은 그 팝업 한 번에만 그 체크아웃을 쓴다 — 기억된 대상(툴바)을 바꾸지 않는다. 팝업을
+// 취소해도, 골라 실행해도, 다음 인자 없는 실행(⌃R)은 사람이 고른 원래 대상(여기서는 활성 체크아웃 — 이 머신)으로 간다.
+it("uses the checkout of run.chooseIn for that one popup only and leaves the remembered target alone", async () => {
+  await mount();
+  await vi.waitFor(() => expect(registry().get("run.chooseIn")).toBeDefined());
+  const popup = () => document.querySelector<HTMLElement>("[data-run-config=dev]");
+  // 취소: 팝업에 그 머신의 목록이 뜨고, 닫으면 대상은 그대로다.
   await act(async () => void registry().run("run.chooseIn", { checkout: { machine: MINI } }));
   await settle();
-  expect(runTarget().getState().chosen).toEqual({ machine: MINI });
+  await vi.waitFor(() => expect(popup()?.textContent).toContain("Dev (mini)"));
+  await act(async () => {
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }),
+    );
+  });
+  await settle();
+  expect(popup()).toBeNull();
+  expect(runTarget().getState().chosen).toBeUndefined();
+  await vi.waitFor(() => expect(byTestId("run-picker")?.textContent).toContain("Dev (local)"));
+  await act(async () => void registry().run("run.current"));
+  await settle();
+  await vi.waitFor(() => expect(calls("local", "run.start")).toHaveLength(1));
+  expect(calls(MINI, "run.start")).toHaveLength(0);
+
+  // 골라 실행: 그 한 번은 그 머신에서 돌고, 다음 ⌃R 은 다시 이 머신이다.
+  await act(async () => void registry().run("run.chooseIn", { checkout: { machine: MINI } }));
+  await settle();
+  await vi.waitFor(() => expect(popup()?.textContent).toContain("Dev (mini)"));
+  await click(popup());
+  await vi.waitFor(() => expect(calls(MINI, "run.start")).toHaveLength(1));
+  expect(calls(MINI, "run.start")[0]!.params).toMatchObject({ projectId: "r1" });
+  expect(runTarget().getState().chosen).toBeUndefined();
+  await vi.waitFor(() => expect(byTestId("run-picker")?.textContent).toContain("Dev (local)"));
+  await act(async () => void registry().run("run.current"));
+  await settle();
+  await vi.waitFor(() => expect(calls("local", "run.start")).toHaveLength(2));
+  expect(calls(MINI, "run.start")).toHaveLength(1);
+});
+
+// 델타 리뷰 D3: 다시 실행하는 사슬의 sql 단계 위험 확인(3001)도 그 탭의 머신 이름을 문장에 넣는다.
+it("names the tab's machine in a restarted chain's sql confirmation", async () => {
+  fake.runs.get(MINI)!.push(RUN(MINI, "r1", null));
+  fake.sqlConfirm = true;
+  await mount();
+  await act(async () => projectOpenInbox.push({ worktree: REMOTE_MAIN }));
+  await settle();
+  await vi.waitFor(() => expect(windowRuns().store.getState().tabs).toHaveLength(1));
+  await act(async () => projectOpenInbox.push({ mainCheckout: true }));
+  await settle();
+  const key = windowRuns().store.getState().tabs[0]!.key;
+  await act(async () => void windowRuns().restart(key));
+  await settle();
+  const dialog = await vi.waitFor(() => {
+    const d = byTestId("db-risk-confirm");
+    expect(d).not.toBeNull();
+    return d!;
+  });
+  expect(dialog.querySelector("[data-testid=target-machine]")?.textContent).toContain("mini");
+});
+
+// 델타 리뷰 D5: 그 머신의 링크가 멈춘 동안 새로 생긴 실행 탭(목록 · 이벤트로 온 것)의 콘솔도 읽기 전용이다.
+it("makes a run console that appears while its link resumes read-only from the start", async () => {
+  await mount();
+  await act(async () => projectOpenInbox.push({ worktree: REMOTE_MAIN }));
+  await settle();
+  await link({ state: "resuming", machine: MINI });
+  await act(async () => windowRuns().upsert(RUN(MINI, "r1", null) as never, MINI));
+  await settle();
+  await act(async () => void registry().run("toolWindow.run"));
+  await settle();
+  await vi.waitFor(() => expect(byTestId("run-tab-read-only")?.textContent).toBe("읽기 전용"));
+  const key = windowRuns().store.getState().tabs[0]!.key;
+  await vi.waitFor(() => expect(calls(MINI, "run.attach")).toHaveLength(1));
+  await act(async () => windowRuns().console(key)!.term.input("x"));
+  await settle();
+  expect(calls(MINI, "run.input")).toHaveLength(0);
 });
 
 it("keeps a remote run's console through a resuming link and picks it up with `since` after the link really closed", async () => {
