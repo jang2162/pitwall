@@ -86,6 +86,7 @@
   - `readonly`: 조회만
 - 기기 해제(revoke) 즉시 반영, 페어링 코드는 5분 만료
 - Relay가 노출하는 프로젝트 경로는 화이트리스트 (`relay.toml`의 `roots`)
+- **포트 포워딩**(18-m7-plan M7-22): 방향은 Desktop → 원격 하나다 — Desktop 의 루프백 포트로 들어온 연결을 owner 링크의 채널로 Relay 에 보내고 Relay 가 그 머신의 루프백(`localhost` · `127.0.0.1` · `::1`)으로 잇는다. Relay 는 Desktop 쪽으로 포워딩을 열 수 없고(링크 규칙 위반으로 끊긴다), 원격을 거쳐 다른 호스트로 가지 않으며, `readonly` · `mobile` 기기 · MCP 툴로는 만들 수 없다. Desktop 쪽은 루프백에만 듣지만(결정 M7-D12) **이 컴퓨터의 다른 프로세스(같은 uid 든 아니든)는 그 루프백 포트에 붙어 원격 개발 서버 · 디버그 포트에 닿을 수 있다** — 루프백만으로 받아들인 대가다. 브라우저의 쿠키는 포트를 가르지 않으므로 포워딩한 원격 페이지는 이 컴퓨터의 다른 `localhost` 서비스와 쿠키를 함께 본다
 
 ### 원격 호스트 등록 예 (Desktop 쪽)
 
@@ -105,7 +106,7 @@ remote_port = 8080
 [[remote_hosts.port_forwards]]
 local_port = 5005                  # 원격 JVM 디버그 포트
 remote_port = 5005
-remote_host = "localhost"          # 다른 호스트(Docker 등)로 바꿀 수 있음
+remote_host = "localhost"          # 그 머신의 루프백만(localhost · 127.0.0.1 · ::1) — Docker 는 컨테이너 포트를 그 머신 localhost 에 publish 해서 쓴다(18-m7-plan M7-P15)
 local_host = "127.0.0.1"           # 루프백(127.0.0.1 · ::1)만 받는다 — 다른 값은 그 포워딩을 열지 않고 경고(18-m7-plan 결정 M7-D12)
 ```
 
@@ -136,7 +137,7 @@ stop_lsp_after = "30m"
 | Git | Relay에서 처리 (그래프 데이터는 스트리밍) |
 | LSP · 인덱스 | Relay에서 언어 서버 실행 |
 | 런타임 환경 | Relay의 `runtime` 모듈이 원격 머신의 mise/셸 환경으로 해석 (F14-7) |
-| 실행 · 디버그 | Relay에서 프로세스 실행, DAP 중계, **포트 포워딩**(원격 웹서버/디버그 포트 → 로컬) |
+| 실행 · 디버그 | Relay에서 프로세스 실행, DAP 중계, **포트 포워딩**(원격 웹서버 포트 → 로컬 루프백 — 사람의 브라우저 · 도구용. 디버그 attach 는 원격 Host 에서 붙는다, 18-m7-plan M7-22 ⑥) |
 | 터미널 | Relay의 PTY |
 | DB | Relay에서 직접 연결 (내부망 DB 접근에 유리) |
 | MCP | 원격 머신의 에이전트도 Relay의 로컬 MCP 엔드포인트 사용 → 승인 요청은 연결된 Desktop으로 전달. 그 세션은 그 머신의 체크아웃만 다룬다(05-mcp.md 「체크아웃」). 원격 에이전트는 `pitwall-relay mcp` 로 붙는다(18-m7-plan M7-P12 — 사람이 고른 `pitwall` 링크면 `pitwall mcp`). 붙은 owner Desktop 이 없는 동안 `write` 이상은 거절(M7-D10) |
