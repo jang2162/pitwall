@@ -52,6 +52,8 @@ struct Fake {
     port_forwards: Mutex<Vec<pw_link::forward::ForwardSetting>>,
     /// 포워더가 이은 연결 수.
     carried: Arc<AtomicUsize>,
+    /// 참이면 설정에서 호스트를 지운 것처럼 목록이 빈다.
+    gone: AtomicBool,
 }
 
 /// 가짜 링크의 포워더: 「원격 머신」 이 이 컴퓨터라고 보고 `127.0.0.1:<원격 포트>` 로 곧바로 잇는다.
@@ -104,6 +106,9 @@ impl Backend for Fake {
     }
 
     fn hosts(&self, _settings: Option<&Value>) -> (Vec<HostEntry>, Vec<String>) {
+        if self.gone.load(Ordering::SeqCst) {
+            return (Vec::new(), Vec::new());
+        }
         (
             vec![HostEntry {
                 name: "mini".into(),
@@ -202,6 +207,7 @@ struct Setup {
     fake: Arc<Fake>,
     router: Arc<HostRouter>,
     registry: Registry,
+    bus: EventBus,
 }
 
 fn setup() -> Setup {
@@ -211,7 +217,7 @@ fn setup() -> Setup {
     let remote = RemoteHosts::default();
     let fake = Arc::new(Fake::default());
     let router = Arc::new(HostRouter::new());
-    remote.attach_host(Some(registry.clone()), bus, None);
+    remote.attach_host(Some(registry.clone()), bus.clone(), None);
     remote.attach_backend(fake.clone());
     remote.attach_router(Arc::clone(&router));
     Setup {
@@ -220,6 +226,7 @@ fn setup() -> Setup {
         fake,
         router,
         registry,
+        bus,
     }
 }
 
@@ -810,6 +817,12 @@ async fn every_remote_method_takes_only_a_host_connection() {
             "remote.prompt.answer",
             serde_json::json!({ "promptId": 1, "answer": { "kind": "cancel" } }),
         ),
+        ("remote.forwards.list", serde_json::json!({})),
+        (
+            "remote.forward.open",
+            serde_json::json!({ "name": "mini", "remotePort": 5173 }),
+        ),
+        ("remote.forward.close", serde_json::json!({ "id": 1 })),
     ];
     let declared: std::collections::BTreeSet<&str> = host
         .router()

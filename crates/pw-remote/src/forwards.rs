@@ -9,7 +9,9 @@
 //!   보이며 연결 로그에 경고를 남긴다. 듣기 전에 [`pw_link::forward::local_addr`] 와 [`pw_link::forward::bind`] 가 두 번 본다.
 //! - 로컬 포트가 이미 쓰이면 설정의 포워딩은 `portInUse` 로 목록에 남고, 실행 탭의 포워딩은 그 번호를 실은 오류로 끝난다 — 창이 다른
 //!   포트를 고르게 한다.
-//! - 링크가 이어 붙는 동안(M7-09)은 채널이 그대로라 연결도 산다. 링크가 끊겨 다시 붙는 동안 들어온 연결은 곧 닫는다(듣기는 남는다).
+//! - **닫힘**(메인 판정 2026-11-24): 링크가 끊기면(`reconnecting` · `disconnected`) · 머신이 바뀌면(`machineChanged`) · 쓰는 창이 모두
+//!   닫히면 · 설정에서 그 호스트를 지우면 그 호스트의 포워딩을 모두 닫는다(실행 탭의 스트림도 끝난다). 설정에서 지운 포워딩도 닫는다.
+//!   설정의 포워딩은 다음에 붙을 때 다시 연다. **이어 붙는 동안(`resuming` — M7-09)은 둔다** — 채널이 그대로라 연결도 산다.
 //! - **한 호스트에 동시에 잇는 연결은 [`MAX_CONNECTIONS`] 까지** — 루프백 포트는 이 컴퓨터의 어느 프로세스든 열 수 있으므로, 연결을
 //!   몰아 열어 링크의 채널 상한(창 · 셸 · LSP 의 채널과 같이 쓴다)을 채우지 못하게. 넘는 연결은 곧 닫는다.
 //! - MCP 툴이 없다(메인 판정 M7-P15). RPC 는 owner · Host 범위 연결만이다(`methods.rs`).
@@ -214,6 +216,46 @@ impl RemoteHosts {
         }
     }
 
+    /// 설정이 바뀐 뒤: 목록에서 사라진 호스트의 포워딩과, 설정에서 지운 포워딩을 닫는다(18-m7-plan M7-22).
+    pub(crate) fn prune_forwards(&self) {
+        let names: std::collections::BTreeSet<String> = lock(&self.inner.forwards)
+            .entries
+            .iter()
+            .map(|e| e.info.name.clone())
+            .collect();
+        if names.is_empty() {
+            return;
+        }
+        let Some(backend) = self.backend() else {
+            return;
+        };
+        let snapshot = read(&self.inner.host)
+            .and_then(|h| h.settings)
+            .map(|s| s.snapshot());
+        let settings = snapshot
+            .as_ref()
+            .and_then(|s| s.get("settings", crate::pw_link_key()));
+        let (entries, _) = backend.hosts(settings);
+        for name in names {
+            if !entries.iter().any(|e| e.name == name) {
+                self.close_host_forwards(&name);
+                continue;
+            }
+            let wanted = backend.port_forwards(settings, &name);
+            let gone: Vec<u64> = lock(&self.inner.forwards)
+                .entries
+                .iter()
+                .filter(|e| {
+                    e.info.name == name && e.setting.as_ref().is_some_and(|s| !wanted.contains(s))
+                })
+                .map(|e| e.info.id)
+                .collect();
+            for id in gone {
+                self.close_forward(id);
+            }
+        }
+    }
+
     /// 붙은 뒤: 그 호스트의 설정 포워딩을 연다(이미 연 것은 그대로).
     pub(crate) async fn open_configured_forwards(&self, name: &str) {
         let Some(backend) = self.backend() else {
@@ -287,6 +329,16 @@ impl RemoteHosts {
                     )
                 }
             };
+            // 여는 사이에 링크가 끊겼으면 두지 않는다(끊길 때 닫은 것을 되살리지 않게).
+            if !matches!(
+                self.status(name),
+                crate::RemoteStatus::Connected { .. } | crate::RemoteStatus::Resuming { .. }
+            ) {
+                if let Some(task) = task {
+                    task.abort();
+                }
+                return;
+            }
             let mut table = lock(&self.inner.forwards);
             table.next_id += 1;
             let id = table.next_id;

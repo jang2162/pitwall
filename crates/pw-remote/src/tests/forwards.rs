@@ -205,3 +205,120 @@ async fn forwarded_connections_are_capped_per_host() {
     assert_eq!(n, 0);
     assert_eq!(s.fake.carried.load(Ordering::SeqCst), MAX_CONNECTIONS);
 }
+
+/// 실행 탭 포워딩 하나와 설정 포워딩 하나를 연 채로 붙인다.
+async fn forwarding(s: &Setup) -> (Use, ForwardUse) {
+    let echo = echo_server().await;
+    *lock(&s.fake.port_forwards) = vec![ForwardSetting {
+        local_port: free_port().await,
+        remote_port: echo,
+        remote_host: None,
+        local_host: None,
+    }];
+    let use_ = s.remote.hold("mini").unwrap();
+    until(&s.remote, connected).await;
+    let run = s.remote.open_forward("mini", echo, Some(0)).await.unwrap();
+    forwards_until(&s.remote, |f| f.len() == 2).await;
+    (use_, run)
+}
+
+/// 링크가 이어 붙는 동안(`resuming`)은 포워딩을 두고, 링크가 끊기면(다시 붙기) 그 호스트의 포워딩을 모두 닫는다 — 실행 탭의
+/// 스트림도 끝난다. 다시 붙으면 설정의 것만 다시 연다(메인 판정 2026-11-24).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn forwards_survive_resuming_and_close_when_the_link_drops() {
+    let s = setup();
+    let (_use, run) = forwarding(&s).await;
+    s.fake.last_link().resuming.send_replace(true);
+    until(&s.remote, |st| matches!(st, RemoteStatus::Resuming { .. })).await;
+    assert_eq!(s.remote.forwards(None).len(), 2, "closed while resuming");
+    s.fake.last_link().resuming.send_replace(false);
+    until(&s.remote, connected).await;
+
+    let mut watch = run.watch.clone();
+    s.fake.last_link().drop_link();
+    until(&s.remote, |st| {
+        matches!(st, RemoteStatus::Reconnecting { .. })
+    })
+    .await;
+    assert!(
+        s.remote.forwards(None).is_empty(),
+        "a forward outlived the link"
+    );
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while watch.borrow_and_update().is_some() {
+            watch.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("the run forward stream did not end");
+    until(&s.remote, connected).await;
+    let again = forwards_until(&s.remote, |f| !f.is_empty()).await;
+    assert_eq!(again.len(), 1);
+    assert_eq!(again[0].origin, RemoteForwardOrigin::Settings);
+}
+
+/// 다른 머신이 답하면(`machineChanged`) 그 호스트의 포워딩을 모두 닫는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn forwards_close_when_the_machine_changes() {
+    let s = setup();
+    let (_use, _run) = forwarding(&s).await;
+    s.fake.push(changed(MINI, "SHA256:other"));
+    s.fake.last_link().drop_link();
+    until(&s.remote, |st| {
+        matches!(st, RemoteStatus::MachineChanged { .. })
+    })
+    .await;
+    assert!(s.remote.forwards(None).is_empty());
+}
+
+/// 설정에서 호스트를 지우면(`config.changed`) 그 호스트의 포워딩을 모두 닫는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn forwards_close_when_the_host_is_removed_from_the_settings() {
+    let s = setup();
+    let (_use, _run) = forwarding(&s).await;
+    s.fake.gone.store(true, Ordering::SeqCst);
+    s.bus
+        .publish(Scope::Host, pw_core::config::TOPIC_CHANGED, &"settings")
+        .unwrap();
+    forwards_until(&s.remote, <[RemoteForward]>::is_empty).await;
+}
+
+/// 포워딩 RPC 는 owner 만이다 — 같은 Host 범위라도 readonly · mobile 기기는 거절된다(범위 표는 `every_remote_method_takes_only_a_host_connection`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn forward_methods_are_for_the_owner_only() {
+    let s = setup();
+    let registered = s.remote.clone();
+    let host = LocalHost::builder("local")
+        .methods(move |r| methods::register(r, &registered))
+        .build();
+    for role in [pw_rpc::Role::Readonly, pw_rpc::Role::Mobile] {
+        for (method, params) in [
+            ("remote.forwards.list", serde_json::json!({})),
+            (
+                "remote.forward.open",
+                serde_json::json!({ "name": "mini", "remotePort": 5173 }),
+            ),
+            ("remote.forward.close", serde_json::json!({ "id": 1 })),
+        ] {
+            let mut conn = host
+                .connect(pw_rpc::Caller {
+                    role,
+                    scope: pw_rpc::ConnectionScope::Host,
+                    window: None,
+                })
+                .await
+                .unwrap();
+            conn.sink.send(
+                serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}),
+            );
+            let frame = conn.source.recv().await.unwrap();
+            assert_eq!(
+                frame["error"]["code"],
+                serde_json::json!(pw_rpc::code::PERMISSION_DENIED),
+                "{method} {role:?}: {frame}"
+            );
+        }
+    }
+    assert!(s.remote.forwards(None).is_empty());
+    assert_eq!(s.fake.connects.load(Ordering::SeqCst), 0);
+}

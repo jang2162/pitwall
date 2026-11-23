@@ -420,6 +420,18 @@ impl RemoteHosts {
         if let Some(registry) = &registry {
             registry.set_remote_machines(Arc::new(Machines(self.clone())));
         }
+        // 설정이 바뀌면 지운 호스트 · 지운 설정 포워딩을 닫는다(18-m7-plan M7-22).
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let mut changes =
+                bus.subscribe(pw_core::Filter::all().topics([pw_core::config::TOPIC_CHANGED]));
+            let hosts = Arc::downgrade(&self.inner);
+            runtime.spawn(async move {
+                while changes.recv().await.is_some() {
+                    let Some(inner) = hosts.upgrade() else { return };
+                    RemoteHosts { inner }.prune_forwards();
+                }
+            });
+        }
         *self
             .inner
             .host
@@ -760,6 +772,16 @@ impl RemoteHosts {
             return;
         }
         slot.status.send_replace(status.clone());
+        // 링크가 끊기거나(새로 붙기 · 끊김) 머신이 바뀌면 그 호스트의 포트 포워딩을 모두 닫는다(18-m7-plan M7-22 — 메인 판정
+        // 2026-11-24). 이어 붙는 동안(`resuming`)은 채널이 그대로라 둔다.
+        if matches!(
+            status,
+            RemoteStatus::Disconnected { .. }
+                | RemoteStatus::Reconnecting { .. }
+                | RemoteStatus::MachineChanged { .. }
+        ) {
+            self.close_host_forwards(name);
+        }
         if let Some(host) = read(&self.inner.host) {
             let _ = host.bus.publish(
                 Scope::Host,
