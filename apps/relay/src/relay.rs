@@ -362,6 +362,8 @@ fn daemon() -> ExitCode {
                 pairings,
                 host: host.clone() as Arc<dyn pw_core::Host>,
                 limits: pw_link::LinkLimits::default(),
+                // 이어 붙기를 기다리는 링크(18-m7-plan M7-09 ①) — 데몬 수명 하나.
+                resumes: pw_link::Resumes::default(),
             },
             activity: Arc::new(assembled.activity),
             narrow: Arc::new(NotYet),

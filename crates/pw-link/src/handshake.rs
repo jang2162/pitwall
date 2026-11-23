@@ -18,6 +18,10 @@
 //!   기억한 머신 id 와 다르면 서명하지 않고 끊는다.
 //! - **role**: Relay 는 서명이 맞고 그 키가 페어링 표에 있을 때만 그 기기의 role 을 준다. 그 밖은 거절하고 끊는다 — 증명 없는 링크는
 //!   role 이 없다.
+//! - **이어 붙기 토큰**(18-m7-plan M7-09 ① — 메인 판정 M7-P8): `welcome` 이 링크마다 무작위 256비트 토큰을 준다. 전송을 잃은 Desktop
+//!   은 새 전송의 `auth` 에 그 토큰과 받은 틀의 수(`resume`)를 싣는다 — 토큰은 **기기 키 증명(서명)과 함께만** 읽는다. Relay 는 서명 ·
+//!   페어링을 본 뒤, 그 기기 키의 멈춘 링크 토큰과 상수 시간으로 견주고 role 이 같을 때만 이어 준다(`welcome.resumed` 에 Relay 가 받은
+//!   수, `token` 에 새 토큰 — 한 번 쓴 토큰은 바뀐다). 아니면 `reject`(`resume`).
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -98,6 +102,57 @@ pub struct Hello {
     pub signature: Option<Signature>,
 }
 
+/// 이어 붙기 토큰(256비트). 원문은 로그 · Debug 에 싣지 않는다.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ResumeToken(pub(crate) [u8; 32]);
+
+impl ResumeToken {
+    pub(crate) fn generate() -> std::io::Result<Self> {
+        crate::device::random_challenge().map(Self)
+    }
+
+    /// 상수 시간 비교(길이는 같다 — 32바이트).
+    pub(crate) fn matches(&self, other: &Self) -> bool {
+        let diff = self
+            .0
+            .iter()
+            .zip(other.0.iter())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b));
+        std::hint::black_box(diff) == 0
+    }
+}
+
+impl std::fmt::Debug for ResumeToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ResumeToken(..)")
+    }
+}
+
+impl Serialize for ResumeToken {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&STANDARD.encode(self.0))
+    }
+}
+
+impl<'de> Deserialize<'de> for ResumeToken {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(d)?;
+        let bytes = STANDARD
+            .decode(text)
+            .map_err(|_| serde::de::Error::custom("resume token is not base64"))?;
+        Ok(Self(bytes.try_into().map_err(|_| {
+            serde::de::Error::custom("resume token is not 32 bytes")
+        })?))
+    }
+}
+
+/// `auth.resume`: 이어 붙을 링크의 토큰과 Desktop 이 그 링크에서 받은 번호 있는 틀의 수.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Resume {
+    pub token: ResumeToken,
+    pub received: u64,
+}
+
 /// `auth` 의 본문(Desktop → Relay).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,12 +160,21 @@ pub struct Auth {
     /// Desktop 이 서명 글에 넣은 Relay 공개키 — 자기가 붙었다고 믿는 Relay(채널 바인딩).
     pub relay_key: PublicKey,
     pub signature: Signature,
+    /// 멈춘 링크를 이어 붙는다(머리 주석 「이어 붙기 토큰」).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<Resume>,
 }
 
 /// `welcome` 의 본문.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Welcome {
     pub role: Role,
+    /// 이 링크의 다음 이어 붙기 토큰.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<ResumeToken>,
+    /// 이어 붙었다 — Relay 가 그 링크에서 받은 번호 있는 틀의 수.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resumed: Option<u64>,
 }
 
 /// 거절의 까닭.
@@ -125,6 +189,8 @@ pub enum RejectReason {
     BadSignature,
     /// 페어링 표에 없는 기기 키.
     Unpaired,
+    /// 이어 붙을 수 없다 — 모르는 · 이미 쓴 · 다른 기기의 토큰, 시한이 지나 닫힌 링크, 바뀐 role.
+    Resume,
 }
 
 /// `reject` 의 본문. 판이 다를 때는 보낸 쪽의 판을 싣는다(M7-07 이 사람에게 보인다).

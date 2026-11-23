@@ -7,9 +7,12 @@
 //! - 채널의 호출자는 [`crate::claim`] 이 링크 기기의 role 로 자른다.
 //! - 페어링 표에서 그 기기가 빠지거나 role 이 바뀌면 링크를 끊는다([`CloseReason::PairingChanged`]) — 열린 구독 · 스트림은 role 을
 //!   다시 보지 않으므로 끊는 것이 계약이다.
+//! - **이어 붙기**(18-m7-plan M7-09 ①): 링크는 전송을 잃어도 [`crate::LinkLimits::resume_within`] 동안 채널을 쥐고([`Resumes`] 에
+//!   그 링크의 토큰과 함께 남는다) 같은 기기가 토큰으로 다시 붙기를 기다린다. 이어 받은 전송의 `serve` 는 곧 [`CloseReason::Resumed`]
+//!   로 끝나고, 링크는 그것을 처음 받은 `serve` 가 계속 쥔다(데몬의 링크 수가 겹치지 않게).
 
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use pw_core::Host;
 use pw_rpc::Role;
@@ -19,7 +22,8 @@ use crate::claim::{CallerClaim, admit};
 use crate::device::{DeviceId, DeviceKey, PublicKey, random_challenge};
 use crate::frame::{CONTROL, Framed, HANDSHAKE_MAX_FRAME, Kind, LinkFrame};
 use crate::handshake::{
-    Auth, Challenge, Hello, PROTOCOL, Reject, RejectReason, Signer, Versions, Welcome, transcript,
+    Auth, Challenge, Hello, PROTOCOL, Reject, RejectReason, Resume, ResumeToken, Signer, Versions,
+    Welcome, transcript,
 };
 use crate::mux::{AddError, CloseReason, LinkLimits, Mux};
 use crate::pairing::PairingTable;
@@ -38,6 +42,95 @@ pub struct RelayParts {
     pub pairings: PairingTable,
     pub host: Arc<dyn Host>,
     pub limits: LinkLimits,
+    /// 이어 붙기를 기다리는 링크(데몬 수명 하나 — 복제는 같은 것을 본다).
+    pub resumes: Resumes,
+}
+
+impl RelayParts {
+    /// 빈 이어 붙기 등록부로.
+    pub fn new(
+        identity: Arc<RelayIdentity>,
+        pairings: PairingTable,
+        host: Arc<dyn Host>,
+        limits: LinkLimits,
+    ) -> Self {
+        Self {
+            identity,
+            pairings,
+            host,
+            limits,
+            resumes: Resumes::default(),
+        }
+    }
+}
+
+/// 이어 붙을 수 있는 링크들과 그 토큰(18-m7-plan M7-09 ①). 링크가 닫히면 빠진다.
+#[derive(Clone, Default)]
+pub struct Resumes(Arc<Mutex<Vec<Held>>>);
+
+struct Held {
+    id: u64,
+    key: PublicKey,
+    role: Role,
+    token: ResumeToken,
+    mux: Mux,
+}
+
+impl Resumes {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Held>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn register(&self, key: PublicKey, role: Role, token: ResumeToken, mux: Mux) -> u64 {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.lock().push(Held {
+            id,
+            key,
+            role,
+            token,
+            mux,
+        });
+        id
+    }
+
+    fn forget(&self, id: u64) {
+        self.lock().retain(|h| h.id != id);
+    }
+
+    /// 그 기기 키의 링크 중 토큰이 맞는(상수 시간 비교) 것. 맞으면 토큰을 새것으로 바꾼다(한 번 쓴 토큰은 다시 받지 않는다). role 이
+    /// 다르거나 닫힌 링크면 `None`.
+    fn take(
+        &self,
+        key: &PublicKey,
+        presented: &ResumeToken,
+        role: Role,
+    ) -> Option<(Mux, ResumeToken)> {
+        let next = ResumeToken::generate().ok()?;
+        let mut held = self.lock();
+        let mut found = None;
+        // 맞는 것을 찾아도 끝까지 돈다 — 토큰 비교의 수가 맞은 자리를 드러내지 않게.
+        for (i, h) in held.iter().enumerate() {
+            if h.key == *key && h.token.matches(presented) {
+                found = Some(i);
+            }
+        }
+        let h = &mut held[found?];
+        if h.role != role || h.mux.reason().is_some() {
+            return None;
+        }
+        h.token = next.clone();
+        Some((h.mux.clone(), next))
+    }
+
+    /// 이어 붙기를 기다리는 링크의 수(시험 · 진단).
+    pub fn len(&self) -> usize {
+        self.lock().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// 링크가 서지 않은 까닭(데몬의 로그 — 키 · 서명 원문은 싣지 않는다).
@@ -111,16 +204,24 @@ pub async fn serve_proven(
     framed.read.set_max_body(HANDSHAKE_MAX_FRAME);
     // 표를 핸드셰이크 **전에** 구독한다 — role 을 읽은 뒤에 구독하면 그 사이의 해제 · role 변경을 「이미 본 값」 으로 놓친다.
     let mut table = parts.pairings.watch();
-    let proven = tokio::time::timeout(
+    let (proven, resume) = tokio::time::timeout(
         parts.limits.dead_after,
         handshake(&mut framed, first, parts),
     )
     .await
     .map_err(|_| ServeError::Timeout)??;
-    tracing::info!(target: "pw_link", device = %proven.device, role = ?proven.role, "link proven");
+    tracing::info!(target: "pw_link", device = %proven.device, role = ?proven.role, resume = resume.is_some(), "link proven");
+    if let Some(resume) = resume {
+        return resume_link(framed, resume, &proven, parts, on_proven).await;
+    }
+    let token = ResumeToken::generate().map_err(|e| ServeError::Io(e.to_string()))?;
+    write_welcome(&mut framed, proven.role, Some(token.clone()), None).await?;
     framed.read.set_max_body(pw_wire::MAX_BODY_BYTES);
     on_proven(&proven);
-    let (mux, mut inbox) = Mux::start(framed, parts.limits);
+    let (mux, mut inbox) = Mux::start_resumable(framed, parts.limits);
+    let held = parts
+        .resumes
+        .register(proven.key, proven.role, token, mux.clone());
     let closed = mux.closed();
 
     // 페어링이 바뀌면 끊는다(핸드셰이크 뒤에 이미 바뀌었으면 `changed` 가 곧바로 깬다).
@@ -159,7 +260,53 @@ pub async fn serve_proven(
     }
     watcher.abort();
     closed.cancelled().await;
+    parts.resumes.forget(held);
     Ok(mux.reason().unwrap_or(CloseReason::Local))
+}
+
+async fn write_welcome(
+    framed: &mut Framed,
+    role: Role,
+    token: Option<ResumeToken>,
+    resumed: Option<u64>,
+) -> Result<(), ServeError> {
+    framed
+        .write
+        .write(&LinkFrame::control(
+            Kind::Welcome,
+            json!(Welcome {
+                role,
+                token,
+                resumed
+            }),
+        ))
+        .await
+        .map_err(|e| ServeError::Io(e.to_string()))
+}
+
+/// 멈춘 링크를 이 전송으로 이어 준다. 토큰은 서명 · 페어링을 본 뒤에만 읽는다(`handshake`). 그 기기 키의 링크 토큰과 맞지 않거나
+/// (모르는 · 이미 쓴 · 다른 기기의 토큰) role 이 바뀌었거나 링크가 닫혔으면 거절한다.
+async fn resume_link(
+    mut framed: Framed,
+    resume: Resume,
+    proven: &Proven,
+    parts: &RelayParts,
+    on_proven: impl FnOnce(&Proven) + Send,
+) -> Result<CloseReason, ServeError> {
+    let Some((mux, token)) = parts.resumes.take(&proven.key, &resume.token, proven.role) else {
+        return Err(reject(&mut framed, RejectReason::Resume, None, None).await);
+    };
+    let Some(received) = mux.suspend_for_resume() else {
+        return Err(reject(&mut framed, RejectReason::Resume, None, None).await);
+    };
+    write_welcome(&mut framed, proven.role, Some(token), Some(received)).await?;
+    framed.read.set_max_body(pw_wire::MAX_BODY_BYTES);
+    on_proven(proven);
+    if let Err(why) = mux.resume(framed, resume.received) {
+        tracing::info!(target: "pw_link", %why, "cannot resume the link");
+        mux.shutdown(CloseReason::Protocol(why));
+    }
+    Ok(CloseReason::Resumed)
 }
 
 fn refuse(mux: &Mux, channel: u32, why: &str) {
@@ -270,7 +417,7 @@ async fn handshake(
     framed: &mut Framed,
     first: LinkFrame,
     parts: &RelayParts,
-) -> Result<Proven, ServeError> {
+) -> Result<(Proven, Option<Resume>), ServeError> {
     let ours = &parts.identity.versions;
     if first.kind != Kind::Hello || first.channel != CONTROL {
         return Err(reject(framed, RejectReason::Protocol, None, None).await);
@@ -341,14 +488,12 @@ async fn handshake(
     let Some(role) = parts.pairings.role_of(&hello.key) else {
         return Err(reject(framed, RejectReason::Unpaired, None, None).await);
     };
-    framed
-        .write
-        .write(&LinkFrame::control(Kind::Welcome, json!(Welcome { role })))
-        .await
-        .map_err(|e| ServeError::Io(e.to_string()))?;
-    Ok(Proven {
-        device: hello.device,
-        key: hello.key,
-        role,
-    })
+    Ok((
+        Proven {
+            device: hello.device,
+            key: hello.key,
+            role,
+        },
+        auth.resume,
+    ))
 }

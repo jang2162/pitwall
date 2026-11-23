@@ -17,7 +17,7 @@ use crate::handshake::{
 };
 use crate::{
     CloseReason, DesktopIdentity, DialError, Expect, LinkLimits, LinkState, Pairing, PairingTable,
-    RelayIdentity, RelayParts, RemoteHost, ServeError, serve, transport,
+    RelayIdentity, RelayParts, RemoteHost, Resumes, ServeError, serve, transport,
 };
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -210,6 +210,7 @@ fn fixture(setup: Setup) -> Fixture {
         pairings: pairings.clone(),
         host: Arc::clone(&relay_host) as Arc<dyn Host>,
         limits: setup.limits,
+        resumes: Resumes::default(),
     };
     let serve_results = Arc::new(Mutex::new(Vec::new()));
     {
@@ -378,7 +379,7 @@ async fn raw_read(framed: &mut Framed) -> Option<LinkFrame> {
 async fn read_until_closed(framed: &mut Framed) -> Vec<LinkFrame> {
     let mut seen = Vec::new();
     while let Some(frame) = raw_read(framed).await {
-        if !matches!(frame.kind, Kind::Ping | Kind::Pong) {
+        if !matches!(frame.kind, Kind::Ping | Kind::Pong | Kind::Ack | Kind::Bye) {
             seen.push(frame);
         }
     }
@@ -402,6 +403,7 @@ fn desktop_signature(
     Auth {
         relay_key: *relay_key,
         signature: key.sign(&text),
+        resume: None,
     }
 }
 
@@ -737,7 +739,11 @@ async fn the_desktop_reads_the_relay_hello_under_the_handshake_limit() {
                 .write
                 .write(&LinkFrame::control(
                     Kind::Welcome,
-                    json!(Welcome { role: Role::Owner }),
+                    json!(Welcome {
+                        role: Role::Owner,
+                        token: None,
+                        resumed: None
+                    }),
                 ))
                 .await;
         }
@@ -801,7 +807,14 @@ async fn raw_relay(acceptor: &transport::MemoryAcceptor, key: &DeviceKey, role: 
     assert_eq!(raw_read(&mut framed).await.unwrap().kind, Kind::Auth);
     framed
         .write
-        .write(&LinkFrame::control(Kind::Welcome, json!(Welcome { role })))
+        .write(&LinkFrame::control(
+            Kind::Welcome,
+            json!(Welcome {
+                role,
+                token: None,
+                resumed: None
+            }),
+        ))
         .await
         .unwrap();
     framed
@@ -1036,6 +1049,7 @@ async fn a_bad_signature_or_a_false_device_id_gets_no_rpc() {
     let auth = Auth {
         relay_key: theirs.key,
         signature: forger.sign(&text),
+        resume: None,
     };
     framed
         .write
@@ -2061,3 +2075,5 @@ async fn another_key_without_its_signature_is_not_a_machine_change() {
         "the desktop signed: {after:?}"
     );
 }
+
+mod resume;

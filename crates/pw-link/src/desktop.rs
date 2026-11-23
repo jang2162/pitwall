@@ -15,9 +15,10 @@ use crate::claim::CallerClaim;
 use crate::device::{DeviceKey, MachineId, PublicKey, random_challenge};
 use crate::frame::{CONTROL, Framed, Kind, LinkFrame};
 use crate::handshake::{
-    Auth, Challenge, Hello, PROTOCOL, Reject, RejectReason, Signer, Versions, Welcome, transcript,
+    Auth, Challenge, Hello, PROTOCOL, Reject, RejectReason, Resume, ResumeToken, Signer, Versions,
+    Welcome, transcript,
 };
-use crate::mux::{AddError, ChannelRx, CloseReason, LinkLimits, Mux};
+use crate::mux::{AddError, ChannelRx, CloseReason, LinkLimits, Mux, Phase};
 use crate::transport::{LinkStream, Transport};
 
 /// 이 Desktop 의 기기 키와 판.
@@ -99,7 +100,8 @@ pub enum LinkState {
         machine: MachineId,
         role: Role,
     },
-    /// 이어 붙는 중(M7-09 가 쓴다).
+    /// 전송을 잃고 이어 붙는 중(18-m7-plan M7-09 ①) — 채널 · 스트림은 그대로다. 시한([`LinkLimits::resume_within`]) 안에 붙으면
+    /// `Connected`, 못 붙으면 `Disconnected`.
     Reconnecting,
     Disconnected {
         reason: CloseReason,
@@ -122,6 +124,8 @@ pub struct DesktopLink {
     relay_key: PublicKey,
     next_channel: AtomicU32,
     pending: Pending,
+    /// 다음 이어 붙기 토큰(Relay 가 주지 않았으면 이어 붙지 않는다).
+    token: Mutex<Option<ResumeToken>>,
 }
 
 /// 답을 기다리는 채널 열기.
@@ -171,12 +175,21 @@ pub async fn dial(
 ) -> Result<DesktopLink, DialError> {
     // Relay 를 증명하기 전에는 작은 틀만 받는다(Relay 쪽과 같은 규칙 — `HANDSHAKE_MAX_FRAME`).
     let mut framed = Framed::handshake(stream);
-    let (role, relay_key) =
-        tokio::time::timeout(limits.dead_after, handshake(&mut framed, me, expect))
+    let (role, relay_key, welcome) =
+        tokio::time::timeout(limits.dead_after, handshake(&mut framed, me, expect, None))
             .await
             .map_err(|_| DialError::Timeout)??;
+    if welcome.resumed.is_some() {
+        return Err(DialError::Protocol(
+            "the relay resumed a link this desktop did not ask for".to_owned(),
+        ));
+    }
     framed.read.set_max_body(pw_wire::MAX_BODY_BYTES);
-    let (mux, mut inbox) = Mux::start(framed, limits);
+    let (mux, mut inbox) = if welcome.token.is_some() {
+        Mux::start_resumable(framed, limits)
+    } else {
+        Mux::start(framed, limits)
+    };
     let pending: Pending = Arc::default();
     {
         let (mux, pending) = (mux.clone(), Arc::clone(&pending));
@@ -215,6 +228,7 @@ pub async fn dial(
         relay_key,
         next_channel: AtomicU32::new(1),
         pending,
+        token: Mutex::new(welcome.token),
     })
 }
 
@@ -244,11 +258,12 @@ fn rejected(frame: &LinkFrame, ours: &Versions) -> DialError {
     }
 }
 
-async fn handshake(
+pub(crate) async fn handshake(
     framed: &mut Framed,
     me: &DesktopIdentity,
     expect: &Expect,
-) -> Result<(Role, PublicKey), DialError> {
+    resume: Option<Resume>,
+) -> Result<(Role, PublicKey, Welcome), DialError> {
     let io = |e: std::io::Error| DialError::Io(e.to_string());
     let ours = &me.versions;
     let my_key = me.key.public();
@@ -325,9 +340,11 @@ async fn handshake(
         &my_key,
         &theirs.key,
     );
+    // 이어 붙기 토큰은 이 기기 키의 서명과 함께만 보낸다(Relay 도 서명을 본 뒤에만 읽는다).
     let auth = Auth {
         relay_key: theirs.key,
         signature: me.key.sign(&my_text),
+        resume,
     };
     framed
         .write
@@ -340,7 +357,7 @@ async fn handshake(
         Kind::Welcome => {
             let welcome = serde_json::from_value::<Welcome>(frame.body)
                 .map_err(|e| DialError::Protocol(format!("bad welcome: {e}")))?;
-            Ok((welcome.role, theirs.key))
+            Ok((welcome.role, theirs.key, welcome))
         }
         Kind::Reject => Err(rejected(&frame, ours)),
         other => Err(DialError::Protocol(format!(
@@ -362,6 +379,55 @@ impl DesktopLink {
 
     pub fn relay_key(&self) -> PublicKey {
         self.relay_key
+    }
+
+    /// 지금의 이어 붙기 토큰(시험).
+    #[cfg(test)]
+    pub(crate) fn resume_token(&self) -> Option<ResumeToken> {
+        self.token
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// 전송을 잃고 이어 붙기를 기다리는가.
+    pub fn is_suspended(&self) -> bool {
+        *self.mux.phase().borrow() == Phase::Suspended
+    }
+
+    /// 새 전송으로 이 링크를 이어 붙는다(18-m7-plan M7-09 ①). 같은 Relay 키 · role 이어야 하고, Relay 가 토큰을 받지 않으면
+    /// [`DialError::Rejected`]`(Resume)` — 그때 부른 쪽이 링크를 닫는다. 전송을 잃어 멈춰 있을 때만 부른다.
+    pub async fn resume(&self, stream: LinkStream, me: &DesktopIdentity) -> Result<(), DialError> {
+        let token = self
+            .token
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .ok_or(DialError::Rejected(RejectReason::Resume))?;
+        let received = self.mux.received();
+        let limits = *self.mux.limits();
+        let mut framed = Framed::handshake(stream);
+        let expect = Expect::Machine(self.machine.clone());
+        let resume = Resume { token, received };
+        let (role, _, welcome) = tokio::time::timeout(
+            limits.dead_after,
+            handshake(&mut framed, me, &expect, Some(resume)),
+        )
+        .await
+        .map_err(|_| DialError::Timeout)??;
+        let (Some(relay_received), Some(next)) = (welcome.resumed, welcome.token) else {
+            return Err(DialError::Protocol(
+                "the relay answered a resume with a new link".to_owned(),
+            ));
+        };
+        if role != self.role {
+            return Err(DialError::Rejected(RejectReason::Resume));
+        }
+        *self.token.lock().unwrap_or_else(PoisonError::into_inner) = Some(next);
+        framed.read.set_max_body(pw_wire::MAX_BODY_BYTES);
+        self.mux
+            .resume(framed, relay_received)
+            .map_err(DialError::Protocol)
     }
 
     /// 열린 채널 수.
@@ -563,22 +629,13 @@ impl RemoteHost {
             machine: machine.clone(),
             role: link.role(),
         });
-        let (slot, state) = (Arc::clone(&self.link), Arc::clone(&self.state));
-        let watched = Arc::downgrade(&link);
-        let closed = link.mux.closed();
-        tokio::spawn(async move {
-            closed.cancelled().await;
-            let Some(link) = watched.upgrade() else {
-                return;
-            };
-            let reason = link.mux.reason().unwrap_or(CloseReason::Local);
-            let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
-            // 그 사이에 새 링크로 바뀌었으면 상태를 건드리지 않는다.
-            if slot.as_ref().is_some_and(|now| Arc::ptr_eq(now, &link)) {
-                *slot = None;
-                state.send_replace(LinkState::Disconnected { reason });
-            }
-        });
+        tokio::spawn(supervise(
+            Arc::downgrade(&link),
+            Arc::clone(&self.link),
+            Arc::clone(&self.state),
+            Arc::clone(&self.transport),
+            Arc::clone(&self.identity),
+        ));
         Ok(machine)
     }
 
@@ -595,6 +652,103 @@ impl RemoteHost {
                 reason: CloseReason::Local,
             });
         }
+    }
+}
+
+/// 링크 하나를 지켜본다: 전송을 잃으면 `Reconnecting` 으로 두고 시한([`LinkLimits::resume_within`]) 안에서 새 전송으로 이어 붙기를
+/// 되풀이한다(전송 열기 · 핸드셰이크가 실패하면 조금씩 늘려 기다린다). Relay 가 토큰을 받지 않거나 판 · 머신이 달라졌으면 링크를
+/// 닫는다. 링크가 닫히면 `Disconnected`.
+async fn supervise(
+    watched: std::sync::Weak<DesktopLink>,
+    slot: Arc<Mutex<Option<Arc<DesktopLink>>>>,
+    state: Arc<watch::Sender<LinkState>>,
+    transport: Arc<dyn Transport>,
+    identity: Arc<DesktopIdentity>,
+) {
+    let (mut phase, closed, limits) = match watched.upgrade() {
+        Some(link) => (link.mux.phase(), link.mux.closed(), *link.mux.limits()),
+        None => return,
+    };
+    let current = |link: &Arc<DesktopLink>| {
+        slot.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|now| Arc::ptr_eq(now, link))
+    };
+    loop {
+        tokio::select! {
+            () = closed.cancelled() => break,
+            changed = phase.wait_for(|p| *p == Phase::Suspended) => if changed.is_err() { break },
+        }
+        let Some(link) = watched.upgrade() else {
+            return;
+        };
+        if !current(&link) {
+            return;
+        }
+        state.send_replace(LinkState::Reconnecting);
+        let deadline = tokio::time::Instant::now() + limits.resume_within;
+        let mut delay = std::time::Duration::from_millis(200);
+        loop {
+            if closed.is_cancelled() {
+                break;
+            }
+            let attempt = async {
+                let stream = transport
+                    .open()
+                    .await
+                    .map_err(|e| DialError::Io(e.to_string()))?;
+                link.resume(stream, &identity).await
+            };
+            let outcome = tokio::select! {
+                () = closed.cancelled() => break,
+                outcome = tokio::time::timeout_at(deadline, attempt) => outcome,
+            };
+            match outcome {
+                Ok(Ok(())) => {
+                    if current(&link) {
+                        state.send_replace(LinkState::Connected {
+                            machine: link.machine.clone(),
+                            role: link.role,
+                        });
+                    }
+                    break;
+                }
+                Ok(Err(e @ (DialError::Io(_) | DialError::Timeout))) => {
+                    tracing::debug!(target: "pw_link", error = %e, "cannot resume the link yet");
+                    let wait =
+                        delay.min(deadline.saturating_duration_since(tokio::time::Instant::now()));
+                    tokio::select! {
+                        () = closed.cancelled() => break,
+                        () = tokio::time::sleep(wait) => {}
+                    }
+                    delay = (delay * 2).min(std::time::Duration::from_secs(5));
+                }
+                Ok(Err(e)) => {
+                    tracing::info!(target: "pw_link", error = %e, "the link cannot resume");
+                    link.mux.shutdown(CloseReason::Handshake(e.to_string()));
+                    break;
+                }
+                // 시한이 지났다 — 링크의 시한 시계가 닫는다(같은 시한).
+                Err(_) => {
+                    link.mux.shutdown(CloseReason::HeartbeatTimeout);
+                    break;
+                }
+            }
+        }
+        if closed.is_cancelled() {
+            break;
+        }
+    }
+    let Some(link) = watched.upgrade() else {
+        return;
+    };
+    let reason = link.mux.reason().unwrap_or(CloseReason::Local);
+    let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
+    // 그 사이에 새 링크로 바뀌었으면 상태를 건드리지 않는다.
+    if slot.as_ref().is_some_and(|now| Arc::ptr_eq(now, &link)) {
+        *slot = None;
+        state.send_replace(LinkState::Disconnected { reason });
     }
 }
 

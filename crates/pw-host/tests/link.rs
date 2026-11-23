@@ -105,6 +105,7 @@ async fn linked_as(
         pairings,
         host: Arc::clone(&host) as Arc<dyn Host>,
         limits: LinkLimits::default(),
+        resumes: pw_link::Resumes::default(),
     };
     tokio::spawn(async move {
         while let Some(stream) = acceptor.accept().await {

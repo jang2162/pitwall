@@ -89,6 +89,7 @@ fn fixture(max_unproven: usize, idle: IdleConfig) -> Fixture {
             pairings: pairings.clone(),
             host: Arc::clone(&host) as Arc<dyn Host>,
             limits: LinkLimits::default(),
+            resumes: pw_link::Resumes::default(),
         },
         activity: Arc::clone(&activity) as Arc<dyn Activity>,
         narrow: Arc::new(NotYet),

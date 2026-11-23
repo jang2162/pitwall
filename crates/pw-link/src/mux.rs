@@ -19,6 +19,16 @@
 //!   읽지 않음)에서도 하트비트는 따로 돈다.
 //! - 링크 자체의 채널(0)에는 `ping` · `pong` 과 핸드셰이크 뒤의 채널 열기 응답만 온다. 채널 0 의 `msg` 는 규칙 위반이라 링크를
 //!   끊는다.
+//! - **이어 붙기**(18-m7-plan M7-09 ① — 메인 판정 M7-P8, [`Mux::start_resumable`]): 하트비트 · 쓰기 · 읽기가 전송을 잃으면(끊김 ·
+//!   응답 없음) 링크를 닫지 않고 **멈춘다** — 채널은 그대로 두고 보낼 것은 쌓는다(채널마다 [`LinkLimits::send_buffer`] · 링크마다
+//!   [`LinkLimits::send_budget`] — 넘으면 그 채널만 닫는다, 시한 안에서도). [`LinkLimits::resume_within`] 안에 새 전송이 오면
+//!   ([`Mux::resume`]) 잃은 틀을 다시 보내고 이어 간다. 시한이 지나면 링크를 닫는다(채널마다 보통 정리).
+//!   - 링크 틀 중 `ping` · `pong` · `ack` · `bye` 를 뺀 것(채널 메시지 · 열기 · 응답 · 닫기 · `credit` · `want`)에는 보낸 순서의 번호가
+//!     있다(와이어에 싣지 않고 양쪽이 센다). 받는 쪽은 받은 수를 `ack` 로 알려 주고(창의 반만큼 받을 때마다 · 하트비트마다), 보내는
+//!     쪽은 `ack` 받지 못한 틀을 다시 보낼 줄([`LinkLimits::send_budget`] 상한 — 넘으면 상대가 받았다고 하지 않는 것이라 링크를 끊는다)에
+//!     둔다. 이어 붙을 때 양쪽이 받은 수를 주고받고 그 뒤의 틀만 다시 보낸다 — 잃은 틀도 두 번 받는 틀도 없다.
+//!   - 일부러 닫으면(이쪽이 닫음 · 규칙 위반 · 페어링 변경) 상대에게 `bye` 를 보내 상대가 시한 동안 기다리지 않게 한다. 틀 오류 ·
+//!     규칙 위반은 멈추지 않고 닫는다.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -26,13 +36,15 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::{Notify, mpsc, watch};
 use tokio::time::{Instant, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 
 use serde_json::value::RawValue;
 
-use crate::frame::{CONTROL, Framed, FramedRead, FramedWrite, Kind, LinkFrame, RawFrame};
+use crate::frame::{
+    CONTROL, FrameError, Framed, FramedRead, FramedWrite, Kind, LinkFrame, RawFrame,
+};
 
 /// 링크의 상한 · 시한. 값은 출발값이다(18-m7-plan M7-03 ④).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +69,8 @@ pub struct LinkLimits {
     pub ping_every: Duration,
     /// 이만큼 아무 틀도 받지 못하면 링크가 끊긴 것이다. 핸드셰이크의 시한이기도 하다.
     pub dead_after: Duration,
+    /// 이어 붙기 시한(18-m7-plan M7-09 ① — 출발값 2분). 전송을 잃은 링크는 이만큼 채널을 쥐고 다시 붙기를 기다린다.
+    pub resume_within: Duration,
 }
 
 impl Default for LinkLimits {
@@ -70,6 +84,7 @@ impl Default for LinkLimits {
             control_buffer: 256 * 1024,
             ping_every: Duration::from_secs(10),
             dead_after: Duration::from_secs(30),
+            resume_within: Duration::from_secs(120),
         }
     }
 }
@@ -92,6 +107,8 @@ pub enum CloseReason {
     PairingChanged,
     /// 핸드셰이크가 끝나지 않았다(Desktop 의 상태 — 판 · 머신 id 가 아닌 까닭).
     Handshake(String),
+    /// 이 전송은 멈춘 링크를 이어 받았다(Relay — 링크는 그 링크를 처음 받은 `serve` 가 계속 쥔다, 18-m7-plan M7-09 ①).
+    Resumed,
 }
 
 impl std::fmt::Display for CloseReason {
@@ -104,6 +121,7 @@ impl std::fmt::Display for CloseReason {
             Self::Io(why) => write!(f, "link i/o error: {why}"),
             Self::PairingChanged => f.write_str("the device pairing changed"),
             Self::Handshake(why) => write!(f, "handshake failed: {why}"),
+            Self::Resumed => f.write_str("handed to the link it resumed"),
         }
     }
 }
@@ -155,6 +173,8 @@ pub(crate) enum AddError {
 
 #[derive(Default)]
 struct State {
+    /// 번호 없는 링크 틀(`ping` · `pong` · `ack` · `bye`) — 다시 보내지 않는다.
+    link: VecDeque<Vec<u8>>,
     control: VecDeque<Vec<u8>>,
     control_bytes: usize,
     channels: HashMap<u32, Chan>,
@@ -164,6 +184,27 @@ struct State {
     /// 열린 채널의 `out_bytes` 합(보내기 예산).
     send_used: usize,
     shut: bool,
+    /// 이어 붙을 수 있는 링크인가([`Mux::start_resumable`]).
+    resumable: bool,
+    /// 전송의 세대 — 이어 붙을 때마다 하나씩. 옛 전송의 읽기 · 쓰기 · 하트비트는 세대가 다르면 그만둔다.
+    generation: u64,
+    /// 지금 전송의 읽기 · 쓰기 · 하트비트를 멈춘다.
+    stop: CancellationToken,
+    /// 전송을 잃고 이어 붙기를 기다린다.
+    suspended: bool,
+    /// 번호 있는 틀을 보낸 수.
+    sent: u64,
+    /// 보냈지만 `ack` 받지 못한 번호 있는 틀(앞이 `sent - replay.len() + 1` 번).
+    replay: VecDeque<Vec<u8>>,
+    replay_bytes: usize,
+    /// `replay` 에서 다음에 (다시) 보낼 자리. 이어 붙은 뒤에는 0 부터, 평소에는 `replay.len()`.
+    resend: usize,
+    /// 번호 있는 틀을 받은 수.
+    received: u64,
+    /// `ack` 를 보낸 뒤 받은 바이트.
+    unacked_bytes: usize,
+    /// 마지막으로 보낸 `ack`.
+    acked: u64,
 }
 
 impl State {
@@ -183,6 +224,39 @@ struct Shared {
     closed: CancellationToken,
     reason: OnceLock<CloseReason>,
     last_rx: Mutex<Instant>,
+    /// 받은 틀을 세고 다루는 동안 쥔다 — 이어 붙을 때 「받은 수」 를 읽는 사이에 옛 전송의 틀이 끼어들지 않게.
+    rx_gate: Mutex<()>,
+    /// 다중화가 다루지 않는 틀(채널 열기 응답 등)을 받는 쪽 — 전송이 바뀌어도 같다.
+    inbox: mpsc::UnboundedSender<LinkFrame>,
+    phase: watch::Sender<Phase>,
+}
+
+/// 링크의 단계.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Phase {
+    Live,
+    /// 전송을 잃고 이어 붙기를 기다린다.
+    Suspended,
+    Closed,
+}
+
+/// `ack` 본문.
+#[derive(Serialize, Deserialize)]
+struct AckBody {
+    seq: u64,
+}
+
+/// 번호가 붙는 틀인가(다시 보내는 틀).
+fn sequenced(kind: Kind) -> bool {
+    !matches!(kind, Kind::Ping | Kind::Pong | Kind::Ack | Kind::Bye)
+}
+
+/// 이쪽 쓰기가 다음에 할 일.
+enum Next {
+    Frame(Vec<u8>),
+    Idle,
+    /// 이 세대의 전송이 아니다 — 그만둔다.
+    Stale,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -226,21 +300,158 @@ impl Mux {
         framed: Framed,
         limits: LinkLimits,
     ) -> (Self, mpsc::UnboundedReceiver<LinkFrame>) {
+        Self::start_with(framed, limits, false)
+    }
+
+    /// [`Self::start`] 과 같되 전송을 잃으면 닫지 않고 멈춰 [`Self::resume`] 을 기다린다(머리 주석 「이어 붙기」).
+    pub(crate) fn start_resumable(
+        framed: Framed,
+        limits: LinkLimits,
+    ) -> (Self, mpsc::UnboundedReceiver<LinkFrame>) {
+        Self::start_with(framed, limits, true)
+    }
+
+    fn start_with(
+        framed: Framed,
+        limits: LinkLimits,
+        resumable: bool,
+    ) -> (Self, mpsc::UnboundedReceiver<LinkFrame>) {
+        let (inbox_tx, inbox) = mpsc::unbounded_channel();
+        let stop = CancellationToken::new();
         let shared = Arc::new(Shared {
-            state: Mutex::default(),
+            state: Mutex::new(State {
+                resumable,
+                stop: stop.clone(),
+                ..State::default()
+            }),
             wake: Notify::new(),
             limits,
             closed: CancellationToken::new(),
             reason: OnceLock::new(),
             last_rx: Mutex::new(Instant::now()),
+            rx_gate: Mutex::new(()),
+            inbox: inbox_tx,
+            phase: watch::Sender::new(Phase::Live),
         });
         let mux = Self { shared };
-        let (inbox_tx, inbox) = mpsc::unbounded_channel();
-        let Framed { read, write } = framed;
-        tokio::spawn(mux.clone().reader(read, inbox_tx));
-        tokio::spawn(mux.clone().writer(write));
-        tokio::spawn(mux.clone().heartbeat());
+        mux.spawn_transport(framed, 0, stop);
         (mux, inbox)
+    }
+
+    fn spawn_transport(&self, framed: Framed, generation: u64, stop: CancellationToken) {
+        let Framed { read, write } = framed;
+        tokio::spawn(self.clone().reader(read, generation, stop.clone()));
+        tokio::spawn(self.clone().writer(write, generation, stop.clone()));
+        tokio::spawn(self.clone().heartbeat(generation, stop));
+    }
+
+    /// 링크의 단계. 바뀔 때마다 깬다.
+    pub(crate) fn phase(&self) -> watch::Receiver<Phase> {
+        self.shared.phase.subscribe()
+    }
+
+    /// 전송을 잃었다(끊김 · 쓰기 오류 · 하트비트). 이어 붙을 수 있는 링크면 멈추고 시한을 잰다, 아니면 닫는다. 그 세대의 전송이
+    /// 아니면(이미 바뀜) 아무것도 하지 않는다.
+    fn transport_lost(&self, generation: u64, reason: CloseReason) {
+        let mut state = lock(&self.shared.state);
+        if state.shut || state.generation != generation || state.suspended {
+            return;
+        }
+        if !state.resumable {
+            drop(state);
+            self.shutdown(reason);
+            return;
+        }
+        self.suspend_locked(&mut state, reason);
+    }
+
+    fn suspend_locked(&self, state: &mut State, reason: CloseReason) {
+        state.suspended = true;
+        state.stop.cancel();
+        state.link.clear();
+        let generation = state.generation;
+        tracing::info!(target: "pw_link", %reason, "link transport lost; waiting for it to resume");
+        self.shared.phase.send_replace(Phase::Suspended);
+        let (mux, within) = (self.clone(), self.shared.limits.resume_within);
+        tokio::spawn(async move {
+            let closed = mux.closed();
+            tokio::select! {
+                () = closed.cancelled() => return,
+                () = tokio::time::sleep(within) => {}
+            }
+            let expired = {
+                let state = lock(&mux.shared.state);
+                state.suspended && state.generation == generation
+            };
+            if expired {
+                tracing::info!(target: "pw_link", "the link did not resume in time");
+                mux.shutdown(reason);
+            }
+        });
+    }
+
+    /// 이어 붙기 앞: 지금 전송을 멈추고(아직 살아 있다고 보던 것이면 — 상대가 먼저 끊김을 알았다) 받은 번호 있는 틀의 수를 준다.
+    /// 그 뒤로는 옛 전송의 틀을 받지 않는다. 닫힌 링크면 `None`.
+    pub(crate) fn suspend_for_resume(&self) -> Option<u64> {
+        let _gate = lock(&self.shared.rx_gate);
+        let mut state = lock(&self.shared.state);
+        if state.shut {
+            return None;
+        }
+        if !state.suspended {
+            self.suspend_locked(
+                &mut state,
+                CloseReason::Io("replaced by a resumed transport".to_owned()),
+            );
+        }
+        Some(state.received)
+    }
+
+    /// 새 전송으로 이어 간다. `peer_received` 는 상대가 받은 번호 있는 틀의 수 — 그 뒤의 틀부터 다시 보낸다. 상대가 이쪽이 이미
+    /// 버린 틀(`ack` 받은 앞)보다 덜 받았거나 보낸 것보다 많이 받았다면 이어 갈 수 없다(부른 쪽이 링크를 닫는다). 먼저
+    /// [`Self::suspend_for_resume`] 이나 전송을 잃어 멈춰 있어야 한다.
+    pub(crate) fn resume(&self, framed: Framed, peer_received: u64) -> Result<(), String> {
+        let _gate = lock(&self.shared.rx_gate);
+        let mut state = lock(&self.shared.state);
+        if state.shut {
+            return Err("the link is closed".to_owned());
+        }
+        if !state.suspended {
+            return Err("the link is not waiting to resume".to_owned());
+        }
+        let first = state.sent - state.replay.len() as u64;
+        if peer_received < first || peer_received > state.sent {
+            return Err(format!(
+                "the peer received {peer_received} frames; this side kept {first}..{}",
+                state.sent
+            ));
+        }
+        for _ in first..peer_received {
+            if let Some(frame) = state.replay.pop_front() {
+                state.replay_bytes -= frame.len();
+            }
+        }
+        state.resend = 0;
+        state.generation += 1;
+        state.suspended = false;
+        let stop = CancellationToken::new();
+        state.stop = stop.clone();
+        state.unacked_bytes = 0;
+        let generation = state.generation;
+        let resent = state.replay.len();
+        drop(state);
+        *lock(&self.shared.last_rx) = Instant::now();
+        tracing::info!(target: "pw_link", resent, "link resumed");
+        self.spawn_transport(framed, generation, stop);
+        self.shared.phase.send_replace(Phase::Live);
+        self.shared.wake.notify_one();
+        Ok(())
+    }
+
+    /// 받은 번호 있는 틀의 수(이어 붙기의 핸드셰이크가 싣는다).
+    pub(crate) fn received(&self) -> u64 {
+        let _gate = lock(&self.shared.rx_gate);
+        lock(&self.shared.state).received
     }
 
     pub(crate) fn limits(&self) -> &LinkLimits {
@@ -271,12 +482,15 @@ impl Mux {
             state.ready.clear();
             state.budget_used = 0;
             state.send_used = 0;
+            state.replay.clear();
+            state.replay_bytes = 0;
             std::mem::take(&mut state.channels)
         };
         for chan in channels.into_values() {
             chan.cancel.cancel();
         }
         self.shared.closed.cancel();
+        self.shared.phase.send_replace(Phase::Closed);
         self.shared.wake.notify_one();
     }
 
@@ -484,9 +698,42 @@ impl Mux {
         self.push_control(frame.encode());
     }
 
-    /// 다음에 쓸 틀: 링크의 틀이 먼저, 그 다음 창이 남은 채널을 돌아가며 하나씩.
-    fn next_outgoing(&self) -> Option<Vec<u8>> {
+    /// 다음에 쓸 틀: 번호 없는 링크 틀 → 이어 붙은 뒤 다시 보낼 틀 → 링크의 틀 → 창이 남은 채널을 돌아가며 하나씩. 번호 있는 틀은
+    /// 내보내기 전에 다시 보낼 줄에 넣는다(이어 붙을 수 있는 링크).
+    fn next_outgoing(&self, generation: u64) -> Next {
         let mut state = lock(&self.shared.state);
+        if state.generation != generation || state.suspended || state.shut {
+            return Next::Stale;
+        }
+        if let Some(frame) = state.link.pop_front() {
+            return Next::Frame(frame);
+        }
+        if state.resend < state.replay.len() {
+            let frame = state.replay[state.resend].clone();
+            state.resend += 1;
+            return Next::Frame(frame);
+        }
+        let Some(frame) = self.take_sequenced(&mut state) else {
+            return Next::Idle;
+        };
+        if state.resumable {
+            state.sent += 1;
+            state.replay_bytes += frame.len();
+            state.replay.push_back(frame.clone());
+            state.resend = state.replay.len();
+            if state.replay_bytes > self.shared.limits.send_budget {
+                drop(state);
+                self.shutdown(CloseReason::Protocol(
+                    "the peer does not acknowledge what it receives".to_owned(),
+                ));
+                return Next::Stale;
+            }
+        }
+        Next::Frame(frame)
+    }
+
+    /// 다음 번호 있는 틀: 링크의 틀이 먼저, 그 다음 창이 남은 채널을 돌아가며 하나씩.
+    fn take_sequenced(&self, state: &mut State) -> Option<Vec<u8>> {
         if let Some(frame) = state.control.pop_front() {
             state.control_bytes -= frame.len();
             return Some(frame);
@@ -499,7 +746,7 @@ impl Mux {
             control,
             control_bytes,
             ..
-        } = &mut *state;
+        } = state;
         let base = self.shared.limits.window;
         while let Some(channel) = ready.pop_front() {
             let Some(chan) = channels.get_mut(&channel) else {
@@ -556,48 +803,96 @@ impl Mux {
         None
     }
 
-    async fn writer(self, mut write: FramedWrite) {
+    /// 번호 없는 링크 틀(`ping` · `pong` · `ack`)을 낸다. 멈춘 동안에는 버린다.
+    fn push_link(&self, frame: &LinkFrame) {
+        let mut state = lock(&self.shared.state);
+        if state.shut || state.suspended {
+            return;
+        }
+        if state.link.len() > 64 {
+            // 상대가 읽지 않으며 `ping` 을 몰아 보낸다.
+            drop(state);
+            self.shutdown(CloseReason::Protocol(
+                "the peer does not read our link frames".to_owned(),
+            ));
+            return;
+        }
+        state.link.push_back(frame.encode());
+        drop(state);
+        self.shared.wake.notify_one();
+    }
+
+    async fn writer(self, mut write: FramedWrite, generation: u64, stop: CancellationToken) {
         let closed = self.closed();
         loop {
-            match self.next_outgoing() {
-                Some(bytes) => {
+            match self.next_outgoing(generation) {
+                Next::Frame(bytes) => {
                     let result = tokio::select! {
                         biased;
-                        () = closed.cancelled() => return,
+                        () = stop.cancelled() => return,
+                        () = closed.cancelled() => return self.bye(&mut write, &stop).await,
                         result = write.write_encoded(&bytes) => result,
                     };
                     if let Err(e) = result {
-                        self.shutdown(CloseReason::Io(e.to_string()));
+                        self.transport_lost(generation, CloseReason::Io(e.to_string()));
                         return;
                     }
                 }
-                None => tokio::select! {
+                Next::Idle => tokio::select! {
                     biased;
-                    () = closed.cancelled() => return,
+                    () = stop.cancelled() => return,
+                    () = closed.cancelled() => return self.bye(&mut write, &stop).await,
                     () = self.shared.wake.notified() => {}
                 },
+                Next::Stale => {
+                    if closed.is_cancelled() {
+                        self.bye(&mut write, &stop).await;
+                    }
+                    return;
+                }
             }
         }
     }
 
-    async fn reader(self, mut read: FramedRead, inbox: mpsc::UnboundedSender<LinkFrame>) {
+    /// 링크를 닫았다 — 상대가 이어 붙기를 기다리지 않게 `bye` 를 보낸다(전송이 막혔으면 잠깐만 기다린다).
+    async fn bye(&self, write: &mut FramedWrite, stop: &CancellationToken) {
+        if stop.is_cancelled() {
+            return;
+        }
+        let bye = LinkFrame::control(Kind::Bye, Value::Null).encode();
+        let _ = tokio::time::timeout(Duration::from_secs(1), write.write_encoded(&bye)).await;
+    }
+
+    async fn reader(self, mut read: FramedRead, generation: u64, stop: CancellationToken) {
         let closed = self.closed();
         loop {
             let result = tokio::select! {
                 biased;
                 () = closed.cancelled() => return,
+                () = stop.cancelled() => return,
                 result = read.read_raw() => result,
             };
             match result {
                 Ok(Some((frame, len))) => {
+                    let gate = lock(&self.shared.rx_gate);
+                    if !self.count(generation, frame.kind, len) {
+                        return;
+                    }
                     *lock(&self.shared.last_rx) = Instant::now();
-                    if let Err(why) = self.dispatch(frame, len, &inbox) {
+                    if let Err(why) = self.dispatch(frame, len) {
+                        drop(gate);
                         self.shutdown(CloseReason::Protocol(why));
                         return;
                     }
                 }
                 Ok(None) => {
-                    self.shutdown(CloseReason::PeerClosed);
+                    self.transport_lost(generation, CloseReason::PeerClosed);
+                    return;
+                }
+                Err(FrameError::Wire(
+                    e @ (pw_wire::FrameError::Truncated | pw_wire::FrameError::Io(_)),
+                )) => {
+                    self.transport_lost(generation, CloseReason::Io(e.to_string()));
                     return;
                 }
                 Err(e) => {
@@ -608,12 +903,54 @@ impl Mux {
         }
     }
 
-    fn dispatch(
-        &self,
-        raw: RawFrame,
-        len: usize,
-        inbox: &mpsc::UnboundedSender<LinkFrame>,
-    ) -> Result<(), String> {
+    /// 받은 틀을 센다(번호 있는 틀). 이 세대의 전송이 아니면 거짓 — 그 틀은 버린다. 창의 반만큼 받았으면 `ack` 를 낸다.
+    fn count(&self, generation: u64, kind: Kind, len: usize) -> bool {
+        let mut state = lock(&self.shared.state);
+        if state.generation != generation || state.suspended || state.shut {
+            return false;
+        }
+        if !sequenced(kind) {
+            return true;
+        }
+        state.received += 1;
+        state.unacked_bytes += len;
+        if state.resumable && state.unacked_bytes >= (self.shared.limits.window / 2).max(1) {
+            Self::queue_ack(&mut state);
+            drop(state);
+            self.shared.wake.notify_one();
+        }
+        true
+    }
+
+    fn queue_ack(state: &mut State) {
+        state.unacked_bytes = 0;
+        state.acked = state.received;
+        let ack = LinkFrame::control(
+            Kind::Ack,
+            json!(AckBody {
+                seq: state.received
+            }),
+        );
+        state.link.push_back(ack.encode());
+    }
+
+    /// 상대가 `seq` 번까지 받았다 — 다시 보낼 줄에서 뺀다.
+    fn on_ack(&self, seq: u64) -> Result<(), String> {
+        let mut state = lock(&self.shared.state);
+        if seq > state.sent {
+            return Err(format!("ack {seq} past the {} frames sent", state.sent));
+        }
+        let first = state.sent - state.replay.len() as u64;
+        for _ in first..seq.max(first) {
+            if let Some(frame) = state.replay.pop_front() {
+                state.replay_bytes -= frame.len();
+                state.resend = state.resend.saturating_sub(1);
+            }
+        }
+        Ok(())
+    }
+
+    fn dispatch(&self, raw: RawFrame, len: usize) -> Result<(), String> {
         // 채널 메시지는 풀지 않고 받아 둔다.
         if raw.kind == Kind::Msg && raw.channel != CONTROL {
             let body = match raw.body {
@@ -626,9 +963,17 @@ impl Mux {
         let frame = raw.into_frame()?;
         match frame.kind {
             Kind::Ping => {
-                self.send_control(&LinkFrame::control(Kind::Pong, Value::Null));
+                self.push_link(&LinkFrame::control(Kind::Pong, Value::Null));
             }
             Kind::Pong => {}
+            Kind::Ack => {
+                let ack = serde_json::from_value::<AckBody>(frame.body)
+                    .map_err(|e| format!("bad ack: {e}"))?;
+                self.on_ack(ack.seq)?;
+            }
+            Kind::Bye => {
+                self.shutdown(CloseReason::PeerClosed);
+            }
             Kind::Msg => {
                 return Err("a message on the link channel".to_owned());
             }
@@ -649,7 +994,7 @@ impl Mux {
                 }
             }
             _ => {
-                let _ = inbox.send(frame);
+                let _ = self.shared.inbox.send(frame);
             }
         }
         Ok(())
@@ -739,7 +1084,7 @@ impl Mux {
         }
     }
 
-    async fn heartbeat(self) {
+    async fn heartbeat(self, generation: u64, stop: CancellationToken) {
         let closed = self.closed();
         let limits = self.shared.limits;
         let mut tick =
@@ -749,14 +1094,22 @@ impl Mux {
             tokio::select! {
                 biased;
                 () = closed.cancelled() => return,
+                () = stop.cancelled() => return,
                 _ = tick.tick() => {}
             }
             let silent = lock(&self.shared.last_rx).elapsed();
             if silent >= limits.dead_after {
-                self.shutdown(CloseReason::HeartbeatTimeout);
+                self.transport_lost(generation, CloseReason::HeartbeatTimeout);
                 return;
             }
-            self.send_control(&LinkFrame::control(Kind::Ping, Value::Null));
+            self.push_link(&LinkFrame::control(Kind::Ping, Value::Null));
+            // 창의 반을 채우지 못한 채 받은 것도 하트비트마다 알린다 — 다시 보낼 줄이 비게.
+            let mut state = lock(&self.shared.state);
+            if state.resumable && !state.suspended && state.received > state.acked {
+                Self::queue_ack(&mut state);
+                drop(state);
+                self.shared.wake.notify_one();
+            }
         }
     }
 }
