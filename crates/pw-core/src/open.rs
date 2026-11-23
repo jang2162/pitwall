@@ -29,6 +29,8 @@ use crate::registry::Registry;
 use crate::registry::agent::agent_grant;
 use crate::registry::path::{WorktreeRootError, normalize, worktree_root};
 
+pub mod desks;
+
 /// 빈도 제한의 창.
 pub const RATE_WINDOW: Duration = Duration::from_secs(10);
 /// [`RATE_WINDOW`] 안에 이 Host 의 에이전트 호출을 모두 합쳐 열 수 있는 횟수.
@@ -118,6 +120,7 @@ pub trait Opener: Send + Sync + 'static {
 pub struct OpenRequests {
     opener: Arc<OnceLock<Arc<dyn Opener>>>,
     calls: Arc<Mutex<RateLimiter>>,
+    desks: desks::Desks,
 }
 
 impl OpenRequests {
@@ -125,6 +128,75 @@ impl OpenRequests {
     pub fn attach(&self, opener: Arc<dyn Opener>) {
         let _ = self.opener.set(opener);
     }
+
+    /// 붙은 Desktop 들의 듣기(`open.listen` — [`desks`]). 창이 없는 Host(Relay)는 이것을 [`Self::attach`] 로 여는 쪽에 붙인다.
+    pub fn desks(&self) -> desks::Desks {
+        self.desks.clone()
+    }
+
+    /// 판정을 지난 요청을 연다: 빈도([`RATE_LIMIT`] — 에이전트 호출과 `pitwall-relay open` 이 한 벌을 나눈다)를 세고 여는 쪽에
+    /// 넘긴다. 블로킹 스레드에서 부른다.
+    pub fn open(&self, request: &OpenRequest) -> Result<OpenedIn, OpenFailure> {
+        let opener = self.opener.get().ok_or(OpenFailure::NotReady)?;
+        self.calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take(Instant::now())
+            .map_err(OpenFailure::RateLimited)?;
+        opener.open(request).map_err(OpenFailure::Opener)
+    }
+}
+
+/// [`OpenRequests::open`] 의 실패.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpenFailure {
+    /// 여는 쪽이 아직 붙지 않았다.
+    NotReady,
+    /// 빈도를 넘었다 — 다시 될 때까지 남은 시간.
+    RateLimited(Duration),
+    /// 여는 쪽이 열지 못했다(사람 · 에이전트가 읽는 영어).
+    Opener(String),
+}
+
+impl std::fmt::Display for OpenFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotReady => f.write_str("the Pitwall app is not ready to open windows yet"),
+            Self::RateLimited(_) => write!(
+                f,
+                "opening is rate limited: at most {RATE_LIMIT} opens per {} seconds",
+                RATE_WINDOW.as_secs()
+            ),
+            Self::Opener(message) => f.write_str(message),
+        }
+    }
+}
+
+impl From<OpenFailure> for RpcError {
+    fn from(failure: OpenFailure) -> Self {
+        match failure {
+            OpenFailure::RateLimited(retry_after) => rate_limited(retry_after),
+            other => RpcError::internal(other.to_string()),
+        }
+    }
+}
+
+/// 32자 16진수. 프로세스마다 OS 난수로 키를 받는 `RandomState`(SipHash) 두 개의 출력이다 — 다른 프로세스가 미리 맞힐 수 없다
+/// (`pw_git::write::askpass` 의 토큰과 같은 꼴).
+fn token() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    (0..2u8)
+        .map(|half| {
+            let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+            hasher.write_u8(half);
+            hasher.write_u128(nanos);
+            hasher.write_u32(std::process::id());
+            format!("{:016x}", hasher.finish())
+        })
+        .collect()
 }
 
 /// Host 전체의 빈도 셈: 지난 [`RATE_WINDOW`] 안에 연 시각들.
@@ -154,6 +226,7 @@ impl RateLimiter {
 
 /// 핸들러를 붙인다(앱의 Host — [`crate::LocalHostBuilder::open_requests`]).
 pub fn register(router: &mut Router, requests: OpenRequests, registry: Registry) {
+    desks::register(router, requests.desks());
     router.unary(
         ProjectOpenTool,
         move |ctx, params: ProjectOpenToolParams| {
@@ -162,16 +235,7 @@ pub fn register(router: &mut Router, requests: OpenRequests, registry: Registry)
             async move {
                 tokio::task::spawn_blocking(move || {
                     let request = prepare(&scope, &registry, &params)?;
-                    let opener = requests.opener.get().ok_or_else(|| {
-                        RpcError::internal("the Pitwall app is not ready to open windows yet")
-                    })?;
-                    requests
-                        .calls
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .take(Instant::now())
-                        .map_err(rate_limited)?;
-                    let opened_in = opener.open(&request).map_err(RpcError::internal)?;
+                    let opened_in = requests.open(&request)?;
                     Ok(ProjectOpenToolResult {
                         opened_in,
                         path: request.file.map(|f| f.display().to_string()),

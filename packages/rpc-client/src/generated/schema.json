@@ -41776,6 +41776,226 @@
       ],
       "tier": "read"
     },
+    "open.answer": {
+      "description": "`open.listen` 으로 받은 질문 · 열기 요청에 답한다. owner 의 Host 범위 연결만.",
+      "kind": "unary",
+      "params": {
+        "$defs": {
+          "OpenAnswer": {
+            "description": "Desktop 의 답.",
+            "oneOf": [
+              {
+                "description": "마지막 사람 입력 뒤 지난 밀리초.",
+                "properties": {
+                  "idleMs": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "kind": {
+                    "const": "idle",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "idleMs"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "const": "opened",
+                    "type": "string"
+                  },
+                  "openedIn": {
+                    "$ref": "#/$defs/OpenedIn"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "openedIn"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "열지 못했다(원격에 찍힌다 — 짧은 영어).",
+                "properties": {
+                  "kind": {
+                    "const": "failed",
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "message"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "OpenedIn": {
+            "description": "Where the request was opened.",
+            "oneOf": [
+              {
+                "const": "existingWindow",
+                "description": "The project's window that was already open (not brought to the front).",
+                "type": "string"
+              },
+              {
+                "const": "newWindow",
+                "description": "A newly created window for the project (not activated).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "answer": {
+            "$ref": "#/$defs/OpenAnswer"
+          },
+          "listener": {
+            "type": "string"
+          },
+          "requestId": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "listener",
+          "requestId",
+          "answer"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "open.listen": {
+      "description": "이 Host 의 열기 요청을 받는다(창이 없는 Host — Relay 에 붙은 Desktop). owner 의 Host 범위 연결만.",
+      "item": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`open.listen` 의 항목.",
+        "oneOf": [
+          {
+            "description": "듣기가 섰다. `listener` 를 답에 싣는다.",
+            "properties": {
+              "kind": {
+                "const": "listening",
+                "type": "string"
+              },
+              "listener": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "listener"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "열기 요청이 왔다 — 사람 입력 뒤 지난 시간을 [`OpenAnswer::Idle`] 로 답한다.",
+            "properties": {
+              "kind": {
+                "const": "query",
+                "type": "string"
+              },
+              "requestId": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "requestId"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "이 Desktop 이 연다. 그 묶음 창의 이 체크아웃(`worktree` 가 없으면 메인 체크아웃) 탭으로 — 활성 체크아웃은 바꾸지 않는다.\n답은 [`OpenAnswer::Opened`] · [`OpenAnswer::Failed`].",
+            "properties": {
+              "column": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "open",
+                "type": "string"
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "path": {
+                "description": "열 파일의 실제 경로(프로젝트 루트 안). 프로젝트만 열면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "projectId": {
+                "description": "이 머신 레지스트리의 프로젝트 id.",
+                "type": "string"
+              },
+              "requestId": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "worktree": {
+                "description": "워크트리 꼭대기(이 머신의 절대 경로). 메인 체크아웃이면 `null`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "requestId",
+              "projectId",
+              "worktree",
+              "path",
+              "line",
+              "column"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "kind": "stream",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "openWith.list": {
       "description": "External tools available on this OS (id · name · contributing extension · whether it opens files too · settings\nformat errors) and the default tool. With `projectId`, the default tool is chosen including that project's\n`[open_with] default` (when the session has a project, leaving the key out means the session's project — pass\n`null` for the global default only). Launch commands are not included.",
       "kind": "unary",

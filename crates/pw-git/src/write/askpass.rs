@@ -313,7 +313,7 @@ pub fn client_main(args: &[OsString]) -> i32 {
 }
 
 /// `SSH_ASKPASS_PROMPT` 의 값으로 질문의 종류를 정한다(모르는 값 · 없음은 값을 묻는 것).
-pub(crate) fn hint_of(value: Option<&std::ffi::OsStr>) -> AskpassHint {
+pub fn hint_of(value: Option<&std::ffi::OsStr>) -> AskpassHint {
     match value.and_then(std::ffi::OsStr::to_str) {
         Some("confirm") => AskpassHint::Confirm,
         Some("none") => AskpassHint::Notice,
@@ -464,6 +464,50 @@ impl Askpass {
 /// [`Askpass::serve`] 가 끝나면(버려지면) 도우미를 더 주지 않는다.
 #[cfg(unix)]
 struct ClearServing(Askpass);
+
+/// [`Askpass::serve_through`] 의 자리. 버리면 도우미를 더 주지 않는다.
+#[cfg(unix)]
+pub struct Through {
+    _clear: ClearServing,
+}
+
+#[cfg(unix)]
+impl Askpass {
+    /// 자기 소켓을 열지 않고 **남이 받는 소켓**을 도우미에게 준다(Relay — 18-m7-plan M7-15 ①). 도우미 스크립트는 `socket` 옆에
+    /// 두고(`<exe> askpass "$@"` — [`unix::write_helper`]), 그 소켓으로 온 요청은 받는 쪽이 [`Askpass::answer`] 로 넘긴다. Relay
+    /// 데몬은 데몬 소켓의 좁은 명령 `askpass` 로 받는다 — 폴더 · 소켓 · 상대 uid 규칙은 데몬 소켓의 것이다(같은 규칙).
+    pub fn serve_through(&self, socket: PathBuf, exe: &Path) -> std::io::Result<Through> {
+        let helper = unix::write_helper(&socket, exe)?;
+        *lock(&self.inner.serving) = Some(Serving { socket, helper });
+        Ok(Through {
+            _clear: ClearServing(self.clone()),
+        })
+    }
+
+    /// 남의 소켓으로 온 요청 하나(도우미가 보낸 JSON — `protocol` · `token` · `prompt` · `hint`)에 답한다. 답(비밀)은
+    /// `{"value": …}` 로 돌려주고, 답이 없으면 그 까닭. 받는 쪽은 답을 로그에 쓰지 않는다. 그 토큰의 쓰기가 끝났거나 모르는 토큰이면
+    /// 거절이다(지금 소켓과 같다).
+    pub async fn answer(&self, body: serde_json::Value) -> Result<serde_json::Value, String> {
+        let request = serde_json::from_value::<Request>(body)
+            .map_err(|_| "malformed askpass request".to_owned())?;
+        let reply = self.reply(request).await;
+        match (reply.value, reply.error) {
+            (Some(value), _) => Ok(serde_json::json!({ "value": value })),
+            (None, error) => Err(error.unwrap_or_else(|| "no answer".to_owned())),
+        }
+    }
+
+    /// 도우미 쪽: 질문 하나를 요청 JSON 으로(남의 소켓에 실어 보낼 몸통).
+    pub fn request_body(token: &str, prompt: &str, hint: AskpassHint) -> serde_json::Value {
+        serde_json::to_value(Request {
+            protocol: PROTOCOL.to_owned(),
+            token: token.to_owned(),
+            prompt: prompt.to_owned(),
+            hint,
+        })
+        .unwrap_or_default()
+    }
+}
 
 #[cfg(unix)]
 impl Drop for ClearServing {

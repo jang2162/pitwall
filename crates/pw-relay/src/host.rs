@@ -17,6 +17,25 @@ pub const HOST_ID: &str = "local";
 
 /// 조립한다. `paths` 는 Relay 의 앱 경로([`crate::paths::relay_paths`]).
 pub fn assemble(paths: AppPaths, config: &RelayConfig, tokio: tokio::runtime::Handle) -> Assembled {
+    assemble_with(
+        paths,
+        config,
+        tokio,
+        pw_git::write::Askpass::default(),
+        pw_core::open::OpenRequests::default(),
+    )
+}
+
+/// [`assemble`] 에 askpass · 열기 요청 자리를 넣은 것 — 데몬은 같은 것을 좁은 명령 몸통(`crate::narrow::RelayNarrow`)에도 준다.
+/// 열기 요청은 붙은 Desktop 이 연다(`pw_core::open::desks` — 여는 쪽으로 붙인다, M7-15).
+pub fn assemble_with(
+    paths: AppPaths,
+    config: &RelayConfig,
+    tokio: tokio::runtime::Handle,
+    askpass: pw_git::write::Askpass,
+    open_requests: pw_core::open::OpenRequests,
+) -> Assembled {
+    open_requests.attach(Arc::new(open_requests.desks()));
     let engine = semver::Version::parse(crate::VERSION).unwrap_or(semver::Version::new(0, 0, 0));
     let extensions = Arc::new(pw_ext::Registry::load(&pw_ext::LoadOptions::with_data_dir(
         engine,
@@ -36,10 +55,10 @@ pub fn assemble(paths: AppPaths, config: &RelayConfig, tokio: tokio::runtime::Ha
         extensions,
         i18n,
         fs: Arc::new(pw_fs::Fs::new()),
-        // 원격 git 의 암호 질문은 붙은 Desktop 이 받는다(M7-12 · M7-15). 그 전에는 묻는 길이 없다.
-        askpass: pw_git::write::Askpass::default(),
+        // 원격 git 의 암호 질문은 붙은 Desktop 의 그 프로젝트 창이 받는다(M7-15 — 데몬 소켓의 `askpass`, `Askpass::serve_through`).
+        askpass,
         // 열기 요청은 붙은 Desktop 의 창이 연다(M7-15).
-        open_requests: pw_core::open::OpenRequests::default(),
+        open_requests,
         mcp_sessions: pw_mcp::sessions::Sessions::default(),
         // 비밀을 디스크에 두지 않는다(메인 판정 M7-P5). 붙은 Desktop 에 묻는 구현은 M7-12 가 넣는다.
         secrets: Arc::new(MemoryOnlySecrets::default()),

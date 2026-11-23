@@ -5,16 +5,28 @@ use std::sync::Arc;
 
 use pw_core::config::AppPaths;
 use pw_link::{RelayIdentity, RelayKeyFile, RelayParts};
-use pw_relay::command::{Command, NotYet};
+use pw_relay::command::Command;
 use pw_relay::daemon::{Daemon, DaemonParts, Ended, MAX_UNPROVEN};
 use tracing_subscriber::Layer as _;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt as _;
 
-const USAGE: &str = "usage: pitwall-relay <proxy|daemon|status [--json]|pair --from-ssh <key> [<name>]|unpair <device id>|--verify <file> <sha256>|--version>";
+const USAGE: &str = "usage: pitwall-relay <proxy|daemon|status [--json]|open <file>...|askpass <prompt>|link-command [--remove]|pair --from-ssh <key> [<name>]|unpair <device id>|--verify <file> <sha256>|--version>";
 
 pub fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut argv = std::env::args_os();
+    let argv0 = argv.next();
+    let mut args: Vec<String> = argv.map(|a| a.to_string_lossy().into_owned()).collect();
+    // 사람이 고른 `~/.local/bin/pitwall` 링크로 불렸다(메인 판정 M7-P12) — `open` · `mcp` · `tool` 만 읽는다.
+    if crate::shell::called_as_pitwall(argv0.as_ref()) {
+        match crate::shell::pitwall_args(&args) {
+            Some(read) => args = read,
+            None => {
+                eprintln!("{}", crate::shell::PITWALL_USAGE);
+                return ExitCode::from(2);
+            }
+        }
+    }
     match args.first().map(String::as_str) {
         Some("proxy") => proxy(),
         Some("daemon") => daemon(),
@@ -24,6 +36,13 @@ pub fn main() -> ExitCode {
         Some("pair") => pair(&args[1..]),
         Some("unpair") => unpair(&args[1..]),
         Some("--verify") => verify(&args[1..]),
+        Some("askpass") => crate::shell::askpass(&args[1..]),
+        Some("open") => match paths().and_then(|p| socket_path(&p)) {
+            Ok(socket) => crate::shell::open(&socket, &args[1..]),
+            Err(code) => code,
+        },
+        Some("link-command") => crate::shell::link_command(&args[1..]),
+        Some(command @ ("mcp" | "tool")) => crate::shell::not_yet(command),
         Some("--version" | "version") => {
             println!(
                 "pitwall-relay {} ({})",
@@ -351,7 +370,30 @@ fn daemon() -> ExitCode {
             pairings.clone(),
             seen,
         ));
-        let assembled = pw_relay::host::assemble(paths.clone(), &config, tokio::runtime::Handle::current());
+        // 원격 git 의 암호 질문(M7-15 ①): 도우미 스크립트를 데몬 소켓 옆에 두고, 질문은 데몬 소켓의 좁은 명령 `askpass` 로 받는다.
+        let askpass = pw_git::write::Askpass::default();
+        let open_requests = pw_core::open::OpenRequests::default();
+        let assembled = pw_relay::host::assemble_with(
+            paths.clone(),
+            &config,
+            tokio::runtime::Handle::current(),
+            askpass.clone(),
+            open_requests.clone(),
+        );
+        let _askpass = match std::env::current_exe()
+            .and_then(|exe| askpass.serve_through(socket.clone(), &exe))
+        {
+            Ok(through) => Some(through),
+            Err(e) => {
+                tracing::warn!(%e, "cannot write the askpass helper; git on this relay will not ask for passwords");
+                None
+            }
+        };
+        let narrow = Arc::new(pw_relay::narrow::RelayNarrow::new(
+            askpass,
+            open_requests,
+            assembled.host.registry().cloned(),
+        ));
         let host = Arc::new(assembled.host);
         let daemon = Daemon::new(DaemonParts {
             link: RelayParts {
@@ -366,7 +408,7 @@ fn daemon() -> ExitCode {
                 resumes: pw_link::Resumes::default(),
             },
             activity: Arc::new(assembled.activity),
-            narrow: Arc::new(NotYet),
+            narrow,
             idle: config.idle,
             name: config.name.clone(),
             max_unproven: MAX_UNPROVEN,

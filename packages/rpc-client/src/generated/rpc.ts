@@ -1115,6 +1115,10 @@ export type UnaryMethods = {
 	 */
 	"mcp.tools.list": { params: McpToolsListParams; result: McpToolInfo[] };
 	/**
+	 * `open.listen` 으로 받은 질문 · 열기 요청에 답한다. owner 의 Host 범위 연결만.
+	 */
+	"open.answer": { params: OpenAnswerParams; result: null };
+	/**
 	 * External tools available on this OS (id · name · contributing extension · whether it opens files too · settings
 	 * format errors) and the default tool. With `projectId`, the default tool is chosen including that project's
 	 * `[open_with] default` (when the session has a project, leaving the key out means the session's project — pass
@@ -1606,6 +1610,10 @@ export type StreamMethods = {
 	 */
 	"mcp.approvals": { params: McpApprovalsParams; item: McpApprovalEvent };
 	/**
+	 * 이 Host 의 열기 요청을 받는다(창이 없는 Host — Relay 에 붙은 Desktop). owner 의 Host 범위 연결만.
+	 */
+	"open.listen": { params: OpenListenParams; item: OpenEvent };
+	/**
 	 * 그 호스트를 쓴다: 링크가 없으면 붙고(SSH → 설치 → 데몬 → 핸드셰이크), 스트림이 열린 동안 링크를 둔다. 지금 상태부터 바뀔
 	 * 때마다 보낸다. 사람이 끊어 둔 호스트도 다시 붙는다. 모든 스트림이 닫히면 링크를 닫는다.
 	 */
@@ -1868,6 +1876,8 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"mcp.settings.get": {"name":"mcp.settings.get","kind":"unary","tier":"read","roles":["owner"],"params":"McpSettingsGetParams","output":"McpSettingsView","doc":" 설정 창 「MCP」 쪽의 값: 전역 `[mcp]` 의 프리셋 · 자동 승인 · 그룹 키 · 감사 보관 일수(Host 가 판정에 쓰는 값)와 전역\n 설정 파일 경로. `projectId` 를 주면 그 프로젝트의 설정 파일들 · 그 파일들이 덮은 `[mcp]` 키 · 그 프로젝트의 자동 승인도\n 싣는다(읽기만). 툴 하나하나의 판정은 `mcp.tools.list` 다.\n","mcp":null,"fileScope":false},
 	"mcp.settings.set": {"name":"mcp.settings.set","kind":"unary","tier":"write","roles":["owner"],"params":"McpSettingsSetParams","output":"McpSettingsView","doc":" 전역 `settings.toml` 의 `[mcp]` 키 하나를 쓴다(`value: null` 이면 지운다). 프로젝트 설정은 쓰지 않는다. 값은 Host 가\n 판정한다 — 모르는 프리셋 · 그룹 · 툴, `auto_approve` 의 `dangerous`, 0 ~ 3650 정수가 아닌 보관 일수는 쓰지 않고\n `INVALID_PARAMS`(`data` 는 `McpSettingRefused`). 쓴 뒤 설정을 다시 읽어 열린 MCP 세션의 툴 목록이 바뀌고\n (`tools/list_changed`), 새 전역 값을 돌려준다.\n","mcp":null,"fileScope":false},
 	"mcp.tools.list": {"name":"mcp.tools.list","kind":"unary","tier":"read","roles":["owner"],"params":"McpToolsListParams","output":"Vec<McpToolInfo>","doc":" MCP 툴 카탈로그 전부와 지금 노출 판정(켜졌는지 · 그 규칙), 최근 호출 수. 이 앱의 Host 가 처리하는 툴만이다.\n","mcp":null,"fileScope":false},
+	"open.answer": {"name":"open.answer","kind":"unary","tier":"read","roles":["owner"],"params":"OpenAnswerParams","output":"()","doc":" `open.listen` 으로 받은 질문 · 열기 요청에 답한다. owner 의 Host 범위 연결만.\n","mcp":null,"fileScope":false},
+	"open.listen": {"name":"open.listen","kind":"stream","tier":"read","roles":["owner"],"params":"OpenListenParams","output":"OpenEvent","doc":" 이 Host 의 열기 요청을 받는다(창이 없는 Host — Relay 에 붙은 Desktop). owner 의 Host 범위 연결만.\n","mcp":null,"fileScope":false},
 	"openWith.list": {"name":"openWith.list","kind":"unary","tier":"read","roles":["owner"],"params":"OpenWithListParams","output":"OpenWithList","doc":" External tools available on this OS (id · name · contributing extension · whether it opens files too · settings\n format errors) and the default tool. With `projectId`, the default tool is chosen including that project's\n `[open_with] default` (when the session has a project, leaving the key out means the session's project — pass\n `null` for the global default only). Launch commands are not included.\n","mcp":{"group":null,"name":null},"fileScope":false},
 	"openWith.run": {"name":"openWith.run","kind":"unary","tier":"exec","roles":["owner"],"params":"OpenWithRunParams","output":"OpenWithOutcome","doc":" 프로젝트를 외부 도구로 연다. 셸 없이 argv 를 띄우고(Pitwall 과 따로 산다) 곧바로 실패하는지 잠깐 본다. 실행하지 못한 이유는\n 오류가 아니라 `failed` 결과로 온다. 없는 프로젝트 · 상대 경로 파일 · 상대 경로이거나 그 프로젝트의 것이 아닌 워크트리는 invalid params 오류.\n 그 프로젝트의 창이 아니면 permission denied 오류다 — 웰컴 창(Host 연결)만 예외로, 목록에 있는 도구(또는 기본 도구)로\n 프로젝트 루트를 여는 것(`worktree` · `file` · `line` · `column` 없이)은 된다.\n","mcp":null,"fileScope":false},
 	"openWith.tool.upsert": {"name":"openWith.tool.upsert","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<OpenWithUpsertParams>","output":"OpenWithUpsertResult","doc":" Add an external tool for \"Open with\", or change one, in the global settings (`[open_with.tools.<id>]` in\n `settings.toml`). The tool's settings entry is replaced as a whole by the fields given; for a tool contributed\n by an extension, fields left out keep the extension's values (giving `command` drops the extension's\n `file_command` unless it is given too). Commands are argv arrays run without a shell, and the first element\n cannot use variables; a malformed command or a new tool without `label` and `command` is refused before asking.\n Always needs approval in Pitwall, every call: the request shows the settings file before and after.\n","mcp":{"group":"open_with","name":"open_with_upsert"},"fileScope":false},
@@ -8861,6 +8871,39 @@ export type ObjectRef = {
 	schema: string | null,
 	name: string,
 };
+
+/**  Desktop 의 답. */
+export type OpenAnswer = 
+/**  마지막 사람 입력 뒤 지난 밀리초. */
+{ kind: "idle"; idleMs: number } | { kind: "opened"; openedIn: OpenedIn } | 
+/**  열지 못했다(원격에 찍힌다 — 짧은 영어). */
+{ kind: "failed"; message: string };
+
+export type OpenAnswerParams = {
+	listener: string,
+	requestId: number,
+	answer: OpenAnswer,
+};
+
+/**  `open.listen` 의 항목. */
+export type OpenEvent = 
+/**  듣기가 섰다. `listener` 를 답에 싣는다. */
+{ kind: "listening"; listener: string } | 
+/**  열기 요청이 왔다 — 사람 입력 뒤 지난 시간을 [`OpenAnswer::Idle`] 로 답한다. */
+{ kind: "query"; requestId: number } | 
+/**
+ *  이 Desktop 이 연다. 그 묶음 창의 이 체크아웃(`worktree` 가 없으면 메인 체크아웃) 탭으로 — 활성 체크아웃은 바꾸지 않는다.
+ *  답은 [`OpenAnswer::Opened`] · [`OpenAnswer::Failed`].
+ */
+{ kind: "open"; requestId: number; 
+/**  이 머신 레지스트리의 프로젝트 id. */
+projectId: string; 
+/**  워크트리 꼭대기(이 머신의 절대 경로). 메인 체크아웃이면 `null`. */
+worktree: string | null; 
+/**  열 파일의 실제 경로(프로젝트 루트 안). 프로젝트만 열면 `null`. */
+path: string | null; line: number | null; column: number | null };
+
+export type OpenListenParams = Record<string, never>;
 
 export type OpenWithList = {
 	/**

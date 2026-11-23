@@ -294,12 +294,24 @@ impl Daemon {
         if kind == "hello" {
             self.link(framed, first, slot).await;
         } else if let Some(command) = Command::from_kind(&kind) {
-            let reply = self.narrow(command, first).await;
-            let _ = framed
-                .write
+            // 요청 틀을 받았다 — 증명 전 자리를 놓는다. askpass · open 은 사람의 답을 오래 기다릴 수 있어 자리를 쥐면 링크가 붙지
+            // 못한다. 기다리는 수는 처리기가 따로 센다(`crate::narrow::MAX_WAITING`).
+            drop(slot);
+            let Framed {
+                mut read,
+                mut write,
+            } = framed;
+            // 부른 쪽이 답을 받기 전에 끝나면(ssh 가 askpass 를 거둠 · 셸에서 끊음) 처리를 버린다 — 창의 다이얼로그가 닫힌다. 요청 뒤에
+            // 더 온 틀은 읽어 버린다(좁은 명령의 연결은 요청 하나 · 답 하나다 — 어디에도 넘기지 않는다).
+            let gone = async move { while let Ok(Some(_)) = read.read_value().await {} };
+            let reply = tokio::select! {
+                biased;
+                reply = self.narrow(command, first) => reply,
+                () = gone => return,
+            };
+            let _ = write
                 .write_encoded(&serde_json::to_vec(&reply_frame(&reply)).unwrap_or_default())
                 .await;
-            drop(slot);
         } else {
             tracing::info!(kind = %kind.chars().take(32).collect::<String>(), "refused a relay connection with an unknown first frame");
             let reply: Reply =

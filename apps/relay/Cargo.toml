@@ -13,6 +13,8 @@ path = "src/main.rs"
 [dependencies]
 pw-core = { path = "../../crates/pw-core" }
 pw-diag = { path = "../../crates/pw-diag" }
+# 원격 git 의 askpass 도우미(`pitwall-relay askpass` — 소켓 · 토큰 환경 · 질문 꼴은 Desktop 의 도우미와 같다, M7-15).
+pw-git = { path = "../../crates/pw-git" }
 pw-link = { path = "../../crates/pw-link" }
 pw-relay = { path = "../../crates/pw-relay" }
 # 끝날 때 터미널 · 실행의 프로세스 트리를 끝낸다(`pw_run::shutdown`).

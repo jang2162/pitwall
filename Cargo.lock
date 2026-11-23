@@ -5157,6 +5157,7 @@ dependencies = [
  "libc",
  "pw-core",
  "pw-diag",
+ "pw-git",
  "pw-host",
  "pw-link",
  "pw-relay",

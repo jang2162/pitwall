@@ -221,6 +221,8 @@ mcp.sessions Unary Read {Owner}
 mcp.settings.get Unary Read {Owner}
 mcp.settings.set Unary Write {Owner}
 mcp.tools.list Unary Read {Owner}
+open.answer Unary Read {Owner}
+open.listen Stream Read {Owner}
 openWith.list Unary Read {Owner}
 openWith.run Unary Exec {Owner}
 openWith.tool.upsert Unary Write {Owner}
