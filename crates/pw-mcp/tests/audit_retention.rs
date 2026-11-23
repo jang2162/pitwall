@@ -80,6 +80,7 @@ impl Fixture {
                 duration: std::time::Duration::ZERO,
                 approval: None,
                 plan_hash: None,
+                transport: None,
             })
             .unwrap();
         rusqlite::Connection::open(log.file())

@@ -64,6 +64,8 @@ const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 /// - 둘째 판: 결과에 `started`(선기록 — 실행 전에 쓴 행), 승인 방식 · 계획 해시 칸, 시각 색인(보관 정리). id 는
 ///   `AUTOINCREMENT` — 지운 가장 큰 id 를 다시 쓰지 않는다. SQLite 는 열의 `CHECK` · `AUTOINCREMENT` 를 고치지 못하므로 표를 새로
 ///   만들어 행을 옮긴다(id 그대로 — `sqlite_sequence` 가 가장 큰 id 에서 이어진다).
+/// - 넷째 판: 전송 칸 `transport`(18-m7-plan M7-25 ⑥ — 메인 판정 2026-11-24). `ALTER TABLE ... ADD COLUMN` 한 줄이라 행 · id 를
+///   옮기지 않는다. 판 올림은 다른 판과 같이 한 트랜잭션이다(실패하면 셋째 판 그대로).
 /// - 셋째 판: 승인 방식 `policy`(정책 자동 — 17-m6-plan M6-10 ③). `CHECK` 를 고치려고 표를 새로 만들어 행을 옮긴다. 옮기기 전
 ///   표의 `sqlite_sequence` 값(지운 가장 큰 id 까지 센 값)을 새 표로 넘긴다 — 옮긴 행의 가장 큰 id 로 되돌아가지 않는다.
 const MIGRATIONS: &[&str] = &[
@@ -125,6 +127,8 @@ const MIGRATIONS: &[&str] = &[
      ALTER TABLE calls_v3 RENAME TO calls;
      CREATE INDEX calls_project_at ON calls(project_id, at);
      CREATE INDEX calls_at ON calls(at);",
+    // 넷째 판: 세션의 전송(`socket` · `stdio` · `http` · `relay-socket` — 18-m7-plan M7-25 ⑥). 옛 행은 `NULL`(모름)이다.
+    "ALTER TABLE calls ADD COLUMN transport TEXT;",
 ];
 
 /// 지금 판(`PRAGMA user_version`).
@@ -249,6 +253,8 @@ pub struct Entry {
     pub approval: Option<AuditApproval>,
     /// 승인이 묶인 계획의 해시(결정 M5-D30 — M5-12).
     pub plan_hash: Option<String>,
+    /// 세션의 전송(`crate::Services::transport` — `socket` · `stdio` · `http` · `relay-socket`, 18-m7-plan M7-25 ⑥).
+    pub transport: Option<String>,
 }
 
 /// 감사 로그 파일. 처음 쓸 때 연다.
@@ -468,6 +474,8 @@ pub struct AuditRow {
     pub approval: Option<AuditApproval>,
     /// 승인이 묶인 계획의 해시. 승인을 지나지 않은 호출은 `null`.
     pub plan_hash: Option<String>,
+    /// 세션의 전송(`socket` · `stdio` · `http` · `relay-socket`). 넷째 판 전에 쓴 행은 `null`.
+    pub transport: Option<String>,
 }
 
 /// [`AuditLog::list`] 의 조건.
@@ -489,7 +497,7 @@ impl AuditLog {
         self.read(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, at, session, client, project_id, tool, args, outcome, detail, result_size, duration_ms,
-                        approval, plan_hash
+                        approval, plan_hash, transport
                  FROM calls
                  WHERE (?1 IS NULL OR project_id = ?1 OR project_id IS NULL)
                    AND (?2 IS NULL OR id < ?2)
@@ -526,6 +534,7 @@ impl AuditLog {
                             duration_ms: row.get(10)?,
                             approval: approval.as_deref().and_then(AuditApproval::parse),
                             plan_hash: row.get(12)?,
+                            transport: row.get(13)?,
                         })
                     },
                 )?
@@ -652,8 +661,8 @@ fn insert(conn: &mut Connection, e: &Entry, outcome: Outcome) -> rusqlite::Resul
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     tx.execute(
         "INSERT INTO calls (at, session, client, project_id, tool, args, outcome, detail, result_size, duration_ms,
-                            approval, plan_hash)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                            approval, plan_hash, transport)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             now_millis(),
             e.session,
@@ -667,6 +676,7 @@ fn insert(conn: &mut Connection, e: &Entry, outcome: Outcome) -> rusqlite::Resul
             e.duration.as_millis() as i64,
             e.approval.map(AuditApproval::as_str),
             e.plan_hash.as_deref().map(|h| clip(h, MAX_DETAIL)),
+            e.transport.as_deref().map(|t| clip(t, MAX_TOOL)),
         ],
     )?;
     let id = tx.last_insert_rowid();
@@ -978,6 +988,7 @@ mod tests {
             duration: Duration::ZERO,
             approval: None,
             plan_hash: None,
+            transport: None,
         })
         .unwrap();
         let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
@@ -1009,6 +1020,7 @@ mod tests {
             duration: Duration::from_millis(3),
             approval: None,
             plan_hash: None,
+            transport: None,
         };
         log.record(&entry).unwrap();
         log.record(&Entry {
@@ -1052,6 +1064,7 @@ mod tests {
             duration: Duration::from_millis(1),
             approval: None,
             plan_hash: None,
+            transport: None,
         }
     }
 
@@ -1095,7 +1108,7 @@ mod tests {
         let log = AuditLog::at(file.clone());
         let rows = all(&log);
         assert_eq!(version(&file), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 3);
+        assert_eq!(SCHEMA_VERSION, 4);
         let kept: Vec<(i64, &str, Outcome)> = rows
             .iter()
             .map(|r| (r.id, r.tool.as_str(), r.outcome))
@@ -1130,6 +1143,101 @@ mod tests {
         drop(log);
         assert_eq!(all(&AuditLog::at(file.clone())).len(), 3);
         assert_eq!(version(&file), SCHEMA_VERSION);
+    }
+
+    /// 셋째 판 파일(M7-25 전의 앱이 쓴 것)을 열면 넷째 판으로 올라가 행 · id · 승인 칸이 그대로 남고 옛 행의 전송은 `null` 이다.
+    /// 새 행은 전송을 쓴다(18-m7-plan M7-25 ⑥).
+    #[test]
+    fn a_third_version_file_keeps_its_rows_and_takes_the_transport() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("audit.db");
+        {
+            let conn = Connection::open(&file).unwrap();
+            for step in &MIGRATIONS[..3] {
+                conn.execute_batch(step).unwrap();
+            }
+            conn.pragma_update(None, "user_version", 3).unwrap();
+            for (id, approval) in [(4, Some("policy")), (7, None)] {
+                conn.execute(
+                    "INSERT INTO calls (id, at, session, client, tool, args, outcome, duration_ms, approval)
+                     VALUES (?1, 1000, 's0', 'c 1', 't', '{}', 'ok', 3, ?2)",
+                    params![id, approval],
+                )
+                .unwrap();
+            }
+        }
+        let log = AuditLog::at(file.clone());
+        let rows = all(&log);
+        assert_eq!(version(&file), SCHEMA_VERSION);
+        assert_eq!(SCHEMA_VERSION, 4);
+        let kept: Vec<(i64, Option<AuditApproval>, Option<&str>, Option<&str>)> = rows
+            .iter()
+            .map(|r| {
+                (
+                    r.id,
+                    r.approval,
+                    r.client.as_deref(),
+                    r.transport.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            kept,
+            [
+                (4, Some(AuditApproval::Policy), Some("c 1"), None),
+                (7, None, Some("c 1"), None),
+            ]
+        );
+        log.record(&Entry {
+            transport: Some("http".into()),
+            ..entry("project_list", None)
+        })
+        .unwrap();
+        let last = all(&log).pop().unwrap();
+        assert_eq!((last.id, last.transport.as_deref()), (8, Some("http")));
+    }
+
+    /// 넷째 판 올림이 실패하면(여기서는 전송 칸이 이미 있어 `ADD COLUMN` 이 실패) 판 · 행이 셋째 판 그대로다 — 판 올림과 그 판의
+    /// 단계가 한 트랜잭션이다. 열기는 오류이고 파일을 고치지 않는다.
+    #[test]
+    fn a_failed_fourth_version_step_leaves_the_third_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("audit.db");
+        {
+            let conn = Connection::open(&file).unwrap();
+            for step in &MIGRATIONS[..3] {
+                conn.execute_batch(step).unwrap();
+            }
+            conn.execute(
+                "INSERT INTO calls (id, at, session, tool, args, outcome, duration_ms)
+                 VALUES (5, 1000, 's0', 't', '{}', 'ok', 0)",
+                [],
+            )
+            .unwrap();
+            // 넷째 판의 단계를 막는다: 같은 이름 칸을 미리 둔다.
+            conn.execute_batch("ALTER TABLE calls ADD COLUMN transport TEXT;")
+                .unwrap();
+            conn.pragma_update(None, "user_version", 3).unwrap();
+        }
+        let log = AuditLog::at(file.clone());
+        assert!(
+            log.list(&Query {
+                limit: 10,
+                ..Query::default()
+            })
+            .is_err()
+        );
+        assert!(log.record(&entry("t", None)).is_err());
+        assert_eq!(version(&file), 3, "실패한 판 올림은 판을 올리지 않는다");
+        let conn = Connection::open(&file).unwrap();
+        let ids: Vec<i64> = conn
+            .prepare("SELECT id FROM calls")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(ids, [5]);
     }
 
     /// 둘째 판 파일(M5 의 앱이 쓴 것)을 열면 셋째 판으로 올라가 행 · 승인 칸이 그대로 남고, 승인 방식 `policy` 를 쓸 수 있다.

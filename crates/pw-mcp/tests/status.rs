@@ -228,6 +228,7 @@ impl Fixture {
             duration: Duration::from_millis(1),
             approval: None,
             plan_hash: None,
+            transport: None,
         }
     }
 }

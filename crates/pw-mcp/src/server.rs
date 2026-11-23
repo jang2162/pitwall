@@ -2040,6 +2040,7 @@ impl Session {
             // 선기록한 행이면 시작 때 쓴 값이 남는다(`AuditLog::finish` 는 비어 있는 값으로 덮지 않는다).
             approval: None,
             plan_hash: None,
+            transport: Some(self.inner.services.transport.to_owned()),
         };
         let job = match row {
             Some(row) => AuditJob::Finish(row, entry),
@@ -2087,6 +2088,7 @@ impl Session {
             duration: std::time::Duration::ZERO,
             approval,
             plan_hash,
+            transport: Some(self.inner.services.transport.to_owned()),
         };
         let log = Arc::clone(&self.inner.services.audit);
         let (row, entry) = tokio::task::spawn_blocking(move || (log.begin(&entry), entry))
