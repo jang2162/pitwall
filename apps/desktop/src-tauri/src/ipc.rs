@@ -318,11 +318,19 @@ async fn rpc_connect<R: Runtime>(
         .connect(&target, caller)
         .await
         .map_err(|error| IpcError::Host { error })?;
+    // 원격만인 묶음 창의 자기 연결(묶음 id 범위 — `window_target`)은 받는 메서드를 닫힌 표로 좁힌다(`BundleWindowSink`).
+    let sink: Box<dyn FrameSink> = match &target {
+        Target::ProjectId(id) if is_bundle_row_id(id) => Box::new(BundleWindowSink {
+            inner: conn.sink,
+            reply: channel.clone(),
+        }),
+        _ => conn.sink,
+    };
     let id = state.next_conn.fetch_add(1, Ordering::Relaxed);
     // Tauri 는 Destroyed 를 창별 훅에 넘기기 전에 매니저에서 창을 지운다. 그래서 이 확인과 훅 중 어느 쪽이 먼저든
     // 닫힌 창의 연결은 남지 않는다.
     let alive = webview.app_handle().get_webview_window(&label).is_some();
-    if !state.register(&label, page, alive, id, conn.sink) {
+    if !state.register(&label, page, alive, id, sink) {
         return Err(IpcError::PageGone);
     }
     let mut source = conn.source;
@@ -406,6 +414,72 @@ fn window_target(state: &IpcState, label: &str, target: Target) -> Target {
         None => {
             state.bind_local_project(id);
             target
+        }
+    }
+}
+
+/// 원격만인 묶음 창의 자기 연결(이 머신 Host 의 묶음 id 범위 — [`window_target`])이 부를 수 있는 **읽기가 아닌** 메서드. 닫힌 표다
+/// (18-m7-plan M7-11b 리뷰 1): 그 창의 상태 쓰기, 그 창의 「체크아웃 추가」(묶음 쓰기 — 그 창은 이 연결로 부른다), 상태바의 작업
+/// 취소, UI 로그. 나머지 쓰기 · 실행 · 위험 등급(도구 설치 · 제거 · 모드, 터미널, 실행, 파일 쓰기, git 쓰기 …)은 Host 에 넘기지 않고
+/// `PERMISSION_DENIED` 로 답한다 — `Project(_)` 만 보고 id 를 확인하지 않는 관문(`pw_tools` `tool_grant` 등)이 묶음 id 를 프로젝트로
+/// 받지 않게. 읽기 등급(`pw_rpc::Tier::Read` — 선언의 등급)과 프로토콜 메시지(취소 · credit · 구독)는 받는다: 그 창의 i18n · 키맵 ·
+/// 설정 · 묶음 목록 · 구문 강조 · 작업 목록 같은 Host 전역 읽기이고, 프로젝트를 받는 읽기는 묶음 id 를 모르는 프로젝트로 거절한다.
+pub const BUNDLE_WINDOW_WRITES: &[&str] = &[
+    "bundle.addMember",
+    "log.write",
+    "project.state.set",
+    "task.cancel",
+];
+
+/// 묶음 id 범위 연결이 이 메서드를 Host 에 넘기는가([`BUNDLE_WINDOW_WRITES`]).
+pub fn bundle_window_admits(method: &str) -> bool {
+    use pw_rpc::protocol::{
+        EVENTS_SUBSCRIBE, EVENTS_UNSUBSCRIBE, REQUEST_CANCEL, STREAM_CANCEL, STREAM_CREDIT,
+    };
+    if [
+        REQUEST_CANCEL,
+        STREAM_CREDIT,
+        STREAM_CANCEL,
+        EVENTS_SUBSCRIBE,
+        EVENTS_UNSUBSCRIBE,
+    ]
+    .contains(&method)
+        || BUNDLE_WINDOW_WRITES.contains(&method)
+    {
+        return true;
+    }
+    pw_rpc::methods()
+        .iter()
+        .any(|m| m.meta.name == method && m.meta.tier == pw_rpc::Tier::Read)
+}
+
+/// [`bundle_window_admits`] 를 지나지 않는 요청에는 Host 대신 `PERMISSION_DENIED` 로 답하고(알림이면 버린다), 나머지는 그대로 넘긴다.
+struct BundleWindowSink {
+    inner: Box<dyn FrameSink>,
+    reply: Channel<Value>,
+}
+
+impl FrameSink for BundleWindowSink {
+    fn send(&self, frame: Value) {
+        let Some(method) = frame.get("method").and_then(Value::as_str) else {
+            return self.inner.send(frame);
+        };
+        if bundle_window_admits(method) {
+            return self.inner.send(frame);
+        }
+        tracing::warn!(
+            method,
+            "a remote-only bundle window asked for a method outside its table"
+        );
+        if let Some(id) = frame.get("id") {
+            let _ = self.reply.send(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {
+                    "code": pw_rpc::code::PERMISSION_DENIED,
+                    "message": format!("a bundle window without a local checkout cannot call `{method}`"),
+                },
+            }));
         }
     }
 }
@@ -942,6 +1016,39 @@ mod tests {
             registry.project_state(&bundle.id).unwrap().state,
             Some(json!({"by": label}))
         );
+        // 리뷰 1: 그 연결은 닫힌 표의 쓰기와 읽기 등급만 Host 에 넘긴다 — 도구 설치 · 제거 · 모드, 터미널, 파일 쓰기는 Host 에 닿기 전에
+        // 거절(`Project(_)` 만 보는 관문이 묶음 id 를 프로젝트로 받지 않게). 읽기(i18n)는 그대로 간다.
+        let mut call = |method: &str, params: Value| {
+            channel += 1;
+            let conn = connect(&w, channel, json!({"projectId": bundle.id}));
+            send(
+                &w,
+                conn,
+                json!({"jsonrpc": "2.0", "id": 7, "method": method, "params": params}),
+            )
+            .unwrap();
+            next_frame(&f, channel)
+        };
+        for method in [
+            "tools.install",
+            "tools.uninstall",
+            "tools.setMode",
+            "tools.update",
+            "tools.rollback",
+            "terminal.create",
+            "fs.write",
+        ] {
+            let answer = call(method, json!({}));
+            assert_eq!(answer["error"]["code"], denied, "{method}: {answer}");
+            assert!(
+                answer["error"]["message"]
+                    .as_str()
+                    .is_some_and(|m| m.contains("bundle window")),
+                "{method}: {answer}"
+            );
+        }
+        let read = call("bundle.list", Value::Null);
+        assert!(read.get("result").is_some(), "{read}");
         let refused = |w: &WebviewWindow<MockRuntime>, target: Value| {
             let page = invoke(w, "rpc_page", json!({})).unwrap();
             invoke(
@@ -973,6 +1080,33 @@ mod tests {
                 other.label()
             );
         }
+    }
+
+    /// 리뷰 1(M7-11b): 원격만인 묶음 창의 자기 연결이 넘기는 읽기 아닌 메서드는 정확히 [`BUNDLE_WINDOW_WRITES`] 다 — 쓰기 · 실행 ·
+    /// 위험 등급 메서드를 하나 더 받게 하면 실패한다. 표의 이름은 모두 선언된 메서드다(이름이 바뀌면 실패).
+    #[test]
+    fn a_remote_only_bundle_window_passes_on_only_reads_and_its_table() {
+        let all = pw_rpc::methods();
+        let mut passed: Vec<&str> = all
+            .iter()
+            .filter(|m| m.meta.tier != pw_rpc::Tier::Read && bundle_window_admits(m.meta.name))
+            .map(|m| m.meta.name)
+            .collect();
+        passed.sort_unstable();
+        assert_eq!(passed, BUNDLE_WINDOW_WRITES);
+        for name in BUNDLE_WINDOW_WRITES {
+            assert!(all.iter().any(|m| m.meta.name == *name), "{name}");
+        }
+        for name in [
+            "tools.install",
+            "tools.uninstall",
+            "tools.setMode",
+            "terminal.create",
+        ] {
+            assert!(!bundle_window_admits(name), "{name}");
+        }
+        assert!(bundle_window_admits("i18n.get"));
+        assert!(!bundle_window_admits("no.such.method"));
     }
 
     /// 18-m7-plan M7-11: 묶음 창은 그 묶음 멤버의 체크아웃으로만 연결한다. 원격 멤버로 연 연결의 범위는 **그 머신 프로젝트**의
