@@ -102,7 +102,7 @@ macOS · Linux 모두 **XDG Base Directory** 규칙을 따른다 (mise · gh · 
 - **`$CONFIG` 규칙**: 텍스트(TOML)만, 비밀 · 기기 고유 상태 · 캐시 없음 → **chezmoi · yadm 등 dotfiles 도구로 그대로 동기화 가능** (기기 간 설정 동기화의 기본 방법)
   - 설정 파일이 심링크면 따라가서 읽고, 마이그레이션은 링크가 아니라 **대상 파일**을 고친다(권한 유지). 대상이 없는 심링크는 건너뛰고 알림(`brokenLink`)으로 남긴다
 - 기기 고유 값이 필요하면 `settings.local.toml`(같은 폴더, dotfiles에서 제외 권장)으로 분리
-- 원격 Relay 는 `$CONFIG` · `$DATA` · `$STATE` · `$CACHE` 아래 `relay/` 를 뿌리로 쓴다 — `~/.config/pitwall/relay/relay.toml`, 바이너리 · 레지스트리 `~/.local/share/pitwall/relay/`. 같은 머신의 Desktop 과 아무것도 나누지 않는다(18-m7-plan M7-04 ⑦ — 구현 `pw_relay::paths::relay_paths`). 데몬 소켓은 `$STATE/relay/<판>.sock` 이고, 그 경로가 `sun_path` 한도(103 바이트)를 넘으면 `$TMPDIR/pitwall-relay-<uid>/<해시>-<판>.sock`(구현 `pw_relay::socket::endpoint`)
+- 원격 Relay 는 `$CONFIG` · `$DATA` · `$STATE` · `$CACHE` 아래 `relay/` 를 뿌리로 쓴다 — `~/.config/pitwall/relay/relay.toml`, 바이너리 · 레지스트리 `~/.local/share/pitwall/relay/`. 같은 머신의 Desktop 과 아무것도 나누지 않는다(18-m7-plan M7-04 ⑦ — 구현 `pw_relay::paths::relay_paths`). 데몬 소켓은 `$STATE/relay/<채널>-<판>.sock`(채널 · 판마다 따로 — 18-m7-plan M7-07)이고, 그 경로가 `sun_path` 한도(103 바이트)를 넘으면 `$TMPDIR/pitwall-relay-<uid>/<해시>-<채널>-<판>.sock`(구현 `pw_relay::socket::endpoint`)
 - 설정 화면의 "파일로 열기"는 `$CONFIG`의 실제 파일을 연다. "설정 폴더 열기" · "경로 복사" 액션 제공
 
 

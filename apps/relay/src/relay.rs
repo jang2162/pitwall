@@ -11,21 +11,23 @@ use tracing_subscriber::Layer as _;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt as _;
 
-const USAGE: &str = "usage: pitwall-relay <proxy|daemon|status|pair --from-ssh <key> [<name>]|unpair <device id>|--verify <file> <sha256>|--version>";
+const USAGE: &str = "usage: pitwall-relay <proxy|daemon|status [--json]|pair --from-ssh <key> [<name>]|unpair <device id>|--verify <file> <sha256>|--version>";
 
 pub fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("proxy") => proxy(),
         Some("daemon") => daemon(),
-        Some("status") => status(),
+        // `status` 는 판에 묶이지 않는 최소 질의다(18-m7-plan M7-07 ②): 새 판 Desktop 이 옛 판 바이너리로 부른다. `--json` 을 받아도
+        // 같다(출력은 늘 JSON 한 줄 — 꼴은 `pw_relay::command::Status`, 시험이 고정한다).
+        Some("status") if args.len() == 1 || (args.len() == 2 && args[1] == "--json") => status(),
         Some("pair") => pair(&args[1..]),
         Some("unpair") => unpair(&args[1..]),
         Some("--verify") => verify(&args[1..]),
         Some("--version" | "version") => {
             println!(
                 "pitwall-relay {} ({})",
-                pw_relay::VERSION,
+                pw_relay::version(),
                 pw_relay::RELEASE_CHANNEL
             );
             ExitCode::SUCCESS
@@ -47,7 +49,8 @@ fn paths() -> Result<AppPaths, ExitCode> {
 fn socket_path(paths: &AppPaths) -> Result<std::path::PathBuf, ExitCode> {
     pw_relay::socket::endpoint(
         paths,
-        pw_relay::VERSION,
+        pw_relay::RELEASE_CHANNEL,
+        pw_relay::version(),
         &std::env::temp_dir(),
         pw_relay::socket::current_uid(),
     )
@@ -385,7 +388,10 @@ fn init_logging(paths: &AppPaths) {
         }
     };
     if installed.is_ok() {
-        tracing::info!(version = pw_relay::VERSION, "pitwall-relay daemon starting");
+        tracing::info!(
+            version = pw_relay::version(),
+            "pitwall-relay daemon starting"
+        );
     }
 }
 

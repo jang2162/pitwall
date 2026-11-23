@@ -135,9 +135,11 @@ fn measure_the_relay_footprint() {
     std::thread::sleep(Duration::from_secs(3));
     let idle = rss_kib(pid);
 
-    let socket = root
-        .join("state/relay")
-        .join(format!("{}.sock", env!("CARGO_PKG_VERSION")));
+    let socket = root.join("state/relay").join(format!(
+        "{}-{}.sock",
+        option_env!("PITWALL_RELEASE_CHANNEL").unwrap_or("dev"),
+        env!("CARGO_PKG_VERSION")
+    ));
     let rt = tokio::runtime::Runtime::new().unwrap();
     let with_project = rt.block_on(async {
         let remote = RemoteHost::new(

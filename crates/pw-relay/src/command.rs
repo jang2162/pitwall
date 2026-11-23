@@ -91,7 +91,9 @@ pub fn reply_frame(reply: &Reply) -> Value {
     }
 }
 
-/// `status` 의 답.
+/// `status` 의 답. **판에 묶이지 않는 꼴이다**(18-m7-plan M7-07 ②): 새 판 Desktop 이 옛 판 바이너리의 `pitwall-relay status` 로 이
+/// JSON 한 줄을 읽어 「옛 판에 n개 남음」 을 보이고, 끝낼 때 원격 셸이 그 줄에서 `"pid":<수>` 를 찾는다(`pw_link::upgrade`). 칸을
+/// 빼거나 이름을 바꾸면 옛 판과 새 판 사이의 약속이 깨진다 — 덧붙이기만 한다(시험 `the_status_line_keeps_its_shape`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
@@ -160,6 +162,48 @@ pub fn parse_reply(answer: Value) -> Reply {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `status` 줄의 꼴(판 무관 — M7-07): 한 줄 JSON, 칸 이름 그대로, `"pid":<수>` 뒤에 `,` 또는 `}`.
+    #[test]
+    fn the_status_line_keeps_its_shape() {
+        let status = Status {
+            version: "1.2.3".into(),
+            release_channel: "dev".into(),
+            name: Some("mini".into()),
+            pid: 4242,
+            uptime_ms: 7,
+            links: 1,
+            owner_links: 1,
+            runs: 2,
+            terminals: 3,
+        };
+        let line = serde_json::to_value(&status).unwrap().to_string();
+        assert!(!line.contains('\n'));
+        assert!(
+            line.contains("\"pid\":4242,") || line.contains("\"pid\":4242}"),
+            "{line}"
+        );
+        let keys: std::collections::BTreeSet<String> =
+            serde_json::from_str::<serde_json::Map<String, Value>>(&line)
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect();
+        let expected: std::collections::BTreeSet<String> = [
+            "version",
+            "releaseChannel",
+            "name",
+            "pid",
+            "uptimeMs",
+            "links",
+            "ownerLinks",
+            "runs",
+            "terminals",
+        ]
+        .map(String::from)
+        .into();
+        assert_eq!(keys, expected);
+    }
 
     /// 좁은 명령은 `open` · `askpass` · `status` 셋뿐이다(18-m7-plan M7-04 시험 ⑦ — 넷째를 더하면 이 시험이 실패한다). 링크 틀의
     /// 종류와 겹치지 않는다 — 겹치면 첫 틀로 가르지 못한다.

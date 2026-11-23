@@ -7,8 +7,9 @@
 //! 3. 연결마다 상대 uid 가 이 프로세스와 같아야 한다(`pw_mcp::socket::peer_allowed`) — 양쪽 다 본다. 같은 uid 의 다른 프로세스는
 //!    여기서 막히지 않는다 — 링크는 기기 키 증명(M7-03)이 막고, 좁은 명령은 role · 범위를 얻지 못한다(`crate::command`).
 //!
-//! **자리**: `$STATE/relay/<판>.sock`(판마다 따로 — M7-07). `sun_path` 한도를 넘으면 `<임시 폴더>/pitwall-relay-<uid>/<해시>-<판>.sock`.
-//! 데몬과 `proxy` 가 같은 규칙으로 고른다. **한 판에 데몬 하나** — 같은 자리의 `.lock` 을 `flock` 으로 쥔 데몬만 소켓을 연다.
+//! **자리**: `$STATE/relay/<채널>-<판>.sock`(채널 · 판마다 따로 — 18-m7-plan M7-07 ①: 다른 판 · 다른 채널의 데몬에는 붙지 않고 제
+//! 판의 데몬을 따로 띄운다). `sun_path` 한도를 넘으면 `<임시 폴더>/pitwall-relay-<uid>/<해시>-<채널>-<판>.sock`. 데몬과 `proxy` 가
+//! 같은 규칙으로 고른다. **한 판에 데몬 하나** — 같은 자리의 `.lock` 을 `flock` 으로 쥔 데몬만 소켓을 연다.
 
 use std::fs::File;
 use std::io;
@@ -36,9 +37,16 @@ pub fn version_slug(version: &str) -> String {
         .collect()
 }
 
-/// 그 판의 데몬 소켓 자리. `paths` 는 Relay 의 앱 경로, `temp` 는 [`std::env::temp_dir`].
-pub fn endpoint(paths: &AppPaths, version: &str, temp: &Path, uid: u32) -> io::Result<PathBuf> {
-    let slug = version_slug(version);
+/// 그 (릴리스 채널, 판)의 데몬 소켓 자리. `paths` 는 Relay 의 앱 경로, `temp` 는 [`std::env::temp_dir`]. 채널과 판이 둘 다 이름에
+/// 든다 — 같은 판 문자열의 다른 채널(`dev` 와 `stable` 의 `1.0.0`)도 데몬을 나누지 않는다(M7-04 리뷰 권고 8).
+pub fn endpoint(
+    paths: &AppPaths,
+    channel: &str,
+    version: &str,
+    temp: &Path,
+    uid: u32,
+) -> io::Result<PathBuf> {
+    let slug = format!("{}-{}", version_slug(channel), version_slug(version));
     let primary = paths.state.join(format!("{slug}.sock"));
     if primary.as_os_str().len() <= MAX_PATH {
         return Ok(primary);
@@ -255,8 +263,8 @@ mod tests {
         let paths = paths(dir.path());
         let uid = current_uid();
         let temp = std::env::temp_dir();
-        let a = endpoint(&paths, "1.0.0", &temp, uid).unwrap();
-        let b = endpoint(&paths, "1.1.0", &temp, uid).unwrap();
+        let a = endpoint(&paths, "dev", "1.0.0", &temp, uid).unwrap();
+        let b = endpoint(&paths, "dev", "1.1.0", &temp, uid).unwrap();
         assert_ne!(a, b);
         let held = lock(&a, uid).unwrap().expect("first");
         assert!(lock(&a, uid).unwrap().is_none());
@@ -285,13 +293,39 @@ mod tests {
         assert!(connect(&path, uid).await.is_ok());
     }
 
+    /// 판 · 채널이 다르면 소켓이 다르다 — 다른 판 데몬에는 붙지 않는다(18-m7-plan M7-07 시험 ①, M7-04 리뷰 권고 8). 판이나 채널을
+    /// 이름에서 빼면 실패한다. 짧은 자리와 임시 폴더 대체 자리 둘 다.
+    #[test]
+    fn each_channel_and_version_has_its_own_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let temp = Path::new("/tmp");
+        for paths in [
+            paths(dir.path()),
+            paths(&Path::new("/tmp").join("d".repeat(120))),
+        ] {
+            let all = [
+                endpoint(&paths, "dev", "1.0.0", temp, 501).unwrap(),
+                endpoint(&paths, "dev", "1.1.0", temp, 501).unwrap(),
+                endpoint(&paths, "stable", "1.0.0", temp, 501).unwrap(),
+                endpoint(&paths, "stable", "1.1.0", temp, 501).unwrap(),
+            ];
+            let distinct: std::collections::BTreeSet<_> = all.iter().collect();
+            assert_eq!(distinct.len(), all.len(), "{all:?}");
+            assert_eq!(
+                all[0],
+                endpoint(&paths, "dev", "1.0.0", temp, 501).unwrap(),
+                "the same build finds the same socket"
+            );
+        }
+    }
+
     #[test]
     fn a_deep_state_falls_back_to_the_temp_folder() {
         let deep = Path::new("/tmp").join("d".repeat(120));
         let paths = paths(&deep);
-        let path = endpoint(&paths, "1.0.0", Path::new("/tmp"), 501).unwrap();
+        let path = endpoint(&paths, "dev", "1.0.0", Path::new("/tmp"), 501).unwrap();
         assert!(path.starts_with("/tmp/pitwall-relay-501"), "{path:?}");
-        assert!(path.to_str().unwrap().ends_with("-1.0.0.sock"));
+        assert!(path.to_str().unwrap().ends_with("-dev-1.0.0.sock"));
         assert_eq!(version_slug("1.0.0/../x y"), "1.0.0_.._x_y");
     }
 }

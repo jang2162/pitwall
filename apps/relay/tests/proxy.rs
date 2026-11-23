@@ -143,10 +143,14 @@ fn two_proxies_of_one_version_share_one_daemon() {
     assert_eq!(third["pid"], first.0["pid"]);
     eprintln!("proxy -> running daemon answer: {took:?}");
 
-    // 판 하나에 소켓 하나 — `$STATE/relay/<판>.sock`(0600) 과 폴더(0700).
+    // 판 하나에 소켓 하나 — `$STATE/relay/<채널>-<판>.sock`(0600) 과 폴더(0700).
     use std::os::unix::fs::PermissionsExt;
     let state = root.join("state/relay");
-    let socket = state.join(format!("{}.sock", env!("CARGO_PKG_VERSION")));
+    let socket = state.join(format!(
+        "{}-{}.sock",
+        option_env!("PITWALL_RELEASE_CHANNEL").unwrap_or("dev"),
+        env!("CARGO_PKG_VERSION")
+    ));
     assert_eq!(
         std::fs::metadata(&socket).unwrap().permissions().mode() & 0o777,
         0o600
@@ -205,7 +209,11 @@ fn status_without_a_daemon_does_not_start_one() {
     assert!(
         !dir.path()
             .join("state/relay")
-            .join(format!("{}.sock", env!("CARGO_PKG_VERSION")))
+            .join(format!(
+                "{}-{}.sock",
+                option_env!("PITWALL_RELEASE_CHANNEL").unwrap_or("dev"),
+                env!("CARGO_PKG_VERSION")
+            ))
             .exists()
     );
 }
@@ -218,9 +226,11 @@ fn a_second_daemon_of_the_same_version_leaves_the_first_in_place() {
 
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    let socket = root
-        .join("state/relay")
-        .join(format!("{}.sock", env!("CARGO_PKG_VERSION")));
+    let socket = root.join("state/relay").join(format!(
+        "{}-{}.sock",
+        option_env!("PITWALL_RELEASE_CHANNEL").unwrap_or("dev"),
+        env!("CARGO_PKG_VERSION")
+    ));
     let status = || {
         let out = relay(root, &["status"]).output().unwrap();
         out.status

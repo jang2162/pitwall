@@ -189,7 +189,7 @@ impl Daemon {
         let links = self.shared.presence.links();
         let busy = self.busy();
         Status {
-            version: crate::VERSION.to_owned(),
+            version: crate::version().to_owned(),
             release_channel: crate::RELEASE_CHANNEL.to_owned(),
             name: self.shared.parts.name.clone(),
             pid: std::process::id(),
