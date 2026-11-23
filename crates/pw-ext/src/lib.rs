@@ -215,6 +215,7 @@ mod tests {
             "git-history.ftl",
             "git-log.ftl",
             "git-merge.ftl",
+            "git-send.ftl",
             "mcp.ftl",
             "menu.ftl",
             "project.ftl",
