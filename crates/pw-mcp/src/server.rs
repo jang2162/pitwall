@@ -79,6 +79,9 @@ pub const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 /// [`CANCELLED_UNSETTLED`] 다.
 pub const SETTLE_AFTER_CANCEL: Duration = Duration::from_secs(5);
 
+/// 원격만 묶음의 대상 판정(`mcp.target`)을 그 머신에서 기다리는 시간. 넘으면 거절한다 — 넓히지 않는다(18-m7-plan M7-20 리뷰 F1).
+pub const TARGET_WAIT: Duration = Duration::from_secs(5);
+
 /// 취소 뒤 Host 가 결과로 답한 호출의 감사 상세 꼬리 — 되돌릴 수 없는 지점(`db_execute` 의 커밋)을 넘어 끝까지 돌았다.
 pub const CANCELLED_AFTER_THE_POINT: &str =
     "cancelled by the client after the point of no return; it ran to the end";
@@ -1407,12 +1410,22 @@ impl Session {
         cancel: &CancellationToken,
     ) -> Result<Duration, Refusal> {
         let params = serde_json::json!({ "projectId": aim.project, "tool": tool.name });
-        match aim
-            .link
-            .client
-            .call_until("mcp.target", params, cancel)
-            .await
-        {
+        let answered = tokio::time::timeout(
+            TARGET_WAIT,
+            aim.link.client.call_until("mcp.target", params, cancel),
+        )
+        .await;
+        let Ok(answered) = answered else {
+            return Err(Refusal::denied(
+                Reason::MachineUnavailable,
+                format!(
+                    "that machine did not tell within {} seconds whether `{}` may run on its project; refusing",
+                    TARGET_WAIT.as_secs(),
+                    tool.name
+                ),
+            ));
+        };
+        match answered {
             Ok(value) => {
                 let exposed = value.get("exposed").and_then(Value::as_bool) == Some(true);
                 if !exposed {

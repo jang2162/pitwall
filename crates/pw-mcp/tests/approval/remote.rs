@@ -97,6 +97,9 @@ struct FakeMachines {
     refuse: Mutex<Option<MachineError>>,
     /// 참이면 연 연결의 `project.trust` 가 실패한다(그 머신의 신뢰를 읽지 못함 — 리뷰 F3).
     break_trust: AtomicBool,
+    /// 연 연결의 `mcp.target` 을 어떻게 망가뜨리는가(리뷰 F1 — 그 머신이 답하지 못함): 0 그대로, 1 없는 메서드, 2 다른 꼴의 답
+    /// (`host.info`), 3 버림(답이 오지 않음), 4 보내는 순간 링크를 끊음.
+    break_target: std::sync::atomic::AtomicU8,
     /// 연 연결마다 끊는 단추(링크가 끊김 — 리뷰 F3).
     cuts: Mutex<Vec<CancellationToken>>,
 }
@@ -105,12 +108,26 @@ struct FakeMachines {
 struct BreakTrust {
     inner: Box<dyn pw_core::FrameSink>,
     on: bool,
+    target: u8,
+    cut: CancellationToken,
 }
 
 impl pw_core::FrameSink for BreakTrust {
     fn send(&self, mut frame: Value) {
         if self.on && frame["method"] == json!("project.trust") {
             frame["method"] = json!("project.trustBroken");
+        }
+        if frame["method"] == json!("mcp.target") {
+            match self.target {
+                1 => frame["method"] = json!("mcp.targetBroken"),
+                2 => {
+                    frame["method"] = json!("host.info");
+                    frame["params"] = Value::Null;
+                }
+                3 => return,
+                4 => return self.cut.cancel(),
+                _ => {}
+            }
         }
         self.inner.send(frame);
     }
@@ -184,6 +201,8 @@ impl Machines for FakeMachines {
                 sink: Box::new(BreakTrust {
                     inner: connection.sink,
                     on: self.break_trust.load(Ordering::SeqCst),
+                    target: self.break_target.load(Ordering::SeqCst),
+                    cut: cut.clone(),
                 }),
                 source: Box::new(Cut {
                     inner: connection.source,
@@ -241,6 +260,7 @@ impl Remote {
             connects: Mutex::default(),
             refuse: Mutex::default(),
             break_trust: AtomicBool::new(false),
+            break_target: std::sync::atomic::AtomicU8::new(0),
             cuts: Mutex::default(),
         });
         Self {
@@ -1106,4 +1126,81 @@ async fn a_remote_only_bundle_follows_that_machines_project_settings() {
         "대조: 고치면 돈다 — {}",
         text(&fixed)
     );
+}
+
+/// 리뷰 F1: 원격만 묶음에서 그 머신이 `mcp.target` 에 답하지 못하면(옛 판 — 없는 메서드, 다른 꼴의 답, 답이 오지 않음, 끊김) 노출 판정
+/// 없이 넘어가지 않고 거절한다 — 계획 · 실행 0. 다른 꼴의 답(`exposed` 칸 없음)은 끈 것으로 본다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_remote_only_bundle_is_refused_when_that_machine_cannot_judge_it() {
+    for (mode, expected) in [
+        (1, Reason::MachineUnavailable),
+        (2, Reason::NotExposed),
+        (3, Reason::MachineUnavailable),
+        (4, Reason::MachineUnavailable),
+    ] {
+        let r = Remote::new();
+        remote_only(&r);
+        r.machines.break_target.store(mode, Ordering::SeqCst);
+        let _window = r.f.window(REMOTE_ONLY);
+        let agent = r.agent("agent").await;
+        for tool in ["fake_echo", "fake_write"] {
+            let result = agent
+                .call(
+                    tool,
+                    on("box", json!({"projectId": REMOTE_ONLY, "tag": "x"})),
+                )
+                .await;
+            assert_eq!(
+                mark(&result),
+                Mark::denied(expected),
+                "mode {mode} {tool}: {}",
+                text(&result)
+            );
+        }
+        assert_eq!((r.other.plans(), r.other.runs()), (0, 0), "mode {mode}");
+    }
+}
+
+/// 리뷰 R1: `mcp.target` 은 에이전트 범위 연결만 부른다 — Host 범위(웰컴 · 설정 창, 링크의 Host 연결) · 그 프로젝트 창(`Project`)이
+/// 부르면 `PERMISSION_DENIED`(문의 문장)이고, 에이전트 범위는 받는다(대조). 둘째 겹(`agent_grant`)은 같은 범위 판정과 레지스트리
+/// 확인이라 첫 겹을 지나는 입력으로는 따로 드러나지 않는다(보고서 「리뷰 반영」).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_an_agent_connection_asks_for_a_target() {
+    let r = Remote::new();
+    let ask = |caller: Caller| {
+        let host = r.other.host.clone();
+        let project = r.other.project.clone();
+        async move {
+            let client =
+                pw_mcp::HostClient::new(pw_core::Host::connect(&*host, caller).await.unwrap());
+            client
+                .call(
+                    "mcp.target",
+                    json!({"projectId": project, "tool": "fake_echo"}),
+                )
+                .await
+        }
+    };
+    for caller in [
+        Caller::new(Role::Owner),
+        Caller {
+            role: Role::Owner,
+            scope: ConnectionScope::Project(r.other.project.clone()),
+            window: Some("project-1".into()),
+        },
+    ] {
+        let what = format!("{caller:?}");
+        match ask(caller).await {
+            Err(pw_mcp::CallError::Rpc { code, message, .. }) => {
+                assert_eq!(code, i64::from(pw_rpc::code::PERMISSION_DENIED), "{what}");
+                assert_eq!(
+                    message, "only an mcp session asks about its target",
+                    "{what}"
+                );
+            }
+            other => panic!("{what}: {other:?}"),
+        }
+    }
+    let agent = ask(Caller::agent(Role::Owner)).await.unwrap();
+    assert_eq!(agent["exposed"], true, "{agent}");
 }
