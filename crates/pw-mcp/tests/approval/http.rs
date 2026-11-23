@@ -1094,6 +1094,9 @@ async fn a_busy_port_is_retried_until_it_frees() {
     let port = holder.local_addr().unwrap().port();
     let f = Fixture::with_global(&http_global(true, port));
     let e = f.endpoint(port, Limits::default()).await;
+    // 감시 태스크의 첫 맞추기도 끝나게 둔다 — 그 뒤로는 재시도만이 다시 바인드한다(설정은 건드리지 않는다).
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    e.http.apply().await;
     let status = e.http.status();
     assert!(!status.listening);
     assert_eq!(status.problem, Some(http::McpHttpProblem::PortInUse));
