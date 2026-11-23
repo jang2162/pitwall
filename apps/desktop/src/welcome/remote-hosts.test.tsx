@@ -434,6 +434,11 @@ it("shows the old relay daemons of the link and stops one with exactly the value
   await vi.waitFor(() =>
     expect(document.querySelector(`[data-old-relay="${OLD.file}"]`)).toBeNull(),
   );
+
+  // 다른 Desktop 이 붙은 옛 판도 보인 값(붙은 링크 수 포함) 그대로 싣는다.
+  await click(button("옛 판 끝내기 (연결 2개도 끊김)")!);
+  await vi.waitFor(() => expect(stops()).toHaveLength(2));
+  expect(stops()[1]).toEqual({ name: "mini", machine: "SHA256:abc", seen: shared });
 });
 
 it("does not stop an old daemon that changed after it was seen and asks again with the new counts", async () => {
