@@ -1,5 +1,5 @@
-//! 이어 붙기(18-m7-plan M7-09 ① — 완료 기준 ① ② ⑧). 전송은 가운데에서 끊을 수 있는 가짜 전송이다 — 끊으면 양쪽 모두 끝을 보고,
-//! 끊는 순간 가운데에 있던 바이트는 사라진다(잃은 틀).
+//! 이어 붙기(18-m7-plan M7-09 ① — 완료 기준 ① ② ⑧). 전송은 가운데에서 끊을 수 있는 가짜 전송이다 — 끊으면 가운데가 잠깐 받은
+//! 바이트를 버리다가(실제 끊김처럼 그사이 보낸 틀은 사라진다) 양쪽에 끝을 보인다.
 
 use std::sync::atomic::AtomicBool;
 
@@ -13,16 +13,46 @@ use crate::transport::{LinkStream, Transport};
 /// 가운데에서 끊을 수 있는 전송. `open` 마다 Desktop ↔ 가운데 ↔ Relay 의 두 duplex 를 잇고, [`Self::cut`] 은 가운데를 버린다.
 struct Cuttable {
     tx: tokio::sync::mpsc::UnboundedSender<LinkStream>,
-    pipes: Mutex<Vec<AbortHandle>>,
+    pipes: Mutex<Vec<(AbortHandle, Arc<AtomicBool>)>>,
     /// 참이면 새 전송을 열지 못한다(네트워크가 아직 없다).
     down: AtomicBool,
     opens: AtomicUsize,
 }
 
 impl Cuttable {
-    fn cut(&self) {
-        for pipe in self.pipes.lock().unwrap().drain(..) {
+    /// 가운데가 받는 바이트를 버리기 시작하고(그사이 양쪽이 보낸 틀은 사라진다) 조금 뒤 전송을 끊는다.
+    async fn cut(&self) {
+        let pipes: Vec<_> = self.pipes.lock().unwrap().drain(..).collect();
+        for (_, lost) in &pipes {
+            lost.store(true, Ordering::SeqCst);
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        for (pipe, _) in pipes {
             pipe.abort();
+        }
+    }
+}
+
+/// 한 방향 잇기. `lost` 면 읽은 것을 버린다.
+async fn pipe(
+    mut from: tokio::io::ReadHalf<tokio::io::DuplexStream>,
+    mut to: tokio::io::WriteHalf<tokio::io::DuplexStream>,
+    lost: Arc<AtomicBool>,
+) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut buf = vec![0u8; 16 * 1024];
+    loop {
+        let Ok(n) = from.read(&mut buf).await else {
+            return;
+        };
+        if n == 0 {
+            return;
+        }
+        if lost.load(Ordering::SeqCst) {
+            continue;
+        }
+        if to.write_all(&buf[..n]).await.is_err() {
+            return;
         }
     }
 }
@@ -41,12 +71,21 @@ impl Transport for Cuttable {
                 ));
             }
             self.opens.fetch_add(1, Ordering::SeqCst);
-            let (desktop, mut near) = tokio::io::duplex(64 * 1024);
-            let (mut far, relay) = tokio::io::duplex(64 * 1024);
-            let pipe = tokio::spawn(async move {
-                let _ = tokio::io::copy_bidirectional(&mut near, &mut far).await;
+            let (desktop, near) = tokio::io::duplex(64 * 1024);
+            let (far, relay) = tokio::io::duplex(64 * 1024);
+            let lost = Arc::new(AtomicBool::new(false));
+            let (near_read, near_write) = tokio::io::split(near);
+            let (far_read, far_write) = tokio::io::split(far);
+            let both = tokio::spawn({
+                let lost = Arc::clone(&lost);
+                async move {
+                    tokio::join!(
+                        pipe(near_read, far_write, Arc::clone(&lost)),
+                        pipe(far_read, near_write, lost),
+                    );
+                }
             });
-            self.pipes.lock().unwrap().push(pipe.abort_handle());
+            self.pipes.lock().unwrap().push((both.abort_handle(), lost));
             self.tx
                 .send(LinkStream::split(relay))
                 .map_err(|_| std::io::Error::other("no acceptor"))?;
@@ -164,7 +203,7 @@ async fn a_link_that_resumes_within_the_deadline_loses_no_stream_chunk() {
         client.next().await.expect("the stream did not start");
     }
     fx.transport.down.store(true, Ordering::SeqCst);
-    fx.transport.cut();
+    fx.transport.cut().await;
     state = {
         let reconnecting = wait_state(state, |s| *s == LinkState::Reconnecting).await;
         assert_eq!(reconnecting, LinkState::Reconnecting);
@@ -229,7 +268,7 @@ async fn past_the_deadline_the_link_closes_and_the_host_cleans_up() {
     client.next().await.expect("the stream did not start");
     assert_eq!(fx.resumes.len(), 1);
     fx.transport.down.store(true, Ordering::SeqCst);
-    fx.transport.cut();
+    fx.transport.cut().await;
     // 시한 전에는 Host 의 스트림이 산다.
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(
@@ -297,7 +336,7 @@ async fn a_used_token_or_one_without_its_device_proof_is_refused() {
 
     // 끊고 이어 붙으면 토큰이 바뀐다.
     let state = fx.remote.state();
-    fx.transport.cut();
+    fx.transport.cut().await;
     wait_state(state, |s| *s == LinkState::Reconnecting).await;
     wait_state(fx.remote.state(), |s| {
         matches!(s, LinkState::Connected { .. })
@@ -331,7 +370,7 @@ async fn a_suspended_link_of_an_unpaired_device_does_not_resume() {
     ticks(&mut client, 1_000_000, 5).await;
     client.next().await.expect("the stream did not start");
     fx.transport.down.store(true, Ordering::SeqCst);
-    fx.transport.cut();
+    fx.transport.cut().await;
     wait_state(fx.remote.state(), |s| *s == LinkState::Reconnecting).await;
     fx.pairings.upsert(Pairing {
         key: fx.desktop_key.public(),
