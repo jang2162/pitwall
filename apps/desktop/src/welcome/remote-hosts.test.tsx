@@ -502,3 +502,42 @@ it("says under 끊기 that the relay still holds the machine's runs while reconn
     "끊어도 Relay 가 이어 붙기 시한(2분) 동안 그 머신의 실행 · 터미널을 쥐고 있다.",
   );
 });
+
+it("locks the pitwall command box and says why when another file sits there", async () => {
+  host.relays = { ...relaysOf([]), command: "other" };
+  await connectMini();
+  const box = document.querySelector<HTMLInputElement>(
+    "[data-testid=remote-relays] input[type=checkbox]",
+  )!;
+  expect(box.disabled).toBe(true);
+  expect(document.body.textContent).toContain(
+    "~/.local/bin/pitwall 에 다른 파일이 있어 두지 않는다.",
+  );
+  await click(box);
+  expect(host.calls.some((c) => c.method === "remote.linkCommand")).toBe(false);
+});
+
+it("shows the old relay versions only while the host is connected", async () => {
+  host.remoteOld = [OLD];
+  host.relays = relaysOf(host.remoteOld);
+  await openRemoteTab();
+  await click(button("연결")!);
+  await vi.waitFor(() => expect(host.connects.size).toBe(1));
+  for (const status of [
+    { state: "connecting", stage: "daemon" },
+    {
+      state: "reconnecting",
+      attempt: 1,
+      retryInMs: 1000,
+      error: { stage: "handshake", kind: "link", message: "x" },
+    },
+  ] satisfies RemoteStatus[]) {
+    await push(status);
+    expect(document.querySelector("[data-testid=remote-relays]")).toBeNull();
+    expect(button("옛 판 끝내기")).toBeUndefined();
+  }
+  await push({ state: "connected", machine: "SHA256:abc" });
+  await vi.waitFor(() =>
+    expect(document.querySelector("[data-testid=remote-relays]")).not.toBeNull(),
+  );
+});
