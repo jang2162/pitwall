@@ -8,7 +8,8 @@
 //! - 증명된 링크는 [`Presence`] 에 센다 — 유휴 판정과 「붙은 owner 링크가 있는가」(M7-20 의 M7-D10 ④ 판정 — `crate::mcp::services`)가 본다.
 //! - 열린 MCP 연결도 유휴 판정에 든다([`Daemon::count_agents`] — M7-20).
 //! - **직접 연결(QUIC — M7-24)**([`Daemon::serve_direct`]): 받은 스트림은 `pw_link::serve_noise` 로만 잇는다(Noise 없이 링크 틀을
-//!   받는 길 없음 · 좁은 명령은 받지 않는다). 소켓과 같은 증명 전 자리를 쓰되 **주소(IP)별 상한**([`MAX_UNPROVEN_PER_ADDRESS`])을
+//!   받는 길 없음 · 좁은 명령은 받지 않는다). **소켓과 따로 된** 증명 전 자리([`MAX_DIRECT_UNPROVEN`] — 직접 연결이 소켓의 자리를 가져가지 못해 네트워크의 상대가 SSH
+//!   `proxy` · 좁은 명령을 막지 못한다, M7-24 리뷰 F1)에 **주소(IP)별 상한**([`MAX_UNPROVEN_PER_ADDRESS`])을
 //!   더 두고, 받은 때부터 증명(또는 코드 페어링)까지 **전체 시한 하나**([`DIRECT_PROOF_TIMEOUT`])를 건다 — Noise · 첫 틀 · 코드
 //!   페어링마다 따로인 `dead_after`(M7-23 리뷰 R8)보다 먼저 끝난다. 한 주소가 자리를 채워 링크 · 대기 코드를 막지 못하게(R4).
 
@@ -36,7 +37,9 @@ pub const MAX_UNPROVEN: usize = 16;
 pub const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 /// 직접 연결을 받은 때부터 링크가 증명될 때까지(코드 페어링이면 끝날 때까지)의 전체 시한(출발값 — M7-04 리뷰 권고 1).
 pub const DIRECT_PROOF_TIMEOUT: Duration = Duration::from_secs(5);
-/// 직접 연결에서 주소(IP) 하나가 쥘 수 있는 증명 전 자리(출발값). 전체 상한 [`MAX_UNPROVEN`] 안에서 센다.
+/// 직접 연결 전체의 증명 전 자리(출발값). 소켓의 [`MAX_UNPROVEN`] 과 따로다(리뷰 F1).
+pub const MAX_DIRECT_UNPROVEN: usize = 8;
+/// 직접 연결에서 주소(IP) 하나가 쥘 수 있는 증명 전 자리(출발값). [`MAX_DIRECT_UNPROVEN`] 안에서 센다.
 pub const MAX_UNPROVEN_PER_ADDRESS: usize = 4;
 
 /// Host 에 남은 일(실행 · 터미널)과 언어 서버 끄기. 데몬은 `pw_host::Activity` 를 넣는다.
@@ -161,6 +164,8 @@ struct Shared {
     parts: DaemonParts,
     presence: Presence,
     unproven: Arc<Semaphore>,
+    /// 직접 연결의 증명 전 자리(소켓과 따로).
+    direct_unproven: Arc<Semaphore>,
     /// 지금 쥔 증명 전 자리 수(시험 · 로그).
     pending: AtomicUsize,
     started: std::time::Instant,
@@ -182,6 +187,7 @@ impl Daemon {
                 parts,
                 presence: Presence::default(),
                 unproven,
+                direct_unproven: Arc::new(Semaphore::new(MAX_DIRECT_UNPROVEN)),
                 pending: AtomicUsize::new(0),
                 started: std::time::Instant::now(),
                 agents: std::sync::OnceLock::new(),
@@ -415,6 +421,13 @@ impl Daemon {
         }
     }
 
+    /// 시험: 주소 `ip` 의 직접 연결 증명 전 자리 하나를 쥔다(버리면 놓는다). 없으면 `None`. 이 기기 루프백 주소 하나로는 여러 주소를
+    /// 만들 수 없어 둔 길이다(리뷰 F1).
+    #[doc(hidden)]
+    pub fn hold_direct_slot(&self, ip: std::net::IpAddr) -> Option<DirectSlot> {
+        self.direct_slot(ip).map(DirectSlot)
+    }
+
     /// 주소별 · 전체 증명 전 자리 하나. 없으면 `None`.
     fn direct_slot(&self, ip: std::net::IpAddr) -> Option<Slot> {
         let mut by = self
@@ -430,10 +443,10 @@ impl Daemon {
             );
             return None;
         }
-        let Ok(permit) = Arc::clone(&self.shared.unproven).try_acquire_owned() else {
+        let Ok(permit) = Arc::clone(&self.shared.direct_unproven).try_acquire_owned() else {
             tracing::warn!(
-                limit = self.shared.parts.max_unproven,
-                "too many unproven relay connections; refusing a direct one"
+                limit = MAX_DIRECT_UNPROVEN,
+                "too many unproven direct connections; refusing a new one"
             );
             return None;
         };
@@ -530,6 +543,9 @@ impl Daemon {
         }
     }
 }
+
+/// 쥔 직접 연결 증명 전 자리([`Daemon::hold_direct_slot`]). 버리면 놓는다.
+pub struct DirectSlot(#[allow(dead_code)] Slot);
 
 /// 증명 전 자리 하나.
 struct Slot {

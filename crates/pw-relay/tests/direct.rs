@@ -309,3 +309,73 @@ async fn a_link_over_quic_without_noise_gets_nothing() {
     assert_eq!(fx.host.connects.load(Ordering::SeqCst), 0);
     assert_eq!(fx.daemon.presence().links().all, 0);
 }
+
+/// 리뷰 F1: 직접 연결의 증명 전 자리는 소켓(SSH `proxy` · 좁은 명령)과 따로다 — 여러 주소로 직접 연결 자리를 다 채워도(전체 상한
+/// [`MAX_DIRECT_UNPROVEN`]) 소켓으로 온 SSH 링크는 곧바로 붙는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_direct_slots_leave_the_ssh_socket_free() {
+    let desktop = Arc::new(DeviceKey::generate().unwrap());
+    let fx = fixture(vec![paired(&desktop, Role::Owner)]);
+    // 주소 열 개(가짜 — 이 기기 루프백은 하나뿐이다)로 자리를 채운다. 주소마다 4 · 전체 상한까지.
+    let mut held = Vec::new();
+    for host in 1..=10u8 {
+        let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, host));
+        while let Some(slot) = fx.daemon.hold_direct_slot(ip) {
+            held.push(slot);
+        }
+    }
+    assert_eq!(held.len(), pw_relay::daemon::MAX_DIRECT_UNPROVEN);
+    // SSH proxy 자리(데몬 소켓 — 메모리 전송으로 `accept` 에 넘긴다).
+    let (transport, acceptor) = pw_link::transport::memory(256 * 1024);
+    {
+        let daemon = fx.daemon.clone();
+        tokio::spawn(async move {
+            while let Some(stream) = acceptor.accept().await {
+                assert!(daemon.accept(stream), "the socket had no slot left");
+            }
+        });
+    }
+    let remote = RemoteHost::new(
+        "mini",
+        Arc::new(transport),
+        Arc::new(DesktopIdentity {
+            key: Arc::clone(&desktop),
+            versions: pw_relay::versions(),
+        }),
+        Expect::Machine(fx.relay_key.id()),
+        LinkLimits::default(),
+    );
+    tokio::time::timeout(WAIT, remote.attach())
+        .await
+        .expect("the ssh link did not stand while direct slots were full")
+        .unwrap();
+    drop(held);
+}
+
+/// 리뷰 F2: 증명된 직접 링크는 증명 전 시한이 지나도 산다 — 시한의 몇 배를 기다린 뒤에도 새 연결이 오간다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_proven_direct_link_outlives_the_proof_deadline() {
+    let desktop = Arc::new(DeviceKey::generate().unwrap());
+    let fx = fixture(vec![paired(&desktop, Role::Owner)]);
+    fx.daemon.set_direct_timeout(Duration::from_millis(300));
+    let remote = fx.remote(&desktop);
+    remote.attach().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(
+        fx.daemon.presence().links().all,
+        1,
+        "the link was cut at the deadline"
+    );
+    let _conn = tokio::time::timeout(
+        WAIT,
+        remote.connect(Caller {
+            role: Role::Owner,
+            scope: pw_rpc::ConnectionScope::Host,
+            window: None,
+        }),
+    )
+    .await
+    .expect("no answer over the proven link")
+    .unwrap();
+    assert_eq!(fx.host.connects.load(Ordering::SeqCst), 1);
+}
