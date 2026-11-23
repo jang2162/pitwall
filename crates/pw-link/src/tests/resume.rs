@@ -239,8 +239,7 @@ async fn a_link_that_resumes_within_the_deadline_loses_no_stream_chunk() {
         fx.serve_results
             .lock()
             .unwrap()
-            .iter()
-            .any(|r| *r == Ok(CloseReason::Resumed))
+            .contains(&Ok(CloseReason::Resumed))
     })
     .await;
     // 이어 붙은 링크로 새 요청도 지난다.
