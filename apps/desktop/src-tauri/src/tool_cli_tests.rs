@@ -5,7 +5,7 @@
 //! 레지스트리(`pw_rpc::methods`)에 들어가 툴 목록 시험(`mcp_tests.rs`)에 섞인다.
 
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -14,7 +14,7 @@ use pw_mcp::audit::AuditLog;
 use pw_mcp::policy::Approval;
 use pw_mcp::{HostKind, Services};
 use pw_rpc::{MethodInfo, RpcError};
-use serde_json::json;
+use serde_json::{Map, Value, json};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 

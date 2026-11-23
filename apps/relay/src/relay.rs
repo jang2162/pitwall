@@ -11,7 +11,7 @@ use tracing_subscriber::Layer as _;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt as _;
 
-const USAGE: &str = "usage: pitwall-relay <proxy|daemon|mcp [--project <path>]|status [--json]|open <file>...|askpass <prompt>|link-command [--remove]|machine|pair --from-ssh <key> [<name>]|unpair <device id>|--verify <file> <sha256>|--version>";
+const USAGE: &str = "usage: pitwall-relay <proxy|daemon|mcp [--project <path>]|tool <name> [flags]|status [--json]|open <file>...|askpass <prompt>|link-command [--remove]|machine|pair --from-ssh <key> [<name>]|unpair <device id>|--verify <file> <sha256>|--version>";
 
 pub fn main() -> ExitCode {
     let mut argv = std::env::args_os();
@@ -44,7 +44,7 @@ pub fn main() -> ExitCode {
         Some("link-command") => crate::shell::link_command(&args[1..]),
         Some("machine") if args.len() == 1 => machine(),
         Some("mcp") => mcp(&args[1..]),
-        Some(command @ "tool") => crate::shell::not_yet(command),
+        Some("tool") => tool(&args[1..]),
         Some("--version" | "version") => {
             println!(
                 "pitwall-relay {} ({})",
@@ -193,6 +193,71 @@ fn mcp(args: &[String]) -> ExitCode {
     // stdin 이 막힌 읽기는 기다리지 않는다.
     rt.shutdown_timeout(std::time::Duration::from_secs(2));
     code
+}
+
+/// `tool <name> [flags]`(18-m7-plan M7-20 · 메인 판정 M7-P12): 원격 머신의 셸 · 스크립트가 그 머신 Relay 의 툴을 MCP 와 같은 길로
+/// 부른다 — 몸통은 Desktop 의 `pitwall tool` 과 같은 `pw_mcp::cli` 이고, 붙는 곳만 이 판 데몬의 MCP 소켓이다(데몬이 없으면 띄운다,
+/// 헤드리스는 없다). 승인 · 「창이 열려 있는 동안 CLI 허용」 · 붙은 owner Desktop 이 없을 때의 거절은 MCP 세션과 같다.
+fn tool(args: &[String]) -> ExitCode {
+    let args: Vec<std::ffi::OsString> = args.iter().map(Into::into).collect();
+    let (invocation, input) = match pw_mcp::cli::begin(&args) {
+        Ok(begun) => begun,
+        Err(code) => return exit_code(code),
+    };
+    let (paths, daemon_socket, mcp_socket) = match paths().and_then(|p| {
+        let daemon = socket_path(&p)?;
+        let mcp = mcp_socket_path(&p)?;
+        Ok((p, daemon, mcp))
+    }) {
+        Ok(found) => found,
+        Err(code) => return code,
+    };
+    let session = pw_mcp::SessionRequest {
+        project: invocation.project.clone(),
+        cwd: std::env::current_dir().ok(),
+    };
+    let uid = pw_relay::socket::current_uid();
+    let rt = runtime(2);
+    let linked = pw_mcp::Catalog::linked();
+    let code = rt.block_on(async {
+        let spawn = || {
+            let exe = std::env::current_exe()?;
+            pw_relay::proxy::spawn_daemon(&exe, &["daemon"])
+        };
+        let stream =
+            match pw_relay::mcp::connect_or_spawn(&daemon_socket, &mcp_socket, uid, session, spawn)
+                .await
+            {
+                Ok(stream) => stream,
+                Err(e) => {
+                    eprintln!(
+                        "pitwall tool: {e}. The relay daemon log is under {}",
+                        pw_relay::proxy::log_hint(&paths).display()
+                    );
+                    return pw_mcp::cli::exit::FAILED;
+                }
+            };
+        let request = pw_mcp::cli::Request {
+            action: &invocation.action,
+            input,
+            linked: &linked,
+            headless: None,
+        };
+        pw_mcp::cli::execute(
+            request,
+            stream,
+            pw_mcp::cli::interrupted(),
+            &mut std::io::stdout(),
+            &mut std::io::stderr(),
+        )
+        .await
+    });
+    rt.shutdown_timeout(std::time::Duration::from_secs(2));
+    exit_code(code)
+}
+
+fn exit_code(code: i32) -> ExitCode {
+    ExitCode::from(u8::try_from(code).unwrap_or(1))
 }
 
 /// `pair --from-ssh <공개키> [<이름>]`(18-m7-plan M7-06 ⑧ · 결정 M7-D13): Desktop 이 SSH 로 부른다. 데몬 소켓 명령이 아니다 —

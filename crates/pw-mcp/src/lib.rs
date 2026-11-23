@@ -14,6 +14,7 @@
 //! - [`marker`]: `tools/call` 결과의 `_meta` 에 싣는 결과 표지와 까닭 코드.
 //! - [`socket`]: 실행 중인 앱의 로컬 소켓(unix). 위치 · 권한 · 워크트리 격리 · 핸드셰이크.
 //! - [`proxy`]: `pitwall mcp` 의 stdio ↔ 소켓 프록시.
+//! - [`cli`]: `pitwall tool` 의 몸통 — Desktop 과 Relay(`pitwall-relay tool`)가 함께 쓰는 MCP 클라이언트 CLI.
 //!
 //! MCP 메시지(툴 설명 · 오류 문장)는 번역하지 않는다 — 에이전트가 읽는 계약이다.
 //!
@@ -75,6 +76,7 @@ pub mod approval;
 pub mod audit;
 pub mod catalog;
 pub mod checkout;
+pub mod cli;
 mod client;
 pub mod code;
 pub mod exposure;

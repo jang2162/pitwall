@@ -58,12 +58,6 @@ pub fn mcp_request(args: &[String]) -> Result<pw_mcp::SessionRequest, String> {
     })
 }
 
-/// `tool` — 아직 없다(`pitwall tool` 의 CLI 는 Desktop 크레이트에 있다 — 18-m7-plan M7-20 보고 「넘기는 것」).
-pub fn not_yet(command: &str) -> ExitCode {
-    eprintln!("pitwall {command}: not available on this relay yet");
-    ExitCode::from(2)
-}
-
 /// 좁은 명령 하나를 이 판의 데몬에 보낸다. 데몬이 없으면 띄우지 않는다.
 fn ask_daemon(
     socket: &Path,

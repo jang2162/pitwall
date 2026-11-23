@@ -11,8 +11,9 @@
 //! - `pitwall-relay machine`: 이 머신의 id(Relay 기기 키 지문) 한 줄 — Desktop 의 판 바꾸기 · 정리 스크립트가 ssh 로 닿은 곳이 링크의
 //!   머신인지 보는 데만 쓴다(M7-07b). 키를 만들지 않는다.
 //! - `pitwall-relay --verify <파일> <sha256>`: 원격에 해시 도구가 없을 때 설치기가 올린 파일을 본다(M7-06).
+//! - `pitwall-relay mcp` · `tool`: 원격 머신의 에이전트 · 셸이 그 머신 Relay 의 MCP 소켓에 붙는다(M7-20 — 데몬이 없으면 띄운다).
 //!
-//! 몸통은 `crates/pw-relay` 다. `mcp` · `tool` 은 M7-20 이 채운다.
+//! 몸통은 `crates/pw-relay` 다.
 
 // Relay 는 macOS · Linux 만이다(결정 M7-D4). 워크스페이스가 Windows 에서도 빌드되므로 그쪽에서는 알리고 끝난다.
 #[cfg(unix)]

@@ -148,3 +148,36 @@ fn mcp_refuses_unknown_arguments() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("usage: pitwall-relay mcp"));
     assert!(out.stdout.is_empty());
 }
+
+/// `pitwall-relay tool`(M7-P12): 데몬이 없으면 띄우고 그 MCP 소켓에 CLI 로 붙는다. `list` 는 Relay 의 툴, 붙은 owner Desktop 이 없는
+/// 동안 `write` 이상은 거절(종료 3 — M7-D10 ④, `auto_approve` 에 들어도). `pitwall tool` 링크로도 같다.
+#[test]
+fn tool_starts_the_daemon_and_is_judged_like_an_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join("config/relay")).unwrap();
+    std::fs::write(
+        root.join("config/relay/settings.toml"),
+        "schema = 1\n[mcp]\nauto_approve = [\"write\"]\n",
+    )
+    .unwrap();
+    let listed = relay(Path::new(BIN), &root, &["tool", "list"])
+        .output()
+        .unwrap();
+    let _daemon = daemon_of(&root);
+    assert!(listed.status.success(), "{listed:?}");
+    let out = String::from_utf8_lossy(&listed.stdout);
+    assert!(out.contains("run_config_upsert"), "{out}");
+
+    let link = root.join("bin/pitwall");
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(BIN, &link).unwrap();
+    let refused = relay(&link, &root, &["tool", "project_register", "--root", "/"])
+        .output()
+        .unwrap();
+    assert_eq!(refused.status.code(), Some(3), "{refused:?}");
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("no Pitwall desktop is connected"),
+        "{refused:?}"
+    );
+}

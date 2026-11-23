@@ -794,3 +794,135 @@ async fn the_audit_is_the_relays_own_and_read_over_the_link() {
         "the audit file holds the command line"
     );
 }
+
+/// `pitwall-relay tool` 의 몸통(`pw_mcp::cli`)을 Relay 의 MCP 소켓에 붙여 한 번 부른다 — (종료 코드, stdout, stderr).
+async fn cli(f: &Fixture, args: &[&str]) -> (i32, String, String) {
+    let (socket, root) = (f.socket.clone(), f.root.clone());
+    let args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
+    // CLI 는 따로 돈다 — 승인을 기다리는 동안 시험의 창이 답할 수 있게.
+    let handle = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        handle.block_on(cli_on(&socket, &root, &args))
+    })
+    .await
+    .unwrap()
+}
+
+async fn cli_on(socket: &Path, root: &Path, args: &[&str]) -> (i32, String, String) {
+    let args: Vec<std::ffi::OsString> = std::iter::once("tool")
+        .chain(args.iter().copied())
+        .skip(1)
+        .map(Into::into)
+        .collect();
+    let invocation = pw_mcp::cli::parse(&args).unwrap();
+    let stream = pw_mcp::socket::connect(
+        socket,
+        pw_mcp::socket::current_uid(),
+        pw_mcp::SessionRequest {
+            project: None,
+            cwd: Some(root.to_path_buf()),
+        },
+    )
+    .await
+    .unwrap();
+    let linked = pw_mcp::Catalog::linked();
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let code = pw_mcp::cli::execute(
+        pw_mcp::cli::Request {
+            action: &invocation.action,
+            input: None,
+            linked: &linked,
+            headless: None,
+        },
+        stream,
+        std::future::pending::<()>(),
+        &mut out,
+        &mut err,
+    )
+    .await;
+    (
+        code,
+        String::from_utf8(out).unwrap(),
+        String::from_utf8(err).unwrap(),
+    )
+}
+
+fn upsert_flags<'a>(project: &'a str, id: &'a str) -> Vec<&'a str> {
+    vec![
+        "run_config_upsert",
+        "--project-id",
+        project,
+        "--id",
+        id,
+        "--config",
+        r#"{"name":"cli","type":"shell","command":"echo hi"}"#,
+    ]
+}
+
+/// `pitwall-relay tool`(M7-P12 · D54 의 CLI 꼴): MCP 세션과 같은 판정이다. 붙은 owner Desktop 이 없으면 `auto_approve` 에 든 `write` 도
+/// 거절(종료 3). 붙으면 그 프로젝트 창에 CLI 요청(`cli`)으로 묻고, [창이 열려 있는 동안 CLI 허용](`window` — D61)은 **그 Desktop 의 그
+/// 프로젝트 창이 그 머신 Relay 를 듣는 동안**만이다: 다음 CLI 호출은 묻지 않고, 창이 떠나면 사라져 다시 거절된다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_relay_cli_is_judged_like_an_agent_session() {
+    let f = fixture("[mcp.policy]\napproval_timeout_secs = 5\n");
+    let (listed, out, _) = cli(&f, &["list"]).await;
+    assert_eq!(listed, pw_mcp::cli::exit::OK);
+    assert!(out.contains("run_config_upsert"), "{out}");
+
+    let (alone, _, err) = cli(&f, &upsert_flags(&f.project, "alone")).await;
+    assert_eq!(alone, pw_mcp::cli::exit::DENIED, "{err}");
+    assert!(err.contains("no Pitwall desktop is connected"), "{err}");
+    assert!(!f.run_file("alone").exists());
+
+    let mac = f.desktop(Role::Owner, "mac").await;
+    f.owners(1).await;
+    let mut window = Rpc::open(&mac, f.project_caller("project-1")).await;
+    f.listen(&mut window, Some(&f.project)).await.unwrap();
+    let flags = upsert_flags(&f.project, "first");
+    let first = {
+        let f = &f;
+        async move { cli(f, &flags).await }
+    };
+    let answer = async {
+        let request = window.opened().await;
+        assert_eq!(request["cli"], true, "{request}");
+        assert!(
+            request["answers"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("window")),
+            "{request}"
+        );
+        let answered = window.answer(&request["id"], "window").await;
+        assert!(answered["error"].is_null(), "{answered}");
+    };
+    let ((code, _, err), ()) = tokio::join!(first, answer);
+    assert_eq!(code, pw_mcp::cli::exit::OK, "{err}");
+    assert!(f.run_file("first").exists());
+
+    // 창이 열려 있는 동안 CLI 허용 — 같은 열쇠(그 구성 id — 툴의 계획이 정한다)는 묻지 않는다. 다른 열쇠는 다시 묻는다.
+    std::fs::remove_file(f.run_file("first")).unwrap();
+    let (again, _, err) = cli(&f, &upsert_flags(&f.project, "first")).await;
+    assert_eq!(again, pw_mcp::cli::exit::OK, "{err}");
+    assert!(f.run_file("first").exists());
+    // 닫힘 이벤트(앞 요청)말고는 오지 않는다.
+    while let Ok(Ok(event)) = tokio::time::timeout(Duration::from_millis(300), window.event()).await
+    {
+        assert_eq!(event["kind"], "closed", "{event}");
+    }
+
+    // 창이 떠나면 허용도 사라진다 — 물을 창이 없어 거절.
+    drop(window);
+    tokio::time::timeout(WAIT, async {
+        while f.sessions.approvals().listeners() > 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    std::fs::remove_file(f.run_file("first")).unwrap();
+    let (gone, _, err) = cli(&f, &upsert_flags(&f.project, "first")).await;
+    assert_eq!(gone, pw_mcp::cli::exit::DENIED, "{err}");
+    assert!(!f.run_file("first").exists());
+}
