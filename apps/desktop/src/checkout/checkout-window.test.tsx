@@ -626,11 +626,13 @@ it("opens a file sent from another machine's shell in that checkout's tab withou
     ),
   ).toBe(true);
   expect(remoteHeader()?.querySelector("[data-machine]")?.textContent).toBe("mini");
-  expect(fake.calls.get(MINI)!.find((c) => c.method === "fs.read")?.params).toMatchObject({
+  expect(fake.calls.get(MINI)!.find((c) => c.method === "fs.readChunk")?.params).toMatchObject({
     projectId: "r1",
     path: FILE,
   });
-  expect(fake.calls.get("local")!.filter((c) => c.method === "fs.read")).toHaveLength(1);
+  expect(
+    fake.calls.get("local")!.filter((c) => c.method === "fs.read" || c.method === "fs.readChunk"),
+  ).toHaveLength(1);
 
   // 리뷰 3: 그 머신의 링크드 워크트리 파일이면 그 워크트리(그 머신의 열쇠)의 탭으로 열고 읽기에 그 워크트리를 싣는다.
   fake.files.get(MINI)!.set("/work/wt-mini/src/lib.rs", "remote worktree text");
@@ -649,7 +651,8 @@ it("opens a file sent from another machine's shell in that checkout's tab withou
   expect(
     fake.calls
       .get(MINI)!
-      .find((c) => c.method === "fs.read" && c.params.path === "/work/wt-mini/src/lib.rs")?.params,
+      .find((c) => c.method === "fs.readChunk" && c.params.path === "/work/wt-mini/src/lib.rs")
+      ?.params,
   ).toMatchObject({ projectId: "r1", worktree: "/work/wt-mini" });
 });
 
@@ -678,7 +681,8 @@ it("starts a remote-only bundle window on its remote checkout, named after the b
   expect(own.filter((c) => c.method === "project.state.get").map((c) => c.params)).toContainEqual({
     projectId: "b-2",
   });
-  // 묶음 id 를 이 머신의 프로젝트로 다루는 호출이 없다(창 상태만 그 id 다).
+  // 묶음 id 를 이 머신의 프로젝트로 다루는 호출이 없다(창 상태만 그 id 다). 승인도 그 id 로 듣지 않는다 — 원격만인 묶음의
+  // 다른 머신 호출은 Host 가 거절한다(M7-18 · 메인 판정 2026-11-23 (B) — 판정은 M7-20).
   const misused = [...fake.byTarget.values()]
     .flat()
     .filter(

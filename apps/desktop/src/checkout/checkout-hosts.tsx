@@ -244,9 +244,12 @@ export function createCheckoutHosts(
       const { local, directory, remote } = store.getState();
       if (machine === LOCAL_MACHINE) {
         const own = local ?? { target: { hostId: LOCAL_MACHINE }, key: "", client: undefined };
+        // 창 연결의 대상 id 는 로컬 프로젝트 id 이거나 묶음 id 다 — 묶음 id 는 이 머신의 프로젝트가 아니다(원격만인 묶음 창 —
+        // 이 머신 기능 · 승인 듣기가 그 id 로 돌지 않게, M7-11b 리베이스).
+        const ownId = "projectId" in own.target ? own.target.projectId : undefined;
         const projectId =
           directory.members.get(LOCAL_MACHINE) ??
-          ("projectId" in own.target ? own.target.projectId : undefined);
+          (ownId !== undefined && !isBundleRowId(ownId) ? ownId : undefined);
         return { ...own, machine, projectId };
       }
       const project = directory.members.get(machine);
