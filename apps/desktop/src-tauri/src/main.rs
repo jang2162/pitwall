@@ -301,8 +301,9 @@ fn start<R: tauri::Runtime>(
 ) {
     tauri::async_runtime::spawn(config_log::run(config_events));
     // 프로젝트 창이 연결해도 되는 체크아웃(그 창의 묶음 멤버)을 이 레지스트리로 가른다(ipc.rs `window_admits`, 18-m7-plan M7-11).
-    if let Some(registry) = host.registry() {
-        app.state::<ipc::IpcState>().use_registry(registry.clone());
+    // 시험의 mock 앱에는 transport 가 없다.
+    if let (Some(registry), Some(ipc)) = (host.registry(), app.try_state::<ipc::IpcState>()) {
+        ipc.use_registry(registry.clone());
     }
     if let Some(i18n) = app.try_state::<Arc<I18n>>() {
         i18n::follow_in_native_ui(app, Arc::clone(&i18n), i18n::subscribe(host.bus()));
