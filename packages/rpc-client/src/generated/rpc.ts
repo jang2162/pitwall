@@ -5,7 +5,10 @@
 export type UnaryMethods = {
 	/**
 	 * 「체크아웃 추가」: 머신과 그 머신의 경로를 묶음의 멤버로 더한다. 판정에서 멈추면 `rejected` · `largeDirectory` 를
-	 * 돌려준다(오류가 아니다). 그 머신에 닿지 못하면 not found 오류(`data.reason = "machineUnavailable"`).
+	 * 돌려준다(오류가 아니다). 그 머신에 닿지 못하면 not found 오류(`data.reason = "machineUnavailable"`). Host 작업으로 돌아 진행이
+	 * `task.progress` 로 나가고 상태바에서 취소된다. 판정이 시간 상한을 넘기면 cancelled 오류(`data.reason = "judgeTimedOut"`),
+	 * 취소되면 cancelled 오류(`"cancelled"`). **붙이기 단계(진행 3/3)에 들어간 뒤의 취소는 요청만 끝낸다 — 멤버는 붙는다**
+	 * (`project.changed` 로 보인다).
 	 */
 	"bundle.addMember": { params: AddBundleMemberParams; result: AddMemberOutcome };
 	/**
@@ -1662,7 +1665,7 @@ export type MethodName = keyof UnaryMethods | keyof StreamMethods;
 
 /** 메서드 메타데이터(권한 등급 · role · 문서). */
 export const METHODS: Record<MethodName, MethodMeta> = {
-	"bundle.addMember": {"name":"bundle.addMember","kind":"unary","tier":"write","roles":["owner"],"params":"AddBundleMemberParams","output":"AddMemberOutcome","doc":" 「체크아웃 추가」: 머신과 그 머신의 경로를 묶음의 멤버로 더한다. 판정에서 멈추면 `rejected` · `largeDirectory` 를\n 돌려준다(오류가 아니다). 그 머신에 닿지 못하면 not found 오류(`data.reason = \"machineUnavailable\"`).\n","mcp":null,"fileScope":false},
+	"bundle.addMember": {"name":"bundle.addMember","kind":"unary","tier":"write","roles":["owner"],"params":"AddBundleMemberParams","output":"AddMemberOutcome","doc":" 「체크아웃 추가」: 머신과 그 머신의 경로를 묶음의 멤버로 더한다. 판정에서 멈추면 `rejected` · `largeDirectory` 를\n 돌려준다(오류가 아니다). 그 머신에 닿지 못하면 not found 오류(`data.reason = \"machineUnavailable\"`). Host 작업으로 돌아 진행이\n `task.progress` 로 나가고 상태바에서 취소된다. 판정이 시간 상한을 넘기면 cancelled 오류(`data.reason = \"judgeTimedOut\"`),\n 취소되면 cancelled 오류(`\"cancelled\"`). **붙이기 단계(진행 3/3)에 들어간 뒤의 취소는 요청만 끝낸다 — 멤버는 붙는다**\n (`project.changed` 로 보인다).\n","mcp":null,"fileScope":false},
 	"bundle.get": {"name":"bundle.get","kind":"unary","tier":"read","roles":["owner"],"params":"BundleIdParams","output":"ProjectBundle","doc":" 묶음 하나. 없으면 invalid params 오류.\n","mcp":null,"fileScope":false},
 	"bundle.list": {"name":"bundle.list","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"Vec<ProjectBundle>","doc":" 묶음 전부(이름순): 행 있는 묶음과, 어느 묶음에도 들지 않은 로컬 프로젝트의 암묵 묶음(id = 프로젝트 id).\n","mcp":null,"fileScope":false},
 	"bundle.removeMember": {"name":"bundle.removeMember","kind":"unary","tier":"write","roles":["owner"],"params":"RemoveBundleMemberParams","output":"()","doc":" 멤버를 묶음에서만 뺀다. 그 머신의 프로젝트 등록과 파일은 그대로 둔다.\n","mcp":null,"fileScope":false},

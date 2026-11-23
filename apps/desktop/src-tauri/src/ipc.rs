@@ -306,6 +306,7 @@ async fn rpc_connect<R: Runtime>(
     page: u64,
 ) -> Result<ConnId, IpcError> {
     let label = webview.label().to_owned();
+    let target = window_target(&state, &label, target);
     let caller = caller_for(&webview, &state, &target)?;
     // 원격 멤버는 창이 처음 열 때 라우터에 묶는다 — 위 판정이 그 창 묶음의 멤버임을 보았다. 그 머신이 붙어 있지 않으면 묶이지 않고
     // 아래 연결이 `unknownHost` 다(붙으면 다시 연다).
@@ -348,6 +349,14 @@ fn caller_for<R: Runtime>(
 ) -> Result<Caller, IpcError> {
     let label = webview.label();
     let kind = WindowKind::of_label(label);
+    // 창이 Host 로 고르는 연결은 **이 머신의 Host** 뿐이다(M7-11 리뷰 F1). 붙은 원격 머신의 Host 를 고르면 링크가 그 머신의 Host 범위
+    // owner 연결을 연다 — 그 머신의 모든 프로젝트에 닿는다. 다른 머신은 묶음 멤버(`Target::Member`)로만 연다. 모르는 Host 는 Router 가
+    // `unknownHost` 로 낸다.
+    if let Target::HostId(id) = target
+        && state.router.host(id).is_ok_and(|host| host.is_remote())
+    {
+        return Err(IpcError::ProjectScope);
+    }
     if kind != Some(WindowKind::File) {
         let checkout = match target {
             Target::HostId(_) => None,
@@ -373,6 +382,27 @@ fn caller_for<R: Runtime>(
         .and_then(|files| files.file_of(label))
         .ok_or(IpcError::FileScope)?;
     Ok(Caller::file(Role::Owner, file).in_window(label))
+}
+
+/// 묶음 id 창(`project-b-…`, M7-11b 가 연다)의 창 연결(M7-11 리뷰 F2). 웹뷰는 창 쿼리의 id 로 `{projectId}` 를 고른다 — 묶음 id 는
+/// 라우터가 모르는 id 라, 그 묶음의 **로컬 멤버 프로젝트**로 바꾸고 로컬 멤버가 없으면(원격만인 묶음) **이 머신의 Host** 로 바꾼다.
+/// 다른 대상은 그대로다.
+fn window_target(state: &IpcState, label: &str, target: Target) -> Target {
+    let Target::ProjectId(id) = &target else {
+        return target;
+    };
+    if !is_bundle_row_id(id) || windows::project_of_label(label) != Some(id.as_str()) {
+        return target;
+    }
+    let local = state
+        .registry
+        .get()
+        .and_then(|r| r.bundle(id).ok())
+        .and_then(|b| b.local_project().map(str::to_owned));
+    match local {
+        Some(project) => Target::ProjectId(project),
+        None => Target::HostId(crate::LOCAL_HOST_ID.into()),
+    }
 }
 
 /// 프로젝트 창(label 의 id `window`)이 머신 `machine` 의 프로젝트 `project` 로 연결해도 되는가 — **그 창의 묶음 멤버뿐이다**
@@ -788,6 +818,24 @@ mod tests {
 
     struct Machines(Arc<pw_core::registry::bundle::machine::HostMachine>);
 
+    /// 다른 머신의 Host 처럼 보이는 Host(`is_remote`) — 링크로 붙은 머신의 자리.
+    struct Remote(LocalHost);
+
+    impl pw_core::Host for Remote {
+        fn id(&self) -> &str {
+            self.0.id()
+        }
+        fn connect(
+            &self,
+            caller: Caller,
+        ) -> pw_core::BoxFuture<'_, Result<pw_core::Connection, HostError>> {
+            self.0.connect(caller)
+        }
+        fn is_remote(&self) -> bool {
+            true
+        }
+    }
+
     impl pw_core::registry::bundle::add::RemoteMachines for Machines {
         fn machine(
             &self,
@@ -916,6 +964,36 @@ mod tests {
             mini_registry.project_state(&remote).unwrap().state,
             Some(json!({"by": crate::windows::project_label(&bundle.id)}))
         );
+        // 리뷰 F2: 묶음 id 창이 자기 id 로 고른 창 연결은 그 묶음의 로컬 멤버 연결이다(그 프로젝트의 상태를 쓴다).
+        let w = f
+            .app
+            .get_webview_window(&crate::windows::project_label(&bundle.id))
+            .unwrap();
+        let saved = set(&w, json!({"projectId": bundle.id}), &a);
+        assert!(saved.get("error").is_none(), "{saved}");
+        // 리뷰 F1: 프로젝트 창(묶음 창이어도)은 원격 머신을 Host 로 고르지 못한다 — 묶음 멤버로만.
+        f.app
+            .state::<IpcState>()
+            .router
+            .add_host(Arc::new(Remote(LocalHost::new("remote-mini"))))
+            .unwrap();
+        let settings = window(&f.app, "settings");
+        for w in [
+            &f.app
+                .get_webview_window(&crate::windows::project_label(&bundle.id))
+                .unwrap(),
+            &settings,
+        ] {
+            let label = w.label().to_owned();
+            let page = invoke(w, "rpc_page", json!({})).unwrap();
+            let err = invoke(
+                w,
+                "rpc_connect",
+                json!({"target": {"hostId": "remote-mini"}, "channel": "__CHANNEL__:97", "page": page}),
+            )
+            .unwrap_err();
+            assert_eq!(err, json!({"kind": "projectScope"}), "{label}");
+        }
         for label in [crate::windows::project_label(&other), "welcome".to_owned()] {
             let w = window(&f.app, &label);
             let page = invoke(&w, "rpc_page", json!({})).unwrap();

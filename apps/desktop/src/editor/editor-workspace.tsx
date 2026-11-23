@@ -65,6 +65,7 @@ import {
   tabParams,
   trackRecentTabs,
 } from "./editor-tabs";
+import { qualifyOpen } from "../open-with/active-worktree";
 
 /** `ancestor` 가 `path` 이거나 그 위 폴더다(Host 경로 — Windows 는 `\`). */
 function covers(ancestor: string, path: string): boolean {
@@ -84,6 +85,11 @@ export interface OpenRequest {
   path: string;
   /** 요청의 워크트리 꼭대기(`ProjectOpen.worktree`). 없으면 메인 체크아웃. */
   worktree?: string;
+  /**
+   * 접두 없는 경로의 머신(checkout/checkout.ts). 없으면 활성 체크아웃의 머신이다(`qualifyOpen`). 머신을 기억한 목록(최근 파일)이
+   * 준다.
+   */
+  machine?: string;
   line?: number;
   column?: number;
   preview?: boolean;
@@ -296,6 +302,8 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
     { quiet = false }: { quiet?: boolean } = {},
   ): Promise<IDockviewPanel | undefined> {
     const started = performance.now();
+    // 접두 없는 경로는 활성 체크아웃 머신의 것(M7-11 리뷰 B2) — 읽기(`stat`)부터 그 머신으로 간다.
+    request = { ...request, ...qualifyOpen(request.path, request.worktree, request.machine) };
     let stat: FsStat;
     try {
       stat = await deps.stat(request.path, request.worktree);
@@ -354,7 +362,13 @@ export function createEditorWorkspace(deps: EditorWorkspaceDeps) {
       if (loc.line !== undefined) moveCursor(panel.id, { line: loc.line, column: loc.column ?? 1 });
     } else {
       panel = await open(
-        { path: loc.path, worktree: loc.worktree, line: loc.line, column: loc.column },
+        {
+          path: loc.path,
+          worktree: loc.worktree,
+          ...(loc.machine !== undefined && { machine: loc.machine }),
+          line: loc.line,
+          column: loc.column,
+        },
         { quiet: travel },
       );
       if (!panel) return false;

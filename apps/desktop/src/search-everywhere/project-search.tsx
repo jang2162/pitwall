@@ -90,6 +90,8 @@ interface FileRow {
   readonly positions: readonly number[];
   /** 열 워크트리 꼭대기. 없으면 메인 체크아웃. */
   readonly worktree?: string;
+  /** 최근 파일이 기억한 머신(M7-11). Host 결과는 없다 — 활성 체크아웃 머신의 것이다. */
+  readonly machine?: string;
   readonly recent: boolean;
 }
 
@@ -225,6 +227,7 @@ function openFile(deps: Deps, row: FileRow, line?: number, column?: number) {
     {
       path: row.path,
       ...(row.worktree !== undefined && { worktree: row.worktree }),
+      ...(row.machine !== undefined && { machine: row.machine }),
       ...(line !== undefined && { line, column: column ?? 1 }),
     },
     { record: true },
@@ -234,7 +237,7 @@ function openFile(deps: Deps, row: FileRow, line?: number, column?: number) {
 /** 최근 파일 중 질의에 맞는 것(최근 순). */
 function recentRows(
   deps: Deps,
-  list: readonly { path: string; worktree?: string }[],
+  list: readonly { path: string; worktree?: string; machine?: string }[],
   text: string,
 ) {
   const root = windowFileTree().getRoot();
@@ -243,7 +246,14 @@ function recentRows(
     const relative = relativeTo(root, f.path);
     const positions = matchRecent(relative, text);
     if (positions)
-      rows.push({ path: f.path, relative, positions, worktree: f.worktree, recent: true });
+      rows.push({
+        path: f.path,
+        relative,
+        positions,
+        worktree: f.worktree,
+        machine: f.machine,
+        recent: true,
+      });
   }
   return rows;
 }

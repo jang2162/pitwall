@@ -13,6 +13,7 @@ import { afterEach, beforeEach, expect, vi } from "vitest";
 import defaultTheme from "../../../../extensions/theme-default/themes/default.json";
 import { App } from "../App";
 import { openTab } from "../editor/editor-tabs";
+import { resetWindowFileTree } from "../file-tree/project-view";
 import type { KeymapNative } from "../keymap/native";
 import { activeWorktreeStore } from "../open-with/active-worktree";
 import { projectOpenInbox } from "../project-open";
@@ -49,6 +50,8 @@ vi.mock("../tauri-transport", async () => {
     connectHost: async (target: Record<string, unknown>) => {
       fake.targets.push(target);
       const machine = "member" in target ? (target.member as { host: string }).host : "local";
+      // Host 의 범위 규칙: `remote.*` 는 Host 범위 연결만 받는다(pw-remote `host_scope`) — 프로젝트 · 멤버 대상 연결은 거절.
+      const hostScope = "hostId" in target;
       const [client, server] = pair();
       let next = 1;
       const streams = new Set<number>();
@@ -59,6 +62,11 @@ vi.mock("../tauri-transport", async () => {
         const params = (m.params ?? {}) as Record<string, unknown>;
         const files = fake.files.get(machine)!;
         if (m.method.startsWith("fs.")) fake.calls.get(machine)!.push({ method: m.method, params });
+        if (m.method.startsWith("remote.") && !hostScope)
+          return send({
+            id: m.id,
+            error: { code: -32001, message: "remote.* takes only a host connection", data: null },
+          });
         const path = String(params.path ?? "");
         const version = (p: string) => `v:${files.get(p)}`;
         switch (m.method) {
@@ -86,6 +94,8 @@ vi.mock("../tauri-transport", async () => {
               createdAt: 1,
               openedAt: null,
             });
+          case "project.resolve":
+            return reply(null);
           case "project.trust":
             return reply({ projectId: "p1", ownerId: "p1", state: "trusted" });
           case "project.state.get":
@@ -140,6 +150,28 @@ vi.mock("../tauri-transport", async () => {
             const { streamId } = m.params as { streamId: number };
             if (streams.delete(streamId)) fake.linkStreams--;
             return;
+          }
+          case "fs.list": {
+            const prefix = path.endsWith("/") ? path : `${path}/`;
+            const names = new Map<string, "file" | "dir">();
+            for (const f of files.keys()) {
+              if (!f.startsWith(prefix)) continue;
+              const rest = f.slice(prefix.length).split("/");
+              names.set(rest[0]!, rest.length > 1 ? "dir" : "file");
+            }
+            if (names.size === 0) break;
+            return reply({
+              path,
+              entries: [...names].map(([name, kind]) => ({
+                name,
+                kind,
+                target: null,
+                outside: false,
+                size: 0,
+                mtimeMs: 1,
+                ignored: false,
+              })),
+            });
           }
           case "fs.stat":
             if (!files.has(path)) break;
@@ -204,9 +236,15 @@ vi.mock("../tauri-transport", async () => {
   };
 });
 
+let menuListener: ((action: string) => void) | undefined;
 const native = {
   syncMenu: async () => {},
-  onMenuAction: () => () => {},
+  onMenuAction: (listener: (action: string) => void) => {
+    menuListener = listener;
+    return () => {
+      if (menuListener === listener) menuListener = undefined;
+    };
+  },
   openSettings: async () => {},
   closeWindow: async () => {},
 } satisfies KeymapNative;
@@ -233,6 +271,7 @@ beforeEach(() => {
   fake.targets = [];
   fake.linkStreams = 0;
   activeWorktreeStore.setState({ top: undefined });
+  resetWindowFileTree();
   localStorage.clear();
 });
 
@@ -293,18 +332,8 @@ async function save(view: EditorView, text: string) {
   await act(async () =>
     view.dispatch({ changes: { from: 0, insert: text }, userEvent: "input.type" }),
   );
-  view.focus();
-  await act(async () => {
-    view.contentDOM.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        bubbles: true,
-        cancelable: true,
-        code: "KeyS",
-        key: "s",
-        metaKey: true,
-      }),
-    );
-  });
+  // 메뉴의 저장(⌘S 와 같은 액션) — 활성 탭을 저장한다. 키 입력은 포커스를 옮겨 트리에서 온 시험과 다투지 않게 피한다.
+  await act(async () => menuListener?.("editor.save"));
   await settle();
 }
 
@@ -391,4 +420,42 @@ it("lists the bundle's other machine in the branch popup and makes its checkout 
   await settle();
   expect(activeWorktreeStore.getState().top).toBe(REMOTE_MAIN);
   expect(document.querySelector("header [data-machine]")?.textContent).toBe("mini");
+});
+
+// 리뷰 B2: 원격 체크아웃이 활성일 때 그 머신의 파일 트리에서 연 파일은 **그 머신의 파일**이다 — Host 가 돌려준 접두 없는 경로를
+// 이 머신의 같은 경로로 읽지 않는다. 저장도 그 머신으로 가고 이 머신의 파일은 그대로다.
+it("opens a file from the active remote checkout's file tree on that machine and saves it there", async () => {
+  // happy-dom 은 배치를 하지 않는다 — 트리의 가상화가 읽는 보이는 높이만 준다(file-tree/testing.ts 의 일부). 파일을 연 뒤 되돌린다.
+  const isTree = (el: HTMLElement) => el.getAttribute("role") === "tree";
+  const layout = (["offsetHeight", "clientHeight"] as const).map((prop) =>
+    vi.spyOn(HTMLElement.prototype, prop, "get").mockImplementation(function (this: HTMLElement) {
+      return isTree(this) ? 600 : 0;
+    }),
+  );
+  await mount();
+  await push({ worktree: REMOTE_MAIN });
+  const row = (path: string) => document.querySelector<HTMLElement>(`[data-path="${path}"]`);
+  const click = async (el: HTMLElement, type: "click" | "dblclick") => {
+    await act(async () => {
+      el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }));
+    });
+    await settle();
+  };
+  await vi.waitFor(() => expect(row("/work/demo/src")).not.toBeNull());
+  await click(row("/work/demo/src")!, "dblclick");
+  await vi.waitFor(() => expect(row(FILE)).not.toBeNull());
+  await click(row(FILE)!, "click");
+  const view = await vi.waitFor(() => {
+    const found = viewWith("remote text");
+    expect(found).toBeDefined();
+    return found!;
+  });
+  for (const spy of layout) spy.mockRestore();
+  expect(viewWith("local text")).toBeUndefined();
+  expect(fake.calls.get("local")!.filter((c) => c.method === "fs.read")).toHaveLength(0);
+  await save(view, "edited ");
+  expect(writes(MINI)).toHaveLength(1);
+  expect(writes(MINI)[0]).toMatchObject({ projectId: "r1", path: FILE });
+  expect(writes("local")).toHaveLength(0);
+  expect(fake.files.get("local")!.get(FILE)).toBe("local text");
 });

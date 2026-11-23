@@ -4,8 +4,9 @@
 // - **다른 머신**은 그 머신의 묶음 멤버로 연 연결이다(`{ member: { host: 머신 id, project: 그 머신의 프로젝트 id } }` — Rust 가 그 창의
 //   묶음 멤버인지 보고 그 머신 프로젝트의 `Project` 범위로 연다, src-tauri/src/ipc.rs `window_admits`). git 쓰기 · 파일 쓰기가 그
 //   머신의 `scope_may_write` 를 지난다.
-// - **연결은 쓰는 머신만 연다**(08 「창과 활성 체크아웃」, D56): 활성 체크아웃의 머신과 탭이 열린 머신. 쓰는 동안(`retain`) 창의
-//   로컬 **Host 범위** 연결로 `remote.connect` 스트림을 열어 링크를 쥔다 — `remote.*` 는 Host 범위 연결만 받으므로(M7-08) 프로젝트
+// - **연결은 쓰는 머신만 연다**(08 「창과 활성 체크아웃」, D56): 활성 체크아웃의 머신과 탭이 열린 머신. 쓰는 동안(`retain`) 공급자가
+//   **따로 연 로컬 Host 범위 연결**(`{ hostId: "local" }` — 창의 연결은 프로젝트 범위라 `remote.*` 를 받지 못한다)로 `remote.connect`
+//   스트림을 열어 링크를 쥔다 — `remote.*` 는 Host 범위 연결만 받으므로(M7-08) 프로젝트
 //   연결로 넓히지 않고 창이 Host 연결을 따로 연다(M7-08 리뷰 R6, 메인 판정). 스트림이 「붙음」 을 알리면 멤버 연결을 열고, 끊기면
 //   닫는다. 아무도 쓰지 않으면 스트림을 닫는다 — 그 머신을 쓰는 것이 모두 닫히면 Host 가 링크를 닫는다.
 // - 머신의 호스트 이름(`remote.connect` 의 `name`)과 별명은 `remote.hosts.list` 의 기억한 머신 id 로 찾는다. 모르면 스트림 없이
@@ -77,6 +78,8 @@ interface Remote {
 
 interface State {
   local: HostConnection | undefined;
+  /** 공급자가 따로 연 로컬 Host 범위 연결 — `remote.connect` · `remote.hosts.list` 를 부른다. */
+  link: RpcClient | undefined;
   directory: CheckoutDirectory;
   remote: Readonly<Record<string, Readonly<Omit<Remote, "running">>>>;
 }
@@ -84,6 +87,7 @@ interface State {
 export interface CheckoutHosts {
   readonly store: StoreApi<State>;
   setLocal(local: HostConnection): void;
+  setLink(link: RpcClient | undefined): void;
   setDirectory(directory: CheckoutDirectory): void;
   /** 그 머신을 쓰기 시작한다(연결을 연다). 돌려준 함수로 놓는다 — 마지막으로 놓으면 닫는다. */
   retain(machine: string): () => void;
@@ -108,6 +112,7 @@ export function createCheckoutHosts(
   let started = false;
   const store = createStore<State>()(() => ({
     local: undefined,
+    link: undefined,
     directory: { members: new Map(), hostNames: new Map() },
     remote: {},
   }));
@@ -157,7 +162,7 @@ export function createCheckoutHosts(
   /** 쓰는 머신이고 아직 멈춰 있으면 붙기를 시작한다(로컬 연결 · 묶음을 읽은 뒤에). */
   function run(machine: string) {
     const r = remotes.get(machine);
-    const local = store.getState().local?.client;
+    const local = store.getState().link;
     if (!r || r.users === 0 || r.running || !started || !local || !memberTarget(machine)) return;
     const running = { abort: new AbortController() } as NonNullable<Remote["running"]>;
     r.running = running;
@@ -201,6 +206,12 @@ export function createCheckoutHosts(
     store,
     setLocal(local) {
       store.setState({ local });
+      refresh();
+    },
+    setLink(link) {
+      // 연결이 바뀌면(닫힘 · 다시 열림) 그 연결로 연 스트림은 끝났다 — 쓰던 머신을 새 연결로 다시 붙인다.
+      for (const r of remotes.values()) halt(r);
+      store.setState({ link });
       refresh();
     },
     setDirectory(directory) {
@@ -285,6 +296,51 @@ export function createCheckoutHosts(
 }
 
 const CheckoutHostsContext = createContext<CheckoutHosts | undefined>(undefined);
+const LinkHostContext = createContext<HostConnection | undefined>(undefined);
+
+const HOST_SCOPE: HostTarget = { hostId: LOCAL_MACHINE };
+
+/**
+ * 이 머신 Host 의 **Host 범위** 연결을 창이 사는 동안 연다(M7-11 리뷰 B1 — `remote.*` 는 Host 범위만 받는다, M7-08). 닫히면 없앤다.
+ * StrictMode 의 붙였다 떼기는 열기 · 닫기의 짝이다.
+ */
+function useHostScopeConnection(
+  connect: (target: HostTarget) => Promise<TauriConnection>,
+): HostConnection {
+  const [client, setClient] = useState<RpcClient>();
+  useEffect(() => {
+    let disposed = false;
+    let close: (() => void) | undefined;
+    connect(HOST_SCOPE)
+      .then((conn) => {
+        const opened = new RpcClient(conn.transport);
+        close = () => {
+          opened.close();
+          void conn.close();
+        };
+        if (disposed) return close();
+        conn.transport.onClose?.(() => !disposed && setClient(undefined));
+        setClient(opened);
+      })
+      .catch((e: unknown) => console.warn(LOG, "could not open the host connection", e));
+    return () => {
+      disposed = true;
+      close?.();
+      setClient(undefined);
+    };
+  }, [connect]);
+  return useMemo(
+    () => ({ target: HOST_SCOPE, key: `link:${hostKey(HOST_SCOPE)}`, client }),
+    [client],
+  );
+}
+
+/** 창의 로컬 **Host 범위** 연결(`remote.*` 를 부른다). 체크아웃 공급자 밖이면 `useLocalHost`(웰컴 · 설정 창은 Host 범위다). */
+export function useLinkHost(): HostConnection {
+  const own = useContext(LinkHostContext);
+  const local = useLocalHost();
+  return own ?? local;
+}
 const LocalHostContext = createContext<HostConnection | undefined>(undefined);
 
 /**
@@ -302,14 +358,16 @@ export function CheckoutHostsProvider({
 }) {
   const local = useHost();
   const [hosts] = useState(() => createCheckoutHosts(connect));
+  const link = useHostScopeConnection(connect ?? connectHost);
   const bundles = useRpcQueryOn(local, "bundle.list", null, { retry: false });
-  const names = useRpcQueryOn(local, "remote.hosts.list", null, { retry: false });
+  const names = useRpcQueryOn(link, "remote.hosts.list", null, { retry: false });
   const bundle = windowBundle(bundles.data, windowId);
   useEffect(() => {
     hosts.start();
     return () => hosts.stop();
   }, [hosts]);
   useEffect(() => hosts.setLocal(local), [hosts, local]);
+  useEffect(() => hosts.setLink(link.client), [hosts, link.client]);
   useEffect(() => {
     hosts.setDirectory({
       members: new Map(bundle?.members.map((m) => [m.machine, m.projectId])),
@@ -318,7 +376,9 @@ export function CheckoutHostsProvider({
   }, [hosts, bundle, names.data]);
   return (
     <LocalHostContext value={local}>
-      <CheckoutHostsContext value={hosts}>{children}</CheckoutHostsContext>
+      <LinkHostContext value={link}>
+        <CheckoutHostsContext value={hosts}>{children}</CheckoutHostsContext>
+      </LinkHostContext>
     </LocalHostContext>
   );
 }
@@ -365,6 +425,7 @@ export function useCheckoutHost(checkout: { machine: string } | string): Checkou
 
 const FALLBACK = createStore<State>()(() => ({
   local: undefined,
+  link: undefined,
   directory: { members: new Map(), hostNames: new Map() },
   remote: {},
 }));

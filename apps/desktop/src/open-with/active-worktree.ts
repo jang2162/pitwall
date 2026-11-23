@@ -16,7 +16,14 @@
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
 
-import { type Checkout, checkoutOfKey } from "../checkout/checkout";
+import {
+  type Checkout,
+  checkoutKey,
+  checkoutOfKey,
+  isRemotePath,
+  LOCAL_MACHINE,
+  qualify,
+} from "../checkout/checkout";
 import type { ProjectOpen } from "../project-open";
 
 interface ActiveWorktreeState {
@@ -58,6 +65,24 @@ export function activeCheckoutKey(): string | undefined {
 /** 활성 체크아웃. */
 export function activeCheckout(): Checkout {
   return checkoutOfKey(activeWorktreeStore.getState().top);
+}
+
+/**
+ * 열기 요청의 경로 · 워크트리를 창 안의 꼴로(18-m7-plan M7-11 리뷰 B2). **접두 없는 경로는 `machine` 의 것이다** — 기본은 활성
+ * 체크아웃의 머신이다: 활성 체크아웃 아래 기능(파일 트리 · 찾기 · git · DB · 터미널 링크 · LSP 이동 …)은 그 머신 연결로 돌아 그
+ * 머신의 경로를 접두 없이 넘긴다. 이미 접두가 있으면(다른 머신의 탭 · 그 저장본) 그대로다. 이 머신이면 그대로다(옛 꼴).
+ * 에디터의 열기 입구(`editor-workspace.tsx` `open`)와 파일 탭을 만드는 `openTab` 이 부른다 — 열기는 모두 이 둘을 지난다.
+ */
+export function qualifyOpen(
+  path: string,
+  worktree: string | undefined,
+  machine: string = activeCheckout().machine,
+): { path: string; worktree: string | undefined } {
+  if (isRemotePath(path) || machine === LOCAL_MACHINE) return { path, worktree };
+  return {
+    path: qualify(machine, path),
+    worktree: isRemotePath(worktree) ? worktree : checkoutKey({ machine, worktree }),
+  };
 }
 
 /** 활성 체크아웃의 머신(화면이 구독). */

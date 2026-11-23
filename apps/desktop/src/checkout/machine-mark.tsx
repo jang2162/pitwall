@@ -4,14 +4,15 @@
 //
 // 머신 이름은 Desktop 의 별명이다(메인 판정 M7-P19 — Relay 가 댄 이름이 아니다): 이 머신은 「이 컴퓨터」, 다른 머신은 그 머신 id 를
 // 기억한 원격 호스트 항목의 이름(`remote.hosts.list` — 설정의 별명이나 `~/.ssh/config` 의 호스트 이름). 모르면 머신 id 그대로다.
-// 이름은 창의 로컬 연결로 읽는다(활성 체크아웃이 다른 머신이어도 — 그 머신의 Relay 에는 `remote.*` 가 없다).
+// 이름은 창의 로컬 Host 범위 연결로 읽는다(`remote.*` 는 Host 범위만 받는다. 활성 체크아웃이 다른 머신이어도 — 그 머신의 Relay 에는
+// `remote.*` 가 없다).
 
 import { createContext, type ReactNode, useContext } from "react";
 
 import { useAppStrings } from "../i18n/app-strings";
 import { useRpcQueryOn } from "../rpc/host";
 import { LOCAL_MACHINE } from "./checkout";
-import { hostNamesOf, useLocalHost } from "./checkout-hosts";
+import { hostNamesOf, useLinkHost } from "./checkout-hosts";
 
 export { LOCAL_MACHINE };
 
@@ -19,7 +20,7 @@ export { LOCAL_MACHINE };
 export function useMachineName(): (machine: string) => string {
   const T = useAppStrings().machines;
   const names = hostNamesOf(
-    useRpcQueryOn(useLocalHost(), "remote.hosts.list", null, { retry: false }).data,
+    useRpcQueryOn(useLinkHost(), "remote.hosts.list", null, { retry: false }).data,
   );
   return (machine) => (machine === LOCAL_MACHINE ? T.thisMachine : (names.get(machine) ?? machine));
 }

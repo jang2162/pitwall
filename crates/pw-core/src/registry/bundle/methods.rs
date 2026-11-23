@@ -81,7 +81,10 @@ rpc_method! {
     }
 
     /// 「체크아웃 추가」: 머신과 그 머신의 경로를 묶음의 멤버로 더한다. 판정에서 멈추면 `rejected` · `largeDirectory` 를
-    /// 돌려준다(오류가 아니다). 그 머신에 닿지 못하면 not found 오류(`data.reason = "machineUnavailable"`).
+    /// 돌려준다(오류가 아니다). 그 머신에 닿지 못하면 not found 오류(`data.reason = "machineUnavailable"`). Host 작업으로 돌아 진행이
+    /// `task.progress` 로 나가고 상태바에서 취소된다. 판정이 시간 상한을 넘기면 cancelled 오류(`data.reason = "judgeTimedOut"`),
+    /// 취소되면 cancelled 오류(`"cancelled"`). **붙이기 단계(진행 3/3)에 들어간 뒤의 취소는 요청만 끝낸다 — 멤버는 붙는다**
+    /// (`project.changed` 로 보인다).
     pub BundleAddMember: "bundle.addMember" {
         params: AddBundleMemberParams,
         result: AddMemberOutcome,

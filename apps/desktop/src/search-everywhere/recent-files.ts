@@ -7,6 +7,7 @@ import type { DockviewApi } from "dockview-react";
 import { createStore } from "zustand/vanilla";
 
 import { editorPanels, isEditorPanel, isFileTab, tabParams } from "../editor/editor-tabs";
+import { machineOf } from "../checkout/checkout";
 
 /** 기억하는 파일 수. */
 export const RECENT_FILES_LIMIT = 50;
@@ -16,6 +17,11 @@ export interface RecentFile {
   readonly path: string;
   /** 탭을 연 워크트리 꼭대기. 없으면 메인 체크아웃. */
   readonly worktree?: string;
+  /**
+   * 그 탭의 머신(M7-11). 접두 없는 경로는 열 때 활성 체크아웃 머신의 것으로 읽히므로(`qualifyOpen`), 이 머신의 탭은 머신을 적어
+   * 둔다 — 다른 머신이 활성일 때 다시 열어도 이 머신 파일이다. 옛 저장본에는 없다(그때는 활성 머신).
+   */
+  readonly machine?: string;
 }
 
 export function createRecentFiles() {
@@ -45,7 +51,12 @@ export function createRecentFiles() {
         // src/db/documents/spec.ts).
         if (!isEditorPanel(panel) || !isFileTab(panel)) return;
         const { path, worktree } = tabParams(panel);
-        if (path) remember({ path, ...(worktree !== undefined && { worktree }) });
+        if (path)
+          remember({
+            path,
+            ...(worktree !== undefined && { worktree }),
+            machine: machineOf(path, worktree),
+          });
       };
       for (const panel of editorPanels(api).reverse()) add(panel);
       add(api.activePanel);

@@ -14,6 +14,7 @@ import type { DockviewApi, DockviewGroupPanel, IDockviewPanel } from "dockview-r
 import type { DbDocumentSpec } from "../db/documents/spec";
 import type { GitDocumentSpec } from "../git/documents/spec";
 import type { ViewerKind } from "./viewer-kinds";
+import { qualifyOpen } from "../open-with/active-worktree";
 
 /** 에디터 탭의 내용 컴포넌트 이름(project-window.tsx 의 COMPONENTS 키). */
 export const EDITOR_PANEL = "editorTab";
@@ -165,6 +166,8 @@ export function openTab(
     title?: string;
   },
 ): { panel: IDockviewPanel; created: boolean } {
+  // 파일 탭의 접두 없는 경로는 활성 체크아웃 머신의 것(M7-11 리뷰 B2 — `qualifyOpen`). git · DB 문서는 경로가 아니라 문서 키다.
+  if (git === undefined && db === undefined) ({ path, worktree } = qualifyOpen(path, worktree));
   const group = targetGroup(api, recent);
   const existing = findTab(api, path, { group, recent });
   if (existing) {

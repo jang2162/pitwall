@@ -1177,3 +1177,43 @@ async fn adding_runs_as_a_host_task_that_reports_progress_and_both_cancels_reach
     }
     assert_eq!(registry.bundle(&p.id).unwrap().members.len(), 1);
 }
+
+/// 리뷰 권고 2: 진행 알림은 읽기 → 견주기 → 붙이기 차례로 나간다 — 붙이기(판정이 끝난 뒤)도 알린다.
+#[tokio::test]
+async fn the_stages_are_reported_in_order_up_to_attaching() {
+    let f = Fixture::new();
+    let local = f.repo("local/app", "one");
+    let p = f.project(&f.desktop, &local);
+    let remote = f.clone(&local, "mini/app", None);
+    let stages = std::sync::Mutex::new(Vec::new());
+    let stage = |s: super::add::AddStage| stages.lock().unwrap().push(s);
+    let outcome = super::add::add_member_watched(
+        &f.desktop,
+        AddTo::Bundle(&p.id),
+        MINI,
+        remote.to_str().unwrap(),
+        false,
+        super::add::AddWatch {
+            timeout: Duration::from_secs(30),
+            stage: &stage,
+        },
+    )
+    .await
+    .unwrap();
+    added(outcome);
+    use super::add::AddStage::{Attach, Compare, Inspect};
+    assert_eq!(
+        stages.into_inner().unwrap(),
+        vec![
+            Inspect {
+                machine: MINI.to_owned()
+            },
+            Compare {
+                machine: LOCAL_MACHINE.to_owned()
+            },
+            Attach {
+                machine: MINI.to_owned()
+            },
+        ]
+    );
+}

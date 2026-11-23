@@ -29,6 +29,8 @@ export interface NavLocation {
   readonly path: string;
   /** 탭의 워크트리(`undefined` 면 메인 체크아웃). */
   readonly worktree?: string;
+  /** 접두 없는 경로의 머신(M7-11 — 최근 파일이 기억한다). 없으면 활성 체크아웃의 머신. */
+  readonly machine?: string;
   readonly line: number;
   readonly column: number;
   /**
