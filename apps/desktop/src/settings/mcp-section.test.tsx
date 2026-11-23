@@ -32,6 +32,10 @@ const host = vi.hoisted(() => ({
   /** 다음 `mcp.settings.set` 을 이 까닭으로 거절한다. */
   refuse: undefined as string | undefined,
   calls: [] as { method: string; params: unknown }[],
+  /** `mcp.http.token` 이 돌려줄 토큰. */
+  token: "a".repeat(64) as string | null,
+  /** 다음 `httpPort` 쓰기에서 Host 가 낼 문제. */
+  busyPort: false,
 }));
 
 vi.mock("../tauri-transport", async () => {
@@ -108,8 +112,27 @@ vi.mock("../tauri-transport", async () => {
               host.view.autoApprove = p.value as McpSettingsView["autoApprove"];
             if (p.key === "retentionDays")
               host.view.retentionDays = p.value === null ? 90 : (p.value as number);
+            if (p.key === "httpEnabled" && host.view.http) {
+              const on = p.value === true;
+              host.view.http = { ...host.view.http, enabled: on, listening: on };
+            }
+            if (p.key === "httpPort" && host.view.http) {
+              const port = p.value === null ? 7425 : (p.value as number);
+              host.view.http = {
+                ...host.view.http,
+                port,
+                url: `http://127.0.0.1:${port}/mcp`,
+                listening: !host.busyPort,
+                problem: host.busyPort ? "portInUse" : null,
+              };
+            }
             return reply({ ...host.view, project: null });
           }
+          case "mcp.http.token":
+            return reply({ token: host.token });
+          case "mcp.http.regenerateToken":
+            host.token = "b".repeat(64);
+            return reply({ token: host.token });
           case "events.subscribe":
             return reply({ subscriptionId: next++ });
           case "events.unsubscribe":
@@ -152,6 +175,14 @@ function view(): McpSettingsView {
     maxRetentionDays: 3650,
     warnings: [],
     project: null,
+    http: {
+      enabled: false,
+      port: 7425,
+      url: "http://127.0.0.1:7425/mcp",
+      listening: false,
+      problem: null,
+      tokenFile: "/home/me/.local/state/pitwall/mcp/http-token",
+    },
   };
 }
 
@@ -171,6 +202,8 @@ beforeEach(() => {
   host.calls = [];
   host.view = view();
   host.refuse = undefined;
+  host.token = "a".repeat(64);
+  host.busyPort = false;
   host.tools = [
     tool("project_list", "project", { recentCalls: 4 }),
     tool("db_query", "db"),
@@ -452,4 +485,98 @@ it("copies each agent's registration text", async () => {
   expect(native.copied[0]).toBe(
     "claude mcp add --transport stdio --scope user pitwall -- pitwall mcp",
   );
+});
+
+// ---- Streamable HTTP(18-m7-plan M7-25 — 계획 2 의 12번 시나리오) ----
+
+const httpPart = () => part("http");
+const button = (scope: HTMLElement, text: string) =>
+  [...scope.querySelectorAll("button")].find((b) => b.textContent === text)!;
+const calls = (method: string) => host.calls.filter((c) => c.method === method);
+
+it("turns http on through the host and shows the address and a masked token", async () => {
+  await mount();
+  await vi.waitFor(() => expect(httpPart()).toBeTruthy());
+  expect(httpPart().querySelector("[data-http-state]")!.textContent).toBe(S.http.off);
+  await click(httpPart().querySelector<HTMLInputElement>("input[data-http-enabled]")!);
+  expect(sets()).toEqual([{ key: "httpEnabled", name: null, value: true }]);
+  await vi.waitFor(() =>
+    expect(httpPart().querySelector("[data-http-state]")!.textContent).toBe(S.http.listening),
+  );
+  const address = httpPart().querySelector<HTMLElement>('[data-register="httpAddress"]')!;
+  expect(address.querySelector("code")!.textContent).toBe("http://127.0.0.1:7425/mcp");
+  await click(address.querySelector("button")!);
+  expect(native.copied).toEqual(["http://127.0.0.1:7425/mcp"]);
+  // 토큰은 가려져 있고, 누르기 전에는 읽지도 않는다.
+  expect(httpPart().querySelector("[data-token-value]")!.textContent).not.toContain("a".repeat(8));
+  expect(document.body.innerHTML).not.toContain("a".repeat(64));
+  expect(calls("mcp.http.token")).toEqual([]);
+});
+
+it("shows, hides and copies the token, and the client examples keep a placeholder", async () => {
+  host.view.http = { ...host.view.http!, enabled: true, listening: true };
+  await mount();
+  await vi.waitFor(() => expect(httpPart()).toBeTruthy());
+  const token = () => httpPart().querySelector("[data-token-value]")!.textContent;
+  await click(button(httpPart(), S.http.show));
+  expect(token()).toBe("a".repeat(64));
+  await click(button(httpPart(), S.http.hide));
+  expect(token()).not.toContain("a".repeat(8));
+  expect(document.body.innerHTML).not.toContain("a".repeat(64));
+  await click(button(httpPart().querySelector("[data-http-token]")!, S.copy));
+  expect(native.copied).toEqual(["a".repeat(64)]);
+  // 복사는 보이지 않는다.
+  expect(token()).not.toContain("a".repeat(8));
+  const clients = httpPart().querySelector<HTMLElement>("[data-http-clients]")!;
+  expect(clients.textContent).toContain("http://127.0.0.1:7425/mcp");
+  expect(clients.textContent).toContain("Bearer <token>");
+  expect(clients.textContent).not.toContain("a".repeat(8));
+});
+
+it("regenerating asks first, then replaces the token and drops the shown one", async () => {
+  host.view.http = { ...host.view.http!, enabled: true, listening: true };
+  await mount();
+  await vi.waitFor(() => expect(httpPart()).toBeTruthy());
+  await click(button(httpPart(), S.http.show));
+  await click(button(httpPart(), S.http.regenerate));
+  expect(httpPart().querySelector("[data-http-regenerate]")!.textContent).toContain(
+    S.http.regenerateConfirm,
+  );
+  await click(button(httpPart(), S.http.cancel));
+  expect(calls("mcp.http.regenerateToken")).toEqual([]);
+  await click(button(httpPart(), S.http.regenerate));
+  await click(httpPart().querySelector<HTMLElement>("[data-confirm]")!);
+  expect(calls("mcp.http.regenerateToken")).toHaveLength(1);
+  expect(httpPart().querySelector("[role=status]")!.textContent).toBe(S.http.regenerated);
+  expect(httpPart().querySelector("[data-token-value]")!.textContent).not.toContain("a".repeat(8));
+  await click(button(httpPart(), S.http.show));
+  expect(httpPart().querySelector("[data-token-value]")!.textContent).toBe("b".repeat(64));
+});
+
+it("a port goes to the host, and a busy port or a refused one says why", async () => {
+  host.view.http = { ...host.view.http!, enabled: true, listening: true };
+  await mount();
+  await vi.waitFor(() => expect(httpPart()).toBeTruthy());
+  const input = httpPart().querySelector<HTMLInputElement>("#mcp-http-port")!;
+  host.busyPort = true;
+  await type(input, "8080");
+  await act(async () => input.form!.requestSubmit());
+  await settle();
+  expect(sets()).toEqual([{ key: "httpPort", name: null, value: 8080 }]);
+  await vi.waitFor(() =>
+    expect(httpPart().querySelector("[data-http-state]")!.textContent).toBe(
+      S.http.problem.portInUse,
+    ),
+  );
+  host.refuse = "badPort";
+  await type(input, "0");
+  await act(async () => input.form!.requestSubmit());
+  await settle();
+  expect(httpPart().querySelector("[role=alert]")!.textContent).toBe(S.refused.badPort);
+});
+
+it("has no http block when the host has no http endpoint", async () => {
+  host.view.http = null;
+  await mount();
+  expect(section().querySelector('[data-setting="http"]')).toBeNull();
 });

@@ -13,10 +13,15 @@
 //   화면이 추론하지 않고, 고친 뒤 Host 가 다시 낸 「이 프로젝트에서」 줄이 보인다. 그 프로젝트 파일이 `[mcp]` 아래에 적은 값과
 //   파일은 `mcp.settings.get { projectId }` 가 준다. 「파일로 열기」 는 Host 가 준 경로만 연다(화면이 조립하지 않는다).
 // - 툴 설명은 영어 그대로다(에이전트가 읽는 글 — 결정 M5-D39).
+// - **Streamable HTTP**(18-m7-plan M7-25 — 계획 2 의 12번 시나리오): 켜기 · 포트는 `mcp.settings.set`(`httpEnabled` · `httpPort`)이고
+//   Host 가 곧바로 맞춰 듣는지 · 포트가 쓰이는 중인지를 돌려준다. 주소는 `http://127.0.0.1:<port>/mcp`(Host 가 준 글). 토큰은 가려
+//   두고 [보기] · [복사] 를 누를 때만 `mcp.http.token` 으로 읽는다(화면 상태에 오래 두지 않는다 — 가리면 버린다). 「토큰 새로
+//   만들기」 는 한 번 더 묻고 `mcp.http.regenerateToken`. 클라이언트 설정 예는 토큰 자리를 `<token>` 으로 둔다.
 // - 에이전트 등록 문구는 복사만 한다 — 자동 등록(F10-5)은 하지 않는다(결정 M5-D33). 문구의 출처는 아래 `REGISTRATIONS`.
 
 import {
   ERROR_CODE,
+  type McpHttpStatus,
   type McpSettingKey,
   type McpSettingRefused,
   type McpSettingsView,
@@ -221,6 +226,7 @@ export function McpSection({ native }: { native: SettingsNative }) {
           <PresetRow view={view} />
           <AutoApproveRow view={view} />
           <RetentionRow view={view} />
+          {view.http && <HttpRow http={view.http} native={native} />}
           <ProjectPicker
             projectId={projectId}
             onChange={setProjectId}
@@ -375,6 +381,210 @@ function RetentionRow({ view }: { view: McpSettingsView }) {
         {S.retentionHint(view.maxRetentionDays, view.defaultRetentionDays)}
       </span>
       <ErrorLine error={error} />
+    </div>
+  );
+}
+
+/** HTTP 클라이언트 설정 예(토큰 자리는 `<token>`). Claude Code: https://code.claude.com/docs/en/mcp 의 `--transport http` ·
+ * `--header`. Cursor: https://cursor.com/docs/mcp 의 `url` · `headers`. */
+export function httpClients(url: string) {
+  return [
+    {
+      id: "claudeCode",
+      text: `claude mcp add --transport http --scope user pitwall ${url} --header "Authorization: Bearer <token>"`,
+    },
+    {
+      id: "cursor",
+      text: JSON.stringify(
+        { mcpServers: { pitwall: { url, headers: { Authorization: "Bearer <token>" } } } },
+        null,
+        2,
+      ),
+    },
+  ] as const;
+}
+
+const MASK = "••••••••••••••••";
+
+function HttpRow({ http, native }: { http: McpHttpStatus; native: SettingsNative }) {
+  const S = useMcpStrings().settings;
+  const H = S.http;
+  const { client } = useHost();
+  const { save, error, busy } = useSetting();
+  const [port, setPort] = useState(http.port === null ? "" : String(http.port));
+  const [seenPort, setSeenPort] = useState(http.port);
+  if (seenPort !== http.port) {
+    setSeenPort(http.port);
+    setPort(http.port === null ? "" : String(http.port));
+  }
+  const [shown, setShown] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [note, setNote] = useState<
+    { kind: "copied" | "regenerated" } | { kind: "failed"; error: string }
+  >();
+  const fail = (e: unknown) =>
+    setNote({ kind: "failed", error: e instanceof Error ? e.message : String(e) });
+  const readToken = async (): Promise<string | null> => {
+    if (!client) return null;
+    const view = await client.call("mcp.http.token", null);
+    return view.token;
+  };
+  return (
+    <div data-setting="http" className="flex flex-col gap-1">
+      <span className="font-semibold">{H.title}</span>
+      <span className={NOTE}>{H.intro}</span>
+      <label className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          data-http-enabled=""
+          checked={http.enabled}
+          disabled={busy}
+          onChange={(e) => void save("httpEnabled", null, e.target.checked)}
+        />
+        {H.enabled}
+      </label>
+      <form
+        className="flex items-center gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const trimmed = port.trim();
+          const n = Number(trimmed);
+          void save("httpPort", null, trimmed !== "" && Number.isFinite(n) ? n : trimmed);
+        }}
+      >
+        <label htmlFor="mcp-http-port">{H.port}</label>
+        <input
+          id="mcp-http-port"
+          value={port}
+          inputMode="numeric"
+          onChange={(e) => setPort(e.target.value)}
+          aria-invalid={error !== undefined}
+          className="w-24 rounded-sm border border-ui-border bg-ui-background px-1.5 py-0.5"
+        />
+        <button type="submit" className={BUTTON} disabled={busy}>
+          {S.apply}
+        </button>
+        <button
+          type="button"
+          className={BUTTON}
+          disabled={busy}
+          onClick={() => void save("httpPort", null, null)}
+        >
+          {S.reset}
+        </button>
+      </form>
+      <ErrorLine error={error} />
+      <span data-http-state="" className={http.problem ? ALERT : NOTE}>
+        {!http.enabled ? H.off : http.problem ? H.problem[http.problem] : H.listening}
+      </span>
+      {http.url && <CopyRow id="httpAddress" label={H.address} text={http.url} native={native} />}
+      <div data-http-token="" className="flex flex-col gap-0.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="w-56 shrink-0">{H.token}</span>
+          <code
+            data-token-value=""
+            className="flex-1 rounded-sm border border-ui-border px-1.5 py-0.5 font-mono text-[12px] break-all"
+          >
+            {shown ?? MASK}
+          </code>
+          <button
+            type="button"
+            className={BUTTON}
+            onClick={() => {
+              if (shown !== null) {
+                setShown(null);
+                return;
+              }
+              setNote(undefined);
+              readToken().then((t) => setShown(t ?? H.tokenNone), fail);
+            }}
+          >
+            {shown !== null ? H.hide : H.show}
+          </button>
+          <button
+            type="button"
+            className={BUTTON}
+            onClick={() => {
+              setNote(undefined);
+              readToken()
+                .then(async (t) => {
+                  if (t === null) {
+                    setShown(H.tokenNone);
+                    return;
+                  }
+                  await native.copyText(t);
+                  setNote({ kind: "copied" });
+                })
+                .catch(fail);
+            }}
+          >
+            {S.copy}
+          </button>
+          {!confirming && (
+            <button type="button" className={BUTTON} onClick={() => setConfirming(true)}>
+              {H.regenerate}
+            </button>
+          )}
+        </div>
+        <span className={NOTE}>{H.tokenNote(http.tokenFile)}</span>
+        {confirming && (
+          <div data-http-regenerate="" className="flex flex-wrap items-center gap-2">
+            <span role="alert" className={ALERT}>
+              {H.regenerateConfirm}
+            </span>
+            <button
+              type="button"
+              className={BUTTON}
+              data-confirm=""
+              onClick={() => {
+                setConfirming(false);
+                setNote(undefined);
+                if (!client) return;
+                client.call("mcp.http.regenerateToken", null).then(() => {
+                  // 보이던 옛 토큰은 버린다 — 새 토큰은 [보기] 로 다시 읽는다.
+                  setShown(null);
+                  setNote({ kind: "regenerated" });
+                }, fail);
+              }}
+            >
+              {H.regenerateYes}
+            </button>
+            <button type="button" className={BUTTON} onClick={() => setConfirming(false)}>
+              {H.cancel}
+            </button>
+          </div>
+        )}
+        {note?.kind === "copied" && (
+          <span role="status" className={NOTE}>
+            {S.copied}
+          </span>
+        )}
+        {note?.kind === "regenerated" && (
+          <span role="status" className={NOTE}>
+            {H.regenerated}
+          </span>
+        )}
+        {note?.kind === "failed" && (
+          <span role="alert" className={ALERT}>
+            {H.tokenFailed(note.error)}
+          </span>
+        )}
+      </div>
+      {http.url && (
+        <div data-http-clients="" className="flex flex-col gap-1">
+          <span>{H.clients}</span>
+          <span className={NOTE}>{H.clientsNote}</span>
+          {httpClients(http.url).map((c) => (
+            <CopyRow
+              key={c.id}
+              id={`http-${c.id}`}
+              label={S.registerClient[c.id]}
+              text={c.text}
+              native={native}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

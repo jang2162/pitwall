@@ -198,6 +198,7 @@ function row(id: number, extra: Partial<AuditRow> = {}): AuditRow {
     durationMs: 12,
     approval: null,
     planHash: null,
+    transport: "socket",
     ...extra,
   };
 }
