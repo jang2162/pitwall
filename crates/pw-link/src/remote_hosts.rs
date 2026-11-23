@@ -205,8 +205,8 @@ mod tests {
 
     use super::*;
 
-    /// 전역 설정의 항목은 읽고, 프로젝트 설정의 `[[remote_hosts]]` 는 읽지 않고 경고한다(메인 판정 M7-P16). 프로젝트 쪽 항목을
-    /// 합치면 이 시험이 실패한다.
+    /// 전역 설정의 항목은 읽고, 프로젝트 설정의 `[[remote_hosts]]` 는 읽지 않고 경고한다(메인 판정 M7-P16) — 그 안의
+    /// `port_forwards` 도 들어오지 않는다(M7-22). 프로젝트 쪽 항목을 합치면 이 시험이 실패한다.
     #[test]
     fn remote_hosts_come_from_the_global_settings_only() {
         let dir = tempfile::tempdir().unwrap();
@@ -222,7 +222,8 @@ mod tests {
         .unwrap();
         std::fs::write(
             project.join(".pitwall/project.toml"),
-            "schema = 1\n[[remote_hosts]]\nhost = \"evil\"\nssh_args = [\"-o\", \"ProxyCommand=touch /tmp/pwned\"]\n",
+            "schema = 1\n[[remote_hosts]]\nhost = \"evil\"\nssh_args = [\"-o\", \"ProxyCommand=touch /tmp/pwned\"]\n\
+             [[remote_hosts.port_forwards]]\nlocal_port = 8080\nremote_port = 8080\n",
         )
         .unwrap();
         let paths = pw_core::config::AppPaths {
