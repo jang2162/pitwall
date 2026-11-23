@@ -1299,6 +1299,15 @@ export type UnaryMethods = {
 	 */
 	"remote.disconnect": { params: RemoteHostParams; result: null };
 	/**
+	 * 포워딩 하나를 끈다. 실행 탭의 것이면 그 스트림이 끝나고, 설정의 것은 다음에 붙을 때 다시 연다.
+	 */
+	"remote.forward.close": { params: RemoteForwardCloseParams; result: null };
+	/**
+	 * 포트 포워딩 목록(`name` 이 없으면 모든 호스트): 설정의 것(붙을 때 연다)과 실행 탭의 것, 듣는 로컬 주소 · 원격 대상 · 상태
+	 * (열지 못했으면 까닭 — 루프백이 아님 · 로컬 포트가 쓰임). 바뀌면 `remote.forwards` 이벤트.
+	 */
+	"remote.forwards.list": { params: RemoteForwardsParams; result: RemoteForward[] };
+	/**
 	 * 링크 없이 가볍게 본다: 사람의 ControlMaster 가 떠 있는가(`ssh -O check`)와 마지막 링크 상태.
 	 */
 	"remote.hosts.check": { params: RemoteHostParams; result: RemoteHostCheck };
@@ -1690,6 +1699,12 @@ export type StreamMethods = {
 	 */
 	"remote.connect": { params: RemoteHostParams; item: RemoteStatus };
 	/**
+	 * 실행 탭 포트의 「로컬로 포워딩」: 그 호스트의 `localhost:remotePort` 를 이 컴퓨터의 루프백(`127.0.0.1`)에서 듣는다. 스트림이
+	 * 열린 동안 포워딩과 그 호스트를 쓴다(링크가 없으면 붙는다). 처음 열린 포워딩을, 닫히면(`remote.forward.close`) 끝을 보낸다. 로컬
+	 * 포트를 이미 누가 쓰면 `conflict`(data `{ reason: "portInUse", port }`) — 다른 `localPort` 로 다시 연다.
+	 */
+	"remote.forward.open": { params: RemoteForwardOpenParams; item: RemoteForward };
+	/**
 	 * 원격 호스트를 붙이는 ssh 의 질문 스트림(호스트 키 확인 · 암호). 열 때 아직 열린 질문이 먼저 온다.
 	 */
 	"remote.prompts": { params: null; item: GitPromptEvent };
@@ -1988,6 +2003,9 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"project.update": {"name":"project.update","kind":"unary","tier":"write","roles":["owner"],"params":"UpdateProjectParams","output":"Project","doc":" 이름 · 즐겨찾기 · 태그 · 설정 저장 방식을 바꾼다. 루트와 slug 는 바꾸지 않는다.\n","mcp":null,"fileScope":false},
 	"remote.connect": {"name":"remote.connect","kind":"stream","tier":"write","roles":["owner"],"params":"RemoteHostParams","output":"RemoteStatus","doc":" 그 호스트를 쓴다: 링크가 없으면 붙고(SSH → 설치 → 데몬 → 핸드셰이크), 스트림이 열린 동안 링크를 둔다. 지금 상태부터 바뀔\n 때마다 보낸다. 사람이 끊어 둔 호스트도 다시 붙는다. 모든 스트림이 닫히면 링크를 닫는다.\n","mcp":null,"fileScope":false},
 	"remote.disconnect": {"name":"remote.disconnect","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteHostParams","output":"()","doc":" 사람이 끊는다. 쓰는 창이 남아 있어도 다시 붙지 않는다(새 `remote.connect` · `remote.retry` 까지).\n","mcp":null,"fileScope":false},
+	"remote.forward.close": {"name":"remote.forward.close","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteForwardCloseParams","output":"()","doc":" 포워딩 하나를 끈다. 실행 탭의 것이면 그 스트림이 끝나고, 설정의 것은 다음에 붙을 때 다시 연다.\n","mcp":null,"fileScope":false},
+	"remote.forward.open": {"name":"remote.forward.open","kind":"stream","tier":"write","roles":["owner"],"params":"RemoteForwardOpenParams","output":"RemoteForward","doc":" 실행 탭 포트의 「로컬로 포워딩」: 그 호스트의 `localhost:remotePort` 를 이 컴퓨터의 루프백(`127.0.0.1`)에서 듣는다. 스트림이\n 열린 동안 포워딩과 그 호스트를 쓴다(링크가 없으면 붙는다). 처음 열린 포워딩을, 닫히면(`remote.forward.close`) 끝을 보낸다. 로컬\n 포트를 이미 누가 쓰면 `conflict`(data `{ reason: \"portInUse\", port }`) — 다른 `localPort` 로 다시 연다.\n","mcp":null,"fileScope":false},
+	"remote.forwards.list": {"name":"remote.forwards.list","kind":"unary","tier":"read","roles":["owner"],"params":"RemoteForwardsParams","output":"Vec<RemoteForward>","doc":" 포트 포워딩 목록(`name` 이 없으면 모든 호스트): 설정의 것(붙을 때 연다)과 실행 탭의 것, 듣는 로컬 주소 · 원격 대상 · 상태\n (열지 못했으면 까닭 — 루프백이 아님 · 로컬 포트가 쓰임). 바뀌면 `remote.forwards` 이벤트.\n","mcp":null,"fileScope":false},
 	"remote.hosts.check": {"name":"remote.hosts.check","kind":"unary","tier":"read","roles":["owner"],"params":"RemoteHostParams","output":"RemoteHostCheck","doc":" 링크 없이 가볍게 본다: 사람의 ControlMaster 가 떠 있는가(`ssh -O check`)와 마지막 링크 상태.\n","mcp":null,"fileScope":false},
 	"remote.hosts.list": {"name":"remote.hosts.list","kind":"unary","tier":"read","roles":["owner"],"params":"()","output":"RemoteHostList","doc":" 원격 호스트 목록: 전역 `[[remote_hosts]]` 와 `~/.ssh/config` 의 `Host` 이름(와일드카드 없음), 각각의 지금 상태 · 기억한\n 머신 id · 마지막 링크 상태. 링크를 열지 않는다.\n","mcp":null,"fileScope":false},
 	"remote.linkCommand": {"name":"remote.linkCommand","kind":"unary","tier":"write","roles":["owner"],"params":"RemoteLinkCommandParams","output":"()","doc":" 원격의 `~/.local/bin/pitwall` 링크를 이 판 Relay 로 두거나(`on`) 걷는다(메인 판정 M7-P12 — 사람이 고를 때만). 그 자리에 사람의\n 다른 파일이 있으면 Relay 가 거절한다. 그 호스트가 지금 `machine` 에 붙어 있을 때만.\n","mcp":null,"fileScope":false},
@@ -2054,7 +2072,7 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 };
 
 /** 선언된 이벤트 토픽(`rpc_event!`). 선언 없는 토픽은 구독할 수 없다. */
-export type TopicName = "config.changed" | "config.error" | "db.queryProgress" | "db.schemaChanged" | "db.secretRequested" | "db.sessionChanged" | "debug.breakpoints" | "debug.continued" | "debug.ended" | "debug.output" | "debug.stopped" | "fs.changed" | "git.refsChanged" | "git.statusChanged" | "lsp.applyEdit" | "lsp.diagnostics" | "lsp.showDocument" | "lsp.status" | "mcp.activity" | "mcp.sessionsChanged" | "notification.show" | "project.changed" | "remote.relays" | "remote.status" | "run.chain" | "run.exited" | "run.ports" | "run.started" | "runtime.changed" | "task.finished" | "task.progress";
+export type TopicName = "config.changed" | "config.error" | "db.queryProgress" | "db.schemaChanged" | "db.secretRequested" | "db.sessionChanged" | "debug.breakpoints" | "debug.continued" | "debug.ended" | "debug.output" | "debug.stopped" | "fs.changed" | "git.refsChanged" | "git.statusChanged" | "lsp.applyEdit" | "lsp.diagnostics" | "lsp.showDocument" | "lsp.status" | "mcp.activity" | "mcp.sessionsChanged" | "notification.show" | "project.changed" | "remote.forwards" | "remote.relays" | "remote.status" | "run.chain" | "run.exited" | "run.ports" | "run.started" | "runtime.changed" | "task.finished" | "task.progress";
 
 /** 토픽 메타데이터(구독할 수 있는 role). `events.subscribe` 는 호출자의 role 이 없는 토픽을 거절한다. */
 export const TOPICS: Record<TopicName, EventMeta> = {
@@ -2080,6 +2098,7 @@ export const TOPICS: Record<TopicName, EventMeta> = {
 	"mcp.sessionsChanged": {"name":"mcp.sessionsChanged","roles":["owner","mobile","readonly"]},
 	"notification.show": {"name":"notification.show","roles":["owner","mobile","readonly"]},
 	"project.changed": {"name":"project.changed","roles":["owner","mobile","readonly"]},
+	"remote.forwards": {"name":"remote.forwards","roles":["owner"]},
 	"remote.relays": {"name":"remote.relays","roles":["owner"]},
 	"remote.status": {"name":"remote.status","roles":["owner"]},
 	"run.chain": {"name":"run.chain","roles":["owner","mobile","readonly"]},
@@ -9560,6 +9579,72 @@ export type RemoteFailureKind =
 "alreadyConnected" | 
 /**  원격 호스트를 쓸 수 없다(설정 · 부품 없음). */
 "unavailable";
+
+/**  포트 포워딩 하나(`remote.forwards.list` 의 줄). */
+export type RemoteForward = {
+	/**  이 앱이 사는 동안 유일한 번호(`remote.forward.close`). */
+	id: number,
+	/**  원격 호스트 이름. */
+	name: string,
+	origin: RemoteForwardOrigin,
+	/**  듣는 로컬 주소(설정 그대로 — 열지 못했으면 루프백이 아닐 수 있다). */
+	localHost: string,
+	/**  듣는 로컬 포트(OS 가 고른 포트면 고른 값). */
+	localPort: number,
+	remoteHost: string,
+	remotePort: number,
+	state: RemoteForwardState,
+};
+
+/**  `remote.forward.close` 의 입력. */
+export type RemoteForwardCloseParams = {
+	id: number,
+};
+
+/**  포워딩을 열지 못한 까닭. */
+export type RemoteForwardFailure = {
+	kind: RemoteForwardFailureKind,
+	/**  영어 원문. */
+	message: string,
+};
+
+/**  포워딩을 열지 못한 까닭의 종류. */
+export type RemoteForwardFailureKind = 
+/**  설정의 `local_host` 가 루프백이 아니다 — 열지 않는다(결정 M7-D12). */
+"notLoopback" | 
+/**  이 컴퓨터에서 그 로컬 포트를 이미 누가 쓴다. */
+"portInUse" | 
+/**  그 밖의 듣기 실패. */
+"bind";
+
+/**
+ *  `remote.forward.open` 의 입력 — 그 호스트의 `localhost:remotePort` 를 로컬로. `localPort` 가 없으면 같은 번호, `0` 이면 OS 가
+ *  빈 포트를 고른다.
+ */
+export type RemoteForwardOpenParams = {
+	name: string,
+	remotePort: number,
+	localPort?: number | null,
+};
+
+/**  포트 포워딩이 어디서 왔나(18-m7-plan M7-22 ①). */
+export type RemoteForwardOrigin = 
+/**  원격 호스트 설정의 `[[remote_hosts.port_forwards]]` — 붙을 때 연다. */
+"settings" | 
+/**  실행 탭 포트의 「로컬로 포워딩」 — 연 창이 쥐는 동안(그 실행이 사는 동안). */
+"run";
+
+/**  포워딩의 지금 상태. */
+export type RemoteForwardState = 
+/**  로컬 루프백에서 듣는다. */
+{ state: "listening" } | 
+/**  열지 못했다(설정의 포워딩 — 실행 탭의 포워딩은 열지 못하면 목록에 남지 않고 오류로 끝난다). */
+{ state: "failed"; error: RemoteForwardFailure };
+
+/**  `remote.forwards.list` 의 입력. `name` 이 없으면 모든 호스트. */
+export type RemoteForwardsParams = {
+	name?: string | null,
+};
 
 /**  가벼운 상태 확인(`ssh -O check`). */
 export type RemoteHostCheck = {

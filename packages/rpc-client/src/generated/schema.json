@@ -45576,6 +45576,383 @@
       ],
       "tier": "write"
     },
+    "remote.forward.close": {
+      "description": "포워딩 하나를 끈다. 실행 탭의 것이면 그 스트림이 끝나고, 설정의 것은 다음에 붙을 때 다시 연다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`remote.forward.close` 의 입력.",
+        "properties": {
+          "id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "null"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "remote.forward.open": {
+      "description": "실행 탭 포트의 「로컬로 포워딩」: 그 호스트의 `localhost:remotePort` 를 이 컴퓨터의 루프백(`127.0.0.1`)에서 듣는다. 스트림이\n열린 동안 포워딩과 그 호스트를 쓴다(링크가 없으면 붙는다). 처음 열린 포워딩을, 닫히면(`remote.forward.close`) 끝을 보낸다. 로컬\n포트를 이미 누가 쓰면 `conflict`(data `{ reason: \"portInUse\", port }`) — 다른 `localPort` 로 다시 연다.",
+      "item": {
+        "$defs": {
+          "RemoteForwardFailure": {
+            "description": "포워딩을 열지 못한 까닭.",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/RemoteForwardFailureKind"
+              },
+              "message": {
+                "description": "영어 원문.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message"
+            ],
+            "type": "object"
+          },
+          "RemoteForwardFailureKind": {
+            "description": "포워딩을 열지 못한 까닭의 종류.",
+            "oneOf": [
+              {
+                "const": "notLoopback",
+                "description": "설정의 `local_host` 가 루프백이 아니다 — 열지 않는다(결정 M7-D12).",
+                "type": "string"
+              },
+              {
+                "const": "portInUse",
+                "description": "이 컴퓨터에서 그 로컬 포트를 이미 누가 쓴다.",
+                "type": "string"
+              },
+              {
+                "const": "bind",
+                "description": "그 밖의 듣기 실패.",
+                "type": "string"
+              }
+            ]
+          },
+          "RemoteForwardOrigin": {
+            "description": "포트 포워딩이 어디서 왔나(18-m7-plan M7-22 ①).",
+            "oneOf": [
+              {
+                "const": "settings",
+                "description": "원격 호스트 설정의 `[[remote_hosts.port_forwards]]` — 붙을 때 연다.",
+                "type": "string"
+              },
+              {
+                "const": "run",
+                "description": "실행 탭 포트의 「로컬로 포워딩」 — 연 창이 쥐는 동안(그 실행이 사는 동안).",
+                "type": "string"
+              }
+            ]
+          },
+          "RemoteForwardState": {
+            "description": "포워딩의 지금 상태.",
+            "oneOf": [
+              {
+                "description": "로컬 루프백에서 듣는다.",
+                "properties": {
+                  "state": {
+                    "const": "listening",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "열지 못했다(설정의 포워딩 — 실행 탭의 포워딩은 열지 못하면 목록에 남지 않고 오류로 끝난다).",
+                "properties": {
+                  "error": {
+                    "$ref": "#/$defs/RemoteForwardFailure"
+                  },
+                  "state": {
+                    "const": "failed",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "error"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "포트 포워딩 하나(`remote.forwards.list` 의 줄).",
+        "properties": {
+          "id": {
+            "description": "이 앱이 사는 동안 유일한 번호(`remote.forward.close`).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "localHost": {
+            "description": "듣는 로컬 주소(설정 그대로 — 열지 못했으면 루프백이 아닐 수 있다).",
+            "type": "string"
+          },
+          "localPort": {
+            "description": "듣는 로컬 포트(OS 가 고른 포트면 고른 값).",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "description": "원격 호스트 이름.",
+            "type": "string"
+          },
+          "origin": {
+            "$ref": "#/$defs/RemoteForwardOrigin"
+          },
+          "remoteHost": {
+            "type": "string"
+          },
+          "remotePort": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/$defs/RemoteForwardState"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "origin",
+          "localHost",
+          "localPort",
+          "remoteHost",
+          "remotePort",
+          "state"
+        ],
+        "type": "object"
+      },
+      "kind": "stream",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`remote.forward.open` 의 입력 — 그 호스트의 `localhost:remotePort` 를 로컬로. `localPort` 가 없으면 같은 번호, `0` 이면 OS 가\n빈 포트를 고른다.",
+        "properties": {
+          "localPort": {
+            "default": null,
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "remotePort": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "remotePort"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "write"
+    },
+    "remote.forwards.list": {
+      "description": "포트 포워딩 목록(`name` 이 없으면 모든 호스트): 설정의 것(붙을 때 연다)과 실행 탭의 것, 듣는 로컬 주소 · 원격 대상 · 상태\n(열지 못했으면 까닭 — 루프백이 아님 · 로컬 포트가 쓰임). 바뀌면 `remote.forwards` 이벤트.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`remote.forwards.list` 의 입력. `name` 이 없으면 모든 호스트.",
+        "properties": {
+          "name": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "RemoteForward": {
+            "description": "포트 포워딩 하나(`remote.forwards.list` 의 줄).",
+            "properties": {
+              "id": {
+                "description": "이 앱이 사는 동안 유일한 번호(`remote.forward.close`).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "localHost": {
+                "description": "듣는 로컬 주소(설정 그대로 — 열지 못했으면 루프백이 아닐 수 있다).",
+                "type": "string"
+              },
+              "localPort": {
+                "description": "듣는 로컬 포트(OS 가 고른 포트면 고른 값).",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "description": "원격 호스트 이름.",
+                "type": "string"
+              },
+              "origin": {
+                "$ref": "#/$defs/RemoteForwardOrigin"
+              },
+              "remoteHost": {
+                "type": "string"
+              },
+              "remotePort": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "state": {
+                "$ref": "#/$defs/RemoteForwardState"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "origin",
+              "localHost",
+              "localPort",
+              "remoteHost",
+              "remotePort",
+              "state"
+            ],
+            "type": "object"
+          },
+          "RemoteForwardFailure": {
+            "description": "포워딩을 열지 못한 까닭.",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/RemoteForwardFailureKind"
+              },
+              "message": {
+                "description": "영어 원문.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message"
+            ],
+            "type": "object"
+          },
+          "RemoteForwardFailureKind": {
+            "description": "포워딩을 열지 못한 까닭의 종류.",
+            "oneOf": [
+              {
+                "const": "notLoopback",
+                "description": "설정의 `local_host` 가 루프백이 아니다 — 열지 않는다(결정 M7-D12).",
+                "type": "string"
+              },
+              {
+                "const": "portInUse",
+                "description": "이 컴퓨터에서 그 로컬 포트를 이미 누가 쓴다.",
+                "type": "string"
+              },
+              {
+                "const": "bind",
+                "description": "그 밖의 듣기 실패.",
+                "type": "string"
+              }
+            ]
+          },
+          "RemoteForwardOrigin": {
+            "description": "포트 포워딩이 어디서 왔나(18-m7-plan M7-22 ①).",
+            "oneOf": [
+              {
+                "const": "settings",
+                "description": "원격 호스트 설정의 `[[remote_hosts.port_forwards]]` — 붙을 때 연다.",
+                "type": "string"
+              },
+              {
+                "const": "run",
+                "description": "실행 탭 포트의 「로컬로 포워딩」 — 연 창이 쥐는 동안(그 실행이 사는 동안).",
+                "type": "string"
+              }
+            ]
+          },
+          "RemoteForwardState": {
+            "description": "포워딩의 지금 상태.",
+            "oneOf": [
+              {
+                "description": "로컬 루프백에서 듣는다.",
+                "properties": {
+                  "state": {
+                    "const": "listening",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "열지 못했다(설정의 포워딩 — 실행 탭의 포워딩은 열지 못하면 목록에 남지 않고 오류로 끝난다).",
+                "properties": {
+                  "error": {
+                    "$ref": "#/$defs/RemoteForwardFailure"
+                  },
+                  "state": {
+                    "const": "failed",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "error"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "items": {
+          "$ref": "#/$defs/RemoteForward"
+        },
+        "type": "array"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "remote.hosts.check": {
       "description": "링크 없이 가볍게 본다: 사람의 ControlMaster 가 떠 있는가(`ssh -O check`)와 마지막 링크 상태.",
       "kind": "unary",

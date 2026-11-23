@@ -257,6 +257,9 @@ project.trust Unary Read {Owner, Mobile, Readonly}
 project.update Unary Write {Owner}
 remote.connect Stream Write {Owner}
 remote.disconnect Unary Write {Owner}
+remote.forward.close Unary Write {Owner}
+remote.forward.open Stream Write {Owner}
+remote.forwards.list Unary Read {Owner}
 remote.hosts.check Unary Read {Owner}
 remote.hosts.list Unary Read {Owner}
 remote.linkCommand Unary Write {Owner}
