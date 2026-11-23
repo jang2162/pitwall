@@ -2,7 +2,7 @@
 // 윈도우는 `TOOL_WINDOWS` 에 한 줄로 등록하고, 나머지는 자리만 잡는다. 에디터(src/editor)는 창마다 하나의 작업 공간
 // (`createEditorWorkspace`)을 두고, 창이 받은 열기 요청(src/project-open.ts 의 우편함)을 그것으로 연다.
 
-import { ERROR_CODE, type FsStat, RpcCallError } from "@pitwall/rpc-client";
+import { ERROR_CODE, type FsStat, RpcCallError, type RpcClient } from "@pitwall/rpc-client";
 import "dockview-react/dist/styles/dockview.css";
 
 import type { UiLogger } from "@pitwall/logger";
@@ -44,7 +44,9 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Toaster } from "sonner";
 
 import { createDocumentStore, FS_CHANGED_TOPIC, type FsChangedEvent } from "../editor/documents";
+import { REMOTE_WHOLE_READ, REMOTE_WHOLE_WRITE, wireBytes } from "../editor/link-limits";
 import { startMachineDocumentSync } from "../editor/machine-documents";
+import { formatMiB } from "../editor/viewers";
 import { editorActions } from "../editor/editor-actions";
 import { useEditorOperations } from "../editor/editor-operations";
 import { EditorPanel } from "../editor/editor-panel";
@@ -500,6 +502,52 @@ function errorText(e: unknown): string {
 }
 
 /**
+ * 탭 · 문서의 머신으로 가는 길(18-m7-plan M7-11 ② — 활성 체크아웃 연결이 아니다). 다른 머신의 경로 · 워크트리는 머신이 붙은
+ * 꼴이라(checkout/checkout.ts) 풀어서 그 머신의 연결 · 프로젝트 id 로 보내고(`route`), 돌아온 경로에 머신을 다시 붙인다(`back`).
+ * 문서(에디터)와 스스로 읽는 뷰어(미리보기 — M7-13)가 같은 길을 쓴다.
+ */
+function machineRoute(
+  now: () => {
+    client: RpcClient | undefined;
+    hosts: CheckoutHosts | undefined;
+    projectId: string | undefined;
+  },
+) {
+  const route = async (path: string, worktree: string | undefined) => {
+    const machine = machineOf(path, worktree);
+    const { client, hosts, projectId } = now();
+    const scoped = {
+      path: unqualify(path).path,
+      worktree: checkoutOfKey(worktree).worktree ?? null,
+    };
+    if (machine === LOCAL_MACHINE) {
+      if (!client || projectId === undefined) throw new Error("Host is not connected");
+      return {
+        machine,
+        client,
+        projectId,
+        base: { projectId, worktree: scoped.worktree },
+        path: scoped.path,
+      };
+    }
+    if (!hosts) throw new Error(`the machine ${machine} is not connected`);
+    const remote = await hosts.client(machine);
+    return {
+      machine,
+      client: remote.client,
+      projectId: remote.projectId,
+      base: { projectId: remote.projectId, worktree: scoped.worktree },
+      path: scoped.path,
+    };
+  };
+  const back = <T extends { path: string }>(machine: string, result: T): T => ({
+    ...result,
+    path: qualify(machine, result.path),
+  });
+  return { route, back };
+}
+
+/**
  * 창의 에디터 작업 공간. 파일 읽기 · 쓰기는 이 창의 Host 연결로 하고(`fs.stat` · `fs.read` · `fs.write` · `lang.detect`, 요청 · 탭의
  * 워크트리를 접근 범위로), 열지 못한 것 · 저장하지 못한 것은 알림으로 보인다. 구문 강조도 같은 연결의 문서 세션(`syntax.*`)이다.
  * 미저장 확인은 `ask` 가 묻는다. 창이 사는 동안 하나다.
@@ -533,35 +581,11 @@ function useWindowEditor(
       if (!c || projectId === undefined) throw new Error("Host is not connected");
       return c;
     };
-    // 문서는 그 탭의 체크아웃 머신 연결로 읽고 쓴다(18-m7-plan M7-11 ② — 활성 체크아웃 연결이 아니다). 다른 머신의 경로 · 워크트리는
-    // 머신이 붙은 꼴이라(checkout/checkout.ts) 풀어서 그 머신의 프로젝트 id 로 보내고, 돌아온 경로에 머신을 다시 붙인다.
-    const route = async (path: string, worktree: string | undefined) => {
-      const machine = machineOf(path, worktree);
-      const scoped = {
-        path: unqualify(path).path,
-        worktree: checkoutOfKey(worktree).worktree ?? null,
-      };
-      if (machine === LOCAL_MACHINE)
-        return {
-          machine,
-          client: host(),
-          base: { projectId: projectId ?? "", worktree: scoped.worktree },
-          path: scoped.path,
-        };
-      const hosts = latest.current.hosts;
-      if (!hosts) throw new Error(`the machine ${machine} is not connected`);
-      const remote = await hosts.client(machine);
-      return {
-        machine,
-        client: remote.client,
-        base: { projectId: remote.projectId, worktree: scoped.worktree },
-        path: scoped.path,
-      };
-    };
-    const back = <T extends { path: string }>(machine: string, result: T): T => ({
-      ...result,
-      path: qualify(machine, result.path),
-    });
+    const { route, back } = machineRoute(() => ({
+      client: latest.current.client,
+      hosts: latest.current.hosts,
+      projectId,
+    }));
     const stat = async (path: string, worktree: string | undefined) => {
       const r = await route(path, worktree);
       return back(r.machine, await r.client.call("fs.stat", { ...r.base, path: r.path }));
@@ -570,8 +594,26 @@ function useWindowEditor(
     return createEditorWorkspace({
       documents: createDocumentStore({
         stat,
+        // 다른 머신 파일은 링크 틀에 실린다 — 통째로 읽기 · 쓰기에 상한(editor/link-limits.ts, 메인 판정 — 조각은 M7-13b).
+        wholeReadLimit: (path, worktree) =>
+          machineOf(path, worktree) === LOCAL_MACHINE ? undefined : REMOTE_WHOLE_READ,
         read: async (params, worktree) => {
           const r = await route(params.path, worktree);
+          // 문서 모델의 다른 통째 읽기(맞추기 · 이름 바뀜 찾기 · 충돌 뒤 읽기)도 같은 상한을 지난다 — 열 때 본 크기는 그사이 바뀐다.
+          if (
+            r.machine !== LOCAL_MACHINE &&
+            params.offset === undefined &&
+            params.length === undefined
+          ) {
+            const { size } = await r.client.call("fs.stat", { ...r.base, path: r.path });
+            if (size > REMOTE_WHOLE_READ)
+              throw new Error(
+                latest.current.strings.tooLargeForLink(
+                  formatMiB(size),
+                  formatMiB(REMOTE_WHOLE_READ),
+                ),
+              );
+          }
           return back(
             r.machine,
             await r.client.call("fs.read", { ...r.base, ...params, path: r.path }),
@@ -579,6 +621,11 @@ function useWindowEditor(
         },
         write: async (params, worktree) => {
           const r = await route(params.path, worktree);
+          // 틀을 넘는 요청은 그 머신의 채널을 닫는다 — 보내기 전에 막는다(그 머신의 다른 탭 · 터미널까지 끊지 않게).
+          if (r.machine !== LOCAL_MACHINE && wireBytes(params.content) > REMOTE_WHOLE_WRITE)
+            throw new Error(
+              latest.current.strings.saveTooLargeForLink(formatMiB(REMOTE_WHOLE_WRITE)),
+            );
           return back(
             r.machine,
             await r.client.call("fs.write", { ...r.base, ...params, path: r.path }),
@@ -670,49 +717,45 @@ function useWindowEditor(
  */
 function useWindowPreviewHost(projectId: string | undefined): PreviewHost {
   const { client } = useHost();
-  const latest = useRef(client);
-  latest.current = client;
+  const hosts = useCheckoutHosts();
+  const latest = useRef({ client, hosts });
+  latest.current = { client, hosts };
   const [host] = useState<PreviewHost>(() => {
-    const call = () => {
-      const c = latest.current;
-      if (!c || projectId === undefined) throw new Error("Host is not connected");
-      return c;
-    };
+    // 탭의 머신으로 읽는다(M7-13 — 다른 머신의 탭을 이 머신 연결로 읽지 않는다). 바이트는 조각(`BYTES_CHUNK`)이라 링크 틀 안이다.
+    const { route, back } = machineRoute(() => ({ ...latest.current, projectId }));
     return {
       readBytes: (path, worktree, limit) =>
         readAllBytes(
-          (params) =>
-            call().call("fs.read", {
-              projectId: projectId ?? "",
-              worktree: worktree ?? null,
-              ...params,
-            }),
+          async (params) => {
+            const r = await route(params.path, worktree);
+            return r.client.call("fs.read", { ...r.base, ...params, path: r.path });
+          },
           path,
           limit,
         ),
-      readPage: async (path, worktree, offset, length) =>
-        pageOf(
-          await call().call("fs.readBytes", {
-            projectId: projectId ?? "",
-            worktree: worktree ?? null,
-            path,
-            offset,
-            length,
-          }),
-        ),
-      readHead: (path, worktree, length) =>
-        call().call("fs.read", {
-          projectId: projectId ?? "",
-          worktree: worktree ?? null,
-          path,
-          offset: 0,
-          length,
-        }),
+      readPage: async (path, worktree, offset, length) => {
+        const r = await route(path, worktree);
+        return pageOf(
+          await r.client.call("fs.readBytes", { ...r.base, path: r.path, offset, length }),
+        );
+      },
+      readHead: async (path, worktree, length) => {
+        const r = await route(path, worktree);
+        return back(
+          r.machine,
+          await r.client.call("fs.read", { ...r.base, path: r.path, offset: 0, length }),
+        );
+      },
       rootOf: async (worktree) => {
-        if (worktree === undefined)
-          return (await call().call("project.get", { id: projectId ?? "" })).roots[0];
-        const r = await call().call("project.resolve", { path: worktree });
-        return r?.worktree?.root ?? r?.root;
+        // 루트도 그 머신의 경로다 — 머신을 붙여 돌려준다(뷰어가 탭의 경로와 견준다).
+        const r = await route(qualify(checkoutOfKey(worktree).machine, "/"), worktree);
+        if (r.base.worktree === null) {
+          const root = (await r.client.call("project.get", { id: r.projectId })).roots[0];
+          return root === undefined ? undefined : qualify(r.machine, root);
+        }
+        const resolved = await r.client.call("project.resolve", { path: r.base.worktree });
+        const root = resolved?.worktree?.root ?? resolved?.root;
+        return root === undefined ? undefined : qualify(r.machine, root);
       },
       openExternal: (url) => openUrl(url),
     };

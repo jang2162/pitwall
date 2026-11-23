@@ -55,6 +55,8 @@ const fake = vi.hoisted(() => ({
   /** 머신 → 열린 `fs.watch` 스트림(연결 · 워크트리). */
   watches: [] as { conn: Conn; projectId: unknown; worktree: unknown; open: boolean }[],
   clock: 10,
+  /** 머신 → (경로 → 보고할 크기). 없으면 내용의 길이(큰 파일을 내용 없이 흉내 낸다). */
+  sizes: new Map<string, Map<string, number>>(),
 }));
 
 vi.mock("../tauri-transport", async () => {
@@ -102,6 +104,7 @@ vi.mock("../tauri-transport", async () => {
           return deny(`this connection is scoped to ${project}`);
         const path = String(params.path ?? "");
         const version = (p: string) => `${files.get(p)!.mtime}:${files.get(p)!.text}`;
+        const size = (p: string) => fake.sizes.get(machine)?.get(p) ?? files.get(p)!.text.length;
         switch (m.method) {
           case "i18n.get":
             return reply(i18nState("ko"));
@@ -208,7 +211,7 @@ vi.mock("../tauri-transport", async () => {
               path,
               kind: "file",
               target: null,
-              size: files.get(path)!.text.length,
+              size: size(path),
               mtimeMs: files.get(path)!.mtime,
               readonly: false,
               sizeClass: "editable",
@@ -217,12 +220,14 @@ vi.mock("../tauri-transport", async () => {
             if (!files.has(path)) break;
             return reply({
               path,
-              size: files.get(path)!.text.length,
+              size: size(path),
               mtimeMs: files.get(path)!.mtime,
               offset: 0,
               eof: true,
-              version: version(path),
-              content: { kind: "text", text: files.get(path)!.text },
+              version: params.length === undefined ? version(path) : null,
+              content: params.bytes
+                ? { kind: "base64", data: btoa(files.get(path)!.text) }
+                : { kind: "text", text: files.get(path)!.text },
               judgment: {
                 binary: false,
                 encoding: "UTF-8",
@@ -332,6 +337,10 @@ beforeEach(() => {
   fake.conns = [];
   fake.links = new Set();
   fake.watches = [];
+  fake.sizes = new Map([
+    ["local", new Map()],
+    [MINI, new Map()],
+  ]);
   activeWorktreeStore.setState({ top: undefined });
   resetWindowFileTree();
   localStorage.clear();
@@ -640,3 +649,78 @@ it("saves a reconnected tab only to its own machine's new connection after the a
   expect(writes(MINI)[0]).toMatchObject({ projectId: "r1", path: FILE });
   expect(fake.files.get("local")!.get(FILE)!.text).toBe("local text");
 });
+
+// 링크 틀 상한(메인 판정 — editor/link-limits.ts): 틀을 넘는 메시지는 그 머신의 채널을 닫는다. 다른 머신 파일은 통째로 읽기 ·
+// 쓰기 전에 크기를 보고 막는다 — 이 머신 파일은 그대로 연다.
+const BIG = 30 * 1024 * 1024;
+const wholeReads = (machine: string, path: string) =>
+  fake.calls
+    .get(machine)!
+    .filter(
+      (c) => c.method === "fs.read" && c.params.path === path && c.params.length === undefined,
+    );
+
+it("does not read a remote file too large for the link at once, and opens the same size from this machine", async () => {
+  await mount();
+  fake.files.get(MINI)!.set("/work/demo/big.log", { text: "big remote", mtime: 1 });
+  fake.sizes.get(MINI)!.set("/work/demo/big.log", BIG);
+  fake.files.get("local")!.set("/work/demo/big.log", { text: "big local", mtime: 1 });
+  fake.sizes.get("local")!.set("/work/demo/big.log", BIG);
+  await act(
+    async () =>
+      void openTab(dock!, { path: qualify(MINI, "/work/demo/big.log"), worktree: REMOTE_MAIN }),
+  );
+  await vi.waitFor(() => expect(document.body.textContent).toContain("링크로는 열지 않는다"));
+  // 열지 않은 큰 파일의 안내다(읽기 실패가 아니다) — [앞부분 보기] · [hex] 는 범위 읽기라 링크 틀 안이다.
+  expect(document.querySelector("[data-notice-action=head]")).not.toBeNull();
+  expect(wholeReads(MINI, "/work/demo/big.log")).toHaveLength(0);
+  expect(viewWith("big remote")).toBeUndefined();
+
+  await push({ file: "/work/demo/big.log" });
+  await vi.waitFor(() => expect(viewWith("big local")).toBeDefined());
+});
+
+it("does not read a remote document again once it grew past the link limit", async () => {
+  await openBoth();
+  const member = liveMember()!;
+  await vi.waitFor(() => expect(member.subscriptions.size).toBeGreaterThan(0));
+  fake.files.get(MINI)!.set(FILE, { text: "grown", mtime: ++fake.clock });
+  fake.sizes.get(MINI)!.set(FILE, BIG);
+  const before = wholeReads(MINI, FILE).length;
+  await changed(member, [FILE]);
+  await settle();
+  expect(wholeReads(MINI, FILE)).toHaveLength(before);
+  expect(viewWith("remote text")).toBeDefined();
+});
+
+it("refuses to send a remote save too large for the link and keeps the edit", async () => {
+  const remote = await openBoth();
+  // 따옴표는 JSON 에서 두 바이트다 — 25 MiB 의 따옴표는 보낼 때 50 MiB 로, 쓰기 상한(48 MiB)을 넘는다.
+  await type(remote, '"'.repeat(25 * 1024 * 1024));
+  await saveActive();
+  expect(writes(MINI)).toHaveLength(0);
+  expect(writes("local")).toHaveLength(0);
+  expect(document.body.textContent).toContain("보내지 않았다");
+  expect(member().closed).toBe(false);
+}, 60_000);
+
+it("reads a remote tab's image on that machine and none on this one", async () => {
+  await mount();
+  fake.files.get(MINI)!.set("/work/demo/logo.png", { text: "PNGDATA", mtime: 1 });
+  await act(
+    async () =>
+      void openTab(dock!, { path: qualify(MINI, "/work/demo/logo.png"), worktree: REMOTE_MAIN }),
+  );
+  await vi.waitFor(() =>
+    expect(
+      fake.calls.get(MINI)!.some((c) => c.method === "fs.read" && c.params.bytes === true),
+    ).toBe(true),
+  );
+  expect(
+    fake.calls.get(MINI)!.find((c) => c.method === "fs.read" && c.params.bytes === true)!.params,
+  ).toMatchObject({ projectId: "r1", path: "/work/demo/logo.png" });
+  const localFs = fake.calls.get("local")!.filter((c) => c.params.path === "/work/demo/logo.png");
+  expect(localFs).toHaveLength(0);
+});
+
+const member = () => liveMember()!;

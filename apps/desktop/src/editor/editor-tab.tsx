@@ -85,7 +85,7 @@ export function EditorTabHeader(props: IDockviewPanelHeaderProps<EditorTabParams
     const doc = s.docs[params.path];
     if (doc?.status === "text" || doc?.status === "external")
       return chooseViewer(doc, params.viewer);
-    if (doc?.status === "tooLarge" && doc.reason === "size") return params.viewer ?? "notice";
+    if (doc?.status === "tooLarge" && doc.reason !== "special") return params.viewer ?? "notice";
     return null;
   });
   const git = useGitDecoration(params.path);
