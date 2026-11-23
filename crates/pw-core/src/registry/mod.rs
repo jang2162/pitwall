@@ -388,13 +388,40 @@ impl Registry {
     }
 
     /// 등록할 수 있는 루트를 좁힌다(복제본이 모두 같은 것을 본다). 모든 등록(`project.create` · 에이전트의 `project_register` ·
-    /// 묶음 멤버 더하기 등)이 지나는 [`Self::create`] 가 심링크 · `..` 를 푼 실제 경로로 묻는다. 이미 등록된 프로젝트는 건드리지 않는다.
+    /// 묶음 멤버 더하기 등)이 지나는 [`Self::create`] 가 심링크 · `..` 를 푼 실제 경로로 묻는다. 이미 등록된 프로젝트의 행은
+    /// 건드리지 않지만, 루트 하나라도 판정을 지나지 못하는 프로젝트는 **숨긴다** — [`Self::list`] · [`Self::recent`] ·
+    /// [`Self::get`] · [`Self::resolve`] 에 나오지 않아 열 수도 쓸 수도 없다(`roots` 를 좁힌 뒤 밖에 남은 프로젝트 — M7-04 리뷰 권고
+    /// 5). 판정을 다시 넓히면 다시 보인다. 숨긴 것은 [`Self::hidden_by_root_policy`] 로 본다.
     pub fn set_root_policy(&self, policy: RootPolicy) {
         *self
             .inner
             .root_policy
             .write()
             .unwrap_or_else(PoisonError::into_inner) = Some(policy);
+    }
+
+    /// 루트 판정([`Self::set_root_policy`])이 숨기는가. 판정이 없으면 숨기지 않는다. 저장한 루트를 지금 다시 푼 실제 경로로 묻는다
+    /// (풀 수 없으면 저장한 그대로).
+    fn hidden(&self, project: &Project) -> bool {
+        let policy = self
+            .inner
+            .root_policy
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        policy.is_some_and(|policy| {
+            project.roots.iter().any(|root| {
+                let root = Path::new(root);
+                let real = normalize(root).unwrap_or_else(|_| root.to_path_buf());
+                policy(&real).is_err()
+            })
+        })
+    }
+
+    /// 루트 판정이 숨긴 프로젝트(Relay 가 시작할 때 경고로 남긴다).
+    pub fn hidden_by_root_policy(&self) -> Result<Vec<Project>, RegistryError> {
+        let projects = self.read(|conn| load(conn, None))?;
+        Ok(projects.into_iter().filter(|p| self.hidden(p)).collect())
     }
 
     /// 그 묶음의 더하기 잠금.
@@ -434,33 +461,36 @@ impl Registry {
 
     /// 이름순(대소문자 무시), 같으면 만든 순.
     pub fn list(&self) -> Result<Vec<Project>, RegistryError> {
-        self.read(|conn| {
-            let mut projects = load(conn, None)?;
-            projects.sort_by(|a, b| {
-                a.name
-                    .to_lowercase()
-                    .cmp(&b.name.to_lowercase())
-                    .then(a.created_at.cmp(&b.created_at))
-            });
-            Ok(projects)
-        })
+        // 숨김 판정은 디스크를 읽는다(루트 풀기) — DB 락 밖에서.
+        let mut projects = self.read(|conn| load(conn, None))?;
+        projects.retain(|p| !self.hidden(p));
+        projects.sort_by(|a, b| {
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
+                .then(a.created_at.cmp(&b.created_at))
+        });
+        Ok(projects)
     }
 
     /// 연 적 있는 프로젝트를 최근에 연 것부터 `limit` 개.
     pub fn recent(&self, limit: usize) -> Result<Vec<Project>, RegistryError> {
-        self.read(|conn| {
-            let mut projects: Vec<Project> = load(conn, None)?
-                .into_iter()
-                .filter(|p| p.opened_at.is_some())
-                .collect();
-            projects.sort_by_key(|p| std::cmp::Reverse(p.opened_at));
-            projects.truncate(limit);
-            Ok(projects)
-        })
+        let mut projects: Vec<Project> = self
+            .read(|conn| load(conn, None))?
+            .into_iter()
+            .filter(|p| p.opened_at.is_some() && !self.hidden(p))
+            .collect();
+        projects.sort_by_key(|p| std::cmp::Reverse(p.opened_at));
+        projects.truncate(limit);
+        Ok(projects)
     }
 
     pub fn get(&self, id: &str) -> Result<Project, RegistryError> {
-        self.read(|conn| load_one(conn, id))
+        let project = self.read(|conn| load_one(conn, id))?;
+        if self.hidden(&project) {
+            return Err(RegistryError::NotFound(id.to_owned()));
+        }
+        Ok(project)
     }
 
     /// 프로젝트 요약([`info`]). 루트 폴더를 읽으므로 레지스트리 잠금을 놓고 본다.
@@ -619,7 +649,7 @@ impl Registry {
         let projects: Vec<Project> = self
             .read(|conn| load(conn, None))?
             .into_iter()
-            .filter(|p| p.host == LOCAL_HOST)
+            .filter(|p| p.host == LOCAL_HOST && !self.hidden(p))
             .collect();
         let roots: Vec<(usize, PathBuf)> = projects
             .iter()

@@ -120,6 +120,47 @@ mod tests {
         assert!(err.contains("allows no project folders"), "{err}");
     }
 
+    /// `roots` 를 좁히면 밖에 남은 프로젝트는 목록 · 찾기 · 경로 풀기에서 숨고(열 수 없다), 숨긴 것으로 보인다. 다시 넓히면 보인다
+    /// (M7-04 리뷰 권고 5 — 18-m7-plan M7-12 이월).
+    #[test]
+    fn narrowing_the_roots_hides_projects_left_outside() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let (kept, left) = (base.join("a/kept"), base.join("b/left"));
+        for d in [&kept, &left] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let registry = registry(dir.path(), &[base.join("a"), base.join("b")]);
+        create(&registry, &kept).unwrap();
+        create(&registry, &left).unwrap();
+        let left_id = registry.resolve(&left).unwrap().unwrap().project.id;
+        registry.recent(10).unwrap();
+        registry.mark_opened(&left_id).unwrap();
+
+        registry.set_root_policy(Roots::new(&[base.join("a")]).policy());
+        let names: Vec<String> = registry
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        assert_eq!(names, ["kept"]);
+        assert!(registry.get(&left_id).is_err());
+        assert!(registry.resolve(&left).unwrap().is_none());
+        assert!(registry.recent(10).unwrap().is_empty());
+        let hidden: Vec<String> = registry
+            .hidden_by_root_policy()
+            .unwrap()
+            .into_iter()
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(hidden, std::slice::from_ref(&left_id));
+
+        registry.set_root_policy(Roots::new(std::slice::from_ref(&base)).policy());
+        assert_eq!(registry.list().unwrap().len(), 2);
+        assert!(registry.get(&left_id).is_ok());
+    }
+
     fn registry_at(dir: &Path, name: &str) -> Registry {
         let registry = Registry::new(AppPaths::under(&dir.join(name)), None, EventBus::new(16));
         registry.set_root_policy(Roots::new(&[]).policy());
