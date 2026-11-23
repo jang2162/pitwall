@@ -10,6 +10,7 @@
 //! - 다중화(`mux`): 링크 하나에 채널 여럿 — 채널 수 상한, 채널마다 흐름 제어 · 보내기 버퍼 상한, 하트비트.
 //! - [`desktop`]: [`dial`] · [`RemoteHost`](`pw_core::Host` 를 구현해 `HostRouter` 에 붙는다) · 링크 상태.
 //! - [`relay`]: [`serve`] — 증명된 Desktop 의 채널을 이 머신의 Host 연결로 잇고, 호출자를 링크 기기의 role 로 자른다.
+//! - [`forward`]: 포트 포워딩(M7-22) — Desktop 루프백의 TCP 연결 하나가 채널 하나, Relay 가 그 머신에서 TCP 를 연다(owner 링크만).
 //! - 이어 붙기(M7-09 ①): 전송을 잃은 링크는 시한 동안 채널을 쥐고, Desktop([`RemoteHost`])이 같은 링크의 토큰으로 다시 붙으면 잃은
 //!   틀 없이 이어 간다(`mux` 머리 주석 「이어 붙기」).
 //! - `ssh` · `install`(기능 `bootstrap` — Desktop 만): 시스템 `ssh` 로 원격 명령 · 링크 전송, Relay 설치 · SSH 자동 페어링(M7-06).
@@ -18,6 +19,7 @@
 mod claim;
 pub mod desktop;
 pub mod device;
+pub mod forward;
 pub mod frame;
 pub mod handshake;
 mod mux;

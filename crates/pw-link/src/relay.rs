@@ -306,14 +306,19 @@ pub async fn serve_proven(
             frame = inbox.recv() => frame,
         };
         let Some(frame) = frame else { break };
-        if frame.kind != Kind::Connect || frame.channel == CONTROL {
-            mux.shutdown(CloseReason::Protocol(format!(
-                "unexpected {:?} frame",
-                frame.kind
-            )));
-            break;
+        match frame.kind {
+            Kind::Connect if frame.channel != CONTROL => {
+                connect(&mux, frame, &proven, &parts.host);
+            }
+            Kind::Forward if frame.channel != CONTROL => forward(&mux, frame, &proven),
+            _ => {
+                mux.shutdown(CloseReason::Protocol(format!(
+                    "unexpected {:?} frame",
+                    frame.kind
+                )));
+                break;
+            }
         }
-        connect(&mux, frame, &proven, &parts.host);
     }
     watcher.abort();
     closed.cancelled().await;
@@ -450,6 +455,76 @@ fn connect(mux: &Mux, frame: LinkFrame, proven: &Proven, host: &Arc<dyn Host>) {
         }
         // 연결을 버리면 Host 가 그 세션의 요청 · 스트림을 취소하고 구독을 걷는다.
         drop(connection);
+    });
+}
+
+/// 포트 포워딩 채널 하나(18-m7-plan M7-22 — [`crate::forward`]). **owner 링크만**(메인 판정 M7-P15): 다른 role 의 기기는
+/// 거절하고 TCP 를 열지 않는다. 대상은 꼴만 본다 — 어느 호스트로 갈지는 owner 기기(사람의 설정)가 정한다.
+fn forward(mux: &Mux, frame: LinkFrame, proven: &Proven) {
+    let channel = frame.channel;
+    if proven.role != Role::Owner {
+        refuse(mux, channel, "port forwarding needs an owner device");
+        return;
+    }
+    if mux.has_channel(channel) {
+        refuse(mux, channel, "channel already open");
+        return;
+    }
+    if mux.channel_count() >= mux.limits().max_channels {
+        refuse(mux, channel, "too many channels on this link");
+        return;
+    }
+    let to = match serde_json::from_value::<crate::forward::ForwardTo>(frame.body)
+        .map_err(|e| format!("bad forward target: {e}"))
+        .and_then(|to| to.check().map(|()| to))
+    {
+        Ok(to) => to,
+        Err(why) => {
+            refuse(mux, channel, &why);
+            return;
+        }
+    };
+    let (rx, cancel) = match mux.add_channel(channel) {
+        Ok(opened) => opened,
+        Err(AddError::Budget) => {
+            refuse(mux, channel, "the link's receive budget is exhausted");
+            return;
+        }
+        Err(AddError::Closed | AddError::Exists) => return,
+    };
+    let mux = mux.clone();
+    tokio::spawn(async move {
+        let connecting = tokio::time::timeout(
+            crate::forward::CONNECT_TIMEOUT,
+            tokio::net::TcpStream::connect((to.host.as_str(), to.port)),
+        );
+        let tcp = tokio::select! {
+            () = cancel.cancelled() => return,
+            tcp = connecting => tcp,
+        };
+        let tcp = match tcp {
+            Ok(Ok(tcp)) => tcp,
+            Ok(Err(e)) => {
+                mux.forget_channel(channel);
+                refuse(
+                    &mux,
+                    channel,
+                    &format!("cannot connect to {}:{}: {e}", to.host, to.port),
+                );
+                return;
+            }
+            Err(_) => {
+                mux.forget_channel(channel);
+                refuse(
+                    &mux,
+                    channel,
+                    &format!("connecting to {}:{} timed out", to.host, to.port),
+                );
+                return;
+            }
+        };
+        mux.send_control(&LinkFrame::new(channel, Kind::Accepted, Value::Null));
+        crate::forward::pump(mux, channel, rx, cancel, tcp).await;
     });
 }
 

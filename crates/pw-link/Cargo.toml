@@ -42,7 +42,8 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["raw_value"] }
 # 머신 id = Relay 기기 공개키의 SHA-256 지문(메인 판정 M7-P6). ed25519-dalek 이 쓰는 판과 같다.
 sha2 = "0.11.1"
-tokio = { workspace = true, features = ["rt", "sync", "macros", "time", "io-util", "fs"] }
+# net: 포트 포워딩(18-m7-plan M7-22) — Desktop 은 루프백에서 듣고 Relay 는 그 머신에서 TCP 를 연다.
+tokio = { workspace = true, features = ["rt", "sync", "macros", "time", "io-util", "fs", "net"] }
 tokio-util = { workspace = true }
 tracing = "0.1.44"
 zeroize = "1.9.1"

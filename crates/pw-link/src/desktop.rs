@@ -9,10 +9,13 @@ use pw_core::{BoxFuture, Connection, FrameSink, FrameSource, Host, HostError, Ho
 use pw_rpc::{Caller, Role};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::net::TcpStream;
 use tokio::sync::{oneshot, watch};
+use tokio_util::sync::CancellationToken;
 
 use crate::claim::CallerClaim;
 use crate::device::{DeviceKey, MachineId, PublicKey, random_challenge};
+use crate::forward::ForwardTo;
 use crate::frame::{CONTROL, Framed, Kind, LinkFrame};
 use crate::handshake::{
     Auth, Challenge, Hello, PROTOCOL, Reject, RejectReason, Resume, ResumeToken, Signer, Versions,
@@ -448,6 +451,38 @@ impl DesktopLink {
 
     /// 채널 하나를 연다(`Host::connect` 하나). Relay 는 호출자의 주장을 링크 기기의 role 로 자른다(M7-02 ②).
     pub async fn open(&self, caller: &Caller) -> Result<Connection, HostError> {
+        let (channel, rx, _cancel) = self
+            .open_channel(Kind::Connect, json!(CallerClaim::from(caller)))
+            .await?;
+        Ok(Connection {
+            sink: Box::new(ChannelSink {
+                mux: self.mux.clone(),
+                channel,
+            }),
+            source: Box::new(ChannelSource(rx)),
+        })
+    }
+
+    /// 포트 포워딩 채널 하나를 열고(Relay 가 그 머신에서 `to` 로 TCP 를 연다 — 18-m7-plan M7-22) `tcp` 를 그 채널에 잇는다. 연결이
+    /// 끝날 때까지 돈다. owner 링크가 아니면 열지 않는다(Relay 도 거절한다 — 메인 판정 M7-P15).
+    pub async fn forward(&self, to: &ForwardTo, tcp: TcpStream) -> Result<(), HostError> {
+        if self.role != Role::Owner {
+            return Err(HostError::Refused(
+                "port forwarding needs an owner device".to_owned(),
+            ));
+        }
+        to.check().map_err(HostError::Refused)?;
+        let (channel, rx, cancel) = self.open_channel(Kind::Forward, json!(to)).await?;
+        crate::forward::pump(self.mux.clone(), channel, rx, cancel, tcp).await;
+        Ok(())
+    }
+
+    /// 채널을 열고(`connect` · `forward`) Relay 의 답을 기다린다.
+    async fn open_channel(
+        &self,
+        kind: Kind,
+        body: Value,
+    ) -> Result<(u32, ChannelRx, CancellationToken), HostError> {
         let disconnected = || HostError::Disconnected(self.machine.to_string());
         let channel = self.next_channel.fetch_add(1, Ordering::Relaxed);
         if channel == CONTROL || channel == u32::MAX {
@@ -473,11 +508,7 @@ impl DesktopLink {
             channel,
             armed: true,
         };
-        self.mux.send_control(&LinkFrame::new(
-            channel,
-            Kind::Connect,
-            json!(CallerClaim::from(caller)),
-        ));
+        self.mux.send_control(&LinkFrame::new(channel, kind, body));
         let closed = self.mux.closed();
         let outcome = tokio::select! {
             outcome = answer => outcome.unwrap_or_else(|_| Err("link closed".to_owned())),
@@ -496,13 +527,7 @@ impl DesktopLink {
         if cancel.is_cancelled() {
             return Err(disconnected());
         }
-        Ok(Connection {
-            sink: Box::new(ChannelSink {
-                mux: self.mux.clone(),
-                channel,
-            }),
-            source: Box::new(ChannelSource(rx)),
-        })
+        Ok((channel, rx, cancel))
     }
 }
 
@@ -572,6 +597,21 @@ impl RemoteHost {
     /// 링크 상태. 바뀔 때마다 깬다.
     pub fn state(&self) -> watch::Receiver<LinkState> {
         self.state.subscribe()
+    }
+
+    /// 로컬에서 받은 `tcp` 연결 하나를 지금 링크로 원격의 `to` 에 잇는다(18-m7-plan M7-22 — [`DesktopLink::forward`]). 링크가
+    /// 없으면 [`HostError::Disconnected`]. 링크가 이어 붙는 동안(M7-09)은 채널이 그대로라 연결도 이어진다.
+    pub fn forward(
+        &self,
+        to: ForwardTo,
+        tcp: TcpStream,
+    ) -> BoxFuture<'static, Result<(), HostError>> {
+        let link = self.link();
+        let id = self.id.clone();
+        Box::pin(async move {
+            let link = link.ok_or(HostError::Disconnected(id))?;
+            link.forward(&to, tcp).await
+        })
     }
 
     /// 지금 링크(붙어 있을 때).

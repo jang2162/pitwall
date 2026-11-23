@@ -222,6 +222,8 @@ impl State {
 struct Shared {
     state: Mutex<State>,
     wake: Notify,
+    /// 쓰기가 틀 하나를 내보낼 때마다 깬다 — [`Mux::send_msg_paced`] 가 보내기 버퍼에 자리가 나기를 기다린다.
+    room: Notify,
     limits: LinkLimits,
     closed: CancellationToken,
     reason: OnceLock<CloseReason>,
@@ -258,6 +260,15 @@ struct AckBody {
 /// 번호가 붙는 틀인가(다시 보내는 틀).
 fn sequenced(kind: Kind) -> bool {
     !matches!(kind, Kind::Ping | Kind::Pong | Kind::Ack | Kind::Bye)
+}
+
+/// [`Mux::queue_msg`] 의 결과.
+enum Queued {
+    Sent,
+    /// 채널이 없거나 닫았다.
+    Dropped,
+    /// 자리가 없다(기다리는 보내기만).
+    Full,
 }
 
 /// 이쪽 쓰기가 다음에 할 일.
@@ -334,6 +345,7 @@ impl Mux {
                 ..State::default()
             }),
             wake: Notify::new(),
+            room: Notify::new(),
             limits,
             closed: CancellationToken::new(),
             reason: OnceLock::new(),
@@ -605,6 +617,33 @@ impl Mux {
     /// 채널에 메시지 하나를 보낸다. 채널이 없으면 버린다. 보내기 버퍼가 상한을 넘으면 그 채널을 닫고 거짓.
     pub(crate) fn send_msg(&self, channel: u32, body: Value) -> bool {
         let bytes = LinkFrame::new(channel, Kind::Msg, body).encode();
+        matches!(self.queue_msg(channel, bytes, false), Queued::Sent)
+    }
+
+    /// 채널에 메시지 하나를 보내되, 보내기 버퍼가 찼으면 **채널을 닫지 않고 자리가 날 때까지 기다린다**(포워딩 — 18-m7-plan M7-22 ④).
+    /// 채널에 쌓인 것이 기본 창([`LinkLimits::window`])을 넘거나 링크 보내기 예산([`LinkLimits::send_budget`])이 모자라면 기다린다 —
+    /// 그동안 부른 쪽(TCP 읽기)이 멈추므로 상대 TCP 의 창이 차고, 이쪽 메모리는 채널마다 창 둘 안팎에 머문다. 링크가 멈춘 동안(이어
+    /// 붙기)에도 기다린다. 채널 · 링크가 닫히면 거짓.
+    pub(crate) async fn send_msg_paced(&self, channel: u32, body: Value) -> bool {
+        let bytes = LinkFrame::new(channel, Kind::Msg, body).encode();
+        let closed = self.closed();
+        loop {
+            let room = self.shared.room.notified();
+            tokio::pin!(room);
+            room.as_mut().enable();
+            match self.queue_msg(channel, bytes.clone(), true) {
+                Queued::Sent => return true,
+                Queued::Dropped => return false,
+                Queued::Full => {}
+            }
+            tokio::select! {
+                () = &mut room => {}
+                () = closed.cancelled() => return false,
+            }
+        }
+    }
+
+    fn queue_msg(&self, channel: u32, bytes: Vec<u8>, paced: bool) -> Queued {
         let mut state = lock(&self.shared.state);
         let limit = self.shared.limits.send_buffer;
         let send_budget = self.shared.limits.send_budget;
@@ -615,25 +654,31 @@ impl Mux {
             ..
         } = &mut *state;
         let Some(chan) = channels.get_mut(&channel) else {
-            return false;
+            return Queued::Dropped;
         };
         if bytes.len() > pw_wire::MAX_BODY_BYTES {
             drop(state);
             tracing::debug!(target: "pw_link", channel, "a message larger than the frame limit; closing the channel");
             self.close_channel(channel, "message larger than the frame limit");
-            return false;
+            return Queued::Dropped;
+        }
+        if paced
+            && ((!chan.out.is_empty() && chan.out_bytes + bytes.len() > self.shared.limits.window)
+                || *send_used + bytes.len() > send_budget)
+        {
+            return Queued::Full;
         }
         if !chan.out.is_empty() && chan.out_bytes + bytes.len() > limit {
             drop(state);
             tracing::debug!(target: "pw_link", channel, "send buffer full; closing the channel");
             self.close_channel(channel, "send buffer full");
-            return false;
+            return Queued::Dropped;
         }
         if *send_used + bytes.len() > send_budget {
             drop(state);
             tracing::debug!(target: "pw_link", channel, "link send budget exhausted; closing the channel");
             self.close_channel(channel, "link send budget exhausted");
-            return false;
+            return Queued::Dropped;
         }
         *send_used += bytes.len();
         chan.out_bytes += bytes.len();
@@ -646,12 +691,13 @@ impl Mux {
         if wake {
             self.shared.wake.notify_one();
         }
-        true
+        Queued::Sent
     }
 
     /// 채널을 곧바로 닫는다 — 아직 못 보낸 틀은 버리고 상대에게 `close` 를 보낸다. 받는 쪽은 끝을 본다.
     pub(crate) fn close_channel(&self, channel: u32, reason: &str) {
         let removed = lock(&self.shared.state).remove_channel(channel);
+        self.shared.room.notify_waiters();
         if let Some(chan) = removed {
             chan.cancel.cancel();
             self.push_control(
@@ -868,6 +914,7 @@ impl Mux {
         loop {
             match self.next_outgoing(generation) {
                 Next::Frame(bytes) => {
+                    self.shared.room.notify_waiters();
                     // 닫혀도 쓰던 틀은 마저 쓴다(잠깐만) — 틀 가운데서 끊고 `bye` 를 붙이면 상대는 잘린 틀(끊김)로 읽고 이어 붙기를
                     // 기다린다.
                     let (result, closing) = {

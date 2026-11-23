@@ -56,6 +56,9 @@ pub enum Kind {
     Ack,
     /// 링크를 일부러 닫는다 — 받는 쪽은 이어 붙기를 기다리지 않고 닫는다.
     Bye,
+    /// Desktop → Relay: 채널 하나를 포트 포워딩으로 연다(본문 [`crate::forward::ForwardTo`] — 18-m7-plan M7-22). 답은 `connect` 와
+    /// 같이 `accepted` · `refused` 이고, 그 뒤 채널의 `msg` 는 TCP 바이트다([`crate::forward`]). Relay 는 Desktop 쪽으로 보내지 않는다.
+    Forward,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
