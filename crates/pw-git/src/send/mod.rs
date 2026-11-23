@@ -7,7 +7,7 @@
 //!   객체 폴더를 alternates 로만 보는 임시 bare 저장소(`$STATE/git-send/`)에 `refs/heads/<branch>` 하나를 두고 거기서
 //!   `git bundle create` 한다 — 원본 저장소의 설정 · 훅을 읽지 않고 원본에 쓰지 않는다. 대상이 이미 가진 커밋(`theirs` 가운데
 //!   원본에 있는 것)은 `--not` 으로 뺀다. 원본에 커밋 안 한 변경이 있으면 표지만 단다(막지 않는다, D57 ①).
-//! - **대상 받기**(`git.send.receive.*`, 쓰기 — 그 프로젝트 창의 연결만): 받은 바이트를 `$STATE/git-send/` 의 0600 임시 파일에
+//! - **대상 받기**(`git.send.receive.*`, 쓰기 — 그 프로젝트 창의 연결, 또는 대상 계획 해시를 승인 표로 실은 MCP 세션 — [`agent`]): 받은 바이트를 `$STATE/git-send/` 의 0600 임시 파일에
 //!   쓰고(연결 · 부른 role 에 묶인 `uploadId`, 청크는 offset 으로 잇는다), `git bundle verify` → 묶음의 `refs/heads/<branch>` 가
 //!   알린 커밋인지 → `git fetch <파일> +refs/heads/<branch>:refs/pitwall/incoming/<원본 머신>/<branch>`(refspec 은 Host 가 만든다 —
 //!   묶음의 다른 ref 는 받지 않는다, 태그도) → 임시 파일 지움. 그 전에 다 쓴 전용 ref 를 치운다(그 커밋이 같은 이름의 브랜치에 든

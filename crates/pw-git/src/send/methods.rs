@@ -1,4 +1,5 @@
-//! `git.send.*` RPC(18-m7-plan.md M7-16 — 「공유 부품의 주인」: M7-17 · 19 는 부르기만). UI 전용이라 MCP 툴이 아니다.
+//! `git.send.*` RPC(18-m7-plan.md M7-16 — 「공유 부품의 주인」: M7-17 · 19 는 부르기만, M7-19 가 에이전트 갈래의 `git.send.plan` ·
+//! `git.send.compare` 와 승인 표를 더했다 — 메인 판정). MCP 툴이 아니다 — MCP 세션의 세션 툴 `checkout_send` 가 부른다.
 //!
 //! 한 번의 보내기: Desktop 이 대상에서 `git.send.theirs` 로 대상이 가진 커밋 · 브랜치 끝을 읽고 → 원본의 `git.send.prepare` 스트림을
 //! 대상의 `git.send.receive.begin` · `chunk` · `finish` 로 흘리고(바이트를 디스크에 두지 않는다) → 대상의 `git.send.apply`.
