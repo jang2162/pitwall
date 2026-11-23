@@ -121,6 +121,39 @@ it("runs a notification's action once, from the toast or the record, and keeps i
   expect(JSON.parse(JSON.stringify(item))).not.toHaveProperty("action.run");
 });
 
+it("runs each of several buttons once and keeps the others after one is pressed", async () => {
+  const store = createNotificationStore();
+  await mount(store);
+  const run = vi.fn();
+  const terminal = vi.fn();
+  await act(async () => {
+    notify({
+      level: "info",
+      title: "보냈다",
+      body: "본문",
+      actions: [
+        { label: "거기서 실행", run },
+        { label: "거기서 터미널", run: terminal },
+      ],
+    });
+  });
+  await settle();
+  const buttons = [
+    ...toastNodes()[0]!.querySelectorAll<HTMLButtonElement>("[data-notification-buttons] button"),
+  ];
+  expect(buttons.map((b) => b.textContent)).toEqual(["거기서 실행", "거기서 터미널"]);
+  expect(toastNodes()[0]!.textContent).toContain("본문");
+  await act(async () => buttons[0]!.click());
+  expect(run).toHaveBeenCalledTimes(1);
+  const id = store.getState().items[0]!.id;
+  // 누른 단추는 다시 돌지 않고, 다른 단추는 남는다.
+  expect(store.getState().act(id, 0)).toBe(false);
+  expect(store.getState().items[0]!.acted).toBe(false);
+  expect(store.getState().act(id, 1)).toBe(true);
+  expect(terminal).toHaveBeenCalledTimes(1);
+  expect(store.getState().items[0]!.acted).toBe(true);
+});
+
 it("retires an action without running it: the record's button is off and the toast loses its button", async () => {
   const store = createNotificationStore();
   await mount(store);

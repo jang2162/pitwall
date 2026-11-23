@@ -50,14 +50,26 @@ export interface NotificationInput {
   title: string;
   body?: string;
   action?: NotificationAction;
+  /**
+   * 단추가 여럿이면 여기에(커밋 보내기의 [거기서 실행] · [거기서 터미널] · [되돌리기] — 18-m7-plan M7-17). `action` 이 있으면 그것이
+   * 맨 앞이다. 단추는 저마다 한 번 누를 수 있고, 하나를 눌러도 다른 단추는 남는다. `retire` 는 모두 끈다.
+   */
+  actions?: readonly NotificationAction[];
+}
+
+/** 알림의 단추들(`action` 이 맨 앞). */
+export function buttonsOf(input: NotificationInput): readonly NotificationAction[] {
+  return [...(input.action ? [input.action] : []), ...(input.actions ?? [])];
 }
 
 export interface AppNotification extends NotificationInput {
   id: number;
   /** 낸 시각(epoch ms). */
   at: number;
-  /** `action` 을 이미 눌렀다. */
+  /** 단추를 모두 눌렀거나 껐다. */
   acted?: boolean;
+  /** 누른 단추의 자리(`buttonsOf` 순서). */
+  pressed?: readonly number[];
 }
 
 /** 기록에 남기는 최대 개수. 넘으면 오래된 것부터 버린다. */
@@ -72,7 +84,8 @@ interface NotificationState {
   /** 알림 툴 윈도우가 보이는 동안 부른다. */
   markSeen(): void;
   /** `id` 의 단추를 누른다 — 처음 한 번만 `run` 을 부르고 참을 돌려준다. */
-  act(id: number): boolean;
+  /** `index` 는 `buttonsOf` 의 자리(없으면 맨 앞). */
+  act(id: number, index?: number): boolean;
   /** `id` 의 단추를 누르지 않고 끈다(`run` 을 부르지 않는다). 끌 단추가 있었으면 참. */
   retire(id: number): boolean;
   clear(): void;
@@ -94,16 +107,22 @@ export function createNotificationStore(): NotificationStore {
       return item;
     },
     markSeen: () => set((s) => (s.unseenErrors === 0 ? s : { unseenErrors: 0 })),
-    act(id) {
+    act(id, index = 0) {
       const item = get().items.find((n) => n.id === id);
-      if (!item?.action || item.acted) return false;
-      set((s) => ({ items: s.items.map((n) => (n.id === id ? { ...n, acted: true } : n)) }));
-      item.action.run();
+      const buttons = item ? buttonsOf(item) : [];
+      const button = buttons[index];
+      if (!item || !button || item.acted || item.pressed?.includes(index)) return false;
+      const pressed = [...(item.pressed ?? []), index];
+      const acted = pressed.length >= buttons.length;
+      set((s) => ({
+        items: s.items.map((n) => (n.id === id ? { ...n, pressed, acted } : n)),
+      }));
+      button.run();
       return true;
     },
     retire(id) {
       const item = get().items.find((n) => n.id === id);
-      if (!item?.action || item.acted) return false;
+      if (!item || buttonsOf(item).length === 0 || item.acted) return false;
       set((s) => ({ items: s.items.map((n) => (n.id === id ? { ...n, acted: true } : n)) }));
       return true;
     },
@@ -173,6 +192,37 @@ export function useNotifications<T>(selector: (state: NotificationState) => T): 
   return useStore(useNotificationStore(), selector);
 }
 
+/**
+ * 토스트는 단추 하나(sonner 의 `action`)만 그린다 — `actions` 가 있으면 본문 아래에 단추 줄을 그린다(첫 단추는 `action`). 누르면
+ * 기록의 그 단추와 함께 꺼진다(`act`). 단추가 `actions` 에 없으면 `undefined` — 본문 글 그대로다.
+ */
+function extraButtons(
+  input: NotificationInput,
+  id: number,
+  withAction: boolean,
+  store: NotificationStore,
+): ReactNode | undefined {
+  if (!withAction || !input.actions?.length) return undefined;
+  const offset = input.action ? 1 : 0;
+  return (
+    <span className="flex flex-col gap-1">
+      {input.body && <span className="whitespace-pre-line">{input.body}</span>}
+      <span className="flex flex-wrap gap-1" data-notification-buttons="">
+        {input.actions.map((b, i) => (
+          <button
+            key={i}
+            type="button"
+            onClick={() => store.getState().act(id, offset + i)}
+            className="rounded-sm border border-ui-border px-2 hover:bg-ui-hover"
+          >
+            {b.label}
+          </button>
+        ))}
+      </span>
+    </span>
+  );
+}
+
 const TOASTS = { info: toast.info, warning: toast.warning, error: toast.error } as const;
 
 /** `notify` 가 돌려주는 손잡이. */
@@ -204,7 +254,7 @@ export function useRetirableNotify(): (input: NotificationInput) => Notification
           count !== undefined && count > 1 ? repeatedRef.current(input.title, count) : input.title,
           {
             id: key,
-            description: input.body,
+            description: extraButtons(input, item.id, withAction, store) ?? input.body,
             // 같은 id 로 다시 그리면 sonner 는 옛 옵션에 덮어쓴다 — 단추를 없앨 때는 `undefined` 를 적어 넘긴다.
             action:
               withAction && input.action
@@ -394,15 +444,20 @@ export function NotificationsToolWindow({ api }: IDockviewPanelProps) {
                     <time className="flex-none text-ui-muted-foreground">{time(n.at, locale)}</time>
                   </div>
                   {n.body && <div className="break-words text-ui-muted-foreground">{n.body}</div>}
-                  {n.action && (
-                    <button
-                      type="button"
-                      disabled={n.acted}
-                      onClick={() => act(n.id)}
-                      className="mt-0.5 rounded-sm border border-ui-border px-2 hover:bg-ui-hover disabled:opacity-50"
-                    >
-                      {n.action.label}
-                    </button>
+                  {buttonsOf(n).length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {buttonsOf(n).map((b, index) => (
+                        <button
+                          key={index}
+                          type="button"
+                          disabled={n.acted || n.pressed?.includes(index)}
+                          onClick={() => act(n.id, index)}
+                          className="mt-0.5 rounded-sm border border-ui-border px-2 hover:bg-ui-hover disabled:opacity-50"
+                        >
+                          {b.label}
+                        </button>
+                      ))}
+                    </div>
                   )}
                 </div>
               </li>
