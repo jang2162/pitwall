@@ -711,7 +711,13 @@ async fn every_remote_method_takes_only_a_host_connection() {
     );
     for (method, params) in &table {
         for scope in [ConnectionScope::Project("p".into()), ConnectionScope::Agent] {
-            let refused = call(&host, scope.clone(), method, params.clone()).await;
+            // 거절되지 않은 스트림(`remote.connect`)은 끝나지 않는다 — 시간 상한으로 실패로 만든다.
+            let refused = tokio::time::timeout(
+                Duration::from_secs(5),
+                call(&host, scope.clone(), method, params.clone()),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("{method} {scope:?} was not refused (it is still running)"));
             assert_eq!(
                 refused["error"]["code"],
                 serde_json::json!(pw_rpc::code::PERMISSION_DENIED),
