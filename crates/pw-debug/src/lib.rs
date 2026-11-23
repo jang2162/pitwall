@@ -57,7 +57,8 @@ use pw_rpc::{RpcError, code};
 use pw_run::config::{DebugMode, RunConfigPlace};
 use pw_run::env::RunEnv;
 use pw_run::runs::{
-    LaunchedBy, NewRun, ProcessLauncher, PtyLauncher, Relaunch, RunId, RunKind, Runs, no_such_run,
+    LaunchedBy, NewRun, ProcessLauncher, PtyLauncher, Relaunch, RunId, RunKind, RunState, Runs,
+    no_such_run,
 };
 use pw_runtime::Runtime;
 use serde_json::json;
@@ -200,6 +201,23 @@ impl Debugger {
             .filter(|r| r.project_id == project_id)
             .cloned()
             .ok_or_else(|| no_such_run(run_id))
+    }
+
+    /// 아직 끝나지 않은 디버그 세션 — 끝내기가 시작됐거나 실행의 끝이 이미 알려졌으면 [`Self::find`] 가 찾더라도 「없는 실행」이다.
+    /// 실행의 끝은 세션 표에서 빠지기 전에 알려진다(디버그 대상의 PTY 가 스스로 끝나면 `finish` 보다 먼저, `finish` 안에서도 표에서
+    /// 빼기 전) — `debug.source` 가 그 틈에 끝난 실행의 토큰으로 읽지 않게 한다(`source.rs` 머리 주석).
+    pub(crate) fn live(&self, project_id: &str, run_id: &str) -> Result<Arc<DebugRun>, RpcError> {
+        let run = self.find(project_id, run_id)?;
+        let ended = run.finished.load(Ordering::SeqCst)
+            || self
+                .inner
+                .runs
+                .find(project_id, run_id)
+                .map_or(true, |r| r.state() == RunState::Exited);
+        if ended {
+            return Err(no_such_run(run_id));
+        }
+        Ok(run)
     }
 
     /// 그 프로젝트의 디버그 세션들.

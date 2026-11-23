@@ -1368,6 +1368,67 @@ async fn frame_sources_outside_the_root_are_read_through_tokens() {
     assert_eq!(e.code, code::NOT_FOUND);
 }
 
+/// 실행의 끝이 알려진 뒤에는 `debug.source` 가 그 실행의 토큰으로 읽지 않는다 — 디버그 대상의 PTY 가 스스로 끝나면 실행의 끝은
+/// `finish` 보다 먼저 알려지고, `finish` 는 어댑터의 `disconnect` 답을 기다린 뒤에야 세션 · 토큰을 지운다(여기서는 답하지 않아
+/// 그 틈이 끊기 시한만큼 열린다). 2026-11-23 전체 실행에서 위 시험의 「멈춘 뒤」 단언이 같은 틈(중지 경로 — 끝을 알린 뒤 지우기
+/// 전)으로 한 번 흔들렸다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_source_token_dies_when_the_run_is_announced_ended() {
+    let f = Fixture::new();
+    let outside = f.base().join("outside.rs");
+    fs::write(&outside, "pub fn lib() {}\n").unwrap();
+    f.scenario(
+        Scenario::default()
+            .on(
+                "launch",
+                vec![Action::Request {
+                    command: "runInTerminal".into(),
+                    arguments: json!({
+                        "cwd": f.root.to_string_lossy(),
+                        "args": ["/bin/sh", "-c", "exec sleep 30"]
+                    }),
+                    unless_arg: None,
+                }],
+            )
+            .reply(
+                "stackTrace",
+                Reply::body(json!({ "stackFrames": [
+                    { "id": 1, "name": "lib", "line": 1, "column": 1,
+                      "source": { "path": outside.to_str().unwrap() } },
+                ] })),
+            )
+            .reply(
+                "disconnect",
+                Reply {
+                    no_reply: true,
+                    ..Reply::default()
+                },
+            ),
+    );
+    let mut c = f.client();
+    let run_id = start(&f, &mut c).await;
+    assert!(eventually(SOON, || !f.launcher.launched.lock().unwrap().is_empty()).await);
+    let stack = c
+        .ok("debug.stack", json!({ "runId": run_id, "threadId": 1 }))
+        .await;
+    let token = stack["frames"][0]["token"].as_str().unwrap().to_owned();
+    c.ok("debug.source", json!({ "runId": run_id, "token": token }))
+        .await;
+
+    // 디버그 대상이 스스로 끝난다 — 실행의 끝이 알려진다.
+    let pid = f.launcher.launched.lock().unwrap()[0].pid().unwrap() as i32;
+    assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
+    let run = f.runs.find(&f.project, &run_id).unwrap();
+    tokio::time::timeout(SOON, run.exited())
+        .await
+        .expect("the debug run did not end");
+
+    let e = c
+        .err("debug.source", json!({ "runId": run_id, "token": token }))
+        .await;
+    assert_eq!(e.code, code::NOT_FOUND);
+}
+
 /// M6-18 리뷰 F1 · F3 · R1: 루트 안 링크가 루트 밖 파일을 가리키면 `debug.source` 는 **실제 경로**를 주고(보고한 경로는 따로),
 /// `sourceReference` 가 있으면 경로가 디스크에 있어도 어댑터의 글이다. 한 실행의 토큰을 다른 실행의 `runId` 로 부르면 없는 토큰이다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
