@@ -201,10 +201,12 @@ impl Debugger {
     /// `finish` 안에서 표에서 빼기 전에. 그 틈에 `debug.*` 가 끝난 실행의 세션 · 소스 토큰을 쓰지 않게 모든 조회가 여기를 지난다.
     /// `finish` 의 차례만 바꾸는 것으로는 PTY 경로를 막지 못한다.
     pub fn find(&self, project_id: &str, run_id: &str) -> Result<Arc<DebugRun>, RpcError> {
-        lock(&self.inner.sessions)
+        // 세션 표 잠금을 놓은 뒤에 실행 표를 본다(`sessions_of` 와 같은 꼴 — 두 잠금을 겹쳐 쥐지 않는다).
+        let found = lock(&self.inner.sessions)
             .get(run_id)
             .filter(|r| r.project_id == project_id)
-            .cloned()
+            .cloned();
+        found
             .filter(|r| !self.announced_ended(r))
             .ok_or_else(|| no_such_run(run_id))
     }

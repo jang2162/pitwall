@@ -1481,6 +1481,37 @@ async fn debug_calls_on_a_run_announced_ended_are_refused() {
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
+/// 중지를 요청했지만 끝이 아직 알려지지 않은(`Stopping`) 실행의 세션은 아직 `debug.*` 를 받는다 — 거르는 것은 끝이 알려진 실행뿐이다
+/// (위 시험의 짝). 어댑터가 `disconnect` 에 답하지 않아 `finish` 가 끊기 시한만큼 그 답을 기다리는 동안 부른다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stopping_run_still_answers_debug_calls() {
+    let f = Fixture::new();
+    f.scenario(Scenario::default().reply(
+        "disconnect",
+        Reply {
+            no_reply: true,
+            ..Reply::default()
+        },
+    ));
+    let mut c = f.client();
+    let run_id = start(&f, &mut c).await;
+    c.ok("run.stop", json!({ "runId": run_id })).await;
+    let run = f.runs.find(&f.project, &run_id).unwrap();
+    assert!(
+        eventually(SOON, || !f.received("disconnect").is_empty()).await,
+        "{:#?}",
+        f.records()
+    );
+    assert_eq!(run.state(), RunState::Stopping);
+    let threads = c.ok("debug.threads", json!({ "runId": run_id })).await;
+    assert_eq!(threads["threads"][0]["id"], 1, "{threads}");
+    // 부른 동안 끝이 알려지지 않았다(시한 안이었다) — 그래야 위의 답이 「중지 중」 의 것이다.
+    assert_eq!(run.state(), RunState::Stopping);
+    tokio::time::timeout(SOON, run.exited())
+        .await
+        .expect("the debug run did not end");
+}
+
 /// M6-18 리뷰 F1 · F3 · R1: 루트 안 링크가 루트 밖 파일을 가리키면 `debug.source` 는 **실제 경로**를 주고(보고한 경로는 따로),
 /// `sourceReference` 가 있으면 경로가 디스크에 있어도 어댑터의 글이다. 한 실행의 토큰을 다른 실행의 `runId` 로 부르면 없는 토큰이다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
