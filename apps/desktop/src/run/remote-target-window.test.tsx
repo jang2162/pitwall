@@ -93,6 +93,8 @@ const fake = vi.hoisted(() => ({
   }[],
   /** 이 컴퓨터에서 이미 쓰이는 로컬 포트(`remote.forward.open` 이 `conflict` · `portInUse` 로 답한다). */
   inUse: new Set<number>(),
+  /** `remote.forwards.list` 의 답(설정의 포워딩). */
+  listed: [] as Record<string, unknown>[],
 }));
 
 vi.mock("@tauri-apps/api/webview", () => ({
@@ -268,7 +270,10 @@ vi.mock("../tauri-transport", async () => {
             });
           }
           case "remote.forwards.list":
-            return reply([]);
+            return reply(fake.listed);
+          case "remote.forward.close":
+            fake.listed = fake.listed.filter((f) => f.id !== params.id);
+            return reply(null);
           case "stream.cancel": {
             const { streamId } = params as { streamId: number };
             for (const f of fake.forwards)
@@ -599,6 +604,7 @@ beforeEach(() => {
   fake.status = { state: "connected", machine: MINI };
   fake.forwards = [];
   fake.inUse = new Set();
+  fake.listed = [];
   activeWorktreeStore.setState({ top: undefined });
   terminalTarget().setState({ chosen: undefined });
   runTarget().setState({ chosen: undefined });
@@ -1150,6 +1156,35 @@ it("shows a local port in use, forwards on the port the human picks and stops wh
   await act(async () => windowRuns().stop(tab.key));
   await settle();
   await vi.waitFor(() => expect(fake.forwards[0]!.cancelled).toBe(true));
+});
+
+it("shows the port forwards in the status bar and turns one off over the host connection", async () => {
+  fake.listed = [
+    {
+      id: 7,
+      name: "mini",
+      origin: "settings",
+      localHost: "127.0.0.1",
+      localPort: 8080,
+      remoteHost: "localhost",
+      remotePort: 8080,
+      state: { state: "listening" },
+    },
+  ];
+  await mount();
+  const item = await vi.waitFor(() => {
+    const b = byTestId("status-forwards");
+    expect(b).not.toBeNull();
+    return b!;
+  });
+  expect(item.textContent).toContain("1");
+  await click(item);
+  const row = document.querySelector<HTMLElement>("[data-testid=remote-forward]")!;
+  expect(row.textContent).toContain("127.0.0.1:8080");
+  await click(row.querySelector("[data-testid=remote-forward-off]"));
+  // `remote.*` 는 Host 범위 연결로만 간다(가짜 Host 는 프로젝트 · 멤버 연결의 `remote.*` 를 거절한다).
+  expect(calls("local", "remote.forward.close").map((c) => c.params)).toEqual([{ id: 7 }]);
+  expect(calls(MINI, "remote.forward.close")).toHaveLength(0);
 });
 
 it("refuses the checkout actions without a checkout or with a machine this window does not know", async () => {
