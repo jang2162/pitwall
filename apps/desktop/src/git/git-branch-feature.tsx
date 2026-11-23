@@ -27,6 +27,7 @@ import { type BranchStrings, useBranchStrings } from "./branch-strings";
 import { useGitDialogs } from "./dialogs/git-dialogs";
 import { useGitDialogStrings } from "./dialogs/strings";
 import { offerUndo } from "./dialogs/undo";
+import { GitSendFeature } from "./send/send-feature";
 import { checkoutKey, LOCAL_MACHINE } from "../checkout/checkout";
 import { activeCheckout } from "../open-with/active-worktree";
 
@@ -168,6 +169,7 @@ export function GitBranchFeature({ projectId, state }: { projectId: string; stat
         open={popup === "vcs"}
         onOpenChange={(open) => setPopup(open ? "vcs" : undefined)}
       />
+      <GitSendFeature />
       {dialogs.element}
       {gitDialogs.element}
     </>

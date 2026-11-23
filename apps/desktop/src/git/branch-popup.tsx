@@ -37,6 +37,7 @@ import { useBranch } from "./branch-state";
 import { headName } from "./branch-status";
 import { type BranchStrings, useBranchStrings } from "./branch-strings";
 import { canCompareCommits } from "./compare-action";
+import { RECEIVE_ACTION, SEND_ACTION } from "./send/send-feature";
 
 export interface BranchFavorites {
   readonly list: readonly string[];
@@ -273,6 +274,36 @@ function CheckoutGroup({ onSwitch }: { onSwitch?(machine: string): void }) {
   );
 }
 
+/**
+ * 「다른 체크아웃으로 보내기…」 · 「다른 체크아웃에서 가져오기…」(18-m7-plan M7-17 ① — git/send/send-feature.tsx 의 액션). 액션이 켜져
+ * 있을 때만(묶음에 다른 머신의 체크아웃이 있을 때) 보인다.
+ */
+function SendItems({ run }: { run?(id: string): void }) {
+  const { registry } = useKeymap();
+  useRegistryVersion(registry);
+  if (!run) return null;
+  const items = [SEND_ACTION, RECEIVE_ACTION].filter((id) => registry.isEnabled(id));
+  if (items.length === 0) return null;
+  return (
+    <Command.Group className={GROUP_CLASS}>
+      {items.map((id) => {
+        const label = registry.get(id)?.label ?? id;
+        return (
+          <Command.Item
+            key={id}
+            value={`action:${id}`}
+            keywords={[label]}
+            onSelect={() => run(id)}
+            className={SEARCH_ITEM_CLASS}
+          >
+            {label}
+          </Command.Item>
+        );
+      })}
+    </Command.Group>
+  );
+}
+
 const NO_CHECKOUTS = createStore<{ directory: { members: ReadonlyMap<string, string> } }>()(() => ({
   directory: { members: new Map() },
 }));
@@ -285,6 +316,7 @@ function RefList({
   onCreate,
   onSwitchWorktree,
   onSwitchCheckout,
+  onRunAction,
 }: {
   projectId: string;
   favorites: BranchFavorites;
@@ -292,6 +324,8 @@ function RefList({
   onCreate(): void;
   onSwitchWorktree(worktree: GitWorktree): void;
   onSwitchCheckout?(machine: string): void;
+  /** 팝업을 닫고 액션을 부른다(보내기 · 가져오기). */
+  onRunAction?(id: string): void;
 }) {
   const T = useBranchStrings();
   const { refs, error } = useBranch();
@@ -301,7 +335,12 @@ function RefList({
     { projectId, worktree: worktree ?? null },
     { staleTime: 0 },
   );
-  const checkouts = <CheckoutGroup onSwitch={onSwitchCheckout} />;
+  const checkouts = (
+    <>
+      <CheckoutGroup onSwitch={onSwitchCheckout} />
+      <SendItems run={onRunAction} />
+    </>
+  );
   if (!refs)
     return (
       <>
@@ -458,6 +497,7 @@ export function BranchPopup({
   onSwitchCheckout?(machine: string): void;
 }) {
   const T = useBranchStrings();
+  const { registry } = useKeymap();
   useKeymapPopup(open);
   const [chosen, setChosen] = useState<BranchRef>();
   const [query, setQuery] = useState("");
@@ -509,6 +549,7 @@ export function BranchPopup({
           onCreate={() => run(() => ops.create())}
           onSwitchWorktree={(w) => run(() => onSwitchWorktree(w))}
           onSwitchCheckout={onSwitchCheckout && ((m) => run(() => onSwitchCheckout(m)))}
+          onRunAction={(id) => run(() => void registry.run(id))}
         />
       )}
     </PopupShell>
