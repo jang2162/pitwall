@@ -572,3 +572,110 @@ fn codes_are_six_digits() {
     assert!(PairingCode::parse("12345a").is_none());
     assert!(PairingCode::parse("1234567").is_none());
 }
+
+/// 코드를 모르는 가짜 Relay: Noise 를 받고(`noise_key`), Desktop 의 `pair` 에 아무 SPAKE2 답과 `reply_key` 를 대고, Desktop 의
+/// 확인 뒤 아무 MAC 으로 `confirm` 을 보낸다(중간자가 Relay 를 사칭하는 자리).
+async fn fake_relay(stream: LinkStream, noise_key: DeviceKey, reply_key: crate::PublicKey) {
+    let secured = noise::respond(stream, &noise_key).await.unwrap();
+    let mut framed = Framed::handshake(secured);
+    let Some(hello) = raw_read(&mut framed).await else {
+        return;
+    };
+    assert_eq!(hello.kind, Kind::Pair);
+    let (_state, spake_b) = spake2::Spake2::<spake2::Ed25519Group>::start_b(
+        &spake2::Password::new(b"000000"),
+        &spake2::Identity::new(b"a"),
+        &spake2::Identity::new(b"b"),
+    );
+    let b64 =
+        |bytes: &[u8]| base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
+    framed
+        .write
+        .write(&LinkFrame::control(
+            Kind::Pair,
+            json!({ "key": reply_key, "spake": b64(&spake_b) }),
+        ))
+        .await
+        .unwrap();
+    if raw_read(&mut framed).await.is_none() {
+        return;
+    }
+    framed
+        .write
+        .write(&LinkFrame::control(
+            Kind::Confirm,
+            json!({ "mac": b64(&[7u8; 32]), "role": "owner" }),
+        ))
+        .await
+        .unwrap();
+}
+
+/// 리뷰 F1: Relay 를 사칭하는 중간자(코드를 모름)가 확인 MAC 을 지어 보내면 Desktop 은 그 Relay 키를 받지 않는다
+/// (`RelayNotProven` — 받으면 `CodePaired.machine` 이 중간자 키가 되어 그 뒤 `dial` 이 중간자를 그 호스트로 믿는다). Relay 가
+/// Noise 상대와 다른 Ed25519 키를 대면 확인 전에 끊는다(`Protocol`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_desktop_refuses_a_relay_that_does_not_prove_the_code() {
+    let desktop = Arc::new(DeviceKey::generate().unwrap());
+    for other_key in [false, true] {
+        let impostor = DeviceKey::generate().unwrap();
+        let reply_key = if other_key {
+            DeviceKey::generate().unwrap().public()
+        } else {
+            impostor.public()
+        };
+        let (d_end, r_end) = tokio::io::duplex(64 * 1024);
+        let relay = tokio::spawn(fake_relay(LinkStream::split(r_end), impostor, reply_key));
+        let secured = noise::initiate(LinkStream::split(d_end), &desktop)
+            .await
+            .unwrap();
+        let paired = pair_with_code(secured, &identity(&desktop), "123456", "laptop", WAIT).await;
+        let expected = if other_key {
+            PairError::Protocol("the relay's key is not the noise peer".to_owned())
+        } else {
+            PairError::RelayNotProven
+        };
+        assert_eq!(paired.err(), Some(expected), "other key: {other_key}");
+        relay.await.unwrap();
+    }
+}
+
+/// 리뷰 R1: 페어링되는 키는 그 Noise 세션이 증명한 키다 — Noise 키 A 로 붙어 `pair.key` 에 남의 키 B 를 대면 Relay 는 시도를 쓰기
+/// 전에 거절하고 표에 아무것도 넣지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pairing_for_a_key_other_than_the_noise_peer_is_refused() {
+    let relay = noise_relay(Vec::new(), "123456", Role::Owner);
+    let (a, b) = (
+        DeviceKey::generate().unwrap(),
+        DeviceKey::generate().unwrap(),
+    );
+    let mut framed = Framed::handshake(relay.secured(&a).await);
+    let (_state, spake_a) = spake2::Spake2::<spake2::Ed25519Group>::start_a(
+        &spake2::Password::new(b"123456"),
+        &spake2::Identity::new(b"x"),
+        &spake2::Identity::new(b"y"),
+    );
+    framed
+        .write
+        .write(&LinkFrame::control(
+            Kind::Pair,
+            json!({
+                "protocol": PROTOCOL, "app": "1.2.3", "releaseChannel": "stable",
+                "device": b.id(), "key": b.public(), "name": "x",
+                "spake": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &spake_a),
+            }),
+        ))
+        .await
+        .unwrap();
+    let reply = raw_read(&mut framed).await.unwrap();
+    assert_eq!(reply.kind, Kind::Reject);
+    assert_eq!(
+        serde_json::from_value::<Reject>(reply.body).unwrap().reason,
+        RejectReason::Protocol
+    );
+    assert_eq!(
+        relay.book.attempts(),
+        0,
+        "a refused pairing spent an attempt"
+    );
+    assert!(relay.pairings.snapshot().is_empty());
+}

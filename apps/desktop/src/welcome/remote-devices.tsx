@@ -8,7 +8,7 @@
 // - 코드는 화면에만 보인다(로그 · 콘솔에 쓰지 않는다). 칸을 닫으면 잊는다.
 
 import type { RelayDevice, RelayPairCode, Role } from "@pitwall/rpc-client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useI18n } from "../i18n/i18n-provider";
 import { useHost, useRpcQuery } from "../rpc/host";
@@ -51,6 +51,14 @@ export function RemoteDevices({
   const [busy, setBusy] = useState(false);
   const [role, setRole] = useState<Role>("readonly");
   const [code, setCode] = useState<RelayPairCode>();
+  // 만료된 코드는 화면에서 지운다(리뷰 R6 — 한 번 쓴 코드는 Relay 가 끝내지만 이 칸은 모른다. 만료까지만 보인다).
+  useEffect(() => {
+    if (!code) return;
+    const left = code.expiresAtMs - Date.now();
+    // setTimeout 의 지연은 2^31 - 1 ms 를 넘으면 곧바로 돈다.
+    const timer = setTimeout(() => setCode(undefined), Math.min(Math.max(0, left), 2 ** 31 - 1));
+    return () => clearTimeout(timer);
+  }, [code]);
   const failed = (method: string) => (e: unknown) => {
     onError(String(e instanceof Error ? e.message : e));
     console.warn(LOG, method, "failed");

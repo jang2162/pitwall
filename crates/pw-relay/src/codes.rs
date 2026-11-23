@@ -284,6 +284,28 @@ mod tests {
         assert!(load(&pairings_file(&data)).unwrap().is_empty());
     }
 
+    /// 리뷰 R2: 여러 연결(스레드)이 같은 코드에 동시에 시도해도 시도 수가 겹치지 않는다 — 받는 시도는 정확히 세 번이다(읽고 · 더하고
+    /// · 쓰는 사이를 페어링 표의 잠금이 감싼다).
+    #[test]
+    fn concurrent_attempts_take_exactly_three() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("relay");
+        let now = Arc::new(AtomicU64::new(0));
+        issue(&data, Role::Owner, None, 0).unwrap();
+        let taken = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|s| {
+            for _ in 0..16 {
+                let (data, now, taken) = (&data, &now, &taken);
+                s.spawn(move || {
+                    if book(data, now).attempt().unwrap().is_some() {
+                        taken.fetch_add(1, Ordering::SeqCst);
+                    }
+                });
+            }
+        });
+        assert_eq!(taken.load(Ordering::SeqCst), MAX_ATTEMPTS as usize);
+    }
+
     /// 코드 파일은 이 사용자 전용(0600)이다.
     #[test]
     fn the_code_file_is_private() {

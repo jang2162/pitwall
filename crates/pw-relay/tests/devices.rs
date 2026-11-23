@@ -307,10 +307,33 @@ async fn only_an_owner_device_lists_unpairs_or_issues_codes() {
         })
         .await
         .unwrap();
-    let denied = call(&mut window, 1, "relay.devices", Value::Null)
-        .await
-        .unwrap_err();
-    assert_eq!(denied["code"], json!(pw_rpc::code::PERMISSION_DENIED));
+    // 리뷰 F2: owner 기기라도 Host 범위가 아닌 연결(프로젝트 창 · 묶음 창 자리)은 셋 모두 거절된다 — 코드도 해제도 없다.
+    for (i, (method, params)) in [
+        ("relay.devices", Value::Null),
+        ("relay.unpair", json!({"device": viewer.id()})),
+        ("relay.pairCode", json!({"role": "owner"})),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let denied = call(&mut window, i as i64, method, params)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            denied["code"],
+            json!(pw_rpc::code::PERMISSION_DENIED),
+            "{method}"
+        );
+    }
+    assert_eq!(
+        relay.pairings.snapshot().len(),
+        3,
+        "a project connection unpaired a device"
+    );
+    assert!(
+        !relay.data.join(pw_relay::codes::CODE_FILE).exists(),
+        "a project connection issued a code"
+    );
 
     let mut conn = remote.connect(admin()).await.unwrap();
     let list = call(&mut conn, 1, "relay.devices", Value::Null)

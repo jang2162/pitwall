@@ -74,10 +74,12 @@ impl PublicKey {
             .is_ok()
     }
 
-    /// 이 키의 X25519 공개키(Noise 의 정적 키 — `crate::noise`). 꼴이 틀린 키는 `None`.
+    /// 이 키의 X25519 공개키(Noise 의 정적 키 — `crate::noise`). 꼴이 틀린 키 · 약한 키(저차 점 — 리뷰 R5)는 `None` 이라 어느
+    /// Noise 상대와도 같지 않다.
     pub fn x25519(&self) -> Option<[u8; 32]> {
         VerifyingKey::from_bytes(&self.0)
             .ok()
+            .filter(|key| !key.is_weak())
             .map(|key| key.to_montgomery().to_bytes())
     }
 
@@ -418,6 +420,15 @@ fn write_private_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 약한 키(저차 점 — 단위원 등)는 X25519 로 바꾸지 않는다 — Noise 상대로 맞춰 볼 수 없다(리뷰 R5).
+    #[test]
+    fn a_weak_key_has_no_noise_key() {
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+        assert_eq!(PublicKey::from_bytes(identity).x25519(), None);
+        assert!(DeviceKey::generate().unwrap().public().x25519().is_some());
+    }
 
     #[test]
     fn a_signature_verifies_only_for_its_key_and_message() {

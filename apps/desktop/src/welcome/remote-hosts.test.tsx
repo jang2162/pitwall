@@ -45,6 +45,8 @@ const host = vi.hoisted(() => ({
   forwards: [] as RemoteForward[],
   /** 그 Relay 의 페어링 표(`remote.devices`). */
   devices: [] as RelayDevice[],
+  /** `remote.pairCode` 가 돌려줄 만료 시각(없으면 5분 뒤). */
+  codeExpiresAt: undefined as number | undefined,
 }));
 
 vi.mock("../tauri-transport", async () => {
@@ -136,7 +138,10 @@ vi.mock("../tauri-transport", async () => {
               host.devices = host.devices.filter((d) => d.device !== p.device);
               return reply({ removed: host.devices.length !== before });
             }
-            return reply({ code: "042917", expiresAtMs: 1_800_000_000_000 });
+            return reply({
+              code: "042917",
+              expiresAtMs: host.codeExpiresAt ?? Date.now() + 300_000,
+            });
           }
           case "remote.stopOld":
           case "remote.linkCommand": {
@@ -236,6 +241,7 @@ beforeEach(() => {
   host.remoteOld = [];
   host.forwards = [];
   host.devices = [];
+  host.codeExpiresAt = undefined;
 });
 
 afterEach(() => {
@@ -736,4 +742,15 @@ it("shows a pairing code for the chosen role on screen only", async () => {
   });
   for (const spy of logs)
     for (const args of spy.mock.calls) expect(JSON.stringify(args)).not.toContain("042917");
+});
+
+it("takes an expired pairing code off the screen", async () => {
+  host.devices = [device({ you: true })];
+  await openDevices();
+  host.codeExpiresAt = Date.now() + 400;
+  await click(button("코드 띄우기")!);
+  await vi.waitFor(() =>
+    expect(document.querySelector("[data-testid=pairing-code]")?.textContent).toContain("042 917"),
+  );
+  await vi.waitFor(() => expect(document.querySelector("[data-testid=pairing-code]")).toBeNull());
 });
