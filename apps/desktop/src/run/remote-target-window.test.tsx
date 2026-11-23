@@ -77,6 +77,8 @@ const fake = vi.hoisted(() => ({
   files: new Map<string, Set<string>>(),
   /** 머신 → 디버그가 어댑터를 못 찾는가(`adapterMissing` — M7-21 ③). */
   adapterMissing: new Map<string, boolean>(),
+  /** 머신 → 저장된 브레이크포인트(`debug.breakpoints.list` 의 `files`). */
+  breakpoints: new Map<string, unknown[]>(),
   /** 머신 → 멈춘 프레임(`debug.stack`). */
   frames: new Map<string, unknown[]>(),
   /** 구독(연결 · 번호 · 토픽 · 프로젝트). */
@@ -253,7 +255,7 @@ vi.mock("../tauri-transport", async () => {
             return reply({ subscriptionId: id });
           }
           case "debug.breakpoints.list":
-            return reply({ files: [], problem: null });
+            return reply({ files: fake.breakpoints.get(machine) ?? [], problem: null });
           case "debug.start": {
             if (params.projectId !== project) return fail(-32001, "another project");
             if (fake.adapterMissing.get(machine))
@@ -544,7 +546,9 @@ beforeEach(() => {
     fake.files.set(machine, new Set());
     fake.adapterMissing.set(machine, false);
     fake.frames.set(machine, []);
+    fake.breakpoints.set(machine, []);
   }
+
   fake.subs = [];
   fake.runLogs = new Map();
   fake.conns = new Map();
@@ -1441,4 +1445,117 @@ it("asks that machine's installer for a missing adapter and names the machine in
   expect(calls("local", "tools.install")).toHaveLength(1);
   expect(local.querySelector("[data-testid=tool-confirm-machine]")).toBeNull();
   await click(byTestId("tool-confirm-cancel"));
+});
+
+const STOPPED_ON_MINI = {
+  projectId: "r1",
+  runId: "d1",
+  session: null,
+  reason: "breakpoint",
+  description: null,
+  threadId: 1,
+  text: null,
+  allThreadsStopped: true,
+  hitBreakpointIds: [],
+};
+
+/** MINI 를 활성으로 두고 디버그를 열어 멈춘다(프레임 하나 — `FILE` 3줄). */
+async function stopOnMini(FILE: string) {
+  fake.files.get(MINI)!.add(FILE);
+  fake.files.get("local")!.add(FILE);
+  fake.frames.set(MINI, [
+    {
+      id: 1,
+      name: "main",
+      path: FILE,
+      sourceReference: null,
+      line: 3,
+      column: 1,
+      presentationHint: null,
+      token: null,
+    },
+  ]);
+  await mount();
+  await act(async () => projectOpenInbox.push({ worktree: REMOTE_MAIN }));
+  await settle();
+  await vi.waitFor(() => expect(byTestId("run-picker")?.textContent).toContain("Dev (mini)"));
+  await act(async () => void registry().run("debug.current"));
+  await settle();
+  await vi.waitFor(() => expect(calls(MINI, "debug.start")).toHaveLength(1));
+  await emit(MINI, "debug.stopped", STOPPED_ON_MINI);
+  await vi.waitFor(() =>
+    expect(windowDebug().current.getState().frame).toEqual({ path: qualify(MINI, FILE), line: 3 }),
+  );
+}
+
+// M7-21 리뷰 B1: 디버그 중에 활성 체크아웃을 이 머신으로 바꾸면 그 머신 세션은 이 창에서 걷힌다(그 머신 Host 에는 산다) — 남은
+// 프레임을 눌러 이 머신의 같은 경로 파일을 여는 길이 없고, 그 세션의 `debug.*` 가 이 머신 연결로 가지 않는다. 그 머신을 다시 활성으로
+// 두면 `run.list` 로 다시 보이고, 그 프레임은 그 머신의 파일로 연다.
+it("drops another machine's debug session when the active checkout moves here, and picks it up there again", async () => {
+  const FILE = "/work/demo/src/app.py";
+  await stopOnMini(FILE);
+  expect(document.querySelectorAll("[data-frame]").length).toBeGreaterThan(0);
+
+  await act(async () => projectOpenInbox.push({ mainCheckout: true }));
+  await settle();
+  await vi.waitFor(() => expect(byTestId("run-picker")?.textContent).toContain("Dev (local)"));
+  const localStats = calls("local", "fs.stat").length;
+  expect(
+    windowDebug()
+      .store.getState()
+      .sessions.map((x) => x.runId),
+  ).toEqual([]);
+  expect(windowDebug().current.getState().frame).toBeUndefined();
+  expect(document.querySelectorAll("[data-frame]")).toHaveLength(0);
+  await settle();
+  expect(calls("local", "fs.stat").length).toBe(localStats);
+  // 이 머신 연결로 그 세션의 `debug.*`(스레드 · 스택)를 보내지 않았다.
+  expect(calls("local", "debug.stack")).toHaveLength(0);
+  expect(calls("local", "debug.threads")).toHaveLength(0);
+
+  // 그 머신으로 돌아가면 세션이 다시 보이고, 다시 멈추면 그 머신의 파일을 연다.
+  await act(async () => projectOpenInbox.push({ worktree: REMOTE_MAIN }));
+  await settle();
+  await vi.waitFor(() =>
+    expect(windowDebug().store.getState().sessions).toEqual([
+      expect.objectContaining({ runId: "d1", machine: MINI }),
+    ]),
+  );
+  const miniStats = calls(MINI, "fs.stat").length;
+  await emit(MINI, "debug.stopped", STOPPED_ON_MINI);
+  await vi.waitFor(() =>
+    expect(windowDebug().current.getState().frame).toEqual({ path: qualify(MINI, FILE), line: 3 }),
+  );
+  await vi.waitFor(() => expect(calls(MINI, "fs.stat").length).toBeGreaterThan(miniStats));
+  expect(calls("local", "fs.stat").length).toBe(localStats);
+});
+
+// M7-21 리뷰 F2: 원격 세션의 브레이크포인트 목록에서 연 항목(열린 문서가 아닌 줄 — 루트 + 상대 경로)은 그 머신의 파일로 연다.
+it("opens a remote breakpoint from the list on that machine", async () => {
+  const FILE = "/work/demo/src/lib.py";
+  fake.files.get(MINI)!.add(FILE);
+  fake.files.get("local")!.add(FILE);
+  fake.breakpoints.set(MINI, [{ path: "src/lib.py", breakpoints: [{ line: 7 }] }]);
+  await mount();
+  await act(async () => projectOpenInbox.push({ worktree: REMOTE_MAIN }));
+  await settle();
+  await vi.waitFor(() =>
+    expect(calls(MINI, "debug.breakpoints.list").map((c) => c.params.projectId)).toContain("r1"),
+  );
+  await act(async () => void registry().run("debug.viewBreakpoints"));
+  await settle();
+  const row = await vi.waitFor(() => {
+    const r = document.querySelector("[data-breakpoint-row='src/lib.py:7'] button");
+    expect(r).not.toBeNull();
+    return r;
+  });
+  const localStats = calls("local", "fs.stat").length;
+  await click(row);
+  await vi.waitFor(() => expect(calls(MINI, "fs.stat").map((c) => c.params.path)).toContain(FILE));
+  expect(calls("local", "fs.stat").length).toBe(localStats);
+  await vi.waitFor(() =>
+    expect(
+      dock!.panels.some((p) => (p.params as { path?: string }).path === qualify(MINI, FILE)),
+    ).toBe(true),
+  );
 });

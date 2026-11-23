@@ -5,6 +5,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useStore } from "zustand";
 
+import type { RpcClient } from "@pitwall/rpc-client";
+
 import type { DocumentStore } from "../editor/documents";
 import { tabParams } from "../editor/editor-tabs";
 import type { EditorWorkspace } from "../editor/editor-workspace";
@@ -71,6 +73,32 @@ export function debugDocument(
   return { path: doc.path, worktree: tree.worktree };
 }
 
+/**
+ * 브레이크포인트 목록에서 열린 문서가 아닌 줄을 연다 — 그 디버그 연결의 루트 + 상대 경로. 그 머신의 경로라 머신을 실어 연다: 루트를
+ * 묻는 사이 활성 체크아웃이 바뀌어도 접두 없는 경로를 지금 활성 머신으로 붙이지 않는다(M7-11 델타 리뷰 B3 · M7-21 리뷰 F2). 묻지
+ * 못하면(그 머신 연결이 닫힘) 열지 않는다.
+ */
+type DebugClientLike = Pick<RpcClient, "call">;
+
+export async function openSavedBreakpoint(
+  client: Pick<DebugClientLike, "call">,
+  projectId: string,
+  machine: string,
+  workspace: Pick<EditorWorkspace, "open">,
+  rel: string,
+  line: number,
+): Promise<void> {
+  let root: string | undefined;
+  try {
+    root = (await client.call("project.get", { id: projectId })).roots[0];
+  } catch (e) {
+    console.warn("[debug] could not read the project root", e);
+    return;
+  }
+  if (root !== undefined)
+    await workspace.open({ path: `${root}/${rel}`, machine, line, column: 1 });
+}
+
 export function DebugFeature({
   projectId,
   workspace,
@@ -107,7 +135,10 @@ export function DebugFeature({
           language: null,
           // 탭의 워크트리는 창 안의 열쇠다(그 머신이 붙은 꼴).
           ...(frame.worktree !== undefined && {
-            worktree: machine === LOCAL_MACHINE ? frame.worktree : qualify(machine, frame.worktree),
+            worktree:
+              frame.machine === LOCAL_MACHINE
+                ? frame.worktree
+                : qualify(frame.machine, frame.worktree),
           }),
           debug: true,
           read: async () => {
@@ -264,12 +295,7 @@ export function DebugFeature({
               void workspace.open({ path, line, column: 1 });
               return;
             }
-            void client?.call("project.get", { id: projectId }).then((p) => {
-              const root = p.roots[0];
-              // 그 머신의 경로다 — 머신을 실어 연다(접두 없는 경로를 다른 머신으로 붙이지 않게, M7-11 델타 리뷰 B3).
-              if (root !== undefined)
-                void workspace.open({ path: `${root}/${rel}`, machine, line, column: 1 });
-            });
+            if (client) void openSavedBreakpoint(client, projectId, machine, workspace, rel, line);
           }}
           onClose={() => breakpointUi.setState({ listing: false })}
         />

@@ -58,6 +58,11 @@ export interface ConsoleLine {
 
 export interface DebugSessionView {
   runId: string;
+  /**
+   * 세션이 도는 머신(그 세션을 받은 디버그 연결의 머신 — M7-21 리뷰 B1). 프레임 · 멈춘 줄 · 루트 밖 소스는 늘 이 머신의 것으로 연다.
+   * 실행 번호(`runId`)는 머신마다 따로라 머신과 함께만 세션을 가른다.
+   */
+  machine: string;
   name: string;
   adapter: string;
   worktree: string | null;
@@ -113,6 +118,8 @@ export interface DebugDeps {
   /** 루트 밖 프레임을 읽기 전용 탭으로 연다(토큰). */
   openOutside(frame: {
     runId: string;
+    /** 그 세션의 머신. */
+    machine: string;
     token: string;
     path: string;
     adapter: string;
@@ -161,8 +168,13 @@ export class DebugSessions {
     if (first) this.store.setState({ watches: this.readWatches() });
   }
 
-  /** Host 에 붙는다. 해제 함수. */
+  /**
+   * Host 에 붙는다. 해제 함수. 다른 머신의 연결로 붙으면(활성 체크아웃을 다른 머신으로 바꿈 — M7-21 리뷰 B1) 앞 머신의 세션은 화면에서
+   * 걷는다: 그 세션의 `debug.*` 를 보낼 연결이 이제 없고, 남겨 두면 프레임을 누를 때 새 연결로 옛 `runId` 를 묻게 된다. 세션은 그
+   * 머신 Host 에 그대로 살아 있다 — 그 머신의 체크아웃을 다시 활성으로 두면 `run.list` 로 다시 보인다.
+   */
   connect(client: DebugClient, projectId: string): () => void {
+    this.forgetOtherMachines();
     let disposed = false;
     let unsubscribe: (() => Promise<void>) | undefined;
     void client
@@ -399,6 +411,17 @@ export class DebugSessions {
     }
   }
 
+  /** 지금 디버그 연결의 머신이 아닌 세션을 걷는다(고른 세션이면 프레임 · 멈춘 줄도). */
+  private forgetOtherMachines() {
+    const machine = this.deps?.machine ?? LOCAL_MACHINE;
+    const { sessions, activeRunId } = this.store.getState();
+    const kept = sessions.filter((s) => s.machine === machine);
+    if (kept.length === sessions.length) return;
+    const active = kept.some((s) => s.runId === activeRunId) ? activeRunId : undefined;
+    if (active === undefined) this.clearFrames();
+    this.store.setState({ sessions: kept, activeRunId: active });
+  }
+
   private add(run: RunInfo, adapter: string) {
     const sessions = this.store.getState().sessions;
     if (sessions.some((s) => s.runId === run.runId)) {
@@ -412,6 +435,7 @@ export class DebugSessions {
         ...kept,
         {
           runId: run.runId,
+          machine: this.deps?.machine ?? LOCAL_MACHINE,
           name: run.name,
           adapter,
           worktree: run.worktree,
@@ -497,6 +521,7 @@ export class DebugSessions {
       if (open)
         deps.openOutside({
           runId: s.runId,
+          machine: s.machine,
           token: frame.token,
           path: frame.path ?? frame.name,
           adapter: s.adapter,
@@ -510,7 +535,8 @@ export class DebugSessions {
       this.current.setState({ frame: undefined });
       return;
     }
-    const machine = deps.machine ?? LOCAL_MACHINE;
+    // 그 세션의 머신이다 — 지금 연결의 머신이 아니다(M7-21 리뷰 B1 · M7-11 B3 의 꼴).
+    const { machine } = s;
     // 에디터 거터는 창 안의 경로로 견준다 — 다른 머신의 프레임은 그 머신이 붙은 꼴이다(이 머신의 같은 경로 탭에 줄을 칠하지 않게).
     this.current.setState({ frame: { path: qualify(machine, frame.path), line } });
     if (open)
