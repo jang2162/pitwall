@@ -632,7 +632,8 @@ function useWindowEditor(
             content.kind === "text"
               ? new TextEncoder().encode(content.text).length
               : Math.floor((content.data.length * 3) / 4);
-          if (size > UPLOAD_MAX)
+          // 상한은 쓸 파일의 크기다(BOM 포함, Host 와 같다).
+          if (size + (params.bom ? 3 : 0) > UPLOAD_MAX)
             throw new Error(latest.current.strings.saveTooLargeForLink(formatMiB(UPLOAD_MAX)));
           const where = { ...r.base, path: r.path };
           return back(

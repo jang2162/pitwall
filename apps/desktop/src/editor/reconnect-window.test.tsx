@@ -332,8 +332,12 @@ vi.mock("../tauri-transport", async () => {
             const content = params.content as { kind: string; text?: string; data?: string };
             const piece = content.text ?? content.data ?? "";
             const text = content.kind === "text";
+            // 모은 바이트는 실제 Host 처럼 UTF-8(텍스트) · 푼 바이트(base64)로 센다 — 조각의 `offset` 이 그것과 같아야 한다.
+            const pieceBytes = text ? new TextEncoder().encode(piece).length : atob(piece).length;
+            const offset = Number(params.offset ?? 0);
             const id = params.upload as string | null | undefined;
             if (id == null) {
+              if (offset !== 0) return fail(-32602, "the chunk must start at byte 0");
               const mine = [...fake.uploads.values()].filter((u) => u.conn === conn).length;
               if (fake.uploads.size >= 4 || mine >= 2)
                 return fail(-32603, "internal error", "chunked write is busy: too many uploads");
@@ -344,20 +348,22 @@ vi.mock("../tauri-transport", async () => {
                 path,
                 text,
                 pieces: [piece],
-                bytes: piece.length,
+                bytes: pieceBytes,
               });
-              reply({ upload, received: piece.length });
+              reply({ upload, received: pieceBytes });
             } else {
               const u = fake.uploads.get(id);
               if (!u || u.conn !== conn) return fail(-32005, "no such upload", { upload: id });
               if (u.projectId !== params.projectId || u.path !== path || u.text !== text)
                 return fail(-32602, "the upload was opened for another file");
-              if (u.bytes + piece.length > 50 * MIB) {
+              if (offset !== u.bytes)
+                return fail(-32602, `the chunk must start at byte ${u.bytes}`);
+              if (u.bytes + pieceBytes > 50 * MIB) {
                 fake.uploads.delete(id);
                 return fail(-32602, "a chunked write is at most 50 MiB");
               }
               u.pieces.push(piece);
-              u.bytes += piece.length;
+              u.bytes += pieceBytes;
               reply({ upload: id, received: u.bytes });
             }
             if (fake.dropAfterChunks !== undefined && --fake.dropAfterChunks <= 0) {
@@ -373,6 +379,10 @@ vi.mock("../tauri-transport", async () => {
             if (u.projectId !== params.projectId || u.path !== path)
               return fail(-32602, "the upload was opened for another file");
             fake.uploads.delete(id);
+            if (params.size != null && params.size !== u.bytes)
+              return fail(-32602, "the upload holds another size");
+            if (u.bytes + (params.bom ? 3 : 0) > 50 * MIB)
+              return fail(-32602, "a chunked write is at most 50 MiB");
             const current = files.has(path) ? version(path) : null;
             if ((params.expectedVersion ?? null) !== current)
               return fail(-32004, "conflict", { path, current });
@@ -913,16 +923,22 @@ it("saves 33 MiB to the remote machine in chunks, and this machine's tab with on
 
 it("leaves the remote file untouched and keeps the edits when the link drops while chunks are sent", async () => {
   const remote = await openBoth();
-  await replace(remote, '"'.repeat(33 * MIB));
-  fake.dropAfterChunks = 2;
+  // 평문 20 MiB — 한 조각(16 MiB)보다 커서 조각으로 가지만 통째 `fs.write` 로도 틀(64 MiB) 안이다. 통째로 보냈다면 끊기기 전에
+  // 그 머신의 파일이 바뀌었을 것이다(리뷰 F2). 첫 조각을 받은 뒤 링크가 끊긴다.
+  await replace(remote, "a".repeat(20 * MIB));
+  fake.dropAfterChunks = 1;
   await saveActive();
-  await vi.waitFor(() => expect(fake.dropped).toHaveLength(1));
+  // 끊기거나(조각) 통째 `fs.write` 가 닿을 때까지 — 어느 쪽이든 먼저 그 머신의 파일을 본다.
+  await vi.waitFor(() => expect(fake.dropped.length + writes(MINI).length).toBeGreaterThan(0));
   await settle();
   // 커밋은 가지 않았고 모음은 버려졌다 — 그 머신의 파일은 그대로, 편집은 탭에 남는다.
+  expect(fake.files.get(MINI)!.get(FILE)!.text).toBe("remote text");
+  expect(fake.dropped).toHaveLength(1);
   expect(callsOf(MINI, "fs.writeCommit")).toHaveLength(0);
   expect(fake.uploads.size).toBe(0);
-  expect(fake.files.get(MINI)!.get(FILE)!.text).toBe("remote text");
-  expect(remote.state.doc.length).toBe(33 * MIB);
+  expect(callsOf(MINI, "fs.writeChunk")).toHaveLength(1);
+  expect(remote.state.doc.length).toBe(20 * MIB);
+  expect(writes(MINI)).toHaveLength(0);
   expect(writes("local")).toHaveLength(0);
   expect(callsOf("local", "fs.writeChunk")).toHaveLength(0);
 });

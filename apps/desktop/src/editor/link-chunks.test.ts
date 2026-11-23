@@ -65,6 +65,34 @@ describe("writeInChunks", () => {
     expect(Math.max(...sizes)).toBeLessThan(REMOTE_MESSAGE_LIMIT);
   });
 
+  it("places every piece after the bytes already sent and commits their total", async () => {
+    const text = "한글😀a".repeat(50);
+    const offsets: number[] = [];
+    let size = -1;
+    await writeInChunks(
+      {
+        chunk: async ({ offset }) => {
+          offsets.push(offset);
+          return { upload: "u1", received: 0 };
+        },
+        commit: async (params) => {
+          size = params.size;
+          return { path: "p", size: 0, mtimeMs: null, version: "v" };
+        },
+        abort: async () => {},
+      },
+      { kind: "text", text },
+      true,
+      null,
+      40,
+    );
+    const pieces = splitTextByWire(text, 40);
+    const bytes = pieces.map((p) => new TextEncoder().encode(p).length);
+    expect(offsets).toEqual(bytes.map((_, i) => bytes.slice(0, i).reduce((a, b) => a + b, 0)));
+    // BOM 은 Host 가 커밋에서 붙인다 — 크기는 보낸 바이트(BOM 빼고).
+    expect(size).toBe(new TextEncoder().encode(text).length);
+  });
+
   it("splits base64 into pieces that decode on their own", async () => {
     const data = btoa("x".repeat(100));
     const pieces: string[] = [];

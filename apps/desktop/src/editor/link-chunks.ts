@@ -116,9 +116,14 @@ function splitBase64(data: string, budget: number = CHUNK_WIRE_MAX): string[] {
 
 /** 조각 쓰기의 세 RPC. 경로 · 접근 범위는 부르는 쪽이 채운다. */
 export interface WriteChunks {
-  chunk(params: { upload: string | null; content: FsContent }): Promise<FsWriteChunk>;
+  chunk(params: {
+    upload: string | null;
+    offset: number;
+    content: FsContent;
+  }): Promise<FsWriteChunk>;
   commit(params: {
     upload: string;
+    size: number;
     bom: boolean;
     expectedVersion: string | null;
   }): Promise<FsWritten>;
@@ -140,12 +145,22 @@ export async function writeInChunks(
     content.kind === "text"
       ? splitTextByWire(content.text, budget).map((text): FsContent => ({ kind: "text", text }))
       : splitBase64(content.data, budget).map((data): FsContent => ({ kind: "base64", data }));
+  // 자리 · 크기는 Host 가 모은 바이트와 견준다 — 빠뜨린 · 겹친 조각을 커밋하지 않는다(텍스트는 UTF-8, base64 는 푼 바이트).
+  const encoder = new TextEncoder();
+  const bytesOf = (piece: FsContent) =>
+    piece.kind === "text"
+      ? encoder.encode(piece.text).length
+      : (piece.data.length / 4) * 3 - (piece.data.match(/=*$/)?.[0].length ?? 0);
   let upload: string | null = null;
+  let offset = 0;
   try {
-    for (const piece of pieces) upload = (await rpc.chunk({ upload, content: piece })).upload;
+    for (const piece of pieces) {
+      upload = (await rpc.chunk({ upload, offset, content: piece })).upload;
+      offset += bytesOf(piece);
+    }
   } catch (e) {
     if (upload !== null) await rpc.abort(upload).catch(() => {});
     throw e;
   }
-  return rpc.commit({ upload: upload!, bom, expectedVersion });
+  return rpc.commit({ upload: upload!, size: offset, bom, expectedVersion });
 }
