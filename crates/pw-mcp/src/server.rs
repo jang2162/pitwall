@@ -756,8 +756,7 @@ impl Session {
                     project_id,
                     started,
                     &cancel,
-                    remote.as_ref(),
-                    remote_timeout,
+                    remote.as_ref().map(|aim| (aim, remote_timeout)),
                 )
                 .await;
         }
@@ -782,9 +781,13 @@ impl Session {
         project_id: Option<String>,
         started: Instant,
         cancel: &CancellationToken,
-        remote: Option<&RemoteAim>,
-        remote_timeout: Option<Duration>,
+        // 다른 머신 대상과, 원격만 묶음이면 그 머신이 판정한 승인 시한(`mcp.target`).
+        remote: Option<(&RemoteAim, Option<Duration>)>,
     ) -> Result<CallToolResult, ErrorData> {
+        let (remote, remote_timeout) = match remote {
+            Some((aim, timeout)) => (Some(aim), timeout),
+            None => (None, None),
+        };
         let name = tool.name.clone();
         let first = self
             .client_for(remote)
