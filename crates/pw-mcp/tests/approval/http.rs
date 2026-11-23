@@ -1136,3 +1136,35 @@ async fn only_initialized_sessions_are_counted() {
     assert_eq!(agent.send("DELETE", agent.headers(), b"").await.status, 200);
     assert_eq!(e.connections.active(), 0);
 }
+
+/// 답을 기다리던 HTTP 요청의 연결이 끊기면 그 호출을 거둔다(`notifications/cancelled` — stdio 의 취소와 같은 길): 승인 요청이 창에서
+/// 내려가고 툴은 돌지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dropped_http_request_withdraws_its_call() {
+    let port = free_port();
+    let f = Fixture::with_global(&http_global(true, port));
+    let e = f.endpoint(port, Limits::default()).await;
+    let mut agent = e.client();
+    agent.initialize().await;
+    let mut window = f.window(&f.alpha);
+    let body = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+        "params": {"name": "fake_write", "arguments": {"projectId": f.alpha, "tag": "gone"}}});
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    stream
+        .write_all(&request(
+            "POST",
+            http::PATH,
+            &agent.headers(),
+            body.to_string().as_bytes(),
+        ))
+        .await
+        .unwrap();
+    let asked = window.opened().await;
+    drop(stream);
+    window.closed(asked.id).await;
+    assert_eq!(f.runs(), 0);
+    assert!(
+        window.answer(asked.id, McpApprovalAnswer::Once).is_err(),
+        "이미 거둔 요청"
+    );
+}
