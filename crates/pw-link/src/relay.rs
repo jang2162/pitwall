@@ -68,11 +68,17 @@ impl RelayParts {
 #[derive(Clone, Default)]
 pub struct Resumes(Arc<Mutex<Vec<Held>>>);
 
+/// 링크 하나의 토큰들. `current` 는 상대가 가졌다고 확인된 토큰, `pending` 은 이어 붙기의 `welcome` 으로 건넸지만 상대가 받았는지
+/// 아직 모르는 토큰이다 — 새 전송으로 상대의 틀이 오면 확정한다([`Resumes::confirm`]). 확정 전에 그 전송이 죽으면(welcome 을 잃음)
+/// 상대는 옛 토큰으로 다시 오므로, `current` 는 확정 전까지 **한 번 더**(모두 두 번) 받는다. 확정되면 옛 토큰은 끝이다.
 struct Held {
     id: u64,
     key: PublicKey,
     role: Role,
-    token: ResumeToken,
+    current: ResumeToken,
+    /// `current` 로 이어 붙은 수(0 · 1 · 2).
+    uses: u8,
+    pending: Option<ResumeToken>,
     mux: Mux,
 }
 
@@ -88,7 +94,9 @@ impl Resumes {
             id,
             key,
             role,
-            token,
+            current: token,
+            uses: 0,
+            pending: None,
             mux,
         });
         id
@@ -98,29 +106,57 @@ impl Resumes {
         self.lock().retain(|h| h.id != id);
     }
 
-    /// 그 기기 키의 링크 중 토큰이 맞는(상수 시간 비교) 것. 맞으면 토큰을 새것으로 바꾼다(한 번 쓴 토큰은 다시 받지 않는다). role 이
-    /// 다르거나 닫힌 링크면 `None`.
+    /// 그 기기 키의 링크 중 토큰이 맞는(상수 시간 비교) 것과 새로 건넬 토큰. 맞는 토큰은 확정된 토큰(`current` — 확정 전 한 번 더까지)
+    /// 이거나 건넸지만 확정되지 않은 토큰(`pending` — 상대가 받았다는 증거라 그것이 `current` 가 된다)이다. role 이 다르거나 닫힌
+    /// 링크, 쓸 수를 다 쓴 토큰이면 `None`.
     fn take(
         &self,
         key: &PublicKey,
         presented: &ResumeToken,
         role: Role,
-    ) -> Option<(Mux, ResumeToken)> {
+    ) -> Option<(u64, Mux, ResumeToken)> {
         let next = ResumeToken::generate().ok()?;
         let mut held = self.lock();
         let mut found = None;
-        // 맞는 것을 찾아도 끝까지 돈다 — 토큰 비교의 수가 맞은 자리를 드러내지 않게.
+        // 맞는 것을 찾아도 끝까지 돌고 두 토큰을 다 견준다 — 비교의 수가 맞은 자리를 드러내지 않게.
         for (i, h) in held.iter().enumerate() {
-            if h.key == *key && h.token.matches(presented) {
-                found = Some(i);
+            let current = h.current.matches(presented);
+            let pending = h.pending.as_ref().is_some_and(|t| t.matches(presented));
+            if h.key == *key && (current || pending) {
+                found = Some((i, pending));
             }
         }
-        let h = &mut held[found?];
+        let (i, was_pending) = found?;
+        let h = &mut held[i];
         if h.role != role || h.mux.reason().is_some() {
             return None;
         }
-        h.token = next.clone();
-        Some((h.mux.clone(), next))
+        if was_pending {
+            // 상대가 건넨 토큰을 받았다 — 그것이 확정된 토큰이고, 이번이 그 첫 사용이다.
+            h.current = h.pending.take()?;
+            h.uses = 1;
+        } else {
+            // 확정된 토큰은 한 번(보통의 이어 붙기), 건넨 토큰이 확정되지 않은 동안 한 번 더(그 welcome 을 잃음).
+            let allowed = h.uses == 0 || (h.uses == 1 && h.pending.is_some());
+            if !allowed {
+                return None;
+            }
+            h.uses += 1;
+        }
+        h.pending = Some(next.clone());
+        Some((h.id, h.mux.clone(), next))
+    }
+
+    /// 상대가 `token` 을 받았다(그것을 건넨 전송으로 상대의 틀이 왔다) — 확정하고 옛 토큰을 버린다.
+    fn confirm(&self, id: u64, token: &ResumeToken) {
+        let mut held = self.lock();
+        if let Some(h) = held.iter_mut().find(|h| h.id == id)
+            && h.pending.as_ref().is_some_and(|t| t.matches(token))
+        {
+            h.current = token.clone();
+            h.uses = 0;
+            h.pending = None;
+        }
     }
 
     /// 링크를 모두 닫고 상대에게 `bye` 가 나갈 때까지(링크마다 1초 남짓까지) 기다린다 — 데몬이 끝날 때 부른다. 그러지 않으면
@@ -136,6 +172,12 @@ impl Resumes {
             }
         };
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), all).await;
+    }
+
+    /// 건넨 토큰이 모두 확정됐는가(시험).
+    #[cfg(test)]
+    pub(crate) fn settled(&self) -> bool {
+        self.lock().iter().all(|h| h.pending.is_none())
     }
 
     /// 이어 붙기를 기다리는 링크의 수(시험 · 진단).
@@ -308,16 +350,26 @@ async fn resume_link(
     parts: &RelayParts,
     on_proven: impl FnOnce(&Proven) + Send,
 ) -> Result<CloseReason, ServeError> {
-    let Some((mux, token)) = parts.resumes.take(&proven.key, &resume.token, proven.role) else {
+    let Some((id, mux, token)) = parts.resumes.take(&proven.key, &resume.token, proven.role) else {
         return Err(reject(&mut framed, RejectReason::Resume, None, None).await);
     };
     let Some(received) = mux.suspend_for_resume() else {
         return Err(reject(&mut framed, RejectReason::Resume, None, None).await);
     };
-    write_welcome(&mut framed, proven.role, Some(token), Some(received)).await?;
+    write_welcome(
+        &mut framed,
+        proven.role,
+        Some(token.clone()),
+        Some(received),
+    )
+    .await?;
     framed.read.set_max_body(pw_wire::MAX_BODY_BYTES);
     on_proven(proven);
-    if let Err(why) = mux.resume(framed, resume.received) {
+    // 이 전송으로 Desktop 의 틀이 오면(Desktop 은 welcome 을 읽은 뒤에만 이 전송에 쓴다 — 이어 붙자마자 `ack` 를 보낸다) 새 토큰을
+    // 확정한다.
+    let resumes = parts.resumes.clone();
+    let confirmed = Box::new(move || resumes.confirm(id, &token));
+    if let Err(why) = mux.resume_then(framed, resume.received, Some(confirmed)) {
         tracing::info!(target: "pw_link", %why, "cannot resume the link");
         mux.shutdown(CloseReason::Protocol(why));
     }

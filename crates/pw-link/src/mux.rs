@@ -231,7 +231,12 @@ struct Shared {
     phase: watch::Sender<Phase>,
     /// 닫은 뒤 `bye` 를 보냈거나(보내 봤거나) 보낼 전송이 없다.
     drained: CancellationToken,
+    /// 이어 붙은 전송으로 상대의 첫 틀이 오면 부른다(Relay 가 건넨 토큰을 확정한다).
+    on_first_frame: Mutex<Option<(u64, FirstFrame)>>,
 }
+
+/// [`Mux::resume_then`] 의 알림.
+pub(crate) type FirstFrame = Box<dyn FnOnce() + Send>;
 
 /// 링크의 단계.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -335,6 +340,7 @@ impl Mux {
             inbox: inbox_tx,
             phase: watch::Sender::new(Phase::Live),
             drained: CancellationToken::new(),
+            on_first_frame: Mutex::new(None),
         });
         let mux = Self { shared };
         mux.spawn_transport(framed, 0, stop);
@@ -414,6 +420,16 @@ impl Mux {
     /// 버린 틀(`ack` 받은 앞)보다 덜 받았거나 보낸 것보다 많이 받았다면 이어 갈 수 없다(부른 쪽이 링크를 닫는다). 먼저
     /// [`Self::suspend_for_resume`] 이나 전송을 잃어 멈춰 있어야 한다.
     pub(crate) fn resume(&self, framed: Framed, peer_received: u64) -> Result<(), String> {
+        self.resume_then(framed, peer_received, None)
+    }
+
+    /// [`Self::resume`] 와 같되 새 전송으로 상대의 첫 틀이 오면 `first_frame` 을 부른다.
+    pub(crate) fn resume_then(
+        &self,
+        framed: Framed,
+        peer_received: u64,
+        first_frame: Option<FirstFrame>,
+    ) -> Result<(), String> {
         let _gate = lock(&self.shared.rx_gate);
         let mut state = lock(&self.shared.state);
         if state.shut {
@@ -439,10 +455,12 @@ impl Mux {
         state.suspended = false;
         let stop = CancellationToken::new();
         state.stop = stop.clone();
-        state.unacked_bytes = 0;
         let generation = state.generation;
         let resent = state.replay.len();
+        // 이어 붙자마자 받은 수를 알린다 — 상대는 그 틀로 이쪽이 이 전송에 붙었음(Relay 는 건넨 토큰이 닿았음)을 안다.
+        Self::queue_ack(&mut state);
         drop(state);
+        *lock(&self.shared.on_first_frame) = first_frame.map(|f| (generation, f));
         *lock(&self.shared.last_rx) = Instant::now();
         tracing::info!(target: "pw_link", resent, "link resumed");
         self.spawn_transport(framed, generation, stop);
@@ -909,6 +927,19 @@ impl Mux {
                     let gate = lock(&self.shared.rx_gate);
                     if !self.count(generation, frame.kind, len) {
                         return;
+                    }
+                    let first = {
+                        let mut slot = lock(&self.shared.on_first_frame);
+                        match slot.take() {
+                            Some((g, f)) if g == generation => Some(f),
+                            other => {
+                                *slot = other;
+                                None
+                            }
+                        }
+                    };
+                    if let Some(first) = first {
+                        first();
                     }
                     *lock(&self.shared.last_rx) = Instant::now();
                     if let Err(why) = self.dispatch(frame, len) {

@@ -71,6 +71,15 @@ impl Transport for Cuttable {
                 ));
             }
             self.opens.fetch_add(1, Ordering::SeqCst);
+            self.open_raw()
+        })
+    }
+}
+
+impl Cuttable {
+    /// 네트워크가 내려갔어도 여는 전송(시험이 손으로 하는 핸드셰이크 — Desktop 의 되풀이와 섞이지 않게).
+    fn open_raw(&self) -> std::io::Result<LinkStream> {
+        {
             let (desktop, near) = tokio::io::duplex(64 * 1024);
             let (far, relay) = tokio::io::duplex(64 * 1024);
             let lost = Arc::new(AtomicBool::new(false));
@@ -90,7 +99,7 @@ impl Transport for Cuttable {
                 .send(LinkStream::split(relay))
                 .map_err(|_| std::io::Error::other("no acceptor"))?;
             Ok(LinkStream::split(desktop))
-        })
+        }
     }
 }
 
@@ -295,7 +304,7 @@ async fn try_resume(
     key: &Arc<DeviceKey>,
     token: crate::handshake::ResumeToken,
 ) -> Result<(), DialError> {
-    let stream = fx.transport.open().await.unwrap();
+    let stream = fx.transport.open_raw().unwrap();
     let mut framed = Framed::handshake(stream);
     let me = DesktopIdentity {
         key: Arc::clone(key),
@@ -343,6 +352,10 @@ async fn a_used_token_or_one_without_its_device_proof_is_refused() {
     .await;
     let second = link.resume_token().unwrap();
     assert_ne!(first, second, "the token did not change after its use");
+    eventually("the relay did not confirm the new token", || {
+        fx.resumes.settled()
+    })
+    .await;
 
     // 쓴 토큰은 같은 기기 키여도 거절.
     assert_eq!(
@@ -408,5 +421,74 @@ async fn a_relay_that_closes_its_links_says_bye_and_the_desktop_does_not_resume(
         fx.transport.opens.load(Ordering::SeqCst),
         1,
         "the desktop tried to resume"
+    );
+}
+
+/// 리뷰 2.1: 이어 붙기의 `welcome` 이 Desktop 에 닿지 않아도(그 전송이 죽음) 옛 토큰으로 한 번 더 이어 붙는다 — 새 토큰은 Desktop 의
+/// 틀이 새 전송으로 와야 확정된다. 확정 전 옛 토큰은 그 한 번의 다시 시도에만 받고 세 번째는 거절, 확정 뒤에는 거절한다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lost_welcome_still_lets_the_link_resume_once_more() {
+    let fx = resumable(quick());
+    fx.remote.attach().await.unwrap();
+    let link = fx.remote.link().unwrap();
+    let mut client = Client::open(&*fx.remote, Caller::new(Role::Owner)).await;
+    let stream = ticks(&mut client, 300, 2).await;
+    for _ in 0..10 {
+        client.next().await.expect("the stream did not start");
+    }
+    let token = link.resume_token().unwrap();
+    fx.transport.down.store(true, Ordering::SeqCst);
+    fx.transport.cut().await;
+    wait_state(fx.remote.state(), |s| *s == LinkState::Reconnecting).await;
+    // 이 기기가 그 토큰으로 이어 붙었지만 welcome 을 받기 전에 전송이 죽은 것과 같다(Relay 는 새 토큰을 건넸다).
+    let lost = try_resume(&fx, &fx.desktop_key, token.clone()).await;
+    assert_eq!(lost, Ok(()), "the first resume itself was refused");
+    fx.transport.cut().await;
+    assert!(
+        !fx.resumes.settled(),
+        "the relay settled a token the desktop never got"
+    );
+    // 네트워크가 돌아오면 Desktop 은 옛 토큰으로 다시 와서 이어 붙는다.
+    fx.transport.down.store(false, Ordering::SeqCst);
+    wait_state(fx.remote.state(), |s| {
+        matches!(s, LinkState::Connected { .. })
+    })
+    .await;
+    let (chunks, end) = client.drain_stream(stream).await;
+    assert_eq!(end, "completed");
+    assert_eq!(chunks, (10..300).map(|i| json!(i)).collect::<Vec<_>>());
+    eventually("the relay did not confirm the new token", || {
+        fx.resumes.settled()
+    })
+    .await;
+    // 확정됐다 — 옛 토큰은 끝이다.
+    assert_eq!(
+        try_resume(&fx, &fx.desktop_key, token).await,
+        Err(DialError::Rejected(RejectReason::Resume))
+    );
+}
+
+/// 확정 전 옛 토큰의 다시 시도는 한 번뿐이다 — 두 번 잃은 뒤 세 번째 사용은 거절.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unconfirmed_old_token_is_taken_only_once_more() {
+    let fx = resumable(quick());
+    fx.remote.attach().await.unwrap();
+    let token = fx.remote.link().unwrap().resume_token().unwrap();
+    fx.transport.down.store(true, Ordering::SeqCst);
+    fx.transport.cut().await;
+    wait_state(fx.remote.state(), |s| *s == LinkState::Reconnecting).await;
+    assert_eq!(
+        try_resume(&fx, &fx.desktop_key, token.clone()).await,
+        Ok(())
+    );
+    fx.transport.cut().await;
+    assert_eq!(
+        try_resume(&fx, &fx.desktop_key, token.clone()).await,
+        Ok(())
+    );
+    fx.transport.cut().await;
+    assert_eq!(
+        try_resume(&fx, &fx.desktop_key, token).await,
+        Err(DialError::Rejected(RejectReason::Resume))
     );
 }
