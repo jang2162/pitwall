@@ -342,10 +342,13 @@ async fn a_used_token_or_one_without_its_device_proof_is_refused() {
     );
     assert!(!link.is_suspended(), "a refused resume suspended the link");
 
-    // 끊고 이어 붙으면 토큰이 바뀐다.
+    // 끊고 이어 붙으면 토큰이 바뀐다. 끊긴 동안 네트워크를 내려 둔다 — `watch` 는 마지막 값만 보이므로 이어 붙기가 빠르면
+    // `Reconnecting` 을 놓친다.
     let state = fx.remote.state();
+    fx.transport.down.store(true, Ordering::SeqCst);
     fx.transport.cut().await;
     wait_state(state, |s| *s == LinkState::Reconnecting).await;
+    fx.transport.down.store(false, Ordering::SeqCst);
     wait_state(fx.remote.state(), |s| {
         matches!(s, LinkState::Connected { .. })
     })
