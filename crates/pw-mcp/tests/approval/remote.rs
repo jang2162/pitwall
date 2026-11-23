@@ -905,3 +905,83 @@ async fn a_closed_machine_connection_is_opened_again() {
     assert_eq!(r.connects(), [MINI, MINI]);
     assert_eq!(r.mini.runs(), 2);
 }
+
+/// 델타 리뷰 F4: 묶음의 이 머신 멤버 설정을 읽지 못하면 다른 머신을 겨눈 호출도 거절한다(fail-closed — `project_config_unreadable`).
+/// 그 머신에 붙지도, 툴을 부르지도 않는다. 읽기 툴이라 승인 경로를 지나지 않는다 — 판정은 호출 앞의 한 자리다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unreadable_settings_of_the_bundle_member_refuse_another_machine() {
+    let r = Remote::new();
+    let broken = r.f.work("alpha").join(".pitwall/db/y.toml");
+    std::fs::create_dir_all(broken.parent().unwrap()).unwrap();
+    std::fs::write(&broken, "name = \"y\n").unwrap();
+    let _window = r.f.window(&r.f.alpha);
+    let agent = r.agent("agent").await;
+    let result = agent
+        .call("fake_echo", on("mini", json!({"tag": "x"})))
+        .await;
+    assert_eq!(
+        mark(&result),
+        Mark::denied(Reason::ProjectConfigUnreadable),
+        "{}",
+        text(&result)
+    );
+    assert!(!text(&result).contains("name ="), "{}", text(&result));
+    assert!(r.connects().is_empty(), "설정을 못 읽는데 그 머신에 붙었다");
+    assert_eq!((r.mini.runs(), r.f.runs()), (0, 0));
+    std::fs::remove_file(&broken).unwrap();
+    assert_eq!(
+        mark(
+            &agent
+                .call("fake_echo", on("mini", json!({"tag": "x"})))
+                .await
+        ),
+        Mark::ok(),
+        "대조: 고치면 돈다"
+    );
+}
+
+/// 델타 리뷰 R7: 이 머신 멤버가 없는 묶음(원격만)은 승인을 물을 창이 없어 거절한다 — 그 머신의 프로젝트 id 와 같은 id 로 듣는 이 머신
+/// 창이 있어도 그 창으로 가지 않는다(프로젝트 id 는 머신 사이에 유일하지 않다 — M7-03 ⑥).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_bundle_without_a_member_here_is_refused() {
+    let r = Remote::new();
+    const REMOTE_ONLY: &str = "b-00000000000000cc";
+    r.machines.bundles.lock().unwrap().push(ProjectBundle {
+        id: REMOTE_ONLY.into(),
+        name: "remote only".into(),
+        favorite: false,
+        tags: Vec::new(),
+        opened_at: None,
+        implicit: false,
+        members: vec![ProjectBundleMember {
+            machine: BOX.into(),
+            project_id: r.other.project.clone(),
+            last_target: None,
+        }],
+    });
+    // 원격 프로젝트 id 와 같은 id 를 듣는 창(이 머신에 그 id 의 프로젝트가 있다고 치자).
+    let _same_id = r.f.window(&r.other.project);
+    let _alpha = r.f.window(&r.f.alpha);
+    let agent = r.agent("agent").await;
+    for tool in ["fake_echo", "fake_write"] {
+        let result = agent
+            .call(
+                tool,
+                on("box", json!({"projectId": REMOTE_ONLY, "tag": "x"})),
+            )
+            .await;
+        assert_eq!(
+            mark(&result),
+            Mark::denied(Reason::MachineUnavailable),
+            "{tool}: {}",
+            text(&result)
+        );
+        assert!(
+            text(&result).contains("no checkout on this computer"),
+            "{}",
+            text(&result)
+        );
+    }
+    assert!(r.connects().is_empty());
+    assert_eq!((r.other.plans(), r.other.runs()), (0, 0));
+}
