@@ -5438,6 +5438,11 @@ export type FsWriteChunkParams = {
 	path: string,
 	/**  이어 쓸 모음. 없으면 새 모음을 연다. */
 	upload?: string | null,
+	/**
+	 *  이 조각이 놓일 자리 — 앞 조각까지 보낸 바이트(텍스트면 UTF-8, base64 면 푼 바이트). 첫 조각은 0. Host 가 모은 바이트와 다르면
+	 *  거절한다(빠뜨린 · 겹친 · 순서가 바뀐 조각).
+	 */
+	offset?: number,
 	/**  이 조각의 내용(UTF-8 텍스트 조각 또는 그 조각만의 base64). 모음의 모든 조각이 같은 종류여야 한다. */
 	content: FsContent,
 };
@@ -5448,6 +5453,8 @@ export type FsWriteCommitParams = {
 	/**  조각을 보낸 경로. */
 	path: string,
 	upload: string,
+	/**  보낸 바이트의 합(BOM 빼고). 있으면 모은 바이트와 견주고 다르면 아무것도 쓰지 않고 거절한다(웹뷰는 늘 준다). */
+	size?: number | null,
 	/**  텍스트 앞에 UTF-8 BOM 을 붙인다(`fs.write` 와 같다). */
 	bom?: boolean,
 	/**  `fs.write` 와 같다 — 지금 파일과 다르면 아무것도 쓰지 않고 `CONFLICT`. 없으면 새 파일. */

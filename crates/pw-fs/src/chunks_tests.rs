@@ -298,16 +298,18 @@ async fn an_offset_inside_a_character_is_refused() {
 
 async fn upload(conn: &mut Conn, project: &str, path: &str, pieces: &[&str]) -> String {
     let mut id = Value::Null;
+    let mut offset = 0;
     for piece in pieces {
         let r = conn
             .call(
                 "fs.writeChunk",
-                json!({"projectId": project, "path": path, "upload": id,
+                json!({"projectId": project, "path": path, "upload": id, "offset": offset,
                        "content": {"kind": "text", "text": piece}}),
             )
             .await
             .unwrap();
         id = r["upload"].clone();
+        offset += piece.len();
     }
     id.as_str().unwrap().to_owned()
 }
@@ -412,6 +414,7 @@ async fn a_commit_that_fails_before_the_rename_keeps_the_original() {
         worktree: None,
         path: path.clone(),
         upload: id,
+        size: None,
         bom: false,
         expected_version: version.as_str().map(str::to_owned),
     };
@@ -609,7 +612,7 @@ async fn uploads_are_bounded() {
         match late
             .call(
                 "fs.writeChunk",
-                json!({"projectId": f.id, "path": path, "upload": id,
+                json!({"projectId": f.id, "path": path, "upload": id, "offset": sent,
                        "content": {"kind": "text", "text": piece}}),
             )
             .await
@@ -663,4 +666,175 @@ async fn a_file_window_reads_and_writes_only_its_file_in_chunks() {
         .unwrap_err();
     assert_eq!(e.code, code::INVALID_PARAMS);
     assert_eq!(fs::read(Path::new(&other)).unwrap(), b"other");
+}
+
+/// 첫 조각의 블로킹 일이 도는 사이 `before` 를 하고 풀어 준다 — 연결 닫힘 · 요청 취소가 모음을 만드는 순간과 겹치는 경합(리뷰 F1).
+async fn race_first_chunk(
+    f: &Fixture,
+    conn: &mut Conn,
+    path: &str,
+    before: impl FnOnce(&mut Conn),
+) {
+    let (release, wait) = std::sync::mpsc::channel::<()>();
+    let wait = std::sync::Mutex::new(wait);
+    let entered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let seen = Arc::clone(&entered);
+    *f.fs.chunk_gate.lock().unwrap() = Some(Box::new(move || {
+        seen.store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = wait.lock().unwrap().recv();
+    }));
+    conn.next_id += 1;
+    conn.session.handle_value(
+        json!({"jsonrpc": "2.0", "id": conn.next_id, "method": "fs.writeChunk",
+        "params": {"projectId": f.id, "path": path, "content": {"kind": "text", "text": "half"}}}),
+    );
+    while !entered.load(std::sync::atomic::Ordering::SeqCst) {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    before(conn);
+    // 세션이 핸들러를 버릴 틈을 준 뒤 블로킹 일을 끝내게 한다.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    release.send(()).unwrap();
+    *f.fs.chunk_gate.lock().unwrap() = None;
+    // 블로킹 일이 끝날 때까지(모음을 넣었다면 넣은 뒤까지) 기다린다.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while f.fs.pending_chunks() != 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the first chunk finishes");
+    tokio::time::sleep(Duration::from_millis(20)).await;
+}
+
+async fn until_no_uploads(f: &Fixture) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while f.fs.open_uploads() != 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the upload is discarded");
+}
+
+/// 리뷰 F1: 첫 조각을 받는 사이 연결이 닫혀도(세션은 핸들러를 버린다) 그 모음이 남지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_connection_closed_during_the_first_chunk_leaves_no_upload() {
+    let f = Fixture::new();
+    let mut conn = f.own();
+    let path = f.file("a.txt", b"a");
+    race_first_chunk(&f, &mut conn, &path, |c| c.session.close()).await;
+    assert_eq!(f.fs.open_uploads(), 0);
+    assert_eq!(fs::read(&path).unwrap(), b"a");
+}
+
+/// 리뷰 F1: 첫 조각 요청만 취소돼도(연결은 산다) 모음이 남지 않고, 그 연결의 다음 모음은 연결이 닫히면 버려진다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_first_chunk_leaves_no_upload_and_the_connection_is_still_watched() {
+    let f = Fixture::new();
+    let mut conn = f.own();
+    let path = f.file("a.txt", b"a");
+    race_first_chunk(&f, &mut conn, &path, |c| {
+        let id = c.next_id;
+        c.session.handle_value(
+            json!({"jsonrpc": "2.0", "method": "request.cancel", "params": {"id": id}}),
+        );
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(f.fs.open_uploads(), 0);
+    upload(&mut conn, &f.id, &path, &["next"]).await;
+    assert_eq!(f.fs.open_uploads(), 1);
+    conn.session.close();
+    until_no_uploads(&f).await;
+}
+
+/// 리뷰 F1: 쉰 모음은 아무도 쓰기를 부르지 않아도 시계로 치워진다(가짜 시계).
+#[tokio::test(start_paused = true)]
+async fn an_idle_upload_is_swept_by_the_clock() {
+    use crate::chunks::{SWEEP_EVERY, UPLOAD_IDLE};
+    let f = Fixture::new();
+    let mut conn = f.own();
+    let path = f.file("a.txt", b"a");
+    upload(&mut conn, &f.id, &path, &["half"]).await;
+    assert_eq!(f.fs.open_uploads(), 1);
+    tokio::time::advance(UPLOAD_IDLE - SWEEP_EVERY).await;
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(f.fs.open_uploads(), 1, "not idle long enough yet");
+    tokio::time::advance(SWEEP_EVERY * 2).await;
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(f.fs.open_uploads(), 0);
+    assert_eq!(fs::read(&path).unwrap(), b"a");
+}
+
+/// 권고 R1 · R2: 자리가 어긋난 조각, 크기가 다른 커밋, BOM 을 붙여 상한을 넘는 커밋은 아무것도 쓰지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn misplaced_chunks_wrong_sizes_and_a_bom_over_the_limit_write_nothing() {
+    let f = Fixture::new();
+    let mut conn = f.own();
+    let path = f.file("a.txt", b"a");
+    let version = version_of(&mut conn, &f.id, &path).await;
+    let id = upload(&mut conn, &f.id, &path, &["abc"]).await;
+    for offset in [0, 2, 4] {
+        let e = conn
+            .call(
+                "fs.writeChunk",
+                json!({"projectId": f.id, "path": path, "upload": id, "offset": offset,
+                       "content": {"kind": "text", "text": "d"}}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, code::INVALID_PARAMS, "{offset}");
+    }
+    let e = conn
+        .call(
+            "fs.writeChunk",
+            json!({"projectId": f.id, "path": path, "offset": 3,
+                   "content": {"kind": "text", "text": "d"}}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, code::INVALID_PARAMS, "a new upload starts at 0");
+    let e = conn
+        .call(
+            "fs.writeCommit",
+            json!({"projectId": f.id, "path": path, "upload": id, "size": 4,
+                   "expectedVersion": version}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, code::INVALID_PARAMS);
+    assert_eq!(fs::read(&path).unwrap(), b"a");
+
+    // 모은 것이 꼭 상한이면 BOM 을 붙인 커밋은 상한을 넘는다.
+    let piece = "a".repeat(usize::try_from(CHUNK_WIRE_MAX).unwrap());
+    let mut id = Value::Null;
+    let mut sent = 0u64;
+    while sent < UPLOAD_MAX {
+        let take = usize::try_from((UPLOAD_MAX - sent).min(CHUNK_WIRE_MAX)).unwrap();
+        let r = conn
+            .call(
+                "fs.writeChunk",
+                json!({"projectId": f.id, "path": path, "upload": id, "offset": sent,
+                       "content": {"kind": "text", "text": &piece[..take]}}),
+            )
+            .await
+            .unwrap();
+        id = r["upload"].clone();
+        sent = r["received"].as_u64().unwrap();
+    }
+    let e = conn
+        .call(
+            "fs.writeCommit",
+            json!({"projectId": f.id, "path": path, "upload": id, "size": sent, "bom": true,
+                   "expectedVersion": version}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, code::INVALID_PARAMS);
+    assert_eq!(fs::read(&path).unwrap(), b"a");
 }

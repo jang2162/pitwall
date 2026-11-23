@@ -73,6 +73,9 @@ pub struct Fs {
     /// 시험: 판정 뒤 · 파일을 열기 직전에 부른다(그 사이 경로를 바꿔 읽기 경합을 재현한다).
     #[cfg(test)]
     before_open: Mutex<Option<BeforeOpen>>,
+    /// 시험: `fs.writeChunk` 의 블로킹 일이 시작할 때 부른다(그 사이 연결을 닫아 경합을 재현한다).
+    #[cfg(test)]
+    chunk_gate: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
 impl Default for Fs {
@@ -83,6 +86,8 @@ impl Default for Fs {
             uploads: Mutex::default(),
             #[cfg(test)]
             before_open: Mutex::new(None),
+            #[cfg(test)]
+            chunk_gate: Mutex::new(None),
         }
     }
 }

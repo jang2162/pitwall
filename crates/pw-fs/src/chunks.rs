@@ -17,7 +17,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use tokio::time::Instant;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -34,6 +36,9 @@ use crate::{Fs, UTF8_BOM, content, denied, io_error, read, scope};
 
 /// 조각이 오지 않은 채 이만큼 지난 모음은 버린다.
 pub const UPLOAD_IDLE: Duration = Duration::from_secs(5 * 60);
+
+/// 쉰 모음을 치우는 태스크가 깨는 간격.
+pub const SWEEP_EVERY: Duration = Duration::from_secs(30);
 
 /// 와이어 예산의 하한 — 한 글자(최대 `\u00XX` 6바이트 · 4바이트 글자)와 따옴표가 늘 든다.
 const MIN_WIRE: u64 = 16;
@@ -106,6 +111,11 @@ pub struct FsWriteChunkParams {
     /// 이어 쓸 모음. 없으면 새 모음을 연다.
     #[serde(default)]
     pub upload: Option<String>,
+    /// 이 조각이 놓일 자리 — 앞 조각까지 보낸 바이트(텍스트면 UTF-8, base64 면 푼 바이트). 첫 조각은 0. Host 가 모은 바이트와 다르면
+    /// 거절한다(빠뜨린 · 겹친 · 순서가 바뀐 조각).
+    #[serde(default)]
+    #[specta(type = pw_rpc::JsNumber)]
+    pub offset: u64,
     /// 이 조각의 내용(UTF-8 텍스트 조각 또는 그 조각만의 base64). 모음의 모든 조각이 같은 종류여야 한다.
     pub content: FsContent,
 }
@@ -133,6 +143,10 @@ pub struct FsWriteCommitParams {
     /// 조각을 보낸 경로.
     pub path: String,
     pub upload: String,
+    /// 보낸 바이트의 합(BOM 빼고). 있으면 모은 바이트와 견주고 다르면 아무것도 쓰지 않고 거절한다(웹뷰는 늘 준다).
+    #[serde(default)]
+    #[specta(type = Option<pw_rpc::JsNumber>)]
+    pub size: Option<u64>,
     /// 텍스트 앞에 UTF-8 BOM 을 붙인다(`fs.write` 와 같다).
     #[serde(default)]
     pub bom: bool,
@@ -205,6 +219,10 @@ pub(crate) struct Uploads {
     open: HashMap<String, Upload>,
     /// 닫히면 모음을 버리도록 지켜보는 세션 — 세션마다 지켜보는 태스크 하나.
     watched: std::collections::HashSet<SessionId>,
+    /// 쉰 모음을 시계로 치우는 태스크가 돈다([`reap`]).
+    reaping: bool,
+    /// 핸들러가 받았지만 아직 끝나지 않은 `fs.writeChunk` — 치우는 태스크는 이것이 0 이고 모음이 없을 때만 멈춘다.
+    pending: usize,
 }
 
 impl Uploads {
@@ -350,7 +368,17 @@ impl Fs {
         session: SessionId,
         scope: &ConnectionScope,
         params: &FsWriteChunkParams,
-    ) -> Result<(FsWriteChunk, bool), RpcError> {
+        gone: &dyn Fn() -> bool,
+    ) -> Result<FsWriteChunk, RpcError> {
+        #[cfg(test)]
+        if let Some(gate) = self
+            .chunk_gate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
+            gate();
+        }
         let roots = self.write_roots(scope, &params.project_id, params.worktree.as_deref())?;
         let real = roots.writable(Path::new(&params.path)).map_err(denied)?;
         let (text, piece) = match &params.content {
@@ -370,7 +398,15 @@ impl Fs {
         let now = Instant::now();
         let mut uploads = self.uploads.lock().unwrap_or_else(PoisonError::into_inner);
         uploads.sweep(now);
+        // 연결이 닫혔거나 요청이 취소됐다 — 받는 쪽이 id 를 받지 못하니 모음을 만들거나 늘리지 않는다. 잠금 안에서 본다: 닫힘 감시의
+        // 버리기([`Fs::drop_uploads`])도 이 잠금을 쥐므로 그보다 먼저 넣은 모음은 그것이 치우고, 뒤면 여기서 막힌다.
+        if gone() {
+            return Err(RpcError::cancelled());
+        }
         let Some(id) = &params.upload else {
+            if params.offset != 0 {
+                return Err(misplaced(0));
+            }
             if piece.len() as u64 > UPLOAD_MAX {
                 return Err(too_large());
             }
@@ -393,7 +429,6 @@ impl Fs {
             uploads.next += 1;
             let id = format!("u{}", uploads.next);
             let received = piece.len() as u64;
-            let watch = uploads.watched.insert(session);
             uploads.open.insert(
                 id.clone(),
                 Upload {
@@ -406,13 +441,10 @@ impl Fs {
                     touched: now,
                 },
             );
-            return Ok((
-                FsWriteChunk {
-                    upload: id,
-                    received,
-                },
-                watch,
-            ));
+            return Ok(FsWriteChunk {
+                upload: id,
+                received,
+            });
         };
         let upload = owned(&mut uploads.open, id, session)?;
         same_target(upload, params, &real)?;
@@ -421,19 +453,19 @@ impl Fs {
                 "every chunk of an upload must be the same kind of content",
             ));
         }
+        if params.offset != upload.bytes.len() as u64 {
+            return Err(misplaced(upload.bytes.len() as u64));
+        }
         if (upload.bytes.len() + piece.len()) as u64 > UPLOAD_MAX {
             uploads.open.remove(id);
             return Err(too_large());
         }
         upload.bytes.extend_from_slice(&piece);
         upload.touched = now;
-        Ok((
-            FsWriteChunk {
-                upload: id.clone(),
-                received: upload.bytes.len() as u64,
-            },
-            false,
-        ))
+        Ok(FsWriteChunk {
+            upload: id.clone(),
+            received: upload.bytes.len() as u64,
+        })
     }
 
     /// `fs.writeCommit`. 모음은 결과와 상관없이 닫힌다.
@@ -484,6 +516,18 @@ impl Fs {
             }
             (false, false) => upload.bytes,
         };
+        let sent = bytes.len() as u64 - if params.bom { UTF8_BOM.len() as u64 } else { 0 };
+        if let Some(size) = params.size
+            && sent != size
+        {
+            return Err(RpcError::invalid_params(format!(
+                "the upload holds {sent} bytes, not {size}; nothing was written"
+            )));
+        }
+        // 상한은 쓸 파일의 크기다(BOM 포함) — 다시 열 수 있는 크기만 쓴다.
+        if bytes.len() as u64 > UPLOAD_MAX {
+            return Err(too_large());
+        }
         self.replace(
             &roots,
             &real,
@@ -505,11 +549,37 @@ impl Fs {
         }
     }
 
+    /// `fs.writeChunk` 를 받았다 — 블로킹 일을 시작하기 **전에** 부른다(핸들러가 버려져도 감시가 남게). 이 세션을 처음 지켜봐야 하면
+    /// `(true, _)`, 치우는 태스크를 띄워야 하면 `(_, true)`.
+    fn arrive(&self, session: SessionId) -> (bool, bool) {
+        let mut uploads = self.uploads.lock().unwrap_or_else(PoisonError::into_inner);
+        uploads.pending += 1;
+        let watch = uploads.watched.insert(session);
+        let reap = !uploads.reaping;
+        uploads.reaping = true;
+        (watch, reap)
+    }
+
+    /// [`Self::arrive`] 의 짝 — 블로킹 일이 끝났다(성공 · 실패 · 버려진 핸들러 모두).
+    fn depart(&self) {
+        let mut uploads = self.uploads.lock().unwrap_or_else(PoisonError::into_inner);
+        uploads.pending -= 1;
+    }
+
     /// 그 세션의 모음을 모두 버린다(연결이 닫혔다).
     pub(crate) fn drop_uploads(&self, session: SessionId) {
         let mut uploads = self.uploads.lock().unwrap_or_else(PoisonError::into_inner);
         uploads.open.retain(|_, u| u.session != session);
         uploads.watched.remove(&session);
+    }
+
+    /// 받는 중인 `fs.writeChunk` 수(시험).
+    #[cfg(test)]
+    pub(crate) fn pending_chunks(&self) -> usize {
+        self.uploads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pending
     }
 
     /// 열린 모음 수(시험).
@@ -560,6 +630,26 @@ fn same_target(upload: &Upload, params: &impl Target, real: &Path) -> Result<(),
     }
 }
 
+fn misplaced(expected: u64) -> RpcError {
+    RpcError::invalid_params(format!(
+        "the chunk must start at byte {expected} of the upload"
+    ))
+}
+
+/// 쉰 모음을 시계로 치운다 — 아무도 쓰기를 부르지 않아도 [`UPLOAD_IDLE`] 이 지난 모음은 [`SWEEP_EVERY`] 안에 사라진다. 모음이 없고
+/// 받는 중인 조각도 없으면 멈춘다(다음 `fs.writeChunk` 가 다시 띄운다).
+async fn reap(fs: Arc<Fs>) {
+    loop {
+        tokio::time::sleep(SWEEP_EVERY).await;
+        let mut uploads = fs.uploads.lock().unwrap_or_else(PoisonError::into_inner);
+        uploads.sweep(Instant::now());
+        if uploads.open.is_empty() && uploads.pending == 0 {
+            uploads.reaping = false;
+            return;
+        }
+    }
+}
+
 fn too_large() -> RpcError {
     RpcError::invalid_params(format!(
         "a chunked write is at most {UPLOAD_MAX} bytes; nothing was written"
@@ -599,18 +689,27 @@ pub(crate) fn register(router: &mut Router, fs: Arc<Fs>) {
                 async move {
                     let session = ctx.session();
                     let closed = ctx.connection_closed();
-                    let worker = Arc::clone(&s);
-                    let (result, watch) =
-                        blocking(move || worker.write_chunk_in(session, ctx.scope(), &params))
-                            .await?;
-                    // 연결이 닫히면 그 연결의 모음을 버린다 — 세션마다 하나만 띄운다.
+                    let cancel = ctx.cancellation().clone();
+                    // 감시 · 치우기는 블로킹 일 앞에서 띄운다 — 연결이 닫히거나 요청이 취소되면 세션은 이 future 를 버리지만
+                    // 블로킹 일은 끝까지 돈다(그때 만든 모음도 이 둘이 치운다).
+                    let (watch, reap_needed) = s.arrive(session);
                     if watch {
+                        let (s, closed) = (Arc::clone(&s), closed.clone());
                         tokio::spawn(async move {
                             closed.cancelled().await;
                             s.drop_uploads(session);
                         });
                     }
-                    Ok(result)
+                    if reap_needed {
+                        tokio::spawn(reap(Arc::clone(&s)));
+                    }
+                    blocking(move || {
+                        let gone = || closed.is_cancelled() || cancel.is_cancelled();
+                        let result = s.write_chunk_in(session, ctx.scope(), &params, &gone);
+                        s.depart();
+                        result
+                    })
+                    .await
                 }
             },
         )
