@@ -505,8 +505,12 @@ impl Mux {
                 // 보낼 전송이 없다.
                 self.shared.drained.cancel();
             }
-            state.control.clear();
-            state.control_bytes = 0;
+            // 일부러 닫으면 이미 낸 링크 틀(채널 닫기 · credit)은 `bye` 앞에 내보낸다 — 상대가 그 채널을 닫은 까닭을 본다. 그 밖의
+            // 닫기(규칙 위반 · 상한)는 버린다.
+            if reason != CloseReason::Local {
+                state.control.clear();
+                state.control_bytes = 0;
+            }
             state.ready.clear();
             state.budget_used = 0;
             state.send_used = 0;
@@ -914,8 +918,20 @@ impl Mux {
     /// 링크를 닫았다 — 상대가 이어 붙기를 기다리지 않게 `bye` 를 보낸다(전송이 막혔으면 잠깐만 기다린다).
     async fn bye(&self, write: &mut FramedWrite, stop: &CancellationToken) {
         if !stop.is_cancelled() {
+            let pending: Vec<Vec<u8>> = {
+                let mut state = lock(&self.shared.state);
+                state.control_bytes = 0;
+                state.control.drain(..).collect()
+            };
             let bye = LinkFrame::control(Kind::Bye, Value::Null).encode();
-            let _ = tokio::time::timeout(Duration::from_secs(1), write.write_encoded(&bye)).await;
+            let flush = async {
+                for frame in pending.iter().chain(std::iter::once(&bye)) {
+                    if write.write_encoded(frame).await.is_err() {
+                        return;
+                    }
+                }
+            };
+            let _ = tokio::time::timeout(Duration::from_secs(1), flush).await;
         }
         self.shared.drained.cancel();
     }
