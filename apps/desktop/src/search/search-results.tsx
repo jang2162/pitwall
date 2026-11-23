@@ -20,7 +20,7 @@ import {
 
 import { useEditorWorkspace } from "../editor/editor-workspace";
 import type { UsageFile } from "../lsp/navigation";
-import { openFindRow, useFindWindow } from "./find-in-files";
+import { openSnapshotRow, useFindWindow } from "./find-in-files";
 import { FindStatusText, useFindSnapshot } from "./find-popup";
 import type { FindSession } from "./find-session";
 import { baseName, MatchText } from "./match-text";
@@ -91,7 +91,6 @@ function PinnedResults({ session, query }: { session: FindSession; query: string
   const T = useFindStrings();
   const workspace = useEditorWorkspace();
   const snapshot = useFindSnapshot(session);
-  const worktree = snapshot.params?.worktree ?? undefined;
   return (
     <ResultTree
       // 파일 배열은 받는 동안 같은 배열에 쌓이고 청크마다 스냅숏이 바뀐다(find-session.ts) — 스냅숏으로 다시 펼친다.
@@ -115,7 +114,7 @@ function PinnedResults({ session, query }: { session: FindSession; query: string
           </button>
         )
       }
-      open={(file, line) => openFindRow(workspace, { file, line }, worktree, snapshot.machine)}
+      open={(file, line) => openSnapshotRow(workspace, snapshot, { file, line })}
     />
   );
 }

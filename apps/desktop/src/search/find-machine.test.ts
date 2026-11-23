@@ -7,7 +7,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { checkoutKey } from "../checkout/checkout";
 import type { EditorWorkspace } from "../editor/editor-workspace";
 import { activeWorktreeStore } from "../open-with/active-worktree";
-import { openFindRow } from "./find-in-files";
+import { openSnapshotRow } from "./find-in-files";
 import { DEFAULT_OPTIONS, FindSession, searchParams } from "./find-session";
 
 const MINI = "SHA256:mini/fingerprint";
@@ -39,7 +39,8 @@ it("opens a pinned result on the machine that ran the search after the active ch
   activeWorktreeStore.setState({ top: undefined });
   const navigateTo = vi.fn(async () => true);
   const workspace = { navigateTo } as unknown as EditorWorkspace;
-  openFindRow(workspace, snapshot.rows[0]!, undefined, snapshot.machine);
+  // 결과를 여는 화면(팝업 · 고정 결과)이 부르는 자리 그대로.
+  openSnapshotRow(workspace, snapshot, snapshot.rows[0]!);
   expect(navigateTo).toHaveBeenCalledWith(
     expect.objectContaining({ path: file.path, machine: MINI }),
     { record: true },

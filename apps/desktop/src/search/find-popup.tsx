@@ -28,7 +28,7 @@ import { isComposingKey, keepOpenWhileComposing } from "../ui/ime";
 import {
   closeFindInFiles,
   openFindInFiles,
-  openFindRow,
+  openSnapshotRow,
   pinFindResults,
   searchPlace,
   setFindOptions,
@@ -204,7 +204,7 @@ function FindPopupContent({ workspace }: { workspace: EditorWorkspace }) {
     const target = rows[index];
     if (!target) return;
     closeFindInFiles();
-    openFindRow(workspace, target, params?.worktree ?? undefined, snapshot.machine);
+    openSnapshotRow(workspace, snapshot, target);
   };
 
   const onKeyDown = (e: KeyboardEvent) => {

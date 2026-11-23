@@ -30,6 +30,7 @@ import {
   type FindRow,
   type FindScope,
   FindSession,
+  type FindSnapshot,
   type SearchPlace,
   type SearchRunner,
   searchParams,
@@ -166,6 +167,18 @@ export function openFindRow(
     },
     { record: true },
   );
+}
+
+/**
+ * 찾기 결과(팝업 · 고정 결과)의 줄을 연다 — 그 결과를 낸 검색의 워크트리와 **머신**(`FindSnapshot`)으로. 결과를 여는 화면은 모두
+ * 이것을 부른다(델타 리뷰 F3 — 고정한 결과를 체크아웃을 바꾼 뒤 눌러도 찾은 머신의 파일).
+ */
+export function openSnapshotRow(
+  workspace: EditorWorkspace,
+  snapshot: Pick<FindSnapshot, "params" | "machine">,
+  row: FindRow,
+) {
+  openFindRow(workspace, row, snapshot.params?.worktree ?? undefined, snapshot.machine);
 }
 
 export function useFindWindow<T>(select: (s: FindWindowState) => T): T {
