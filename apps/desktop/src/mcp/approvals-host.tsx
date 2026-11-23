@@ -3,11 +3,12 @@
 // 않는다). 프로젝트 창(`projectId`)과 웰컴 · 설정 창(`null` — 프로젝트 없는 요청만)이 하나씩 둔다.
 
 import type { McpApprovalRequest, RpcClient } from "@pitwall/rpc-client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
+import { createStore } from "zustand/vanilla";
 
 import { LOCAL_MACHINE } from "../checkout/checkout";
-import { useCheckoutHost } from "../checkout/checkout-hosts";
+import { useCheckoutHost, useCheckoutHosts } from "../checkout/checkout-hosts";
 import { useHost } from "../rpc/host";
 import { agentLine } from "./agent-text";
 import { ApprovalDialog } from "./approval-dialog";
@@ -16,10 +17,12 @@ import {
   answerApproval,
   approvalStore,
   type ApprovalStore,
+  approvalStoreFor,
   currentRequest,
   dismiss,
   expire,
   listenApprovals,
+  listening,
   reveal,
 } from "./approvals";
 import { type McpStrings, useMcpStrings } from "./strings";
@@ -67,15 +70,72 @@ export function McpApprovals({ projectId }: { projectId: string | null }) {
 }
 
 /**
- * 프로젝트 창의 승인(18-m7-plan M7-18): Desktop 의 승인 허브는 **늘 창의 이 머신 연결 · 이 머신 프로젝트 id** 로 듣는다 — 활성
- * 체크아웃이 다른 머신이어도 그렇다. 다른 머신을 겨누는 이 Desktop 세션의 요청도 묶음의 로컬 멤버 id 로 온다. 활성 체크아웃의
- * 연결로 들으면 원격이 활성인 동안 이 창이 허브를 듣지 않아 요청이 「창 없음」 으로 거절된다. 원격 머신 Relay 의 허브를 듣는 것은
- * M7-20 이 더한다. 이 머신 체크아웃이 없는 묶음 창(원격만)은 듣지 않는다.
+ * 프로젝트 창의 승인(18-m7-plan M7-18 · M7-20).
+ *
+ * - **이 Desktop 의 허브**는 늘 창의 이 머신 연결 · 이 머신 프로젝트 id 로 듣는다 — 활성 체크아웃이 다른 머신이어도 그렇다. 다른 머신을
+ *   겨누는 이 Desktop 세션의 요청도 묶음의 로컬 멤버 id 로 온다. 이 머신 체크아웃이 없는 묶음 창(원격만)은 듣지 않는다.
+ * - **다른 머신 Relay 의 허브**(그 머신에서 도는 에이전트의 요청 — M7-20 ③)는 그 머신 연결이 열려 있는 동안(활성 체크아웃이거나 탭이
+ *   열린 머신 — 연결은 쓰는 머신만 연다, 08 「창과 활성 체크아웃」) 그 연결 · 그 머신의 프로젝트 id 로 듣는다. 이것만으로 링크를 열지
+ *   않는다 — 붙은 owner Desktop 이 없는 동안 그 머신의 에이전트는 `write` 이상을 거절받는다(결정 M7-D10 ④). 요청은 머신마다의
+ *   저장소(`approvalStoreFor`)에 들고, 다이얼로그는 한 번에 하나 — 이 Desktop 의 요청이 먼저다.
  */
 export function ProjectWindowApprovals() {
   const local = useCheckoutHost(LOCAL_MACHINE);
-  if (!local.client || local.projectId === undefined) return null;
-  return <WindowApprovals client={local.client} projectId={local.projectId} />;
+  const hosts = useCheckoutHosts();
+  const remote = useStore(hosts?.store ?? NO_HOSTS, (s) => s.remote);
+  const members = useStore(hosts?.store ?? NO_HOSTS, (s) => s.directory.members);
+  const localClient = local.projectId === undefined ? undefined : local.client;
+  const listening = useMemo(() => {
+    const out: { machine: string; client: RpcClient; projectId: string; store: ApprovalStore }[] =
+      [];
+    for (const [machine, r] of Object.entries(remote)) {
+      const projectId = members.get(machine);
+      if (machine === LOCAL_MACHINE || !r.client || projectId === undefined) continue;
+      out.push({ machine, client: r.client, projectId, store: approvalStoreFor(machine) });
+    }
+    return out;
+  }, [remote, members]);
+  // 앞의 저장소에 보일 요청이 있으면 뒤의 다이얼로그는 기다린다 — 둘이 한꺼번에 뜨지 않게. 이 Desktop 의 요청이 먼저다.
+  const before = useMemo(() => {
+    const order = [...(localClient ? [approvalStore] : []), ...listening.map((l) => l.store)];
+    return listening.map((l) => order.slice(0, order.indexOf(l.store)));
+  }, [localClient, listening]);
+  return (
+    <>
+      {localClient && local.projectId !== undefined && (
+        <WindowApprovals client={localClient} projectId={local.projectId} />
+      )}
+      {listening.map((l, i) => (
+        <WindowApprovals
+          key={l.machine}
+          client={l.client}
+          projectId={l.projectId}
+          store={l.store}
+          origin={l.machine}
+          yieldTo={before[i]}
+        />
+      ))}
+    </>
+  );
+}
+
+const NO_HOSTS = createStore<{
+  remote: Readonly<Record<string, { client?: RpcClient }>>;
+  directory: { members: ReadonlyMap<string, string> };
+}>()(() => ({ remote: {}, directory: { members: new Map() } }));
+
+const NONE: readonly ApprovalStore[] = [];
+
+/** 저장소들 가운데 다이얼로그에 보일 요청이 있는 것이 있는가. */
+function useWaiting(stores: readonly ApprovalStore[]): boolean {
+  const [waiting, setWaiting] = useState(false);
+  useEffect(() => {
+    const check = () => setWaiting(stores.some((s) => currentRequest(s.getState()) !== undefined));
+    check();
+    const offs = stores.map((s) => s.subscribe(check));
+    return () => offs.forEach((off) => off());
+  }, [stores]);
+  return waiting;
 }
 
 /** `McpApprovals` 의 몸통 — 시험은 가짜 클라이언트 · 알림 · 저장소를 넘긴다. */
@@ -85,6 +145,8 @@ export function WindowApprovals({
   native = tauriApprovalNative,
   store = approvalStore,
   armDelayMs,
+  origin,
+  yieldTo = NONE,
 }: {
   client: RpcClient;
   /** 프로젝트 창이면 그 프로젝트, 웰컴 · 설정 창이면 `null`. */
@@ -93,6 +155,10 @@ export function WindowApprovals({
   store?: ApprovalStore;
   /** 허용 단추를 잠그는 시간(approval-dialog.tsx 의 `ARM_DELAY_MS`). 시험만 바꾼다. */
   armDelayMs?: number;
+  /** 요청이 온 머신 — 그 머신 Relay 의 허브를 들을 때(다이얼로그의 「<머신> 의 에이전트」). 이 Desktop 의 허브면 없다. */
+  origin?: string;
+  /** 이 저장소들에 보일 요청이 있는 동안 다이얼로그를 띄우지 않는다(한 번에 하나). */
+  yieldTo?: readonly ApprovalStore[];
 }) {
   const T = useMcpStrings().approval;
   // 알림 글은 요청이 온 때의 언어로 — 언어가 바뀌어도 스트림을 다시 열지 않는다.
@@ -106,10 +172,12 @@ export function WindowApprovals({
     [client, projectId, store, native],
   );
   useEffect(() => native.onReveal((id) => reveal(store, id)), [native, store]);
+  useEffect(() => (origin === undefined ? undefined : listening(origin, store)), [origin, store]);
   const now = useApprovalClock(store);
   const state = useStore(store);
+  const waiting = useWaiting(yieldTo);
   const current = currentRequest(state);
-  if (!current) return null;
+  if (!current || waiting) return null;
   return (
     <ApprovalDialog
       key={current.id}
@@ -121,6 +189,7 @@ export function WindowApprovals({
       onDismiss={() => dismiss(store, current.id)}
       armDelayMs={armDelayMs}
       epoch={state.revealed}
+      origin={origin}
     />
   );
 }

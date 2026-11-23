@@ -206,3 +206,43 @@ it("a request on this computer has no machine line, no machine button and reads 
   expect(document.querySelector("[data-testid=mcp-approval-row-machine]")).toBeNull();
   expect(host.calls).not.toContain("remote.hosts.list");
 });
+
+// 18-m7-plan M7-20: 그 머신 Relay 에서 들은 요청(그 머신에서 도는 에이전트)은 머신의 저장소에 든다. 「승인 대기」 는 이 Desktop 의 요청과
+// 함께 「<별명> 의 에이전트」 줄로 보이고, 같은 id 의 두 요청(허브마다 id 를 따로 센다)이 서로를 지우지 않는다. 줄을 누르면 그 머신의
+// 저장소에서 다시 연다.
+it("lists another machine's agent request beside this Desktop's one with the same id", async () => {
+  const host = fakeHost();
+  const local = createApprovalStore();
+  const mini = createApprovalStore();
+  const element = document.createElement("div");
+  document.body.append(element);
+  root = createRoot(element);
+  await act(async () =>
+    root!.render(
+      <QueryClientProvider client={new QueryClient()}>
+        <HostConnectionProvider
+          connection={{ target: { hostId: "local" }, key: "host:local", client: host.client }}
+        >
+          <LocalizationProvider l10n={bundledLocalization("ko")}>
+            <PendingApprovals projectId="p1" store={local} machines={{ [MINI]: mini }} />
+          </LocalizationProvider>
+        </HostConnectionProvider>
+      </QueryClientProvider>,
+    ),
+  );
+  act(() => {
+    local.setState({ requests: [request({ machine: null, tool: "here_tool" })] });
+    mini.setState({ requests: [request({ machine: null, tool: "there_tool" })] });
+  });
+  await settle();
+  const rows = [...document.querySelectorAll<HTMLElement>("[data-testid=mcp-approval-row]")];
+  expect(rows.map((r) => r.dataset.request)).toEqual(["1", "1"]);
+  expect(rows[0]!.dataset.origin).toBeUndefined();
+  expect(rows[1]!.dataset.origin).toBe(MINI);
+  const origin = rows[1]!.querySelector("[data-testid=mcp-approval-row-origin]");
+  await vi.waitFor(() => expect(origin?.textContent).toBe(T.agentOn("mini")));
+  expect(rows[0]!.querySelector("[data-testid=mcp-approval-row-origin]")).toBeNull();
+  act(() => rows[1]!.click());
+  expect(mini.getState().front).toBe(1);
+  expect(local.getState().front).toBeUndefined();
+});

@@ -137,6 +137,8 @@ export function mcpStrings(t: Translate) {
       window: t("mcp-approval-window"),
       machine: t("mcp-approval-machine"),
       machineNote: t("mcp-approval-machine-note"),
+      agentOn: (machine: string) => t("mcp-approval-agent-on", { machine }),
+      agentOnNote: t("mcp-approval-agent-on-note"),
       allowMachine: (machine: string) => t("mcp-approval-allow-machine", { machine }),
       allowMachineCli: (machine: string) => t("mcp-approval-allow-machine-cli", { machine }),
       notifyTitle: t("mcp-approval-notify-title"),

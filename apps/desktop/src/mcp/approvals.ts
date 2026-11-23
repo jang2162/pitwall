@@ -39,6 +39,41 @@ export function createApprovalStore(): ApprovalStore {
 /** 이 창(웹뷰 하나)의 저장소. 시험은 `resetApprovals` 로 비운다. */
 export const approvalStore: ApprovalStore = createApprovalStore();
 
+/**
+ * 다른 머신 Relay 의 승인 허브에서 들은 요청의 저장소 — 머신마다 하나(18-m7-plan M7-20). 요청 id 는 허브마다 따로 세므로 이 Desktop
+ * 허브의 요청(`approvalStore`)과 한 저장소에 섞지 않는다 — 섞으면 같은 id 의 두 요청이 서로를 지우고 답이 엉뚱한 허브로 간다.
+ */
+const machineStores = new Map<string, ApprovalStore>();
+
+/** 그 머신의 저장소(없으면 만든다 — 그리는 동안 불러도 된다, 알림을 내지 않는다). */
+export function approvalStoreFor(machine: string): ApprovalStore {
+  let store = machineStores.get(machine);
+  if (!store) {
+    store = createApprovalStore();
+    machineStores.set(machine, store);
+  }
+  return store;
+}
+
+/**
+ * 지금 듣는 머신의 저장소(머신 → 저장소). 「승인 대기」 칸(pending-approvals.tsx)이 읽어 그 머신의 요청도 보인다. 듣는 쪽
+ * (approvals-host.tsx 의 `WindowApprovals`)이 듣는 동안 [`listening`] 으로 올린다.
+ */
+export const machineApprovalStores = createStore<Readonly<Record<string, ApprovalStore>>>(
+  () => ({}),
+);
+
+/** 그 머신의 저장소를 듣는 동안 올린다. 돌려준 함수가 내린다. */
+export function listening(machine: string, store: ApprovalStore): () => void {
+  machineApprovalStores.setState((s) => ({ ...s, [machine]: store }));
+  return () =>
+    machineApprovalStores.setState((s) => {
+      if (s[machine] !== store) return s;
+      const { [machine]: _gone, ...rest } = s;
+      return rest;
+    });
+}
+
 export function resetApprovals(store: ApprovalStore = approvalStore): void {
   store.setState(EMPTY, true);
 }

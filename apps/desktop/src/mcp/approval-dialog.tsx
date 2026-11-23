@@ -421,6 +421,11 @@ export interface ApprovalDialogProps {
   armDelayMs?: number;
   /** 다시 연 횟수 — 바뀌면 허용 단추를 다시 잠근다(approvals.ts 의 `revealed`). */
   epoch?: number;
+  /**
+   * 요청이 온 머신(18-m7-plan M7-20 — 그 머신 Relay 의 승인 허브를 그 머신 연결로 들었다). 그 머신에서 도는 에이전트의 요청이다 —
+   * 「<머신> 의 에이전트」 를 Desktop 별명으로 보인다. 이 Desktop 의 허브면 없다.
+   */
+  origin?: string;
 }
 
 export function ApprovalDialog({
@@ -432,6 +437,7 @@ export function ApprovalDialog({
   onDismiss,
   armDelayMs = ARM_DELAY_MS,
   epoch = 0,
+  origin,
 }: ApprovalDialogProps) {
   const T = useMcpStrings().approval;
   useKeymapPopup(true);
@@ -501,6 +507,18 @@ export function ApprovalDialog({
                     <span data-testid="mcp-approval-cli" className="text-[12px]">
                       {T.cli}
                     </span>
+                  )}
+                  {origin !== undefined && (
+                    <>
+                      <span
+                        data-testid="mcp-approval-origin"
+                        data-machine={origin}
+                        className="truncate font-semibold"
+                      >
+                        <MachineName machine={origin}>{(name) => T.agentOn(name)}</MachineName>
+                      </span>
+                      <span className="text-[12px] text-ui-muted-foreground">{T.agentOnNote}</span>
+                    </>
                   )}
                 </dd>
                 <dt className="text-[12px] text-ui-muted-foreground">{T.tool}</dt>

@@ -41,6 +41,10 @@ const fake = vi.hoisted(() => ({
   linkStreams: 0,
   /** 열린 `mcp.approvals` 스트림: 스트림 id → (머신, 들은 프로젝트). */
   approvals: new Map<number, { machine: string; projectId: unknown }>(),
+  /** 다른 머신의 `mcp.approvals` 가 열리면 보낼 승인 요청(그 머신 Relay 에서 도는 에이전트의 것 — M7-20). */
+  remoteApproval: undefined as Record<string, unknown> | undefined,
+  /** 받은 `mcp.approval.answer`: (머신, 인자). */
+  answers: [] as { machine: string; params: Record<string, unknown> }[],
   /** `bundle.list` 의 답(이 머신 연결만). */
   bundles: [] as unknown[],
   /** 다른 머신이 신뢰 묻기를 처음 한 번 넘겨주는가(`project.claimTrustPrompt` — 실제 Host 는 한 번만 `true`). */
@@ -205,8 +209,17 @@ vi.mock("../tauri-transport", async () => {
               });
             const streamId = next++;
             fake.approvals.set(streamId, { machine, projectId: params.projectId });
-            return reply({ streamId });
+            reply({ streamId });
+            if (machine !== "local" && fake.remoteApproval !== undefined)
+              send({
+                method: "stream.chunk",
+                params: { streamId, data: { kind: "open", request: fake.remoteApproval } },
+              });
+            return;
           }
+          case "mcp.approval.answer":
+            fake.answers.push({ machine, params });
+            return reply(null);
           case "stream.cancel": {
             const { streamId } = m.params as { streamId: number };
             if (streams.delete(streamId)) fake.linkStreams--;
@@ -375,6 +388,8 @@ beforeEach(() => {
   fake.targets = [];
   fake.linkStreams = 0;
   fake.approvals = new Map();
+  fake.remoteApproval = undefined;
+  fake.answers = [];
   fake.byTarget = new Map();
   fake.remoteClaim = false;
   fake.remotePrompt = undefined;
@@ -526,7 +541,57 @@ it("keeps hearing this Desktop's approvals on this machine's connection while an
   await vi.waitFor(() => expect(viewWith("remote text")).toBeDefined());
   expect(document.querySelector("[data-testid=status-machine]")?.textContent).toBe("mini");
   await settle();
-  expect(heard()).toEqual([{ machine: "local", projectId: "p1" }]);
+  // 이 Desktop 의 허브는 그대로 이 머신 연결로 듣고, 그 머신 연결이 열린 동안 그 머신 Relay 의 허브도 그 머신 프로젝트 id 로 듣는다(M7-20).
+  await vi.waitFor(() =>
+    expect(heard()).toEqual([
+      { machine: "local", projectId: "p1" },
+      { machine: MINI, projectId: "r1" },
+    ]),
+  );
+});
+
+// 18-m7-plan M7-20 ③ ④: 그 머신에서 도는 에이전트의 요청은 그 머신 Relay 의 허브에서 온다 — 다이얼로그에 「<머신> 의 에이전트」 를 Desktop
+// 별명으로 보이고, 답은 그 머신 연결로 간다(이 머신 허브에 가지 않는다 — 요청 id 는 허브마다 따로다).
+it("shows another machine's agent request with that machine's name and answers it on that machine", async () => {
+  fake.remoteApproval = {
+    id: 1,
+    projectId: "r1",
+    machine: null,
+    notThisProject: false,
+    session: "s-remote",
+    client: "claude-code 1.0",
+    cli: false,
+    tool: "run_config_upsert",
+    tier: "write",
+    plan: {
+      method: "run.tool.configUpsert",
+      tier: "write",
+      summary: "write a run configuration",
+      changes: [],
+      hash: "h",
+      rules: { remember: { kind: "tool" }, autoApprove: true, policyAuto: false },
+      seen: [],
+    },
+    answers: ["deny", "once", "session"],
+    timeoutSecs: 300,
+    expiresAt: Date.now() + 300_000,
+  };
+  await mount();
+  await push({ worktree: REMOTE_MAIN, file: REMOTE_FILE });
+  const dialog = await vi.waitFor(() => {
+    const found = document.querySelector<HTMLElement>("[data-testid=mcp-approval-dialog]");
+    expect(found).not.toBeNull();
+    return found!;
+  });
+  const origin = dialog.querySelector<HTMLElement>("[data-testid=mcp-approval-origin]");
+  expect(origin?.dataset.machine).toBe(MINI);
+  await vi.waitFor(() => expect(origin?.textContent).toContain("mini"));
+  expect(origin?.textContent).not.toContain(MINI);
+  // 그 머신에서 도는 에이전트다 — 「다른 머신을 겨눈」 줄(이 Desktop 세션의 다른 머신 호출)이 아니다.
+  expect(dialog.querySelector("[data-testid=mcp-approval-machine]")).toBeNull();
+  await act(async () => dialog.querySelector<HTMLButtonElement>("[data-answer=deny]")!.click());
+  await settle();
+  expect(fake.answers).toEqual([{ machine: MINI, params: { id: 1, answer: "deny" } }]);
 });
 
 it("lists the bundle's other machine in the branch popup and makes its checkout the active one", async () => {
