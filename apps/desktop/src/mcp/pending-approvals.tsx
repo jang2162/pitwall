@@ -12,7 +12,7 @@
 // 칸의 꼴: 바깥 `section[data-testid=mcp-approvals]` 와 제목(`aria-labelledby`)은 M5-13 의 것 그대로다. 대기가 없을 때는
 // `[data-testid=mcp-approvals-empty]` 한 줄이다. 패널(agent-activity.tsx)은 이 컴포넌트에 프로젝트 id 만 넘긴다.
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { useStore } from "zustand";
 
 import { agentLine } from "./agent-text";
@@ -37,8 +37,10 @@ export function PendingApprovals({
   const T = strings.activity;
   const title = useId();
   const listened = useStore(machineApprovalStores);
-  const remote = Object.entries(machines ?? listened);
-  const total = useTotal([store, ...remote.map(([, s]) => s)]);
+  const byMachine = machines ?? listened;
+  const remote = useMemo(() => Object.entries(byMachine), [byMachine]);
+  const stores = useMemo(() => [store, ...remote.map(([, s]) => s)], [store, remote]);
+  const total = useTotal(stores);
   return (
     <section
       data-testid="mcp-approvals"
@@ -64,19 +66,14 @@ export function PendingApprovals({
   );
 }
 
-/** 저장소들의 대기 수 합. */
+/** 저장소들의 대기 수 합. `stores` 는 같은 저장소면 같은 배열이어야 한다(다시 구독하지 않게). */
 function useTotal(stores: readonly ApprovalStore[]): number {
-  let total = 0;
-  for (const s of stores) total += s.getState().requests.length;
   const [, rerender] = useState(0);
-  const key = stores.length;
   useEffect(() => {
     const offs = stores.map((s) => s.subscribe(() => rerender((n) => n + 1)));
     return () => offs.forEach((off) => off());
-    // 저장소 목록은 듣는 머신이 바뀔 때만 바뀐다.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, ...stores]);
-  return total;
+  }, [stores]);
+  return stores.reduce((sum, s) => sum + s.getState().requests.length, 0);
 }
 
 /** 저장소 하나의 줄들. `origin` 은 그 요청이 온 머신(그 머신에서 도는 에이전트) — 이 Desktop 의 허브면 없다. */
