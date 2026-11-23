@@ -831,7 +831,13 @@ async fn sessions_need_the_token_and_their_limits_hold() {
     let reply = sessionless.post(&ping).await;
     assert_eq!(reply.status, 400);
     assert!(reply.body.contains("stdio"), "{}", reply.body);
-    assert_eq!(agent.post(&json!([ping.clone()])).await.status, 400);
+    let batch = agent.post(&json!([ping.clone()])).await;
+    assert_eq!(batch.status, 400);
+    assert!(
+        batch.body.contains("batches are not supported"),
+        "{}",
+        batch.body
+    );
     // 스트림은 하나.
     let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
     let mut get = agent.headers();
@@ -1170,5 +1176,134 @@ async fn a_dropped_http_request_withdraws_its_call() {
     assert!(
         window.answer(asked.id, McpApprovalAnswer::Once).is_err(),
         "이미 거둔 요청"
+    );
+}
+
+/// 틀린 토큰 70개를 연결마다 하나씩 보내고 답을 읽지 않은 채 둔다(늦춤 자리 상한을 넉넉히 둬 모두 늦춤에 들게). 늦춤은 연결 자리를
+/// 놓으므로 맞는 토큰의 **새 연결**이 곧바로 200 이다(리뷰 F1 — 전에는 늦춤이 자리 64개를 분 단위로 쥐어 새 연결이 닫혔다).
+async fn wrong_tokens_on_fresh_connections(port: u16, agent: &Client, n: usize) -> Vec<TcpStream> {
+    let wrong = agent.with_token(&"0".repeat(64));
+    let ping = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"});
+    // 처음 몇 번(늦추지 않음)을 먼저 써 버린다.
+    for _ in 0..3 {
+        assert_eq!(wrong.post(&ping).await.status, 401);
+    }
+    let mut held = Vec::new();
+    for _ in 0..n {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        stream
+            .write_all(&request(
+                "POST",
+                http::PATH,
+                &wrong.headers(),
+                ping.to_string().as_bytes(),
+            ))
+            .await
+            .unwrap();
+        held.push(stream);
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    held
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn slowed_wrong_tokens_do_not_hold_the_connection_slots() {
+    let port = free_port();
+    let f = Fixture::with_global(&http_global(true, port));
+    let limits = Limits {
+        max_delayed: 200,
+        ..Limits::default()
+    };
+    let e = f.endpoint(port, limits).await;
+    let mut agent = e.client();
+    agent.initialize().await;
+    let _held = wrong_tokens_on_fresh_connections(port, &agent, http::MAX_CONNECTIONS + 6).await;
+    let started = Instant::now();
+    let ping = json!({"jsonrpc": "2.0", "id": 2, "method": "ping"});
+    let ok = exchange(
+        port,
+        &request(
+            "POST",
+            http::PATH,
+            &agent.headers(),
+            ping.to_string().as_bytes(),
+        ),
+    )
+    .await;
+    assert_eq!(
+        ok.map(|r| r.status),
+        Some(200),
+        "맞는 토큰의 새 연결이 붙는다"
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+/// 늦춤 자리([`Limits::max_delayed`])가 차면 그 뒤의 틀린 토큰은 늦추지 않고 곧바로 401 로 닫는다 — 늦춤이 끝없이 쌓이지 않는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failures_beyond_the_delayed_slots_are_closed_at_once() {
+    let port = free_port();
+    let f = Fixture::with_global(&http_global(true, port));
+    let e = f.endpoint(port, Limits::default()).await;
+    let mut agent = e.client();
+    agent.initialize().await;
+    let held = wrong_tokens_on_fresh_connections(port, &agent, 40).await;
+    let mut answered = 0;
+    for mut stream in held {
+        let mut buf = [0u8; 64];
+        if let Ok(Ok(n)) =
+            tokio::time::timeout(Duration::from_millis(50), stream.read(&mut buf)).await
+            && buf[..n].starts_with(b"HTTP/1.1 401")
+        {
+            answered += 1;
+        }
+    }
+    assert!(
+        answered >= 40 - http::MAX_DELAYED,
+        "늦춤 자리를 넘은 실패는 곧바로 답한다: {answered}"
+    );
+    let ping = json!({"jsonrpc": "2.0", "id": 2, "method": "ping"});
+    assert_eq!(agent.post(&ping).await.status, 200);
+}
+
+/// 맞는 토큰을 한 번도 보이지 않은 연결은 짧게만 산다(머리 시한보다 짧게).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unauthenticated_connection_lives_briefly() {
+    let port = free_port();
+    let f = Fixture::with_global(&http_global(true, port));
+    let limits = Limits {
+        unauthenticated_lifetime: Duration::from_millis(300),
+        ..Limits::default()
+    };
+    let e = f.endpoint(port, limits).await;
+    let mut idle = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let started = Instant::now();
+    let mut buf = Vec::new();
+    within(idle.read_to_end(&mut buf)).await.ok();
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        started.elapsed()
+    );
+    // 맞는 토큰을 보인 keep-alive 연결은 그 시간이 지나도 산다.
+    let mut agent = e.client();
+    agent.initialize().await;
+    let mut kept = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let ping = json!({"jsonrpc": "2.0", "id": 3, "method": "ping"});
+    let one = request(
+        "POST",
+        http::PATH,
+        &agent.headers(),
+        ping.to_string().as_bytes(),
+    );
+    kept.write_all(&one).await.unwrap();
+    let mut first = [0u8; 512];
+    let n = within(kept.read(&mut first)).await.unwrap();
+    assert!(first[..n].starts_with(b"HTTP/1.1 200"));
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    kept.write_all(&one).await.unwrap();
+    let n = within(kept.read(&mut first)).await.unwrap();
+    assert!(
+        first[..n].starts_with(b"HTTP/1.1 200"),
+        "인증된 연결은 남는다"
     );
 }

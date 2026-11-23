@@ -3,6 +3,7 @@
 
 use std::convert::Infallible;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -41,6 +42,8 @@ pub(super) struct Server {
     connections: Connections,
     failures: Failures,
     slots: Arc<Semaphore>,
+    /// 늦춤 중인 연결의 자리(인증 전 자리 — [`super::Limits::max_delayed`]).
+    delayed: Arc<Semaphore>,
     limits: super::Limits,
     /// 세션들의 부모. 토큰을 바꾸거나 닫으면 세션이 끝난다.
     cancel: CancellationToken,
@@ -62,6 +65,7 @@ impl Server {
             connections,
             failures: Failures::default(),
             slots: Arc::new(Semaphore::new(super::MAX_CONNECTIONS)),
+            delayed: Arc::new(Semaphore::new(limits.max_delayed)),
             limits,
             cancel: CancellationToken::new(),
         })
@@ -118,11 +122,16 @@ pub(super) async fn accept_loop(
         let server = Arc::clone(&server);
         let stop = stop.clone();
         let header_timeout = server.limits.header_timeout;
+        let lifetime = server.limits.unauthenticated_lifetime;
+        let conn = Arc::new(Conn {
+            slot: Mutex::new(Some(slot)),
+            authed: AtomicBool::new(false),
+        });
         tokio::spawn(async move {
-            let _slot = slot;
+            let watched = Arc::clone(&conn);
             let service = hyper::service::service_fn(move |request| {
-                let server = Arc::clone(&server);
-                async move { Ok::<_, Infallible>(handle(&server, request).await) }
+                let (server, conn) = (Arc::clone(&server), Arc::clone(&conn));
+                async move { Ok::<_, Infallible>(handle(&server, &conn, request).await) }
             });
             let mut builder = hyper::server::conn::http1::Builder::new();
             builder
@@ -133,11 +142,24 @@ pub(super) async fn accept_loop(
             let connection =
                 builder.serve_connection(hyper_util::rt::TokioIo::new(stream), service);
             tokio::pin!(connection);
-            tokio::select! {
-                _ = connection.as_mut() => {}
-                () = stop.cancelled() => {
-                    connection.as_mut().graceful_shutdown();
-                    let _ = tokio::time::timeout(Duration::from_secs(1), connection).await;
+            // 인증을 지나지 않은 연결은 짧게만 산다 — 토큰 없는 쪽이 연결 자리를 오래 쥐지 못하게.
+            let deadline = tokio::time::sleep(lifetime);
+            tokio::pin!(deadline);
+            let mut deadline_passed = false;
+            loop {
+                tokio::select! {
+                    _ = connection.as_mut() => break,
+                    () = stop.cancelled() => {
+                        connection.as_mut().graceful_shutdown();
+                        let _ = tokio::time::timeout(Duration::from_secs(1), connection).await;
+                        break;
+                    }
+                    () = &mut deadline, if !deadline_passed => {
+                        deadline_passed = true;
+                        if !watched.authed.load(Ordering::SeqCst) {
+                            break;
+                        }
+                    }
                 }
             }
         });
@@ -157,7 +179,15 @@ pub(super) async fn reap_idle(server: Arc<Server>, stop: CancellationToken) {
     }
 }
 
-async fn handle(server: &Arc<Server>, request: Request<Incoming>) -> Response<Out> {
+/// TCP 연결 하나의 상태. 연결 자리(`slot`)는 받을 때 쥐고, 틀린 토큰으로 늦춤에 들어가면 놓는다 — 늦춤은 따로 작은 자리
+/// ([`super::Limits::max_delayed`])로 센다.
+struct Conn {
+    slot: Mutex<Option<tokio::sync::OwnedSemaphorePermit>>,
+    /// 이 연결에서 맞는 토큰의 요청이 한 번이라도 지났는가.
+    authed: AtomicBool,
+}
+
+async fn handle(server: &Arc<Server>, conn: &Conn, request: Request<Incoming>) -> Response<Out> {
     if !host_allowed(request.headers(), server.port) {
         return plain(
             StatusCode::FORBIDDEN,
@@ -171,13 +201,26 @@ async fn handle(server: &Arc<Server>, request: Request<Incoming>) -> Response<Ou
         );
     }
     if !authorized(request.headers(), &server.token()) {
-        server.failures.punish().await;
+        let count = server.failures.record();
+        // 인증된 연결의 실패(토큰이 바뀜)는 늦추지 않는다 — 그 연결은 이미 토큰을 보였다. 아니면 연결 자리를 놓고 늦춤 자리를
+        // 얻어 늦춘다. 늦춤 자리가 모두 차면 늦추지 않고 곧바로 닫는다 — 늦춤이 연결 자리를 쥐어 맞는 토큰의 새 연결을 막지
+        // 않게(리뷰 F1).
+        if !conn.authed.load(Ordering::SeqCst) {
+            conn.slot
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+            if let Ok(_delayed) = Arc::clone(&server.delayed).try_acquire_owned() {
+                server.failures.wait(count).await;
+            }
+        }
         let mut response = plain(StatusCode::UNAUTHORIZED, "a valid bearer token is required");
-        response
-            .headers_mut()
-            .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+        let headers = response.headers_mut();
+        headers.insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+        headers.insert(header::CONNECTION, HeaderValue::from_static("close"));
         return response;
     }
+    conn.authed.store(true, Ordering::SeqCst);
     if request.uri().path() != super::PATH {
         return plain(StatusCode::NOT_FOUND, "not found");
     }
@@ -480,16 +523,19 @@ pub(super) struct Failures {
 }
 
 impl Failures {
-    async fn punish(&self) {
-        let count = {
-            let mut seen = self.seen.lock().unwrap_or_else(PoisonError::into_inner);
-            if seen.1.is_some_and(|at| at.elapsed() > FAILURE_WINDOW) {
-                seen.0 = 0;
-            }
-            seen.0 = seen.0.saturating_add(1);
-            seen.1 = Some(Instant::now());
-            seen.0
-        };
+    /// 실패 하나를 세고 잇따른 수를 돌려준다.
+    fn record(&self) -> u32 {
+        let mut seen = self.seen.lock().unwrap_or_else(PoisonError::into_inner);
+        if seen.1.is_some_and(|at| at.elapsed() > FAILURE_WINDOW) {
+            seen.0 = 0;
+        }
+        seen.0 = seen.0.saturating_add(1);
+        seen.1 = Some(Instant::now());
+        seen.0
+    }
+
+    /// `count` 번째 실패의 늦춤만큼 문 하나에 줄을 서 기다린다.
+    async fn wait(&self, count: u32) {
         let delay = delay(count);
         if !delay.is_zero() {
             let _one = self.gate.lock().await;

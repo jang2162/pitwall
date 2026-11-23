@@ -79,21 +79,35 @@ impl TokenFile {
     }
 
     /// 쓸 수 있는 토큰이 있으면 그것. 없거나 쓸 수 없으면(권한이 넓음 · 다른 사용자 소유 · 일반 파일 아님 · 꼴이 틀림) `None`.
+    /// 심링크는 따라가지 않고 연 파일 자체(`fstat`)를 본다 — 본 것과 읽는 것이 같은 파일이다.
     pub fn read(&self) -> io::Result<Option<Token>> {
-        let meta = match fs::symlink_metadata(&self.path) {
-            Ok(m) => m,
+        use std::io::Read as _;
+        let mut file = match open_no_follow(&self.path) {
+            Ok(f) => f,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) if is_symlink_refusal(&e) => {
+                self.warn_unusable();
+                return Ok(None);
+            }
             Err(e) => return Err(e),
         };
+        let meta = file.metadata()?;
         if !meta.file_type().is_file() || !private(&meta) {
-            tracing::warn!(
-                file = %self.path.display(),
-                "the mcp http token file is not a private regular file; a new token replaces it"
-            );
+            self.warn_unusable();
             return Ok(None);
         }
-        let text = fs::read_to_string(&self.path)?;
+        let mut text = String::new();
+        if file.read_to_string(&mut text).is_err() {
+            return Ok(None);
+        }
         Ok(Token::parse(&text))
+    }
+
+    fn warn_unusable(&self) {
+        tracing::warn!(
+            file = %self.path.display(),
+            "the mcp http token file is not a private regular file; a new token replaces it"
+        );
     }
 
     /// 켤 때: 있는 토큰을 쓰고, 없으면(쓸 수 없으면) 만든다.
@@ -126,6 +140,38 @@ impl TokenFile {
             let _ = fs::remove_file(&tmp);
         }
         written.map(|()| token)
+    }
+}
+
+#[cfg(unix)]
+fn open_no_follow(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+const SYMLINK: &str = "the token file is a symlink";
+
+#[cfg(not(unix))]
+fn open_no_follow(path: &Path) -> io::Result<fs::File> {
+    if fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, SYMLINK));
+    }
+    fs::File::open(path)
+}
+
+/// 심링크를 열지 않은 오류(`O_NOFOLLOW` 의 `ELOOP` — BSD 는 `EMLINK` 도).
+fn is_symlink_refusal(e: &io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        matches!(e.raw_os_error(), Some(libc::ELOOP | libc::EMLINK))
+    }
+    #[cfg(not(unix))]
+    {
+        e.kind() == io::ErrorKind::InvalidInput && e.to_string() == SYMLINK
     }
 }
 

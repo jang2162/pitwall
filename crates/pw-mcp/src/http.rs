@@ -72,6 +72,11 @@ pub const HEADER_TIMEOUT: Duration = Duration::from_secs(10);
 pub const BODY_TIMEOUT: Duration = Duration::from_secs(30);
 /// 켰는데 듣지 못했을 때 다시 해 보는 간격.
 pub const RETRY_BIND: Duration = Duration::from_secs(2);
+/// 틀린 토큰으로 늦춤 중인 연결(인증 전 자리)의 상한. 늦추는 동안 그 연결은 연결 자리([`MAX_CONNECTIONS`])를 놓는다 — 늦춤이
+/// 맞는 토큰의 새 연결을 막지 않는다(리뷰 F1). 넘는 실패는 늦추지 않고 곧바로 닫는다.
+pub const MAX_DELAYED: usize = 8;
+/// 맞는 토큰의 요청이 한 번도 지나지 않은 연결이 사는 시간(머리 시한보다 짧다).
+pub const UNAUTHENTICATED_LIFETIME: Duration = Duration::from_secs(5);
 /// 세션마다 답을 기다리는 요청의 상한(429).
 pub const MAX_PENDING: usize = 32;
 /// 기다리는 요청도 SSE 스트림도 없이 이만큼 지난 세션은 닫는다.
@@ -85,6 +90,10 @@ pub struct Limits {
     pub header_timeout: Duration,
     pub body_timeout: Duration,
     pub session_idle: Duration,
+    /// 틀린 토큰으로 늦춤 중인 연결의 상한 — 넘으면 늦추지 않고 곧바로 401 로 닫는다.
+    pub max_delayed: usize,
+    /// 맞는 토큰의 요청이 한 번도 지나지 않은 연결이 사는 시간.
+    pub unauthenticated_lifetime: Duration,
 }
 
 impl Default for Limits {
@@ -95,6 +104,8 @@ impl Default for Limits {
             header_timeout: HEADER_TIMEOUT,
             body_timeout: BODY_TIMEOUT,
             session_idle: SESSION_IDLE,
+            max_delayed: MAX_DELAYED,
+            unauthenticated_lifetime: UNAUTHENTICATED_LIFETIME,
         }
     }
 }
