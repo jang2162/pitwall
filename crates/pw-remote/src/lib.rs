@@ -1186,14 +1186,8 @@ impl RemoteHosts {
                     None
                 });
             }
+            // 다른 머신이면(리뷰 R-1) 결과를 두지 않는다 — 화면이 이 머신 id 를 달고 그 머신의 조사를 보이지 않는다.
             Err(e) => {
-                // 다른 머신이었으면 보이던 조사도 거둔다 — 화면이 이 머신 id 를 달고 다른 머신의 것을 보이지 않게.
-                if matches!(e, UpgradeError::OtherMachine { .. }) {
-                    self.update(name, generation, |slot| {
-                        self.set_relays(name, slot, None);
-                        None
-                    });
-                }
                 self.note(
                     name,
                     None,
