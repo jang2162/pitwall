@@ -44,8 +44,11 @@ pub struct Resident {
     pub channel: String,
     pub uid: u32,
     /// 서비스 관리자 명령을 부른다(프로그램, 인자). 시험은 가짜를 넣는다.
-    pub run: Box<dyn Fn(&str, &[String]) -> io::Result<()> + Send + Sync>,
+    pub run: Runner,
 }
+
+/// 서비스 관리자 명령을 부르는 것(프로그램, 인자).
+pub type Runner = Box<dyn Fn(&str, &[String]) -> io::Result<()> + Send + Sync>;
 
 /// 단위 파일 하나.
 #[derive(Debug, Clone, PartialEq, Eq)]
