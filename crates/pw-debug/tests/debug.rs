@@ -1368,12 +1368,12 @@ async fn frame_sources_outside_the_root_are_read_through_tokens() {
     assert_eq!(e.code, code::NOT_FOUND);
 }
 
-/// 실행의 끝이 알려진 뒤에는 `debug.source` 가 그 실행의 토큰으로 읽지 않는다 — 디버그 대상의 PTY 가 스스로 끝나면 실행의 끝은
-/// `finish` 보다 먼저 알려지고, `finish` 는 어댑터의 `disconnect` 답을 기다린 뒤에야 세션 · 토큰을 지운다(여기서는 답하지 않아
-/// 그 틈이 끊기 시한만큼 열린다). 2026-11-23 전체 실행에서 위 시험의 「멈춘 뒤」 단언이 같은 틈(중지 경로 — 끝을 알린 뒤 지우기
-/// 전)으로 한 번 흔들렸다.
+/// 실행의 끝이 알려진 뒤에는 그 실행으로 부르는 `debug.*` 가 모두 「없는 실행」이다 — 디버그 대상의 PTY 가 스스로 끝나면 실행의
+/// 끝은 `finish` 보다 먼저 알려지고, `finish` 는 어댑터의 `disconnect` 답을 기다린 뒤에야 세션 · 소스 토큰을 지운다(여기서는 답하지
+/// 않아 그 틈이 끊기 시한만큼 열린다 — 어댑터는 그동안 다른 요청에 답한다). 2026-11-23 전체 실행에서
+/// `frame_sources_outside_the_root_are_read_through_tokens` 의 「멈춘 뒤」 단언이 같은 틈(중지 경로)으로 한 번 흔들렸다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_source_token_dies_when_the_run_is_announced_ended() {
+async fn debug_calls_on_a_run_announced_ended_are_refused() {
     let f = Fixture::new();
     let outside = f.base().join("outside.rs");
     fs::write(&outside, "pub fn lib() {}\n").unwrap();
@@ -1423,10 +1423,62 @@ async fn a_source_token_dies_when_the_run_is_announced_ended() {
         .await
         .expect("the debug run did not end");
 
-    let e = c
-        .err("debug.source", json!({ "runId": run_id, "token": token }))
+    let calls = [
+        ("debug.threads", json!({ "runId": run_id })),
+        ("debug.stack", json!({ "runId": run_id, "threadId": 1 })),
+        ("debug.scopes", json!({ "runId": run_id, "frameId": 1 })),
+        (
+            "debug.variables",
+            json!({ "runId": run_id, "variablesReference": 1 }),
+        ),
+        (
+            "debug.evaluate",
+            json!({ "runId": run_id, "expression": "1", "context": "repl" }),
+        ),
+        (
+            "debug.control",
+            json!({ "runId": run_id, "threadId": 1, "action": "continue" }),
+        ),
+        (
+            "debug.exceptions.set",
+            json!({ "runId": run_id, "filters": [] }),
+        ),
+        ("debug.source", json!({ "runId": run_id, "token": token })),
+    ];
+    // 첫 실패에서 멈추지 않고 틀린 갈래를 모두 모은다(되돌림 실증에서 어느 갈래가 막는지 보이게).
+    let mut wrong = Vec::new();
+    for (method, params) in calls {
+        match c.call(method, params).await {
+            Err(e) if e.code == code::NOT_FOUND => {}
+            other => wrong.push(format!("{method}: {other:?}")),
+        }
+    }
+    // 브레이크포인트 저장은 프로젝트의 것이라 되지만, 끝난 실행의 세션에는 보내지 않는다.
+    let sent = f.received("setBreakpoints").len();
+    c.ok(
+        "debug.breakpoints.set",
+        json!({ "projectId": f.project, "path": "src/main.rs", "breakpoints": [bp(3)] }),
+    )
+    .await;
+    let now = f.received("setBreakpoints").len();
+    if now != sent {
+        wrong.push(format!(
+            "debug.breakpoints.set: sent {} setBreakpoints",
+            now - sent
+        ));
+    }
+    // 에이전트의 상태 툴도 그 세션을 보이지 않는다.
+    let mut agent = f.client_in(ConnectionScope::Agent);
+    let state = agent
+        .ok(
+            "debug.tool.state",
+            json!({ "projectId": f.project, "sessionId": run_id }),
+        )
         .await;
-    assert_eq!(e.code, code::NOT_FOUND);
+    if state["state"] != "noSession" {
+        wrong.push(format!("debug.tool.state: {state}"));
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
 /// M6-18 리뷰 F1 · F3 · R1: 루트 안 링크가 루트 밖 파일을 가리키면 `debug.source` 는 **실제 경로**를 주고(보고한 경로는 따로),

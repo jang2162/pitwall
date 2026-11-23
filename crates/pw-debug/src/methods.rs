@@ -944,7 +944,7 @@ pub fn register(router: &mut Router, debugger: Debugger) {
                 if entry.run != p.run_id {
                     return Err(RpcError::new(code::NOT_FOUND, "no such source token"));
                 }
-                let run = debugger.live(project, &p.run_id)?;
+                let run = debugger.find(project, &p.run_id)?;
                 Ok((entry, run))
             });
             async move {

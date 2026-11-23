@@ -194,38 +194,40 @@ impl Debugger {
         &self.inner.sources
     }
 
-    /// 그 프로젝트의 디버그 세션(다른 프로젝트 · 없는 실행 · 디버그 실행이 아닌 것은 같은 「없는 실행」).
+    /// 그 프로젝트의 디버그 세션(다른 프로젝트 · 없는 실행 · 디버그 실행이 아닌 것 · **끝이 알려진 실행**은 같은 「없는 실행」).
+    ///
+    /// 끝이 알려진 실행을 거르는 까닭: 실행의 끝(실행 관리자의 `Exited`)은 세션이 세션 표에서 빠지기 전에 알려진다 — 디버그 대상의
+    /// PTY 가 스스로 끝나면 `finish` 가 시작되기도 전에(그 뒤 `finish` 는 어댑터의 `disconnect` 답을 기다린다), 중지 경로에서도
+    /// `finish` 안에서 표에서 빼기 전에. 그 틈에 `debug.*` 가 끝난 실행의 세션 · 소스 토큰을 쓰지 않게 모든 조회가 여기를 지난다.
+    /// `finish` 의 차례만 바꾸는 것으로는 PTY 경로를 막지 못한다.
     pub fn find(&self, project_id: &str, run_id: &str) -> Result<Arc<DebugRun>, RpcError> {
         lock(&self.inner.sessions)
             .get(run_id)
             .filter(|r| r.project_id == project_id)
             .cloned()
+            .filter(|r| !self.announced_ended(r))
             .ok_or_else(|| no_such_run(run_id))
     }
 
-    /// 끝이 알려지지 않은 디버그 세션 — 실행의 끝(실행 관리자의 `Exited`)이 이미 알려졌으면 [`Self::find`] 가 찾더라도 「없는
-    /// 실행」이다. 실행의 끝은 세션 표에서 빠지기 전에 알려진다(디버그 대상의 PTY 가 스스로 끝나면 `finish` 보다 먼저, `finish`
-    /// 안에서도 표에서 빼기 전) — `debug.source` 가 그 틈에 끝난 실행의 토큰으로 읽지 않게 한다(`source.rs` 머리 주석).
-    pub(crate) fn live(&self, project_id: &str, run_id: &str) -> Result<Arc<DebugRun>, RpcError> {
-        let run = self.find(project_id, run_id)?;
-        let ended = self
-            .inner
-            .runs
-            .find(project_id, run_id)
-            .map_or(true, |r| r.state() == RunState::Exited);
-        if ended {
-            return Err(no_such_run(run_id));
-        }
-        Ok(run)
-    }
-
-    /// 그 프로젝트의 디버그 세션들.
+    /// 그 프로젝트의 디버그 세션들(끝이 알려진 실행은 뺀다 — [`Self::find`]).
     pub fn sessions_of(&self, project_id: &str) -> Vec<Arc<DebugRun>> {
-        lock(&self.inner.sessions)
+        let found: Vec<Arc<DebugRun>> = lock(&self.inner.sessions)
             .values()
             .filter(|r| r.project_id == project_id)
             .cloned()
+            .collect();
+        found
+            .into_iter()
+            .filter(|r| !self.announced_ended(r))
             .collect()
+    }
+
+    /// 실행 관리자가 그 실행의 끝을 알렸는가(없어진 실행도 끝난 것으로 본다 — 디버그 세션은 실행보다 늦게 표에 든다).
+    fn announced_ended(&self, run: &DebugRun) -> bool {
+        self.inner
+            .runs
+            .find(&run.project_id, run.run_id())
+            .map_or(true, |r| r.state() == RunState::Exited)
     }
 
     fn publish<T: serde::Serialize>(&self, project_id: &str, topic: &str, payload: &T) {
