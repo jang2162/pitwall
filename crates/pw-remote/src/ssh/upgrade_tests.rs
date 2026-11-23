@@ -502,3 +502,43 @@ async fn the_command_link_follows_the_person_on_the_seen_machine_only() {
         ["link-command", "link-command --remove"]
     );
 }
+
+/// 사람이 둔 `pitwall` 링크를 새 판으로 옮기지 못하면, 그 링크가 가리키는 옛 판 바이너리는 이번 정리에서 지우지 않는다(사람의 `pitwall`
+/// 이 깨지지 않게). 다른 옛 판은 그대로 정리된다.
+#[tokio::test]
+async fn a_command_link_that_cannot_move_keeps_its_binary() {
+    let s = setup();
+    std::fs::create_dir_all(s.remote.relay_dir()).unwrap();
+    write_executable(
+        &s.remote
+            .relay_dir()
+            .join(format!("pitwall-relay-dev-{VERSION}")),
+        "#!/bin/sh\ncase \"$1\" in\n  link-command) echo refused >&2; exit 1 ;;\n  *) exit 2 ;;\nesac\n",
+    );
+    Stub::new(s.dir.path(), &s.remote, "1.1.0");
+    Stub::new(s.dir.path(), &s.remote, "1.0.5");
+    let linked = Stub::new(s.dir.path(), &s.remote, "1.0.0");
+    let bin = s.remote.home.join(".local/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::os::unix::fs::symlink(
+        s.remote.relay_dir().join(linked.file()),
+        bin.join("pitwall"),
+    )
+    .unwrap();
+
+    let _use = s.hosts.hold("mini").unwrap();
+    let relays = s.relays(None).await;
+    assert_eq!(relays.removed, ["pitwall-relay-dev-1.0.5"]);
+    assert!(
+        s.remote.relay_dir().join(linked.file()).exists(),
+        "removed the binary the person's pitwall link points at"
+    );
+    let log = s
+        .hosts
+        .log("mini")
+        .into_iter()
+        .map(|l| l.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(log.contains("could not move ~/.local/bin/pitwall"), "{log}");
+}
