@@ -10,7 +10,11 @@ use gix::bstr::ByteSlice;
 use pw_rpc::{Router, RpcError, rpc_method};
 use serde::{Deserialize, Serialize};
 
+use pw_core::registry::plan::Planned;
+
+use super::agent::SendTarget;
 use super::apply::{Apply, GitSendOutcome};
+use super::compare::{GitSendCompare, GitSendCompareParams};
 use super::receive::{Begin, UploadOwner, Uploads};
 use super::{CHUNK, INCOMING_PREFIX, branch_name, ref_target};
 use crate::write::{GitWrite, WriteError};
@@ -166,6 +170,32 @@ pub struct GitSendApplyParams {
     pub expected: Option<String>,
 }
 
+/// `git.send.plan` 의 입력: 대상이 바꿀 것(`super::agent::SendTarget`).
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct GitSendPlanParams {
+    pub project_id: String,
+    #[serde(default)]
+    pub worktree: Option<String>,
+    pub source_machine: String,
+    pub branch: String,
+    /// 받을 커밋(원본 끝 — 계획 때 읽은 것).
+    pub commit: String,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct GitSendPlan {
+    /// 대상 계획의 해시(`sha256:<hex>`). MCP 세션의 받기 · 맞추기는 이것을 승인 표에 싣는다.
+    pub hash: String,
+    /// 해시에 든 그 브랜치의 지금 끝. 없으면 `null`.
+    pub branch_tip: Option<String>,
+}
+
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type, schemars::JsonSchema,
 )]
@@ -188,6 +218,29 @@ rpc_method! {
 }
 
 rpc_method! {
+    /// 에이전트 갈래(MCP 세션의 `checkout_send`)의 대상 계획: 대상이 바꿀 것과 지금 읽은 브랜치 끝으로 만든 계획 해시. 세션이 사람의
+    /// 승인을 받은 뒤 그 해시를 승인 표로 `receive.begin` · `apply` 에 싣는다 — MCP 세션 범위의 두 메서드는 계획을 다시 만들어 표가
+    /// 맞을 때만 돈다(`super::agent`).
+    pub GitSendPlanMethod: "git.send.plan" {
+        params: GitSendPlanParams,
+        result: GitSendPlan,
+        tier: Read,
+        roles: [Owner],
+    }
+}
+
+rpc_method! {
+    /// 커밋 보내기의 원본 쪽 읽기(에이전트 갈래의 계획): 그 브랜치의 지금 끝, 대상이 가진 커밋에 없는 커밋 수, 대상 브랜치 끝이 그
+    /// 조상인가(fast-forward), 커밋 안 한 변경이 있는가. 원본에 쓰지 않는다.
+    pub GitSendCompareMethod: "git.send.compare" {
+        params: GitSendCompareParams,
+        result: GitSendCompare,
+        tier: Read,
+        roles: [Owner],
+    }
+}
+
+rpc_method! {
     /// 커밋 보내기의 원본 쪽: `commit` 과 그 조상 가운데 `theirs` 에 없는 것의 `git bundle`(ref 는 `refs/heads/<branch>` 하나)을
     /// 흘린다. 원본 저장소에 쓰지 않는다. 1 GiB 를 넘으면 실패한다.
     pub GitSendPrepareMethod: "git.send.prepare" {
@@ -199,9 +252,10 @@ rpc_method! {
 }
 
 rpc_method! {
-    /// 커밋 보내기의 대상 쪽 받기를 연다. 그 프로젝트 창의 연결만(쓰기). 연결이 닫히면 받기를 버린다.
+    /// 커밋 보내기의 대상 쪽 받기를 연다. 그 프로젝트 창의 연결, 또는 `git.send.plan` 의 해시를 승인 표로 실은 MCP 세션(쓰기).
+    /// 연결이 닫히면 받기를 버린다.
     pub GitSendReceiveBeginMethod: "git.send.receive.begin" {
-        params: GitSendReceiveBeginParams,
+        params: Planned<GitSendReceiveBeginParams>,
         result: GitSendUpload,
         tier: Write,
         roles: [Owner],
@@ -230,9 +284,10 @@ rpc_method! {
 
 rpc_method! {
     /// 대상 맞추기: 받은 커밋으로 그 브랜치를 fast-forward(없으면 만들기)하고 체크아웃을 그 브랜치로 바꾼다. 갈라짐 · git 의 거절 ·
-    /// 다른 워크트리가 쓰는 브랜치 · `expected` 와 다른 브랜치면 아무것도 바꾸지 않고 `stopped`.
+    /// 다른 워크트리가 쓰는 브랜치 · `expected` 와 다른 브랜치면 아무것도 바꾸지 않고 `stopped`. 받기와 같이 그 프로젝트 창의 연결,
+    /// 또는 `git.send.plan` 의 해시를 승인 표로 실은 MCP 세션.
     pub GitSendApplyMethod: "git.send.apply" {
-        params: GitSendApplyParams,
+        params: Planned<GitSendApplyParams>,
         result: GitSendApplyResult,
         tier: Write,
         roles: [Owner],
@@ -247,6 +302,32 @@ pub fn register(router: &mut Router, write: Arc<GitWrite>) {
         let w = Arc::clone(&w);
         async move { Ok(theirs(&w, p).await?) }
     });
+    let w = Arc::clone(&write);
+    router.unary(GitSendPlanMethod, move |_ctx, p: GitSendPlanParams| {
+        let w = Arc::clone(&w);
+        async move {
+            let target = SendTarget {
+                project_id: p.project_id,
+                worktree: p.worktree,
+                source_machine: p.source_machine,
+                branch: p.branch,
+                commit: p.commit,
+            };
+            let (plan, branch_tip) = super::agent::planned(&w, &target).await?;
+            Ok(GitSendPlan {
+                hash: plan.hash,
+                branch_tip,
+            })
+        }
+    });
+    let w = Arc::clone(&write);
+    router.unary(
+        GitSendCompareMethod,
+        move |_ctx, p: GitSendCompareParams| {
+            let w = Arc::clone(&w);
+            async move { Ok(super::compare::compare(w.git(), p).await?) }
+        },
+    );
     let w = Arc::clone(&write);
     router.stream(
         GitSendPrepareMethod,
@@ -295,11 +376,26 @@ pub fn register(router: &mut Router, write: Arc<GitWrite>) {
     let (w, u) = (Arc::clone(&write), Arc::clone(&uploads));
     router.unary(
         GitSendReceiveBeginMethod,
-        move |ctx, p: GitSendReceiveBeginParams| {
+        move |ctx, planned: Planned<GitSendReceiveBeginParams>| {
             let (w, u) = (Arc::clone(&w), Arc::clone(&u));
             async move {
+                let Planned { params: p, ticket } = planned;
+                let approved = super::agent::authorize(
+                    &w,
+                    ctx.scope(),
+                    ticket.as_ref(),
+                    &SendTarget {
+                        project_id: p.project_id.clone(),
+                        worktree: p.worktree.clone(),
+                        source_machine: p.source_machine.clone(),
+                        branch: p.branch.clone(),
+                        commit: p.commit.clone(),
+                    },
+                )
+                .await?;
                 let begin = Begin {
                     caller: ctx.scope().clone(),
+                    approved,
                     project_id: p.project_id,
                     worktree: p.worktree,
                     source_machine: p.source_machine,
@@ -342,30 +438,48 @@ pub fn register(router: &mut Router, write: Arc<GitWrite>) {
         }
     });
     let w = Arc::clone(&write);
-    router.unary(GitSendApplyMethod, move |ctx, p: GitSendApplyParams| {
-        let w = Arc::clone(&w);
-        async move {
-            let incoming_ref = super::incoming_ref(&p.source_machine, &p.branch);
-            let (work_tree, outcome) = super::apply::apply(
-                &w,
-                Apply {
-                    caller: ctx.scope().clone(),
-                    project_id: p.project_id,
-                    worktree: p.worktree,
-                    source_machine: p.source_machine,
-                    branch: p.branch,
-                    commit: p.commit,
-                    expected: p.expected,
-                },
-            )
-            .await?;
-            Ok(GitSendApplyResult {
-                work_tree,
-                incoming_ref,
-                outcome,
-            })
-        }
-    });
+    router.unary(
+        GitSendApplyMethod,
+        move |ctx, planned: Planned<GitSendApplyParams>| {
+            let w = Arc::clone(&w);
+            async move {
+                let Planned { params: p, ticket } = planned;
+                let approved = super::agent::authorize(
+                    &w,
+                    ctx.scope(),
+                    ticket.as_ref(),
+                    &SendTarget {
+                        project_id: p.project_id.clone(),
+                        worktree: p.worktree.clone(),
+                        source_machine: p.source_machine.clone(),
+                        branch: p.branch.clone(),
+                        commit: p.commit.clone(),
+                    },
+                )
+                .await?;
+                let incoming_ref = super::incoming_ref(&p.source_machine, &p.branch);
+                let (work_tree, outcome) = super::apply::apply(
+                    &w,
+                    Apply {
+                        caller: ctx.scope().clone(),
+                        approved,
+                        project_id: p.project_id,
+                        worktree: p.worktree,
+                        source_machine: p.source_machine,
+                        branch: p.branch,
+                        commit: p.commit,
+                        expected: p.expected,
+                    },
+                )
+                .await?;
+                Ok(GitSendApplyResult {
+                    work_tree,
+                    incoming_ref,
+                    outcome,
+                })
+            }
+        },
+    );
 }
 
 fn read_at(path: &std::path::Path, offset: u64) -> std::io::Result<Vec<u8>> {

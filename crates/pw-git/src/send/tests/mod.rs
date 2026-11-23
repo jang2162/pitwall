@@ -2,6 +2,7 @@
 //! (`crate::testing::write`, 진짜 git)로 두고 원격 없이 돈다. 두 픽스처의 PATH 맨 앞의 `git` 은 받은 argv 를 적고 진짜 git 을
 //! 부르는 감싸개다 — 엔진이 실제로 부른 git 명령을 시험이 모은다.
 
+mod agent;
 mod bundle;
 mod flow;
 mod guard;
@@ -126,6 +127,7 @@ impl Pair {
             &self.dst.write,
             Apply {
                 caller: self.dst.caller(),
+                approved: None,
                 project_id: self.dst.project.clone(),
                 worktree: None,
                 source_machine: MACHINE.to_owned(),
@@ -177,6 +179,7 @@ async fn receive_bytes(
 fn begin(dst: &WriteFixture, branch: &str, commit: &str, size: u64) -> Begin {
     Begin {
         caller: dst.caller(),
+        approved: None,
         project_id: dst.project.clone(),
         worktree: None,
         source_machine: MACHINE.to_owned(),

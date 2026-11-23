@@ -19,6 +19,7 @@ use std::time::Duration;
 use base64::Engine as _;
 use gix::ObjectId;
 use gix::bstr::ByteSlice;
+use pw_core::registry::plan::Approved;
 use pw_core::registry::state::scope_may_write;
 use pw_rpc::{ConnectionScope, Role, RpcError, SessionId, code as rpc_code};
 use tokio::time::Instant;
@@ -75,6 +76,8 @@ impl UploadOwner {
 #[derive(Debug, Clone)]
 pub struct Begin {
     pub caller: ConnectionScope,
+    /// MCP 세션(`Agent`)의 받기가 지난 승인(`super::agent::authorize`). 그 프로젝트 창의 받기면 `None`.
+    pub approved: Option<Approved>,
     pub project_id: String,
     pub worktree: Option<String>,
     pub source_machine: String,
@@ -176,7 +179,7 @@ impl Uploads {
         begin: Begin,
         closed: CancellationToken,
     ) -> Result<u64, WriteError> {
-        if !scope_may_write(&begin.caller, &begin.project_id) {
+        if !scope_may_write(&begin.caller, &begin.project_id) && begin.approved.is_none() {
             return Err(WriteError::Rpc(RpcError::new(
                 rpc_code::PERMISSION_DENIED,
                 "only the project's own window may write to its git repository",
@@ -386,11 +389,12 @@ impl Uploads {
             upload.begin.source_machine.clone(),
             upload.commit,
         );
-        let result = write
-            .run(request, move |ctx| async move {
-                fetch(&ctx, &path, &machine, &branch, commit).await
-            })
-            .await;
+        let job =
+            move |ctx: WriteCtx| async move { fetch(&ctx, &path, &machine, &branch, commit).await };
+        let result = match &upload.begin.approved {
+            Some(approved) => write.run_approved(request, approved, job).await,
+            None => write.run(request, job).await,
+        };
         drop(upload);
         result
     }

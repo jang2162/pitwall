@@ -721,11 +721,24 @@ export type UnaryMethods = {
 	"git.revert": { params: GitCommitsParams; result: GitHistoryResult };
 	/**
 	 * 대상 맞추기: 받은 커밋으로 그 브랜치를 fast-forward(없으면 만들기)하고 체크아웃을 그 브랜치로 바꾼다. 갈라짐 · git 의 거절 ·
-	 * 다른 워크트리가 쓰는 브랜치 · `expected` 와 다른 브랜치면 아무것도 바꾸지 않고 `stopped`.
+	 * 다른 워크트리가 쓰는 브랜치 · `expected` 와 다른 브랜치면 아무것도 바꾸지 않고 `stopped`. 받기와 같이 그 프로젝트 창의 연결,
+	 * 또는 `git.send.plan` 의 해시를 승인 표로 실은 MCP 세션.
 	 */
 	"git.send.apply": { params: GitSendApplyParams; result: GitSendApplyResult };
 	/**
-	 * 커밋 보내기의 대상 쪽 받기를 연다. 그 프로젝트 창의 연결만(쓰기). 연결이 닫히면 받기를 버린다.
+	 * 커밋 보내기의 원본 쪽 읽기(에이전트 갈래의 계획): 그 브랜치의 지금 끝, 대상이 가진 커밋에 없는 커밋 수, 대상 브랜치 끝이 그
+	 * 조상인가(fast-forward), 커밋 안 한 변경이 있는가. 원본에 쓰지 않는다.
+	 */
+	"git.send.compare": { params: GitSendCompareParams; result: GitSendCompare };
+	/**
+	 * 에이전트 갈래(MCP 세션의 `checkout_send`)의 대상 계획: 대상이 바꿀 것과 지금 읽은 브랜치 끝으로 만든 계획 해시. 세션이 사람의
+	 * 승인을 받은 뒤 그 해시를 승인 표로 `receive.begin` · `apply` 에 싣는다 — MCP 세션 범위의 두 메서드는 계획을 다시 만들어 표가
+	 * 맞을 때만 돈다(`super::agent`).
+	 */
+	"git.send.plan": { params: GitSendPlanParams; result: GitSendPlan };
+	/**
+	 * 커밋 보내기의 대상 쪽 받기를 연다. 그 프로젝트 창의 연결, 또는 `git.send.plan` 의 해시를 승인 표로 실은 MCP 세션(쓰기).
+	 * 연결이 닫히면 받기를 버린다.
 	 */
 	"git.send.receive.begin": { params: GitSendReceiveBeginParams; result: GitSendUpload };
 	/**
@@ -1847,9 +1860,11 @@ export const METHODS: Record<MethodName, MethodMeta> = {
 	"git.reset": {"name":"git.reset","kind":"unary","tier":"write","roles":["owner"],"params":"GitResetParams","output":"GitResetResult","doc":" HEAD 를 커밋으로 옮긴다(`git reset --soft|--mixed|--hard|--keep`, 서브모듈 작업 트리는 그대로). hard 와 잃을 것이 있는 keep · mixed 는\n 확인 뒤에 미리보기의 지문과 함께 부른다(결정 M2-D6 ① — 잃을 변경은 `git.resetPreview`). 결과의 `moved` 로 [되돌리기].\n","mcp":null,"fileScope":false},
 	"git.resetPreview": {"name":"git.resetPreview","kind":"unary","tier":"read","roles":["owner"],"params":"GitResetPreviewParams","output":"GitResetPreview","doc":" reset hard · keep · mixed 가 잃을 변경: 커밋하지 않은 추적 파일의 변경과 덮어써질 추적하지 않는 것(mixed 는 index 에만 있는\n 스테이징 내용). gix 로 읽는다(git 을 띄우지 않는다).\n","mcp":null,"fileScope":false},
 	"git.revert": {"name":"git.revert","kind":"unary","tier":"write","roles":["owner"],"params":"GitCommitsParams","output":"GitHistoryResult","doc":" 커밋들을 차례로 되돌리는 역 커밋을 만든다(`git revert --no-edit`). 충돌이면 `outcome: stopped`.\n","mcp":null,"fileScope":false},
-	"git.send.apply": {"name":"git.send.apply","kind":"unary","tier":"write","roles":["owner"],"params":"GitSendApplyParams","output":"GitSendApplyResult","doc":" 대상 맞추기: 받은 커밋으로 그 브랜치를 fast-forward(없으면 만들기)하고 체크아웃을 그 브랜치로 바꾼다. 갈라짐 · git 의 거절 ·\n 다른 워크트리가 쓰는 브랜치 · `expected` 와 다른 브랜치면 아무것도 바꾸지 않고 `stopped`.\n","mcp":null,"fileScope":false},
+	"git.send.apply": {"name":"git.send.apply","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<GitSendApplyParams>","output":"GitSendApplyResult","doc":" 대상 맞추기: 받은 커밋으로 그 브랜치를 fast-forward(없으면 만들기)하고 체크아웃을 그 브랜치로 바꾼다. 갈라짐 · git 의 거절 ·\n 다른 워크트리가 쓰는 브랜치 · `expected` 와 다른 브랜치면 아무것도 바꾸지 않고 `stopped`. 받기와 같이 그 프로젝트 창의 연결,\n 또는 `git.send.plan` 의 해시를 승인 표로 실은 MCP 세션.\n","mcp":null,"fileScope":false},
+	"git.send.compare": {"name":"git.send.compare","kind":"unary","tier":"read","roles":["owner"],"params":"GitSendCompareParams","output":"GitSendCompare","doc":" 커밋 보내기의 원본 쪽 읽기(에이전트 갈래의 계획): 그 브랜치의 지금 끝, 대상이 가진 커밋에 없는 커밋 수, 대상 브랜치 끝이 그\n 조상인가(fast-forward), 커밋 안 한 변경이 있는가. 원본에 쓰지 않는다.\n","mcp":null,"fileScope":false},
+	"git.send.plan": {"name":"git.send.plan","kind":"unary","tier":"read","roles":["owner"],"params":"GitSendPlanParams","output":"GitSendPlan","doc":" 에이전트 갈래(MCP 세션의 `checkout_send`)의 대상 계획: 대상이 바꿀 것과 지금 읽은 브랜치 끝으로 만든 계획 해시. 세션이 사람의\n 승인을 받은 뒤 그 해시를 승인 표로 `receive.begin` · `apply` 에 싣는다 — MCP 세션 범위의 두 메서드는 계획을 다시 만들어 표가\n 맞을 때만 돈다(`super::agent`).\n","mcp":null,"fileScope":false},
 	"git.send.prepare": {"name":"git.send.prepare","kind":"stream","tier":"read","roles":["owner"],"params":"GitSendPrepareParams","output":"GitSendPrepareItem","doc":" 커밋 보내기의 원본 쪽: `commit` 과 그 조상 가운데 `theirs` 에 없는 것의 `git bundle`(ref 는 `refs/heads/<branch>` 하나)을\n 흘린다. 원본 저장소에 쓰지 않는다. 1 GiB 를 넘으면 실패한다.\n","mcp":null,"fileScope":false},
-	"git.send.receive.begin": {"name":"git.send.receive.begin","kind":"unary","tier":"write","roles":["owner"],"params":"GitSendReceiveBeginParams","output":"GitSendUpload","doc":" 커밋 보내기의 대상 쪽 받기를 연다. 그 프로젝트 창의 연결만(쓰기). 연결이 닫히면 받기를 버린다.\n","mcp":null,"fileScope":false},
+	"git.send.receive.begin": {"name":"git.send.receive.begin","kind":"unary","tier":"write","roles":["owner"],"params":"Planned<GitSendReceiveBeginParams>","output":"GitSendUpload","doc":" 커밋 보내기의 대상 쪽 받기를 연다. 그 프로젝트 창의 연결, 또는 `git.send.plan` 의 해시를 승인 표로 실은 MCP 세션(쓰기).\n 연결이 닫히면 받기를 버린다.\n","mcp":null,"fileScope":false},
 	"git.send.receive.chunk": {"name":"git.send.receive.chunk","kind":"unary","tier":"write","roles":["owner"],"params":"GitSendReceiveChunkParams","output":"GitSendReceived","doc":" 받기에 청크 하나를 잇는다. 빠지거나 겹치거나 크기를 넘는 청크는 거절하고 그 받기를 버린다.\n","mcp":null,"fileScope":false},
 	"git.send.receive.finish": {"name":"git.send.receive.finish","kind":"unary","tier":"write","roles":["owner"],"params":"GitSendUpload","output":"GitSendReceiveFinishResult","doc":" 다 받은 묶음을 확인하고(`git bundle verify`) 그 브랜치만 전용 ref 로 가져온다. 다 쓴 전용 ref 를 먼저 치운다.\n","mcp":null,"fileScope":false},
 	"git.send.theirs": {"name":"git.send.theirs","kind":"unary","tier":"read","roles":["owner"],"params":"GitSendTheirsParams","output":"GitSendTheirs","doc":" 커밋 보내기의 대상 쪽 읽기: 이 저장소가 가진 커밋(로컬 브랜치 · 전용 ref 끝)과 그 브랜치의 지금 끝.\n","mcp":null,"fileScope":false},
@@ -6634,6 +6649,27 @@ export type GitSendApplyResult = {
 	outcome: GitSendOutcome,
 };
 
+export type GitSendCompare = {
+	/**  원본의 그 브랜치 끝. 원본에 그 브랜치가 없으면 `null`(나머지는 비었다). */
+	commit: string | null,
+	/**  그 끝과 조상 가운데 `theirs` 에 없는 커밋 수 — 보낼 커밋 수. */
+	commits: number,
+	/**  대상 브랜치가 없거나, 그 끝이 원본 끝 자신이거나 조상이다. 거짓이면 갈라짐이다. */
+	fastForward: boolean,
+	/**  원본 작업 트리 · index 에 커밋 안 한 변경이 있다(추적하지 않는 파일은 세지 않는다). 그 변경은 가지 않는다. */
+	uncommitted: boolean,
+};
+
+export type GitSendCompareParams = {
+	projectId: string,
+	worktree?: string | null,
+	branch: string,
+	/**  대상이 가진 커밋(`git.send.theirs`). 원본에 없는 것은 무시한다. */
+	theirs?: string[],
+	/**  대상 브랜치의 지금 끝(`git.send.theirs` 의 `branchTip`). `null` 은 대상에 그 브랜치가 없다. */
+	expected?: string | null,
+};
+
 /**  맞추기의 끝. */
 export type GitSendOutcome = 
 /**  대상 체크아웃이 그 브랜치 · 그 커밋이 됐다. */
@@ -6650,6 +6686,23 @@ lfsPointers: number } |
 { kind: "stopped"; reason: GitSendStop; 
 /**  git 의 거절 원문(있으면). */
 message: string | null };
+
+export type GitSendPlan = {
+	/**  대상 계획의 해시(`sha256:<hex>`). MCP 세션의 받기 · 맞추기는 이것을 승인 표에 싣는다. */
+	hash: string,
+	/**  해시에 든 그 브랜치의 지금 끝. 없으면 `null`. */
+	branchTip: string | null,
+};
+
+/**  `git.send.plan` 의 입력: 대상이 바꿀 것(`super::agent::SendTarget`). */
+export type GitSendPlanParams = {
+	projectId: string,
+	worktree?: string | null,
+	sourceMachine: string,
+	branch: string,
+	/**  받을 커밋(원본 끝 — 계획 때 읽은 것). */
+	commit: string,
+};
 
 /**  `git.send.prepare` 의 항목: `info` 하나 → `data` …(offset 순서). */
 export type GitSendPrepareItem = { kind: "info"; 

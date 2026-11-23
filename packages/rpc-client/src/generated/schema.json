@@ -29197,7 +29197,7 @@
       "tier": "write"
     },
     "git.send.apply": {
-      "description": "대상 맞추기: 받은 커밋으로 그 브랜치를 fast-forward(없으면 만들기)하고 체크아웃을 그 브랜치로 바꾼다. 갈라짐 · git 의 거절 ·\n다른 워크트리가 쓰는 브랜치 · `expected` 와 다른 브랜치면 아무것도 바꾸지 않고 `stopped`.",
+      "description": "대상 맞추기: 받은 커밋으로 그 브랜치를 fast-forward(없으면 만들기)하고 체크아웃을 그 브랜치로 바꾼다. 갈라짐 · git 의 거절 ·\n다른 워크트리가 쓰는 브랜치 · `expected` 와 다른 브랜치면 아무것도 바꾸지 않고 `stopped`. 받기와 같이 그 프로젝트 창의 연결,\n또는 `git.send.plan` 의 해시를 승인 표로 실은 MCP 세션.",
       "kind": "unary",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -29236,7 +29236,8 @@
           "branch",
           "commit"
         ],
-        "type": "object"
+        "type": "object",
+        "x-pitwall-planned": true
       },
       "result": {
         "$defs": {
@@ -29368,6 +29369,148 @@
       ],
       "tier": "write"
     },
+    "git.send.compare": {
+      "description": "커밋 보내기의 원본 쪽 읽기(에이전트 갈래의 계획): 그 브랜치의 지금 끝, 대상이 가진 커밋에 없는 커밋 수, 대상 브랜치 끝이 그\n조상인가(fast-forward), 커밋 안 한 변경이 있는가. 원본에 쓰지 않는다.",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "branch": {
+            "type": "string"
+          },
+          "expected": {
+            "default": null,
+            "description": "대상 브랜치의 지금 끝(`git.send.theirs` 의 `branchTip`). `null` 은 대상에 그 브랜치가 없다.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "theirs": {
+            "default": [],
+            "description": "대상이 가진 커밋(`git.send.theirs`). 원본에 없는 것은 무시한다.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "branch"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "commit": {
+            "description": "원본의 그 브랜치 끝. 원본에 그 브랜치가 없으면 `null`(나머지는 비었다).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commits": {
+            "description": "그 끝과 조상 가운데 `theirs` 에 없는 커밋 수 — 보낼 커밋 수.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fastForward": {
+            "description": "대상 브랜치가 없거나, 그 끝이 원본 끝 자신이거나 조상이다. 거짓이면 갈라짐이다.",
+            "type": "boolean"
+          },
+          "uncommitted": {
+            "description": "원본 작업 트리 · index 에 커밋 안 한 변경이 있다(추적하지 않는 파일은 세지 않는다). 그 변경은 가지 않는다.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "commit",
+          "commits",
+          "fastForward",
+          "uncommitted"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
+    "git.send.plan": {
+      "description": "에이전트 갈래(MCP 세션의 `checkout_send`)의 대상 계획: 대상이 바꿀 것과 지금 읽은 브랜치 끝으로 만든 계획 해시. 세션이 사람의\n승인을 받은 뒤 그 해시를 승인 표로 `receive.begin` · `apply` 에 싣는다 — MCP 세션 범위의 두 메서드는 계획을 다시 만들어 표가\n맞을 때만 돈다(`super::agent`).",
+      "kind": "unary",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`git.send.plan` 의 입력: 대상이 바꿀 것(`super::agent::SendTarget`).",
+        "properties": {
+          "branch": {
+            "type": "string"
+          },
+          "commit": {
+            "description": "받을 커밋(원본 끝 — 계획 때 읽은 것).",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "sourceMachine": {
+            "type": "string"
+          },
+          "worktree": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "sourceMachine",
+          "branch",
+          "commit"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "branchTip": {
+            "description": "해시에 든 그 브랜치의 지금 끝. 없으면 `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hash": {
+            "description": "대상 계획의 해시(`sha256:<hex>`). MCP 세션의 받기 · 맞추기는 이것을 승인 표에 싣는다.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hash",
+          "branchTip"
+        ],
+        "type": "object"
+      },
+      "roles": [
+        "owner"
+      ],
+      "tier": "read"
+    },
     "git.send.prepare": {
       "description": "커밋 보내기의 원본 쪽: `commit` 과 그 조상 가운데 `theirs` 에 없는 것의 `git bundle`(ref 는 `refs/heads/<branch>` 하나)을\n흘린다. 원본 저장소에 쓰지 않는다. 1 GiB 를 넘으면 실패한다.",
       "item": {
@@ -29475,7 +29618,7 @@
       "tier": "read"
     },
     "git.send.receive.begin": {
-      "description": "커밋 보내기의 대상 쪽 받기를 연다. 그 프로젝트 창의 연결만(쓰기). 연결이 닫히면 받기를 버린다.",
+      "description": "커밋 보내기의 대상 쪽 받기를 연다. 그 프로젝트 창의 연결, 또는 `git.send.plan` 의 해시를 승인 표로 실은 MCP 세션(쓰기).\n연결이 닫히면 받기를 버린다.",
       "kind": "unary",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -29515,7 +29658,8 @@
           "commit",
           "size"
         ],
-        "type": "object"
+        "type": "object",
+        "x-pitwall-planned": true
       },
       "result": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",

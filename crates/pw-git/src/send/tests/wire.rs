@@ -8,19 +8,24 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::*;
 
-struct Conn {
+pub(super) struct Conn {
     session: Session,
     rx: UnboundedReceiver<Outbound>,
     next: u64,
 }
 
 impl Conn {
-    fn open(f: &WriteFixture) -> Self {
+    pub(super) fn open(f: &WriteFixture) -> Self {
+        Self::open_as(f, ConnectionScope::Project(f.project.clone()))
+    }
+
+    /// 그 범위의 연결(MCP 세션은 `ConnectionScope::Agent`).
+    pub(super) fn open_as(f: &WriteFixture, scope: ConnectionScope) -> Self {
         let mut router = Router::new();
         crate::write::register(&mut router, Arc::clone(&f.write));
         let caller = Caller {
             role: Role::Owner,
-            scope: ConnectionScope::Project(f.project.clone()),
+            scope,
             window: None,
         };
         let (session, rx) = Session::new(Arc::new(router), EventHub::new(), caller);
@@ -32,7 +37,7 @@ impl Conn {
     }
 
     /// unary 호출 하나. `Ok(result)` 나 `Err(error)`.
-    async fn call(&mut self, method: &str, params: Value) -> Result<Value, Value> {
+    pub(super) async fn call(&mut self, method: &str, params: Value) -> Result<Value, Value> {
         self.next += 1;
         let id = self.next;
         self.session
@@ -50,7 +55,7 @@ impl Conn {
     }
 
     /// 스트림을 열고 끝까지 받은 항목들.
-    async fn stream(&mut self, method: &str, params: Value) -> Vec<Value> {
+    pub(super) async fn stream(&mut self, method: &str, params: Value) -> Vec<Value> {
         let opened = self.call(method, params).await.unwrap();
         let stream_id = opened["streamId"].clone();
         self.session.handle_value(

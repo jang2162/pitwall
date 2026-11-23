@@ -275,6 +275,7 @@ async fn a_head_that_moves_while_apply_waits_for_the_lock_is_a_conflict() {
     let apply = {
         let dst = Apply {
             caller: pair.dst.caller(),
+            approved: None,
             project_id: pair.dst.project.clone(),
             worktree: None,
             source_machine: MACHINE.to_owned(),

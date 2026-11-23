@@ -24,7 +24,9 @@
 //!
 //! 묶음 바이트는 로그 · Task 진행 · 오류 문장에 넣지 않는다(크기 · 해시만).
 
+pub mod agent;
 pub mod apply;
+pub mod compare;
 pub mod methods;
 pub mod prepare;
 pub mod receive;

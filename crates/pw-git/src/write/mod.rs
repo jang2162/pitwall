@@ -359,6 +359,37 @@ impl GitWrite {
                 "only the project's own window may write to its git repository",
             )));
         }
+        self.run_unchecked(request, job).await
+    }
+
+    /// 에이전트 갈래의 쓰기(커밋 보내기의 받기 · 맞추기 — `crate::send::agent`): 범위가 MCP 세션(`ConnectionScope::Agent`)이고
+    /// 대상 Host 가 다시 만든 계획을 승인 표가 지났다(`approved` — `plan::approve` 만 만든다). 그 밖은 [`Self::run`] 과 같다.
+    pub async fn run_approved<T, F, Fut>(
+        &self,
+        request: WriteRequest,
+        _approved: &pw_core::registry::plan::Approved,
+        job: F,
+    ) -> Result<T, WriteError>
+    where
+        T: Send + 'static,
+        F: FnOnce(WriteCtx) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T, WriteError>> + Send + 'static,
+    {
+        if request.caller != ConnectionScope::Agent {
+            return Err(WriteError::Rpc(RpcError::new(
+                rpc_code::PERMISSION_DENIED,
+                "an approved git write must come from an mcp session",
+            )));
+        }
+        self.run_unchecked(request, job).await
+    }
+
+    async fn run_unchecked<T, F, Fut>(&self, request: WriteRequest, job: F) -> Result<T, WriteError>
+    where
+        T: Send + 'static,
+        F: FnOnce(WriteCtx) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T, WriteError>> + Send + 'static,
+    {
         let tasks =
             self.tasks.get().cloned().ok_or_else(|| {
                 WriteError::Internal("git writes are not attached to a host".into())

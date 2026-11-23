@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use gix::ObjectId;
 use gix::bstr::ByteSlice;
+use pw_core::registry::plan::Approved;
 use pw_rpc::ConnectionScope;
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +20,8 @@ pub(crate) static BEFORE_UPDATE_REF: std::sync::Mutex<Option<Box<dyn FnOnce() + 
 #[derive(Debug, Clone)]
 pub struct Apply {
     pub caller: ConnectionScope,
+    /// MCP 세션(`Agent`)의 맞추기가 지난 승인(`super::agent::authorize`). 그 프로젝트 창의 맞추기면 `None`.
+    pub approved: Option<Approved>,
     pub project_id: String,
     pub worktree: Option<String>,
     pub source_machine: String,
@@ -129,12 +132,14 @@ pub async fn apply(
         askpass: false,
     };
     let (machine, branch) = (request.source_machine, request.branch);
-    write
-        .run(write_request, move |ctx| async move {
-            let outcome = reconcile(&ctx, &machine, &branch, commit, expected, plan.head).await?;
-            Ok((crate::branch::work_tree(&ctx), outcome))
-        })
-        .await
+    let job = move |ctx: WriteCtx| async move {
+        let outcome = reconcile(&ctx, &machine, &branch, commit, expected, plan.head).await?;
+        Ok((crate::branch::work_tree(&ctx), outcome))
+    };
+    match &request.approved {
+        Some(approved) => write.run_approved(write_request, approved, job).await,
+        None => write.run(write_request, job).await,
+    }
 }
 
 fn stopped(reason: GitSendStop, message: Option<String>) -> GitSendOutcome {

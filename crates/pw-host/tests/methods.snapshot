@@ -137,6 +137,8 @@ git.reset Unary Write {Owner}
 git.resetPreview Unary Read {Owner}
 git.revert Unary Write {Owner}
 git.send.apply Unary Write {Owner}
+git.send.compare Unary Read {Owner}
+git.send.plan Unary Read {Owner}
 git.send.prepare Stream Read {Owner}
 git.send.receive.begin Unary Write {Owner}
 git.send.receive.chunk Unary Write {Owner}
