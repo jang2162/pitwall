@@ -62,21 +62,6 @@ fn other_project(f: &Fixture) -> String {
         .id
 }
 
-/// 출력에서 글자만(오프셋을 따라 빈틈이 없는지도 본다).
-fn text_of(events: &[TerminalEvent], mut next: u64) -> String {
-    let mut text = String::new();
-    for event in events {
-        if let TerminalEvent::Output { data, offset } = event {
-            let offset = offset.expect("a remote terminal's output carries its offset");
-            assert_eq!(offset, next, "a gap in the output");
-            let bytes = STANDARD.decode(data).unwrap();
-            next += bytes.len() as u64;
-            text.push_str(&String::from_utf8_lossy(&bytes));
-        }
-    }
-    text
-}
-
 /// 완료 기준 ③: 원격 Host 의 터미널은 연결이 닫혀도 셸이 살고 다른 연결이 다시 붙어 입력 · 출력이 이어진다. 로컬 Host 의 터미널은
 /// 연결이 닫히면 끝난다 — 로컬에도 떼기를 적용하면(`Terminals::new` 가 Host 수명이면) 뒤 절반이 실패한다.
 #[tokio::test(flavor = "multi_thread")]
