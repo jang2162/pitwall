@@ -498,10 +498,17 @@ async fn readonly_links_and_agent_connections_neither_hear_nor_answer() {
         (&mobile, f.project_caller("project-x"), "mobile"),
         (&owner, Caller::agent(Role::Owner), "agent"),
     ] {
-        let mut rpc = Rpc::open(remote, caller).await;
+        let mut rpc = Rpc::open(remote, caller.clone()).await;
         assert!(
             f.listen(&mut rpc, Some(&f.project)).await.is_err(),
             "{what} listened"
+        );
+        assert_eq!(f.sessions.approvals().listeners(), 0, "{what}");
+        // 프로젝트 없이 듣기(웰컴 · 설정 창의 꼴 — 링크의 non-owner 기기는 Host 범위로 잘려 범위 판정은 지난다)도 role 에서 거절이다.
+        let mut rpc = Rpc::open(remote, caller).await;
+        assert!(
+            f.listen(&mut rpc, None).await.is_err(),
+            "{what} listened without a project"
         );
         assert_eq!(f.sessions.approvals().listeners(), 0, "{what}");
     }
