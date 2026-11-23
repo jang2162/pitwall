@@ -1202,7 +1202,8 @@ async fn wrong_tokens_on_fresh_connections(port: u16, agent: &Client, n: usize) 
             .unwrap();
         held.push(stream);
     }
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // 첫 늦춤(250ms)이 끝나기 전에 본다 — 늦춤이 끝나 풀린 자리로 붙는 것이 아니라 늦춤이 자리를 쥐지 않아 붙는 것을 본다.
+    tokio::time::sleep(Duration::from_millis(100)).await;
     held
 }
 
