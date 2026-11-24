@@ -167,7 +167,11 @@ pub async fn bind(addr: SocketAddr) -> Result<TcpListener, ForwardError> {
         return Err(ForwardError::NotLoopback(addr.ip().to_string()));
     }
     let failed = |e: std::io::Error| {
-        if e.kind() == std::io::ErrorKind::AddrInUse {
+        // `PermissionDenied` 는 Windows 에서 남이 그 포트를 배타(`SO_EXCLUSIVEADDRUSE`)로 쥔 것(`WSAEACCES`)이다 — 사람에게는
+        // 같은 「쓰는 중」 이다. Unix 의 `PermissionDenied`(특권 포트)는 쓰는 중이 아니다.
+        if e.kind() == std::io::ErrorKind::AddrInUse
+            || (cfg!(windows) && e.kind() == std::io::ErrorKind::PermissionDenied)
+        {
             ForwardError::PortInUse(addr.port())
         } else {
             ForwardError::Bind(e.to_string())
@@ -192,8 +196,9 @@ pub async fn bind(addr: SocketAddr) -> Result<TcpListener, ForwardError> {
 /// `127.0.0.1:P` 바인드는 성공하고, 루프백 연결은 더 좁은 우리 쪽으로 온다(그 서버를 가림, M7-22 리뷰 F1 의 Windows 꼴 — CI run
 /// 45316714445). 그래서 먼저 같은 가족의 와일드카드(`0.0.0.0:P` · `[::]:P`)에 배타 바인드를 해 본다: 그 포트를 어느 주소로든
 /// 쥔 소켓이 있으면 실패한다(루프백이 아닌 주소로 쥔 것도 — 더 막는 쪽으로 틀린다). IPv4 를 들을 때는 `[::]:P` 도 떠본다 —
-/// 두 가족 소켓이 IPv4 와일드카드 떠보기를 지나쳤다(CI run 45333303107). 그래서 IPv6 만 듣는 `[::]:P` 가 있어도 IPv4 를
-/// 거절한다(더 막는 쪽). 떠본 소켓은 곧바로 닫는다. 포트 0(골라 받기)은 떠볼 포트가 없다.
+/// 두 가족 소켓이 IPv4 와일드카드 떠보기를 지나쳤다(CI run 45333303107). 그래서 IPv6 만 듣는 `[::]:P`(Windows 의 `::` 기본 —
+/// `IPV6_V6ONLY` 켜짐)가 있어도 IPv4 를 「쓰는 중」 으로 거절한다(가리지 않는데도 — 더 막는 쪽). `netstat` 에 `[::]:P` 만 보여도 그 포트는
+/// 쓰는 중으로 센다. 떠본 소켓은 곧바로 닫는다. 포트 0(골라 받기)은 떠볼 포트가 없다.
 #[cfg(windows)]
 fn exclusive(socket: &TcpSocket, addr: SocketAddr) -> std::io::Result<()> {
     if addr.port() != 0 {
