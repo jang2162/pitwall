@@ -180,7 +180,11 @@ impl Site {
 
     /// relay.toml(`roots` 와 짧은 유휴 시한)과 페어링 표(이 Desktop 키를 owner 로)를 쓴다.
     fn configure(&self, owners: &[&DeviceKey]) {
-        let dir = tempfile::tempdir().unwrap();
+        // 페어링 표는 이 사용자만 여는 폴더에만 쓴다(`pw_link::device::private_dir`) — `tempdir` 은 umask 를 따라 0755 다.
+        let dir = tempfile::Builder::new()
+            .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700))
+            .tempdir()
+            .unwrap();
         let table = dir.path().join("pairings.json");
         pw_link::pairing::save(
             &table,
@@ -417,6 +421,51 @@ async fn project_window(host: &RemoteHost, root: &str) -> (String, Rpc) {
         .await
         .unwrap();
     (id, Rpc::new(window))
+}
+
+/// 프로젝트 창처럼 `git.prompts` 를 듣고 오는 질문(미저장 확인)마다 「진행」 으로 답한다. 돌려준 태스크를 버리면 그만 듣는다.
+async fn answer_prompts(host: &RemoteHost, project: &str) -> AbortOnDrop {
+    let mut window = host
+        .connect(Caller {
+            role: Role::Owner,
+            scope: ConnectionScope::Project(project.to_owned()),
+            window: Some("relay-live-prompts".into()),
+        })
+        .await
+        .unwrap();
+    window.sink.send(
+        json!({"jsonrpc": "2.0", "id": 1, "method": "git.prompts", "params": {"projectId": project}}),
+    );
+    let stream = loop {
+        let frame = window.source.recv().await.expect("closed");
+        if frame["id"] == json!(1) {
+            assert!(frame.get("error").is_none(), "git.prompts: {frame}");
+            break frame["result"]["streamId"].clone();
+        }
+    };
+    window.sink.send(json!({"jsonrpc": "2.0", "method": "stream.credit", "params": {"streamId": stream, "credit": 1000}}));
+    let project = project.to_owned();
+    AbortOnDrop(tokio::spawn(async move {
+        let mut next = 1;
+        while let Some(frame) = window.source.recv().await {
+            let event = &frame["params"]["data"];
+            if frame["method"] == json!("stream.chunk") && event["kind"] == json!("open") {
+                next += 1;
+                window.sink.send(json!({
+                    "jsonrpc": "2.0", "id": next, "method": "git.prompt.answer",
+                    "params": {"projectId": project, "promptId": event["prompt"]["promptId"], "answer": {"kind": "proceed"}},
+                }));
+            }
+        }
+    }))
+}
+
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 fn runtime() -> tokio::runtime::Runtime {
@@ -727,8 +776,10 @@ fn live_relay_the_installer_installs_pairs_and_reconnects() {
 
 /// 이 기기에서 Relay 데몬 하나를 띄운다(로컬 Host 자리 — Desktop 의 로컬 Host 와 같은 조립). 유닉스 소켓으로 붙는다.
 struct LocalDaemon {
-    root: tempfile::TempDir,
+    /// 데몬의 폴더 — 데몬이 끝날 때까지 둔다.
+    _root: tempfile::TempDir,
     child: std::process::Child,
+    socket: PathBuf,
 }
 
 impl LocalDaemon {
@@ -767,7 +818,22 @@ impl LocalDaemon {
             command.env(var, dir(leaf));
         }
         let child = command.spawn().unwrap();
-        let socket = dir("state/relay").join(format!("{VERSION}.sock"));
+        // 데몬과 같은 규칙으로 소켓 자리를 낸다(채널 · 판이 든 이름, 길면 임시 폴더 — M7-07).
+        let base = pw_core::config::AppPaths {
+            config: dir("config"),
+            data: dir("data"),
+            state: dir("state"),
+            cache: dir("cache"),
+        };
+        let socket = pw_relay::socket::endpoint(
+            &pw_relay::paths::relay_paths(&base),
+            option_env!("PITWALL_RELEASE_CHANNEL").unwrap_or("dev"),
+            VERSION,
+            &std::env::temp_dir(),
+            // SAFETY: 인자 없는 조회다.
+            unsafe { libc::getuid() },
+        )
+        .unwrap();
         let started = Instant::now();
         while !socket.exists() {
             assert!(
@@ -776,16 +842,15 @@ impl LocalDaemon {
             );
             std::thread::sleep(Duration::from_millis(50));
         }
-        Self { root, child }
+        Self {
+            _root: root,
+            child,
+            socket,
+        }
     }
 
     fn transport(&self) -> Arc<dyn Transport> {
-        Arc::new(UnixTransport(
-            self.root
-                .path()
-                .join("state/relay")
-                .join(format!("{VERSION}.sock")),
-        ))
+        Arc::new(UnixTransport(self.socket.clone()))
     }
 }
 
@@ -893,6 +958,9 @@ fn live_relay_sends_a_commit_to_the_remote_checkout() {
         there.attach().await.unwrap();
         let (src_id, mut src) = project_window(&here, local_repo.to_str().unwrap()).await;
         let (dst_id, mut dst) = project_window(&there, &remote_repo).await;
+        // 받는 쪽 창은 미저장 문서 확인을 듣는다 — `git.send.apply` 는 작업 트리를 바꾸는 쓰기라 듣는 창이 없으면 돌지 않는다
+        // (`pw_git::write` 의 NoWindow). 앞의 왕복들보다 먼저 연다(듣기가 Host 에 닿기 전에 apply 가 묻지 않게).
+        let _prompts = answer_prompts(&there, &dst_id).await;
         let theirs = dst
             .call("git.send.theirs", json!({"projectId": dst_id, "branch": "feat/x"}))
             .await;
