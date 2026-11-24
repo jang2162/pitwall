@@ -76,7 +76,7 @@ zeroize = "1.9.1"
 # Windows: 포워딩의 듣는 소켓에 `SO_EXCLUSIVEADDRUSE`(`forward::bind` — 다른 프로세스가 그 포트를 가로채지 못하게). 워크스페이스가
 # 이미 쓰는 판이다.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Networking_WinSock"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock"] }
 
 [dev-dependencies]
 # 설치 시험의 개발 빌드 매니페스트(`pw_release::relay::assemble`).
