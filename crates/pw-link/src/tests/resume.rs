@@ -17,6 +17,31 @@ struct Cuttable {
     /// 참이면 새 전송을 열지 못한다(네트워크가 아직 없다).
     down: AtomicBool,
     opens: AtomicUsize,
+    /// 참이면 Desktop 이 읽기 쪽을 버리는 그 자리에서 가운데가 끝난다(ssh 자식의 `kill_on_drop` 처럼 — 아직 넘기지 못한 바이트는
+    /// 사라진다).
+    kill_on_read_drop: AtomicBool,
+}
+
+/// 버리면 가운데를 곧바로 끝내는 읽기 쪽.
+struct KillOnDrop {
+    read: tokio::io::ReadHalf<tokio::io::DuplexStream>,
+    pipe: AbortHandle,
+}
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        self.pipe.abort();
+    }
+}
+
+impl tokio::io::AsyncRead for KillOnDrop {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.read).poll_read(cx, buf)
+    }
 }
 
 impl Cuttable {
@@ -94,10 +119,15 @@ impl Cuttable {
                     );
                 }
             });
+            let pipe = both.abort_handle();
             self.pipes.lock().unwrap().push((both.abort_handle(), lost));
             self.tx
                 .send(LinkStream::split(relay))
                 .map_err(|_| std::io::Error::other("no acceptor"))?;
+            if self.kill_on_read_drop.load(Ordering::SeqCst) {
+                let (read, write) = tokio::io::split(desktop);
+                return Ok(LinkStream::new(KillOnDrop { read, pipe }, write));
+            }
             Ok(LinkStream::split(desktop))
         }
     }
@@ -129,6 +159,7 @@ fn resumable(limits: LinkLimits) -> Resumable {
         pipes: Mutex::default(),
         down: AtomicBool::new(false),
         opens: AtomicUsize::new(0),
+        kill_on_read_drop: AtomicBool::new(false),
     });
     let parts = RelayParts::new(
         Arc::new(RelayIdentity {
@@ -495,4 +526,27 @@ async fn an_unconfirmed_old_token_is_taken_only_once_more() {
         try_resume(&fx, &fx.desktop_key, token).await,
         Err(DialError::Rejected(RejectReason::Resume))
     );
+}
+
+/// 일부러 끊으면(`detach`) Relay 가 `bye` 를 받아 곧바로 링크를 닫는다 — 전송이 ssh 자식처럼 읽기 쪽을 버리면 끝나도(`kill_on_drop`)
+/// 그렇다. Desktop 이 `bye` 를 쓰기 전에 읽기 쪽을 버리면 Relay 는 끊김으로 보고 `resume_within`(20 s) 동안 이어 붙기 표에 쥔다
+/// (relay-live 의 「다시 붙으면 링크 둘」, CI run 45333303107).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_detach_over_a_transport_that_ends_with_its_reader_still_says_bye() {
+    let fx = resumable(quick());
+    fx.transport.kill_on_read_drop.store(true, Ordering::SeqCst);
+    fx.remote.attach().await.unwrap();
+    eventually("the link was not held", || fx.resumes.len() == 1).await;
+    fx.remote.detach();
+    eventually("the relay kept the detached link for a resume", || {
+        fx.resumes.is_empty()
+    })
+    .await;
+    eventually("the relay did not see the bye", || {
+        fx.serve_results
+            .lock()
+            .unwrap()
+            .contains(&Ok(CloseReason::PeerClosed))
+    })
+    .await;
 }

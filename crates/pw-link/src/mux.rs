@@ -988,12 +988,23 @@ impl Mux {
         self.shared.drained.cancelled().await;
     }
 
+    /// 링크를 닫은 뒤 읽기 쪽을 곧바로 버리지 않는다: 전송이 ssh 자식이면 읽기 쪽을 버릴 때 ssh 가 끝나(`kill_on_drop`) 막 쓴
+    /// `bye` 가 상대에 닿지 못한다 — 상대(Relay)는 끊김으로 보고 `resume_within` 동안 링크를 쥐고 센다(relay-live, CI run
+    /// 45333303107). `bye` 를 쓸 때까지([`Self::drained`]), 그리고 상대가 전송을 닫을 때까지(읽은 틀은 버린다) 2초까지 쥔다.
+    async fn linger(&self, mut read: FramedRead) {
+        let _ = tokio::time::timeout(Duration::from_secs(2), async {
+            self.drained().await;
+            while let Ok(Some(_)) = read.read_raw().await {}
+        })
+        .await;
+    }
+
     async fn reader(self, mut read: FramedRead, generation: u64, stop: CancellationToken) {
         let closed = self.closed();
         loop {
             let result = tokio::select! {
                 biased;
-                () = closed.cancelled() => return,
+                () = closed.cancelled() => return self.linger(read).await,
                 () = stop.cancelled() => return,
                 result = read.read_raw() => result,
             };
