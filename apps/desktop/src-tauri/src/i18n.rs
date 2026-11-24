@@ -223,4 +223,35 @@ mod tests {
         task.abort();
         assert_eq!(*seen.lock().unwrap(), ["파일"]);
     }
+
+    /// 언어와 무관한 설정 변경 **하나만** 오면 알리지 않는다(위 시험은 두 변경이 함께 쌓여 이것을 따로 보지 못한다).
+    #[tokio::test]
+    async fn a_config_change_that_is_not_the_language_is_not_announced() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(tmp.path());
+        std::fs::create_dir_all(&paths.config).unwrap();
+        std::fs::write(paths.config.join("settings.toml"), "schema = 1\n").unwrap();
+        let bus = EventBus::new(pw_core::bus::DEFAULT_CAPACITY);
+        let store = ConfigStore::open(ConfigSource::global(&paths), bus.clone(), Scope::Host);
+        let registry = Registry::from_roots(&Version::new(0, 0, 0), pw_ext::builtin::roots());
+        let i18n = Arc::new(I18n::new(
+            Catalog::from_registry(&registry),
+            vec!["en-US".into()],
+        ));
+        i18n.attach_config(store.clone());
+        let seen = Arc::new(Mutex::new(0_usize));
+        let record = Arc::clone(&seen);
+        let task = tokio::spawn(follow(Arc::clone(&i18n), subscribe(&bus), move |_| {
+            *record.lock().unwrap() += 1;
+        }));
+        std::fs::write(
+            paths.config.join("settings.toml"),
+            "schema = 1\n[diagnostics]\ncrash_reports = true\n",
+        )
+        .unwrap();
+        store.reload().unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        task.abort();
+        assert_eq!(*seen.lock().unwrap(), 0);
+    }
 }
