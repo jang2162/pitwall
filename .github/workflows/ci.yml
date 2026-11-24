@@ -63,7 +63,11 @@ jobs:
           key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: pnpm-store-${{ runner.os }}-
 
+      # 시험이 실패하거나 시간 제한으로 취소돼도 빌드 산출물을 남긴다. 기본(성공 때만)이면 한 번도 통과하지 못한 OS(M6 뒤의 Linux ·
+      # Windows)는 매번 처음부터 빌드한다 — CI run 45299304602 의 Windows 는 캐시 없이 lint 13분 · 시험 빌드 22분을 썼다.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
 
       # 데스크톱 크레이트(Tauri 2)를 clippy·nextest 가 컴파일하는 데 필요한 시스템 라이브러리.
       # 목록은 Tauri 2 공식 문서 「Prerequisites → Linux(Debian/Ubuntu)」 그대로다. macOS 는 Xcode 명령행 도구,
@@ -85,17 +89,63 @@ jobs:
       - run: mise run test
         env:
           NEXTEST_PROFILE: ci
-      # 「release 에서만 판정」하는 시간 상한 시험(검색 취소 100 ms · fs.list 1만 개 · 구문 강조 16 ms · git 감시 이벤트 500 ms). 위 test 는 debug 라 이것들을
-      # 판정하지 않는다. 벽시계를 재므로 러너가 일정한 Linux · macOS 만 돌린다(Windows 는 파일 시스템 지연이 들쭉날쭉하다).
-      # 시험을 하나도 못 고르면 --no-tests=fail 로 실패한다.
-      - name: release timing tests
-        if: runner.os != 'Windows'
-        run: mise run test-release
-        env:
-          NEXTEST_PROFILE: ci
       # npm 라이선스 검사는 그 OS 에 설치된 패키지만 본다. OS 전용 바이너리 패키지(esbuild·rollup·oxc 등)를
       # 각 OS 에서 보도록 매트릭스마다 돌린다. 네트워크가 필요 없다.
       - run: node scripts/licenses.mjs check
+
+  # 「release 에서만 판정」하는 시간 상한 시험(검색 취소 100 ms · fs.list 1만 개 · 구문 강조 16 ms · git 감시 이벤트 500 ms 등 —
+  # mise.toml 의 test-release). check 잡의 test 는 debug 라 이것들을 판정하지 않는다. 벽시계를 재므로 러너가 일정한 Linux · macOS 만
+  # 돌린다(Windows 는 파일 시스템 지연이 들쭉날쭉하다). 시험을 하나도 못 고르면 --no-tests=fail 로 실패한다.
+  # check 잡의 끝 단계였을 때는 debug 산출물을 하나도 쓰지 못하고 release 를 처음부터 컴파일해, M7 이 Relay 크레이트를 더한 뒤
+  # macOS 에서 check 잡의 45분을 넘겼다(CI run 45299304602). 따로 돌아 check 와 나란히 가고 release 캐시도 따로 남긴다.
+  release-timing:
+    name: release timing (${{ matrix.os }})
+    if: github.event_name != 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          version: ${{ env.MISE_VERSION }}
+
+      # 까닭은 check 잡의 같은 단계.
+      - name: Rust toolchain components
+        shell: bash
+        run: env -u RUSTUP_TOOLCHAIN rustup toolchain install --no-self-update
+
+      - name: pnpm store path
+        id: pnpm-store
+        shell: bash
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-store-${{ runner.os }}-
+
+      # 까닭은 check 잡의 같은 단계.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+
+      # check 잡의 단계 안에서 돌던 때와 같은 시스템 라이브러리(그 잡의 같은 단계).
+      - name: Tauri system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - run: mise run test-release
+        env:
+          NEXTEST_PROFILE: ci
 
   # 성능 기준선(docs/design/06-roadmap.md 「성능 목표 (검증 기준)」). macOS release 번들의 콜드 스타트 · 유휴 메모리를 재
   # job summary 와 artifact 로 남긴다. 무엇을 재는지는 CONTRIBUTING.md 「성능 기준선」 절.

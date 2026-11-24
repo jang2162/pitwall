@@ -12,3 +12,14 @@ lsp-jvm = { max-threads = 2 }
 [[profile.default.overrides]]
 filter = 'test(/(^|::)live_lsp_(jdtls|kotlin_lsp)_/)'
 test-group = 'lsp-jvm'
+
+# 멈춘 시험은 5분(60 s × 5)에 끝내 실패로 드러낸다 — 끝내지 않으면 잡 시간 제한까지 기다려 잡이 통째로 취소되고 뒤의 시험 결과를
+# 잃는다(CI run 45299304602 의 Windows: 사슬 시험 셋이 450 s 넘게 멈췄다). 가장 긴 보통 시험은 35 s 쯤이다.
+[profile.ci.slow-timeout]
+period = "60s"
+terminate-after = 5
+
+# 실 서버 · 실 기기 시험(lsp-live · dap-live · db-live · relay-live — 이름이 `live_` 로 시작)은 서버의 준비 기다림이 길어 끊지 않는다.
+[[profile.ci.overrides]]
+filter = 'test(/(^|::)live_/)'
+slow-timeout = { period = "60s" }
