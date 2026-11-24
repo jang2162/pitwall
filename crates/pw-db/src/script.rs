@@ -172,9 +172,17 @@ pub fn read_script_file(
             RpcError::invalid_params(format!("file: `{}` is not UTF-8 text", real.display()))
         })?
         .to_owned();
-    let shown = real
-        .strip_prefix(&root)
-        .map_or_else(|_| real.display().to_string(), |p| p.display().to_string());
+    // 루트 안이면 `/` 로 잇는다 — 구성의 `files` 와 같은 꼴이라 어느 OS 에서든 계획 · 콘솔 · 감사가 같은 글이다(Windows 에서
+    // `db\seed.sql` 로 보이던 것, CI run 45299304602).
+    let shown = real.strip_prefix(&root).map_or_else(
+        |_| real.display().to_string(),
+        |p| {
+            p.components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/")
+        },
+    );
     Ok(ScriptFile {
         path: shown,
         content_hash: hex(&Sha256::digest(&snap.bytes)),
