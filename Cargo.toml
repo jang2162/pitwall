@@ -63,6 +63,10 @@ opt-level = 3
 # → opt-level "s" 50.4 → "z" 41.2 MiB(x86_64 49.1). "z" 의 유휴 RSS · 기동은 release 기본보다 낮았다(28.6 → 22.9 MiB). panic 은 unwind 그대로다
 # — RPC 세션이 핸들러 패닉을 `catch_unwind` 로 가둬 데몬이 살아남는다(`abort` 면 핸들러 하나의 패닉이 데몬을 끝낸다).
 # 데스크톱 앱 · 시험은 이 프로필을 쓰지 않는다. 쓰는 곳: scripts/relay-build.mjs(`mise run relay-build` · CI · 릴리스).
+# Linux musl 은 같은 코드가 더 크다(2026-11-24 잰 값) — x86_64 의 첫 CI 빌드가 60,571,968 B(57.8 MiB)로 상한을 넘었다. 몫:
+# `.eh_frame` + `.eh_frame_hdr` 약 8.3 MB(ELF 의 풀기 표 — Mach-O 는 압축 표라 작다, unwind 라 뺄 수 없다)와 x86_64 static-pie 의
+# `.rela.dyn` 4.1 MB(상대 재배치 약 17만 개 × 24 B). 뒤의 것을 relay-build.mjs 가 링크에서 RELR 로 싸 38 KB 로 줄인다(thin LTO 로 잰
+# x86_64: 69,628,336 → 65,544,704 B, static-pie 그대로). aarch64 musl 은 static-pie 가 아니라 `.rela.dyn` 이 없다.
 [profile.relay]
 inherits = "release"
 lto = "fat"

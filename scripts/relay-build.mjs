@@ -5,7 +5,8 @@
 //
 // 타깃: x86_64-unknown-linux-musl · aarch64-unknown-linux-musl · aarch64-apple-darwin · x86_64-apple-darwin(macOS 는 아키텍처별 —
 // 결정 M7-D4 2026-11-23 바뀜). 없으면 이 기기의 플랫폼 하나(Linux 는 같은 아키텍처의 musl). 타깃마다:
-//   1. `cargo build --profile relay -p pitwall-relay --target <타깃>` — `relay` 프로필은 워크스페이스 Cargo.toml(크기를 줄이는 설정).
+//   1. `cargo rustc --profile relay -p pitwall-relay --target <타깃>`(`buildCommand`) — `relay` 프로필은 워크스페이스 Cargo.toml(크기를
+//      줄이는 설정), Linux 는 링크에 RELR 을 더한다.
 //   2. `<out>/pitwall-relay-<판>-<플랫폼>` 으로 복사하고 `file` 결과를 적는다. Linux 는 정적 링크와 아키텍처, macOS 는 그
 //      아키텍처 하나의 Mach-O(유니버설 아님)인지 본다 — 아니면 실패한다(checkFile).
 //   3. `pw-release relay-describe` 로 항목(`<out>/entries/<플랫폼>.json` — 이름 · sha256 · 크기)을 쓴다. **크기가 상한(M7-P13 —
@@ -96,17 +97,30 @@ function run(command, args, options = {}) {
   return result.stdout ?? "";
 }
 
-function cargoBuild(target) {
-  // musl 타깃의 C 컴파일러는 musl-gcc 다(cc 크레이트가 기본으로 고르지 못하는 판이 있어 적는다).
+/**
+ * 그 타깃의 빌드 명령(`cargo` 의 인자와 더할 env). `cargo rustc` 로 Relay 바이너리 하나만 짓는다 — 뒤의 `--` 인자는 마지막 링크에만
+ * 붙고 의존 크레이트는 `cargo build` 와 같다.
+ *
+ * Linux(musl): C 컴파일러는 musl-gcc 다(cc 크레이트가 기본으로 고르지 못하는 판이 있어 적는다). 그리고 상대 재배치를 RELR 로 싼다
+ * (`-z pack-relative-relocs`). x86_64 musl 은 static-pie(주소 무작위화)라 포인터마다 `.rela.dyn` 에 24 바이트가 붙는데(Relay 에서 약
+ * 17만 개 · 4.1 MB), RELR 은 그것을 수십 KB 로 줄인다 — 기능 · 프로필 · static-pie 는 그대로다(잰 값은 Cargo.toml 의 `relay` 프로필
+ * 주석). musl 1.2.4 부터 static-pie 시작 코드가 RELR 을 푼다(Rust 의 자체 musl crt), 링커는 binutils 2.38 이상이 받는다.
+ * static-pie 가 아닌 타깃(aarch64 musl)에는 쌀 것이 없다.
+ */
+export function buildCommand(target) {
+  const args = ["rustc", "--locked", "--profile", "relay", "-p", "pitwall-relay"];
+  args.push("--bin", "pitwall-relay", "--target", target);
   const env = {};
-  if (target.endsWith("-linux-musl")) env[`CC_${target.replaceAll("-", "_")}`] = "musl-gcc";
-  run(
-    "cargo",
-    ["build", "--locked", "--profile", "relay", "-p", "pitwall-relay", "--target", target],
-    {
-      env,
-    },
-  );
+  if (target.endsWith("-linux-musl")) {
+    env[`CC_${target.replaceAll("-", "_")}`] = "musl-gcc";
+    args.push("--", "-C", "link-arg=-Wl,-z,pack-relative-relocs");
+  }
+  return { args, env };
+}
+
+function cargoBuild(target) {
+  const { args, env } = buildCommand(target);
+  run("cargo", args, { env });
   return join(root, "target", target, "relay", "pitwall-relay");
 }
 
