@@ -29,6 +29,7 @@ mod mux;
 pub mod noise;
 pub mod pair;
 pub mod pairing;
+pub mod port;
 pub mod quic;
 pub mod relay;
 pub mod transport;

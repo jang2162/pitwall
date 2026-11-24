@@ -476,165 +476,10 @@ fn bind(addr: SocketAddr) -> Result<TcpListener, McpHttpProblem> {
     .map_err(failed)?;
     socket.set_reuseaddr(false).map_err(failed)?;
     #[cfg(windows)]
-    exclusive(&socket, addr).map_err(failed)?;
+    // 판정은 포트 포워딩과 한 자리다(`pw_link::port`).
+    pw_link::port::exclusive(&socket, addr).map_err(failed)?;
     socket.bind(addr).map_err(failed)?;
     socket.listen(128).map_err(failed)
-}
-
-/// Windows: 다른 소켓이 이 포트를 쥐었으면 `AddrInUse`, 아니면 `SO_EXCLUSIVEADDRUSE` 를 건다(남이 뒤에 더 좁은 주소로 들어오지 못하게).
-///
-/// `SO_EXCLUSIVEADDRUSE` 만으로는 앞서 쥔 소켓을 보지 못한다 — 다른 프로그램이 `0.0.0.0:P` 를 기본 옵션으로 쥐었어도 우리
-/// `127.0.0.1:P` 바인드는 성공하고, 루프백 연결은 더 좁은 우리 쪽으로 온다(그 서버를 가림, M7-22 리뷰 F1 의 Windows 꼴 — CI run
-/// 45316714445). 그래서 먼저 같은 가족의 와일드카드(`0.0.0.0:P` · `[::]:P`)에 배타 바인드를 해 본다: 그 포트를 어느 주소로든
-/// 쥔 소켓이 있으면 실패한다(루프백이 아닌 주소로 쥔 것도 — 더 막는 쪽으로 틀린다). 두 가족 `[::]:P` 소켓은 어느 떠보기에도
-/// 보이지 않아(CI run 45333303107 · 45348060085) 듣기 표도 본다([`listened`] — IPv4 를 들을 때는 IPv4 · IPv6 표 모두, IPv6 는
-/// IPv6 표). 그래서 IPv6 만 듣는 `[::]:P`(Windows 의 `::` 기본 — `IPV6_V6ONLY` 켜짐)가 있어도 IPv4 를 「쓰는 중」 으로
-/// 거절한다(가리지 않는데도 — 더 막는 쪽). `netstat` 에 `[::]:P` 만 보여도 그 포트는
-/// 쓰는 중으로 센다. 떠본 소켓은 곧바로 닫는다. 포트 0(골라 받기)은 떠볼 포트가 없다.
-#[cfg(windows)]
-fn exclusive(socket: &TcpSocket, addr: SocketAddr) -> io::Result<()> {
-    if addr.port() != 0 {
-        let port = addr.port();
-        if addr.is_ipv4() {
-            probe(
-                TcpSocket::new_v4()?,
-                SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port),
-            )?;
-            listened(port, true)?;
-        } else {
-            probe(
-                TcpSocket::new_v6()?,
-                SocketAddr::new(IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED), port),
-            )?;
-            listened(port, false)?;
-        }
-    }
-    set_exclusive(socket)
-}
-
-/// Windows: 이 컴퓨터의 TCP 듣기 표(`GetExtendedTcpTable` — `netstat -a` 가 읽는 표)에 `port` 로 듣는 소켓이 있으면 `AddrInUse`.
-/// IPv6 표는 늘 보고, `v4` 면 IPv4 표도 본다.
-///
-/// 배타 바인드 떠보기만으로는 두 가족 `[::]:P` 소켓(`IPV6_V6ONLY` 끔 — Node 등의 기본, IPv4 루프백 연결도 받는다)이 보이지
-/// 않았다: IPv4 와일드카드 떠보기(CI run 45333303107)도, IPv6 와일드카드 떠보기(CI run 45348060085)도 성공했고 그 위의
-/// `127.0.0.1:P` 가 그 서버를 가렸다. 표는 bind 규칙에 기대지 않는다 — 두 가족 소켓은 IPv6 표에 `[::]:P` 로 오른다. IPv6
-/// 표의 어느 듣기든(IPv6 만 듣는 `[::]` · `[::1]` 도) 거절한다 — 더 막는 쪽. 표를 읽지 못하면 그 오류로 거절한다(닫힌 쪽).
-#[cfg(windows)]
-fn listened(port: u16, v4: bool) -> std::io::Result<()> {
-    use windows_sys::Win32::NetworkManagement::IpHelper::{
-        MIB_TCP6ROW_OWNER_PID, MIB_TCPROW_OWNER_PID,
-    };
-    use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6};
-    let mut held = listener_ports(
-        u32::from(AF_INET6),
-        std::mem::size_of::<MIB_TCP6ROW_OWNER_PID>(),
-        |row| {
-            // SAFETY: `row` 는 표 안의 한 줄 크기만큼의 바이트다.
-            unsafe { std::ptr::read_unaligned(row.cast::<MIB_TCP6ROW_OWNER_PID>()) }.dwLocalPort
-        },
-    )?
-    .contains(&port);
-    if v4 && !held {
-        held = listener_ports(
-            u32::from(AF_INET),
-            std::mem::size_of::<MIB_TCPROW_OWNER_PID>(),
-            |row| {
-                // SAFETY: 위와 같다.
-                unsafe { std::ptr::read_unaligned(row.cast::<MIB_TCPROW_OWNER_PID>()) }.dwLocalPort
-            },
-        )?
-        .contains(&port);
-    }
-    if held {
-        Err(std::io::Error::from(std::io::ErrorKind::AddrInUse))
-    } else {
-        Ok(())
-    }
-}
-
-/// `family` 의 TCP 듣기 표에서 듣는 포트들. 줄마다 `local_port` 가 네트워크 순서의 포트(아래 16비트)를 꺼낸다.
-#[cfg(windows)]
-fn listener_ports(
-    family: u32,
-    row_size: usize,
-    local_port: impl Fn(*const u8) -> u32,
-) -> std::io::Result<Vec<u16>> {
-    use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, NO_ERROR};
-    use windows_sys::Win32::NetworkManagement::IpHelper::{
-        GetExtendedTcpTable, TCP_TABLE_OWNER_PID_LISTENER,
-    };
-    let mut size: u32 = 0;
-    // 표가 두 부름 사이에 자랄 수 있다 — 크기를 다시 받아 몇 번 더 해 본다.
-    for _ in 0..8 {
-        // `u32` 로 잡아 표의 정렬(4바이트)을 맞춘다.
-        let mut buf = vec![0u32; (size as usize).div_ceil(4).max(1)];
-        let mut len = (buf.len() * 4) as u32;
-        // SAFETY: `buf` 는 `len` 바이트다. 표가 모자라면 함수는 쓰지 않고 `len` 에 필요한 크기를 적는다.
-        let rc = unsafe {
-            GetExtendedTcpTable(
-                buf.as_mut_ptr().cast(),
-                &mut len,
-                0,
-                family,
-                TCP_TABLE_OWNER_PID_LISTENER,
-                0,
-            )
-        };
-        if rc == ERROR_INSUFFICIENT_BUFFER {
-            size = len;
-            continue;
-        }
-        if rc != NO_ERROR {
-            return Err(std::io::Error::from_raw_os_error(rc as i32));
-        }
-        // 표: `dwNumEntries: u32` 다음에 줄들(4바이트 정렬).
-        let count = buf[0] as usize;
-        let bytes = (len as usize).min(buf.len() * 4);
-        let base = buf.as_ptr().cast::<u8>();
-        let mut ports = Vec::with_capacity(count);
-        for i in 0..count {
-            let start = 4 + i * row_size;
-            if start + row_size > bytes {
-                break;
-            }
-            // SAFETY: `start + row_size` 가 받은 바이트 안이다.
-            let port = local_port(unsafe { base.add(start) });
-            ports.push(u16::from_be((port & 0xffff) as u16));
-        }
-        return Ok(ports);
-    }
-    Err(std::io::Error::other("the TCP listener table kept growing"))
-}
-
-/// 배타 바인드로 `any` 를 떠보고 곧 닫는다. 그 포트를 쥔 소켓이 있으면 `AddrInUse`(배타로 쥐었으면 `PermissionDenied`).
-#[cfg(windows)]
-fn probe(socket: TcpSocket, any: SocketAddr) -> io::Result<()> {
-    set_exclusive(&socket)?;
-    socket.bind(any)
-}
-
-#[cfg(windows)]
-fn set_exclusive(socket: &TcpSocket) -> io::Result<()> {
-    use std::os::windows::io::AsRawSocket;
-    use windows_sys::Win32::Networking::WinSock::{
-        SO_EXCLUSIVEADDRUSE, SOCKET, SOL_SOCKET, setsockopt,
-    };
-    let on: i32 = 1;
-    // SAFETY: 살아 있는 소켓 핸들과 길이가 맞는 4바이트 값을 넘긴다.
-    let rc = unsafe {
-        setsockopt(
-            socket.as_raw_socket() as SOCKET,
-            SOL_SOCKET,
-            SO_EXCLUSIVEADDRUSE,
-            (&raw const on).cast(),
-            std::mem::size_of::<i32>() as i32,
-        )
-    };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
 }
 
 #[cfg(test)]
@@ -689,12 +534,18 @@ mod tests {
     /// 에서 이 시험이 실패한다. 한쪽(`::1`)만 쥐어도 `127.0.0.1` 을 듣지 않는다.
     #[tokio::test]
     async fn it_does_not_cover_a_port_another_socket_holds() {
-        let mut held = vec!["0.0.0.0", "127.0.0.1"];
+        // (쥔 주소, 두 가족인가). 두 가족 `::` 는 IPv4 루프백도 받는다 — Windows 에서는 듣기 표로 잡는다(`pw_link::port`).
+        let mut held = vec![("0.0.0.0", false), ("127.0.0.1", false)];
         if ipv6_loopback() {
-            held.extend(["::", "::1"]);
+            held.extend([("::", true), ("::1", false)]);
+            // IPv6 만 듣는 `::` 는 Windows 의 기본이다(macOS · Linux 는 기본이 두 가족).
+            if cfg!(windows) {
+                held.push(("::", false));
+            }
         }
-        for addr in held {
-            let holder = std::net::TcpListener::bind((addr, 0)).unwrap();
+        for (addr, dual) in held {
+            let holder = pw_link::port::hold(addr, dual);
+            let addr = format!("{addr} (dual {dual})");
             let port = holder.local_addr().unwrap().port();
             assert_eq!(
                 listen(port).await.map(|_| ()).unwrap_err(),

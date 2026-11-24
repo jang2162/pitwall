@@ -8,6 +8,8 @@ publish.workspace = true
 
 [dependencies]
 pw-core = { path = "../pw-core" }
+# 듣기 전 포트 판정(Windows — `pw_link::port::exclusive`)을 포트 포워딩과 함께 쓴다. pw-link 는 pw-mcp 에 기대지 않는다.
+pw-link = { path = "../pw-link" }
 pw-rpc = { path = "../pw-rpc" }
 # MCP 서버. 툴은 손으로 등록하지 않고 RPC 선언에서 만든다 — `#[tool]` 매크로(macros)는 쓰지 않는다.
 # transport-async-rw: stdio · 로컬 소켓 모두 AsyncRead/AsyncWrite 쌍으로 넘긴다.
@@ -50,14 +52,6 @@ toml_edit = "0.25.17"
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.190"
-
-# Windows: HTTP 의 듣는 소켓에 `SO_EXCLUSIVEADDRUSE`(`http::listen` — 다른 프로세스가 그 포트를 가로채지 못하게). pw-link 와 같은 판.
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = [
-  "Win32_Foundation",
-  "Win32_NetworkManagement_IpHelper",
-  "Win32_Networking_WinSock",
-] }
 
 [dev-dependencies]
 rmcp = { version = "3.9.0", default-features = false, features = [
