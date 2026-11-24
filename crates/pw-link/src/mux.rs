@@ -414,6 +414,12 @@ impl Mux {
         });
     }
 
+    /// 받기 문을 쥔다(시험) — 쥔 동안 reader 는 읽은 틀을 세기 전에 멈춘다.
+    #[cfg(test)]
+    pub(crate) fn hold_rx_gate(&self) -> MutexGuard<'_, ()> {
+        lock(&self.shared.rx_gate)
+    }
+
     /// 이어 붙기 앞: 지금 전송을 멈추고(아직 살아 있다고 보던 것이면 — 상대가 먼저 끊김을 알았다) 받은 번호 있는 틀의 수를 준다.
     /// 그 뒤로는 옛 전송의 틀을 받지 않는다. 닫힌 링크면 `None`.
     pub(crate) fn suspend_for_resume(&self) -> Option<u64> {
@@ -1012,6 +1018,11 @@ impl Mux {
                 Ok(Some((frame, len))) => {
                     let gate = lock(&self.shared.rx_gate);
                     if !self.count(generation, frame.kind, len) {
+                        drop(gate);
+                        // 틀을 읽는 사이에 닫혔다(`shutdown` — `state.shut`) — 닫힘 갈래와 같이 `bye` 가 나갈 때까지 쥔다.
+                        if closed.is_cancelled() {
+                            return self.linger(read).await;
+                        }
                         return;
                     }
                     let first = {

@@ -398,6 +398,11 @@ impl DesktopLink {
 
     /// 지금의 이어 붙기 토큰(시험).
     #[cfg(test)]
+    pub(crate) fn mux(&self) -> &Mux {
+        &self.mux
+    }
+
+    #[cfg(test)]
     pub(crate) fn resume_token(&self) -> Option<ResumeToken> {
         self.token
             .lock()

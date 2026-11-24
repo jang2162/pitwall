@@ -550,3 +550,29 @@ async fn a_detach_over_a_transport_that_ends_with_its_reader_still_says_bye() {
     })
     .await;
 }
+
+/// 닫는 순간 reader 가 막 읽은 틀을 들고 있어도(세기 전에 `shutdown` 이 섰다) `bye` 가 Relay 에 닿는다 — 그 갈래도 읽기 쪽을
+/// 곧바로 버리지 않는다(ci-fix4 리뷰 R1). 받기 문을 쥐어 reader 를 「읽었고 아직 세지 않음」 에 세운 채 끊는다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_detach_while_a_frame_is_being_read_still_says_bye() {
+    let fx = resumable(quick());
+    fx.transport.kill_on_read_drop.store(true, Ordering::SeqCst);
+    fx.remote.attach().await.unwrap();
+    eventually("the link was not held", || fx.resumes.len() == 1).await;
+    let link = fx.remote.link().unwrap();
+    let mut client = Client::open(&*fx.remote, Caller::new(Role::Owner)).await;
+    // 틀이 끊임없이 오게 한다.
+    ticks(&mut client, 100_000, 1).await;
+    client.next().await.expect("the stream did not start");
+    {
+        let _gate = link.mux().hold_rx_gate();
+        // reader 가 다음 틀을 읽고 문에서 멈출 틈.
+        std::thread::sleep(Duration::from_millis(200));
+        fx.remote.detach();
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    eventually("the relay kept the detached link for a resume", || {
+        fx.resumes.is_empty()
+    })
+    .await;
+}
