@@ -472,14 +472,34 @@ fn bind(addr: SocketAddr) -> Result<TcpListener, McpHttpProblem> {
     .map_err(failed)?;
     socket.set_reuseaddr(false).map_err(failed)?;
     #[cfg(windows)]
-    exclusive(&socket).map_err(failed)?;
+    exclusive(&socket, addr).map_err(failed)?;
     socket.bind(addr).map_err(failed)?;
     socket.listen(128).map_err(failed)
 }
 
-/// Windows: `SO_EXCLUSIVEADDRUSE` — 다른 소켓이 이 포트(더 좁은 주소 포함)에 바인드하지 못하게(`pw_link::forward` 와 같다).
+/// Windows: 다른 소켓이 이 포트를 쥐었으면 `AddrInUse`, 아니면 `SO_EXCLUSIVEADDRUSE` 를 건다(남이 뒤에 더 좁은 주소로 들어오지 못하게).
+///
+/// `SO_EXCLUSIVEADDRUSE` 만으로는 앞서 쥔 소켓을 보지 못한다 — 다른 프로그램이 `0.0.0.0:P` 를 기본 옵션으로 쥐었어도 우리
+/// `127.0.0.1:P` 바인드는 성공하고, 루프백 연결은 더 좁은 우리 쪽으로 온다(그 서버를 가림, M7-22 리뷰 F1 의 Windows 꼴 — CI run
+/// 45316714445). 그래서 먼저 같은 가족의 와일드카드(`0.0.0.0:P` · `[::]:P`)에 배타 바인드를 해 본다: 그 포트를 어느 주소로든
+/// 쥔 소켓이 있으면 실패한다(루프백이 아닌 주소로 쥔 것도 — 더 막는 쪽으로 틀린다). 떠본 소켓은 곧바로 닫는다. 포트 0(골라
+/// 받기)은 떠볼 포트가 없다.
 #[cfg(windows)]
-fn exclusive(socket: &TcpSocket) -> io::Result<()> {
+fn exclusive(socket: &TcpSocket, addr: SocketAddr) -> io::Result<()> {
+    if addr.port() != 0 {
+        let (probe, any) = if addr.is_ipv4() {
+            (TcpSocket::new_v4()?, IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+        } else {
+            (TcpSocket::new_v6()?, IpAddr::V6(Ipv6Addr::UNSPECIFIED))
+        };
+        set_exclusive(&probe)?;
+        probe.bind(SocketAddr::new(any, addr.port()))?;
+    }
+    set_exclusive(socket)
+}
+
+#[cfg(windows)]
+fn set_exclusive(socket: &TcpSocket) -> io::Result<()> {
     use std::os::windows::io::AsRawSocket;
     use windows_sys::Win32::Networking::WinSock::{
         SO_EXCLUSIVEADDRUSE, SOCKET, SOL_SOCKET, setsockopt,

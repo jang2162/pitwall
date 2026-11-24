@@ -181,14 +181,37 @@ pub async fn bind(addr: SocketAddr) -> Result<TcpListener, ForwardError> {
     .map_err(failed)?;
     socket.set_reuseaddr(false).map_err(failed)?;
     #[cfg(windows)]
-    exclusive(&socket).map_err(failed)?;
+    exclusive(&socket, addr).map_err(failed)?;
     socket.bind(addr).map_err(failed)?;
     socket.listen(1024).map_err(failed)
 }
 
-/// Windows: `SO_EXCLUSIVEADDRUSE` — 다른 소켓이 이 포트(더 좁은 주소 포함)에 바인드하지 못하게.
+/// Windows: 다른 소켓이 이 포트를 쥐었으면 `AddrInUse`, 아니면 `SO_EXCLUSIVEADDRUSE` 를 건다(남이 뒤에 더 좁은 주소로 들어오지 못하게).
+///
+/// `SO_EXCLUSIVEADDRUSE` 만으로는 앞서 쥔 소켓을 보지 못한다 — 다른 프로그램이 `0.0.0.0:P` 를 기본 옵션으로 쥐었어도 우리
+/// `127.0.0.1:P` 바인드는 성공하고, 루프백 연결은 더 좁은 우리 쪽으로 온다(그 서버를 가림, M7-22 리뷰 F1 의 Windows 꼴 — CI run
+/// 45316714445). 그래서 먼저 같은 가족의 와일드카드(`0.0.0.0:P` · `[::]:P`)에 배타 바인드를 해 본다: 그 포트를 어느 주소로든
+/// 쥔 소켓이 있으면 실패한다(루프백이 아닌 주소로 쥔 것도 — 더 막는 쪽으로 틀린다). 떠본 소켓은 곧바로 닫는다. 포트 0(골라
+/// 받기)은 떠볼 포트가 없다.
 #[cfg(windows)]
-fn exclusive(socket: &TcpSocket) -> std::io::Result<()> {
+fn exclusive(socket: &TcpSocket, addr: SocketAddr) -> std::io::Result<()> {
+    if addr.port() != 0 {
+        let (probe, any) = if addr.is_ipv4() {
+            (TcpSocket::new_v4()?, IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+        } else {
+            (
+                TcpSocket::new_v6()?,
+                IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED),
+            )
+        };
+        set_exclusive(&probe)?;
+        probe.bind(SocketAddr::new(any, addr.port()))?;
+    }
+    set_exclusive(socket)
+}
+
+#[cfg(windows)]
+fn set_exclusive(socket: &TcpSocket) -> std::io::Result<()> {
     use std::os::windows::io::AsRawSocket;
     use windows_sys::Win32::Networking::WinSock::{
         SO_EXCLUSIVEADDRUSE, SOCKET, SOL_SOCKET, setsockopt,
@@ -343,6 +366,39 @@ mod tests {
         assert!(listener.local_addr().unwrap().ip().is_loopback());
     }
 
+    /// 다른 프로그램처럼 `held` 의 빈 포트를 쥔다. `::` 는 두 가족을 함께 듣는 소켓이다 — macOS · Linux 의 기본이고, Windows 는
+    /// 기본이 IPv6 만이라(`IPV6_V6ONLY` 켜짐) 그대로면 IPv4 루프백을 쥐지 않는다(가릴 것이 없다). 그래서 Windows 에서는 끈다.
+    fn hold(held: &str) -> std::net::TcpListener {
+        let addr = SocketAddr::new(held.parse().unwrap(), 0);
+        let socket = if addr.is_ipv4() {
+            TcpSocket::new_v4()
+        } else {
+            TcpSocket::new_v6()
+        }
+        .unwrap();
+        #[cfg(windows)]
+        if addr.is_ipv6() && addr.ip().is_unspecified() {
+            use std::os::windows::io::AsRawSocket;
+            use windows_sys::Win32::Networking::WinSock::{
+                IPPROTO_IPV6, IPV6_V6ONLY, SOCKET, setsockopt,
+            };
+            let off: i32 = 0;
+            // SAFETY: 살아 있는 소켓 핸들과 길이가 맞는 4바이트 값을 넘긴다.
+            let rc = unsafe {
+                setsockopt(
+                    socket.as_raw_socket() as SOCKET,
+                    IPPROTO_IPV6,
+                    IPV6_V6ONLY,
+                    (&raw const off).cast(),
+                    std::mem::size_of::<i32>() as i32,
+                )
+            };
+            assert_eq!(rc, 0, "{}", std::io::Error::last_os_error());
+        }
+        socket.bind(addr).unwrap();
+        socket.listen(16).unwrap().into_std().unwrap()
+    }
+
     /// 이 컴퓨터의 다른 소켓이 와일드카드(`0.0.0.0` · `::`)나 같은 루프백으로 쥔 포트 위에 바인드하지 않는다 — macOS 에서
     /// `SO_REUSEADDR` 를 켜면 더 좁은 루프백 주소에 바인드돼 그 서버를 가린다(리뷰 F1). `SO_REUSEADDR` 를 켜면 이 시험이 실패한다.
     #[tokio::test]
@@ -354,7 +410,7 @@ mod tests {
             cases.extend([("::", "127.0.0.1"), ("::", "::1"), ("::1", "::1")]);
         }
         for (held, ours) in cases {
-            let holder = std::net::TcpListener::bind((held, 0)).unwrap();
+            let holder = hold(held);
             let port = holder.local_addr().unwrap().port();
             let err = bind(local_addr(Some(ours), port).unwrap())
                 .await
