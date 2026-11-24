@@ -934,14 +934,8 @@ async fn an_edit_from_another_instance_of_the_same_server_is_not_applied() {
     )
     .await
     .unwrap();
-    // 명령이 아직 도는 동안 b 의 문서를 고친다 → b 가 편집을 건다.
-    win.call(
-        "lsp.document.change",
-        json!({ "docId": doc_b, "version": 1, "changes": [{ "from": 0, "to": 0, "insert": "y" }] }),
-    )
-    .await
-    .unwrap();
-    // 두 인스턴스가 같은 기록 파일에 쓴다 — 둘 다 첫 요청이 `fake-1` 이다. a 의 답(true) 다음에 b 의 답(false)이 온다.
+    // 두 인스턴스가 같은 기록 파일에 쓴다 — 둘 다 첫 요청이 `fake-1` 이다. 기록의 순서는 두 프로세스가 쓰는 순서라, a 의 답이
+    // 기록에 오른 뒤에 b 의 문서를 고친다(먼저 고치면 b 의 거절이 a 의 답보다 먼저 기록될 수 있다 — CI run 45348060085).
     let answers = |record: &Path| -> Vec<Value> {
         received(record)
             .into_iter()
@@ -949,9 +943,19 @@ async fn an_edit_from_another_instance_of_the_same_server_is_not_applied() {
             .map(|m| m["result"].clone())
             .collect()
     };
+    let one = eventually(Duration::from_secs(10), || !answers(&record).is_empty()).await;
+    assert!(one, "a's answer was not recorded");
+    assert_eq!(answers(&record).len(), 1, "{:?}", answers(&record));
+    assert_eq!(answers(&record)[0]["applied"], true);
+    // 명령이 아직 도는 동안(답이 3 초 늦다) b 의 문서를 고친다 → b 가 편집을 건다.
+    win.call(
+        "lsp.document.change",
+        json!({ "docId": doc_b, "version": 1, "changes": [{ "from": 0, "to": 0, "insert": "y" }] }),
+    )
+    .await
+    .unwrap();
     let two = eventually(Duration::from_secs(10), || answers(&record).len() == 2).await;
     assert!(two, "{:?}", answers(&record));
-    assert_eq!(answers(&record)[0]["applied"], true);
     assert_eq!(answers(&record)[1]["applied"], false);
     assert!(
         next_event(&mut win, "lsp.applyEdit", Duration::from_millis(300))
