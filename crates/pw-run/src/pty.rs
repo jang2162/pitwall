@@ -132,8 +132,9 @@ pub struct Spec {
 
 pub struct Pty {
     master: Mutex<Box<dyn MasterPty + Send>>,
-    /// 쓰기 스레드의 큐. 끝내면 `None` 이 되어 그 스레드도 끝난다.
-    input: Mutex<Option<mpsc::Sender<Vec<u8>>>>,
+    /// 쓰기 스레드의 큐. 끝내면 `None` 이 되어 그 스레드도 끝난다. 읽기 스레드(Windows 의 시작 질의 답)는 이 칸을 함께 보고
+    /// 송신자를 따로 복제해 쥐지 않는다 — 질의가 오기 전에 끝내도 큐가 그 자리에서 닫힌다.
+    input: Arc<Mutex<Option<mpsc::Sender<Vec<u8>>>>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     pid: Option<u32>,
     output: Arc<Output>,
@@ -178,8 +179,9 @@ impl Pty {
         let output = Arc::new(Output::new(OUTPUT_BUFFER));
         let (exit_tx, exit) = watch::channel(None);
         let (input, queue) = mpsc::channel::<Vec<u8>>();
+        let input = Arc::new(Mutex::new(Some(input)));
         // Windows: ConPTY 의 시작 질의에 이 PTY 가 답한다([`StartupQuery`]). 유닉스 PTY 는 묻지 않는다.
-        let answer = cfg!(windows).then(|| input.clone());
+        let answer = cfg!(windows).then(|| Arc::clone(&input));
         let started = [
             thread("pty-read", {
                 let output = Arc::clone(&output);
@@ -213,7 +215,7 @@ impl Pty {
         }
         let pty = Self {
             master: Mutex::new(pair.master),
-            input: Mutex::new(Some(input)),
+            input,
             killer: Mutex::new(killer),
             pid,
             output,
@@ -406,25 +408,30 @@ impl StartupQuery {
             return (bytes.to_vec(), false);
         }
         let mut data = std::mem::take(&mut self.carry);
+        // `data` 의 첫 바이트가 출력에서 몇 번째인가 — 질의는 출력 앞 [`STARTUP_SCAN`] 바이트 안에서 시작해야 한다(한 번의 읽기가
+        // 그보다 커도 그 뒤는 찾지 않는다).
+        let offset = self.seen - data.len();
         data.extend_from_slice(bytes);
         self.seen += bytes.len();
+        let starts = STARTUP_SCAN.saturating_sub(offset);
         if let Some(at) = data
             .windows(CURSOR_QUERY.len())
+            .take(starts)
             .position(|w| w == CURSOR_QUERY)
         {
             self.done = true;
             data.drain(at..at + CURSOR_QUERY.len());
             return (data, true);
         }
-        if self.seen >= STARTUP_SCAN {
-            self.done = true;
-            return (data, false);
-        }
-        // 끝에 걸린 질의의 앞 조각은 다음 읽기와 이어 본다.
+        // 끝에 걸린 질의의 앞 조각은 다음 읽기와 이어 본다 — 그 조각이 앞부분 안에서 시작할 때만.
         let keep = (1..CURSOR_QUERY.len())
             .rev()
             .find(|&n| data.len() >= n && data.ends_with(&CURSOR_QUERY[..n]))
             .unwrap_or(0);
+        if self.seen - keep >= STARTUP_SCAN {
+            self.done = true;
+            return (data, false);
+        }
         self.carry = data.split_off(data.len() - keep);
         (data, false)
     }
@@ -436,7 +443,7 @@ fn read_loop(
     mut reader: Box<dyn Read + Send>,
     readable: &Readable,
     output: &Output,
-    mut answer: Option<mpsc::Sender<Vec<u8>>>,
+    mut answer: Option<Arc<Mutex<Option<mpsc::Sender<Vec<u8>>>>>>,
 ) {
     let mut buf = vec![0u8; CHUNK];
     let mut drain_until: Option<Instant> = None;
@@ -461,7 +468,10 @@ fn read_loop(
             Ok(0) => break,
             Ok(n) if answer.is_some() => {
                 let (bytes, reply) = startup.filter(&buf[..n]);
-                if reply && let Some(queue) = &answer {
+                if reply
+                    && let Some(input) = &answer
+                    && let Some(queue) = lock(input).as_ref()
+                {
                     let _ = queue.send(CURSOR_AT_HOME.to_vec());
                 }
                 if startup.done {
@@ -665,10 +675,78 @@ mod tests {
         assert_eq!(q.filter(&plain), (plain.clone(), false));
         assert_eq!(q.filter(b"\x1b[6n"), (b"\x1b[6n".to_vec(), false));
 
+        // 한 번의 읽기가 앞부분보다 커도 그 뒤의 질의는 프로그램의 것이다 — 앞부분 끝에서 시작한 것까지만 답한다.
+        let mut q = StartupQuery::default();
+        let mut big = vec![b'x'; STARTUP_SCAN];
+        big.extend_from_slice(CURSOR_QUERY);
+        assert_eq!(q.filter(&big), (big.clone(), false));
+        let mut q = StartupQuery::default();
+        let mut edge = vec![b'x'; STARTUP_SCAN - 1];
+        edge.extend_from_slice(CURSOR_QUERY);
+        assert_eq!(q.filter(&edge), (vec![b'x'; STARTUP_SCAN - 1], true));
+        // 앞 조각을 걸쳐 둔 뒤에도 셈은 출력 처음부터다.
+        let mut q = StartupQuery::default();
+        let mut head = vec![b'x'; STARTUP_SCAN - 2];
+        head.extend_from_slice(b"\x1b[");
+        assert_eq!(q.filter(&head), (vec![b'x'; STARTUP_SCAN - 2], false));
+        assert_eq!(q.filter(b"6n"), (Vec::new(), true));
+
         // 끝에 걸렸던 앞 조각이 질의가 아니었으면 다음 읽기 앞에 그대로 붙어 나온다.
         let mut q = StartupQuery::default();
         assert_eq!(q.filter(b"ab\x1b"), (b"ab".to_vec(), false));
         assert_eq!(q.filter(b"[1m"), (b"\x1b[1m".to_vec(), false));
+    }
+
+    /// 리뷰 R3: 질의가 오기 전에 끝내면(입력 칸을 비우면) 읽기 스레드가 송신자를 따로 쥐고 있지 않다 — 쓰기 스레드의 큐가 그
+    /// 자리에서 닫히고, 뒤에 온 질의에는 답하지 않는다.
+    #[test]
+    fn ending_before_the_startup_query_closes_the_input_queue_at_once() {
+        struct Feed {
+            queue: Arc<Mutex<mpsc::Receiver<Vec<u8>>>>,
+            closed_at_first_read: Arc<Mutex<Option<bool>>>,
+            reads: usize,
+        }
+        impl Read for Feed {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                self.reads += 1;
+                if self.reads > 1 {
+                    return Ok(0);
+                }
+                let closed = matches!(
+                    lock(&self.queue).try_recv(),
+                    Err(mpsc::TryRecvError::Disconnected)
+                );
+                *lock(&self.closed_at_first_read) = Some(closed);
+                buf[..CURSOR_QUERY.len()].copy_from_slice(CURSOR_QUERY);
+                Ok(CURSOR_QUERY.len())
+            }
+        }
+        let (sender, queue) = mpsc::channel::<Vec<u8>>();
+        let input = Arc::new(Mutex::new(Some(sender)));
+        let queue = Arc::new(Mutex::new(queue));
+        let closed = Arc::new(Mutex::new(None));
+        let feed = Feed {
+            queue: Arc::clone(&queue),
+            closed_at_first_read: Arc::clone(&closed),
+            reads: 0,
+        };
+        // 끝내기 — `Pty::end_known` 이 하는 것처럼 칸을 비운다.
+        drop(lock(&input).take());
+        let output = Output::new(1024);
+        let readable = Readable {
+            #[cfg(unix)]
+            fd: None,
+        };
+        read_loop(Box::new(feed), &readable, &output, Some(Arc::clone(&input)));
+        assert_eq!(
+            *lock(&closed),
+            Some(true),
+            "the reader kept the input queue open"
+        );
+        assert!(
+            lock(&queue).try_recv().is_err(),
+            "nothing is answered after the end"
+        );
     }
 
     #[tokio::test]
