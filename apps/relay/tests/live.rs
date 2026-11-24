@@ -26,7 +26,8 @@ use std::time::{Duration, Instant};
 
 use pw_core::{Connection, Host};
 use pw_link::{
-    DesktopIdentity, DeviceKey, Expect, LinkLimits, LinkStream, Pairing, RemoteHost, Transport,
+    DesktopIdentity, DeviceKey, Expect, LinkLimits, LinkState, LinkStream, Pairing, RemoteHost,
+    Transport,
 };
 use pw_rpc::{Caller, ConnectionScope, Role};
 use serde_json::{Value, json};
@@ -577,7 +578,9 @@ fn live_relay_reattaches_to_the_same_daemon_after_the_ssh_session_ends() {
     assert_eq!(site.status().unwrap()["pid"], before["pid"]);
 }
 
-/// 끊김: 컨테이너를 얼리면(`docker pause` — 네트워크가 조용해진 것과 같다) 링크가 시한 안에 끊겼다고 본다. 풀면 다시 붙고 데몬은 같다.
+/// 끊김: 컨테이너를 얼리면(`docker pause` — 네트워크가 조용해진 것과 같다) 링크가 시한(`dead_after`) 안에 전송을 잃었다고 보고 이어
+/// 붙기로 간다(`Reconnecting` — M7-09 ①: 링크는 `resume_within` 동안 채널을 쥐고 닫지 않는다). 풀면 같은 링크로 다시 붙고(`Connected`)
+/// 데몬은 같다.
 #[test]
 fn live_relay_notices_a_silent_network_and_reattaches_after() {
     let container = env("PW_TEST_RELAY_CONTAINER");
@@ -596,6 +599,7 @@ fn live_relay_notices_a_silent_network_and_reattaches_after() {
         host.attach().await.unwrap();
         let pid = site.status().unwrap()["pid"].clone();
         let link = host.link().unwrap();
+        let mut state = host.state();
         let docker = |verb: &str| {
             let status = Command::new("docker")
                 .args([verb, &container])
@@ -605,28 +609,33 @@ fn live_relay_notices_a_silent_network_and_reattaches_after() {
         };
         docker("pause");
         let started = Instant::now();
-        let reason = tokio::time::timeout(Duration::from_secs(30), link.closed()).await;
+        let noticed = tokio::time::timeout(
+            Duration::from_secs(30),
+            state.wait_for(|s| *s == LinkState::Reconnecting),
+        )
+        .await
+        .map(|r| r.map(|_| ()));
         let waited = started.elapsed();
         docker("unpause");
-        let reason = reason.expect("the link did not notice the silence within 30 s");
+        noticed
+            .expect("the link did not notice the silence within 30 s")
+            .unwrap();
         assert!(
             waited <= quick_limits().dead_after + Duration::from_secs(5),
-            "noticed after {waited:?} ({reason:?})"
+            "noticed after {waited:?}"
         );
-        // 풀린 뒤 다시 붙는다.
-        let started = Instant::now();
-        loop {
-            match host.attach().await {
-                Ok(_) => break,
-                Err(e) => {
-                    assert!(
-                        started.elapsed() < Duration::from_secs(60),
-                        "no reattach: {e:?}"
-                    );
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                }
-            }
-        }
+        // 풀린 뒤 같은 링크로 다시 붙는다(이어 붙기 — 닫고 새로 붙지 않는다).
+        tokio::time::timeout(
+            Duration::from_secs(60),
+            state.wait_for(|s| matches!(s, LinkState::Connected { .. })),
+        )
+        .await
+        .expect("no reattach within 60 s")
+        .unwrap();
+        assert!(
+            Arc::ptr_eq(&link, &host.link().unwrap()),
+            "the link was replaced instead of resumed"
+        );
         host.detach();
         pid
     });

@@ -1184,6 +1184,9 @@ async fn a_session_allowance_reaches_only_that_session_tool_and_project() {
     beta.answer(other_project.id, McpApprovalAnswer::Deny)
         .unwrap();
     within(call).await.unwrap();
+    // 거절 행은 세션마다의 쓰기 스레드가 응답 뒤에 쓴다(`audit_writer`) — 세션 사이의 행 순서는 정해지지 않는다. 다른 세션을
+    // 열기 전에 이 세션의 넷이 쓰이기를 기다린다(Windows 에서 둘째 세션의 행이 먼저 쓰였다 — CI run 45333303107).
+    f.rows(4);
     // 다른 세션: 묻는다.
     let second = f.agent("agent", &f.work("alpha")).await;
     let call = second.spawn("fake_write", json!({"tag": "5"}));

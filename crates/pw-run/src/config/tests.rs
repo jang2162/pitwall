@@ -59,7 +59,7 @@ impl Fixture {
 
     /// `<root>/.pitwall/run/<name>` 에 쓴다.
     fn run_file(&self, name: &str, text: &str) -> PathBuf {
-        let path = self.root.join(".pitwall/run").join(name);
+        let path = self.root.join(".pitwall").join("run").join(name);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, text).unwrap();
         path
@@ -185,7 +185,11 @@ fn every_kind_builds_its_argv_field_by_field() {
                 "docker".into(),
                 "compose".into(),
                 "-f".into(),
-                f.root.join("deploy/compose.yaml").display().to_string(),
+                f.root
+                    .join("deploy")
+                    .join("compose.yaml")
+                    .display()
+                    .to_string(),
                 "up".into(),
                 "web".into(),
                 "db".into(),
@@ -276,7 +280,7 @@ fn broken_configs_stay_in_the_list_as_unusable() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(
         f.base.join("nowhere.toml"),
-        f.root.join(".pitwall/run/dangling.toml"),
+        f.root.join(".pitwall").join("run").join("dangling.toml"),
     )
     .unwrap();
 
@@ -349,7 +353,7 @@ fn reading_does_not_migrate_files() {
 // --- ③ 루트 밖 경로 -----------------------------------------------------------------------------------------------
 
 fn unusable_reason(f: &Fixture, body: &str) -> Option<String> {
-    let _ = fs::remove_dir_all(f.root.join(".pitwall/run"));
+    let _ = fs::remove_dir_all(f.root.join(".pitwall").join("run"));
     f.run_file(
         "x.toml",
         &format!("schema = 1\nname = 'x'\ntype = 'shell'\ncommand = 'true'\n{body}"),
@@ -493,7 +497,7 @@ fn a_worktree_reads_its_shared_file_and_falls_back_to_the_main_local_file() {
         "dev.local.toml",
         "schema = 1\nenv = { FROM = 'main local' }\n",
     );
-    let wt_run = wt.join(".pitwall/run");
+    let wt_run = wt.join(".pitwall").join("run");
     fs::create_dir_all(&wt_run).unwrap();
     fs::write(
         wt_run.join("dev.toml"),
@@ -509,7 +513,9 @@ fn a_worktree_reads_its_shared_file_and_falls_back_to_the_main_local_file() {
     assert_eq!(
         dev.layers[1].path,
         f.root
-            .join(".pitwall/run/dev.local.toml")
+            .join(".pitwall")
+            .join("run")
+            .join("dev.local.toml")
             .display()
             .to_string()
     );
@@ -567,7 +573,10 @@ fn a_new_file_round_trips() {
          [debug]\nadapter = 'java-debug'\nmode = 'attach'\nport = 5005\n",
     );
     let edit = write(&place, "api", RunConfigLocation::Shared, Some(&config)).unwrap();
-    assert_eq!(edit.path, f.root.join(".pitwall/run/api.toml"));
+    assert_eq!(
+        edit.path,
+        f.root.join(".pitwall").join("run").join("api.toml")
+    );
     let text = fs::read_to_string(&edit.path).unwrap();
     assert!(text.starts_with("schema = 1\n"), "{text}");
     insta::assert_snapshot!("new_gradle", text);
@@ -589,7 +598,7 @@ fn writing_refuses_files_it_cannot_safely_rewrite() {
         assert_eq!(err.code, code::CONFLICT, "{id}: {err:?}");
     }
     assert_eq!(
-        fs::read_to_string(f.root.join(".pitwall/run/half.toml")).unwrap(),
+        fs::read_to_string(f.root.join(".pitwall").join("run").join("half.toml")).unwrap(),
         "name = 'half\n"
     );
     let outside = parse("name = 'x'\ntype = 'shell'\ncommand = 'true'\ncwd = '..'");
@@ -635,7 +644,10 @@ fn local_writes_and_links_inside_the_repository() {
     let place = f.place();
     let config = parse("name = 'x'\ntype = 'shell'\ncommand = 'true'");
     let edit = write(&place, "dev", RunConfigLocation::Local, Some(&config)).unwrap();
-    assert_eq!(edit.path, f.root.join(".pitwall/run/dev.local.toml"));
+    assert_eq!(
+        edit.path,
+        f.root.join(".pitwall").join("run").join("dev.local.toml")
+    );
     let ignore = fs::read_to_string(f.root.join(".pitwall/.gitignore")).unwrap();
     assert!(ignore.lines().any(|l| l == "*.local.toml"), "{ignore}");
 
@@ -647,7 +659,11 @@ fn local_writes_and_links_inside_the_repository() {
             "schema = 1\nname = 'outside'\ntype = 'shell'\ncommand = 'x'\n",
         )
         .unwrap();
-        std::os::unix::fs::symlink(&target, f.root.join(".pitwall/run/linked.toml")).unwrap();
+        std::os::unix::fs::symlink(
+            &target,
+            f.root.join(".pitwall").join("run").join("linked.toml"),
+        )
+        .unwrap();
         let err = write(&place, "linked", RunConfigLocation::Shared, Some(&config)).unwrap_err();
         assert_eq!(err.code, code::CONFLICT, "{err:?}");
         assert!(fs::read_to_string(&target).unwrap().contains("outside"));
@@ -741,7 +757,7 @@ async fn only_the_project_window_may_save_or_delete() {
         "config": {"name": "Dev", "type": "shell", "command": "npm run dev", "envFile": [".env.local"]},
     });
     let delete = json!({"projectId": h.project, "id": "dev"});
-    let file = h.root.join(".pitwall/run/dev.toml");
+    let file = h.root.join(".pitwall").join("run").join("dev.toml");
     for scope in [
         ConnectionScope::Project("ffffffffffffffff".into()),
         ConnectionScope::Host,
@@ -958,7 +974,7 @@ fn a_link_out_of_the_repository_is_not_read() {
         "name = 'Inside'\ntype = 'shell'\ncommand = 'true'\n",
     )
     .unwrap();
-    let run = f.root.join(".pitwall/run");
+    let run = f.root.join(".pitwall").join("run");
     fs::create_dir_all(&run).unwrap();
     std::os::unix::fs::symlink(&secret, run.join("leak.toml")).unwrap();
     std::os::unix::fs::symlink(&outside_toml, run.join("valid.toml")).unwrap();
@@ -1076,7 +1092,7 @@ fn a_worktree_local_file_wins_over_the_main_one_as_a_whole() {
         "dev.local.toml",
         "schema = 1\nenv = { FROM = 'main', ONLY_MAIN = '1' }\n",
     );
-    let wt_run = wt.join(".pitwall/run");
+    let wt_run = wt.join(".pitwall").join("run");
     fs::create_dir_all(&wt_run).unwrap();
     fs::write(
         wt_run.join("dev.toml"),
@@ -1110,7 +1126,7 @@ fn writing_refuses_a_run_folder_that_resolves_outside_the_checkout() {
     let outside = f.base.join("elsewhere");
     fs::create_dir_all(&outside).unwrap();
     fs::create_dir_all(f.root.join(".pitwall")).unwrap();
-    std::os::unix::fs::symlink(&outside, f.root.join(".pitwall/run")).unwrap();
+    std::os::unix::fs::symlink(&outside, f.root.join(".pitwall").join("run")).unwrap();
     let config = parse("name = 'x'\ntype = 'shell'\ncommand = 'true'");
     let err = write(&f.place(), "dev", RunConfigLocation::Shared, Some(&config)).unwrap_err();
     assert_eq!(err.code, code::CONFLICT, "{err:?}");
@@ -1215,7 +1231,7 @@ fn lockfiles_are_found_when_the_root_is_reached_through_a_link() {
 async fn delete_takes_the_exact_id_only() {
     let h = host();
     let own = ConnectionScope::Project(h.project.clone());
-    let file = h.root.join(".pitwall/run/Dev.toml");
+    let file = h.root.join(".pitwall").join("run").join("Dev.toml");
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(
         &file,
@@ -1294,7 +1310,7 @@ fn an_sql_config_reads_its_fields_and_has_no_argv() {
     );
 
     let sql = |body: &str| {
-        let _ = fs::remove_dir_all(f.root.join(".pitwall/run"));
+        let _ = fs::remove_dir_all(f.root.join(".pitwall").join("run"));
         f.run_file(
             "s.toml",
             &format!("schema = 1\nname = 's'\ntype = 'sql'\nconnection = 'c'\n{body}"),

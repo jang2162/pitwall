@@ -511,22 +511,25 @@ fn check(out: std::process::Output, what: &str) -> std::io::Result<String> {
 mod tests {
     use super::*;
 
+    /// `create(_, _, 200, SEED)` 위의 [`perf_fixture`] 커밋. 합성 이력 · 픽스처의 내용 · 시각이 바뀌면 이것도 바뀐다.
+    const PERF_FIXTURE_COMMIT: &str = "52a780dbd1c013e2f955fc8070824030e51cdc4c";
+
     fn git(dir: &Path, ceiling: &Path, args: &[&str]) -> String {
         run(git_command(dir, ceiling).args(args)).unwrap()
     }
 
     /// 픽스처는 `main` 끝에 1만 줄을 바꾼 파일 하나짜리 커밋을 두고, 같은 커밋에 체크아웃용 브랜치를 단다. 그 앞에 측정하는 쪽이 고칠
-    /// 파일 1만 개와 타이핑 대상 파일이 있다. 같은 저장소면 같은 해시다.
+    /// 파일 1만 개와 타이핑 대상 파일이 있다. 같은 저장소면 같은 해시다 — 저장소를 둘 만들어 견주는 대신 고정한 해시
+    /// [`PERF_FIXTURE_COMMIT`] 와 견준다(같은 것을 OS · 실행 사이까지 본다). 저장소 둘(새 파일 약 4만 개)은 Windows 에서 300 s 를
+    /// 넘겼다(CI run 45333303107) — 하나면 절반이다.
     #[test]
     fn the_perf_fixture_changes_ten_thousand_lines_of_one_file_on_main() {
         let tmp = tempfile::tempdir().unwrap();
         // Windows 의 `canonicalize` 는 `\\?\` 를 붙이고, 그 경로의 `GIT_CONFIG_GLOBAL` 을 git 이 읽지 못한다 — [`crate::testing::TestRepo`]
         // 와 같은 정규화를 쓴다.
         let ceiling = pw_core::registry::path::normalize(tmp.path()).unwrap();
-        let mut commits = Vec::new();
-        let mut dirs = Vec::new();
-        for name in ["a", "b"] {
-            let dir = ceiling.join(name);
+        {
+            let dir = ceiling.join("a");
             // 200 커밋: git 의 자동 유지보수는 그래프 밖 커밋이 100 개를 넘어야 commit-graph 를 쓴다.
             create(&dir, &ceiling, 200, SEED).unwrap();
             let fixture = perf_fixture(&dir, &ceiling).unwrap();
@@ -570,13 +573,12 @@ mod tests {
                 "main"
             );
             assert_eq!(git(&dir, &ceiling, &["status", "--porcelain"]), "");
-            commits.push(fixture.commit);
-            dirs.push(dir);
-        }
-        assert_eq!(commits[0], commits[1]);
-        // 커밋 뒤 백그라운드 유지보수가 commit-graph 를 쓰지 않았다(돌았다면 끝날 틈을 준다).
-        std::thread::sleep(std::time::Duration::from_millis(1500));
-        for dir in &dirs {
+            assert_eq!(
+                fixture.commit, PERF_FIXTURE_COMMIT,
+                "같은 시드 · 같은 픽스처가 다른 해시다"
+            );
+            // 커밋 뒤 백그라운드 유지보수가 commit-graph 를 쓰지 않았다(돌았다면 끝날 틈을 준다).
+            std::thread::sleep(std::time::Duration::from_millis(1500));
             let info = dir.join(".git/objects/info");
             assert!(
                 !info.join("commit-graph").exists() && !info.join("commit-graphs").exists(),

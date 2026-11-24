@@ -416,7 +416,17 @@ async fn unpairing_cuts_links_subscriptions_terminals_and_resumes_at_once() {
     let tablet_remote = desktop(&relay, &tablet, Arc::clone(&cuttable) as Arc<dyn Transport>);
     tablet_remote.attach().await.unwrap();
     let tablet_state = tablet_remote.state();
+    // Relay 는 환영 틀(토큰)을 보낸 **뒤에** 링크를 이어 붙기 표에 올린다(`pw_link::relay` 의 serve) — `attach` 가 돌아온 때는
+    // 아직 셋째 링크가 표에 없을 수 있다(CI run 45333303107 의 ubuntu: 2 를 읽고 멈춘 뒤 3). 세 기기의 링크가 다 오르기를 기다린다.
+    tokio::time::timeout(WAIT, async {
+        while relay.parts.resumes.len() < 3 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the three links were not held");
     let held_before = relay.parts.resumes.len();
+    assert_eq!(held_before, 3);
     cuttable.cut();
     let mut watch = tablet_state.clone();
     tokio::time::timeout(WAIT, watch.wait_for(|s| *s == LinkState::Reconnecting))

@@ -324,6 +324,10 @@ fn the_same_config_hashes_the_same_in_another_worktree() {
                 "user.email=t@t",
                 "-c",
                 "commit.gpgsign=false",
+                // Windows 러너의 기본 `core.autocrlf=true` 는 워크트리를 CRLF 로 꺼내, 손으로 LF 로 쓴 메인의 `mise.toml`(원천
+                // 파일 — 바이트를 해시한다)과 바이트가 갈린다(CI run 45333303107). 두 체크아웃의 바이트가 같은 경우를 본다.
+                "-c",
+                "core.autocrlf=false",
             ])
             .args(args)
             .current_dir(dir)

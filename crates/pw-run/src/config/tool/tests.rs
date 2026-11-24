@@ -58,7 +58,7 @@ impl Fixture {
     }
 
     fn file(&self, name: &str) -> PathBuf {
-        self.root.join(".pitwall/run").join(name)
+        self.root.join(".pitwall").join("run").join(name)
     }
 
     fn put(&self, rel: &str, text: &str) {
@@ -602,7 +602,7 @@ fn a_tracked_local_file_is_refused_before_asking() {
     let tracked = "schema = 1\nname = \"Dev\"\ntype = \"shell\"\ncommand = \"committed\"\n";
     let f = Fixture::with_root(|root| {
         git(root, &["init", "-q"]);
-        let file = root.join(".pitwall/run/dev.local.toml");
+        let file = root.join(".pitwall").join("run").join("dev.local.toml");
         fs::create_dir_all(file.parent().unwrap()).unwrap();
         fs::write(&file, tracked).unwrap();
         git(root, &["add", "-f", "."]);
