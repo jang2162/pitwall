@@ -82,9 +82,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: mise run lint
       # pw-host 의 의존 시험(crates/pw-host/tests/deps.rs)은 Relay 의 타깃 넷(pw-release relay.rs `PLATFORMS`)마다 `cargo metadata
-      # --offline --filter-platform` 을 돌린다 — 러너 자신의 타깃이 아닌 패키지를 미리 받는다.
+      # --offline --filter-platform` 을 돌린다 — 러너 자신의 타깃이 아닌 패키지를 미리 받는다. 러너의 타깃도 함께 받는다: metadata 는
+      # 걸러 낸 타깃의 의존을 호스트(빌드 의존)로도 풀어, Linux 에만 쓰는 zbus 의 Windows 의존(`uds_windows`)까지 찾는다 — 빌드는
+      # 그것을 받지 않으므로 Windows 러너에서 없었다(CI run 45316714445).
       - name: fetch the relay targets' packages
-        run: cargo fetch --locked --target x86_64-unknown-linux-musl --target aarch64-unknown-linux-musl --target aarch64-apple-darwin --target x86_64-apple-darwin
+        shell: bash
+        run: |
+          cargo fetch --locked --target "$(rustc -vV | sed -n 's/^host: //p')" --target x86_64-unknown-linux-musl --target aarch64-unknown-linux-musl --target aarch64-apple-darwin --target x86_64-apple-darwin
       # nextest 의 ci 프로필(.config/nextest.toml)은 첫 실패에서 멈추지 않는다 — 실패한 시험을 한 번에 다 본다.
       - run: mise run test
         env:
