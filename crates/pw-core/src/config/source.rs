@@ -244,7 +244,9 @@ impl ConfigSource {
         let local_fallback = linked_worktree(&real_root)
             .and_then(|link| link.map_to_main(&real_root))
             .map(|main_root| {
-                let dir = main_root.join(PROJECT_DIR);
+                // Windows 의 `canonicalize` 는 verbatim(`\\?\C:\…`)이다 — 이 폴더 아래 경로가 레이어 경로로 사람 · 에이전트에게
+                // 보이므로 걷는다(`registry::path::simplify` — 뜻이 바뀌는 경로는 그대로 둔다).
+                let dir = crate::registry::path::simplify(main_root).join(PROJECT_DIR);
                 ScanDir {
                     backup: dir.join(PROJECT_BACKUP_DIR),
                     dir,
