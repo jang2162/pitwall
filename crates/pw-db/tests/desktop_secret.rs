@@ -381,6 +381,15 @@ async fn only_the_desktop_connection_that_got_a_request_answers_it() {
     let mut desktop = e.f.connect(ConnectionScope::Host);
     let stream = desktop.start("secret.requests", Value::Null).await.unwrap();
     desktop.credit(stream, 8);
+    // 스트림이 청을 받는 쪽으로 세어진 뒤에 읽는다 — 그 전이면 「붙은 Desktop 없음」 으로 곧바로 끝나 청이 오지 않는다
+    // (`Desktop::new` 와 같은 기다림, CI run 45348060085).
+    for _ in 0..400 {
+        if e.secrets.desktops() > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(e.secrets.desktops(), 1);
     let mut other = e.f.connect(ConnectionScope::Host);
     let (s, account) = (e.secrets.clone(), account(&e.f.id));
     let reading = tokio::task::spawn_blocking(move || with_asker(direct(), || s.get(&account)));
