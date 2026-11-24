@@ -702,6 +702,9 @@ mod tests {
     #[test]
     fn ending_before_the_startup_query_closes_the_input_queue_at_once() {
         struct Feed {
+            /// 첫 읽기에 들어왔다는 신호와, 끝내기가 끝났다는 신호 — 읽기 스레드가 돌기 시작한 뒤에 끝낸다.
+            reading: mpsc::Sender<()>,
+            ended: mpsc::Receiver<()>,
             queue: Arc<Mutex<mpsc::Receiver<Vec<u8>>>>,
             closed_at_first_read: Arc<Mutex<Option<bool>>>,
             reads: usize,
@@ -712,6 +715,8 @@ mod tests {
                 if self.reads > 1 {
                     return Ok(0);
                 }
+                let _ = self.reading.send(());
+                let _ = self.ended.recv_timeout(Duration::from_secs(10));
                 let closed = matches!(
                     lock(&self.queue).try_recv(),
                     Err(mpsc::TryRecvError::Disconnected)
@@ -725,19 +730,31 @@ mod tests {
         let input = Arc::new(Mutex::new(Some(sender)));
         let queue = Arc::new(Mutex::new(queue));
         let closed = Arc::new(Mutex::new(None));
+        let (end, ended) = mpsc::channel();
+        let (reading, started) = mpsc::channel();
         let feed = Feed {
+            reading,
+            ended,
             queue: Arc::clone(&queue),
             closed_at_first_read: Arc::clone(&closed),
             reads: 0,
         };
-        // 끝내기 — `Pty::end_known` 이 하는 것처럼 칸을 비운다.
+        let reader = std::thread::spawn({
+            let input = Arc::clone(&input);
+            move || {
+                let output = Output::new(1024);
+                let readable = Readable {
+                    #[cfg(unix)]
+                    fd: None,
+                };
+                read_loop(Box::new(feed), &readable, &output, Some(input));
+            }
+        });
+        // 읽기 스레드가 돈 뒤에 끝낸다 — `Pty::end_known` 이 하는 것처럼 칸을 비운다.
+        started.recv_timeout(Duration::from_secs(10)).unwrap();
         drop(lock(&input).take());
-        let output = Output::new(1024);
-        let readable = Readable {
-            #[cfg(unix)]
-            fd: None,
-        };
-        read_loop(Box::new(feed), &readable, &output, Some(Arc::clone(&input)));
+        end.send(()).unwrap();
+        reader.join().unwrap();
         assert_eq!(
             *lock(&closed),
             Some(true),
