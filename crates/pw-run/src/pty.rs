@@ -178,10 +178,12 @@ impl Pty {
         let output = Arc::new(Output::new(OUTPUT_BUFFER));
         let (exit_tx, exit) = watch::channel(None);
         let (input, queue) = mpsc::channel::<Vec<u8>>();
+        // Windows: ConPTY 의 시작 질의에 이 PTY 가 답한다([`StartupQuery`]). 유닉스 PTY 는 묻지 않는다.
+        let answer = cfg!(windows).then(|| input.clone());
         let started = [
             thread("pty-read", {
                 let output = Arc::clone(&output);
-                move || read_loop(reader, &readable, &output)
+                move || read_loop(reader, &readable, &output, answer)
             }),
             thread("pty-write", move || write_loop(writer, &queue)),
             thread("pty-wait", move || {
@@ -377,10 +379,68 @@ fn thread(name: &str, f: impl FnOnce() + Send + 'static) -> std::io::Result<()> 
         .map(drop)
 }
 
-/// 끝낸 뒤([`Output::close`])에는 읽은 것을 버리며 [`DRAIN_AFTER_CLOSE`] 까지만 더 읽는다.
-fn read_loop(mut reader: Box<dyn Read + Send>, readable: &Readable, output: &Output) {
+/// ConPTY 가 시작할 때 묻는 커서 위치(DSR).
+const CURSOR_QUERY: &[u8] = b"\x1b[6n";
+/// 그 질의의 답 — 새 화면의 맨 위 왼쪽.
+const CURSOR_AT_HOME: &[u8] = b"\x1b[1;1R";
+/// 시작 질의를 찾아보는 출력의 앞부분. 그 뒤의 `ESC[6n` 은 프로그램의 것이라 터미널(xterm.js)이 답하게 그대로 둔다.
+const STARTUP_SCAN: usize = 4 * 1024;
+
+/// Windows ConPTY 의 시작 질의. portable-pty 는 ConPTY 를 `PSEUDOCONSOLE_INHERIT_CURSOR` 로 열고, 그러면 ConPTY 는 출력 맨 앞에
+/// `ESC[6n` 을 쓰고 **답이 올 때까지 명령을 돌리지 않는다**. 답하는 것은 원래 터미널(xterm.js)인데, 화면이 붙지 않은 실행(에이전트의
+/// `run_start` · 사슬의 단계)은 아무도 답하지 않아 Windows 에서 영영 시작하지 않았다(CI run 45299304602 — 사슬이 끝나지 않고 시험이
+/// 멈췄다). 그래서 PTY 가 답하고, 그 질의는 출력에서 뺀다 — 화면이 붙어 있어도 두 번 답하지 않는다(두 번째 답은 셸의 입력이 된다).
+#[derive(Default)]
+struct StartupQuery {
+    /// 앞 읽기 끝에 걸린 질의의 앞 조각.
+    carry: Vec<u8>,
+    /// 지금까지 본 출력의 바이트.
+    seen: usize,
+    done: bool,
+}
+
+impl StartupQuery {
+    /// 읽은 `bytes` 에서 내보낼 것과, 지금 답해야 하는지.
+    fn filter(&mut self, bytes: &[u8]) -> (Vec<u8>, bool) {
+        if self.done {
+            return (bytes.to_vec(), false);
+        }
+        let mut data = std::mem::take(&mut self.carry);
+        data.extend_from_slice(bytes);
+        self.seen += bytes.len();
+        if let Some(at) = data
+            .windows(CURSOR_QUERY.len())
+            .position(|w| w == CURSOR_QUERY)
+        {
+            self.done = true;
+            data.drain(at..at + CURSOR_QUERY.len());
+            return (data, true);
+        }
+        if self.seen >= STARTUP_SCAN {
+            self.done = true;
+            return (data, false);
+        }
+        // 끝에 걸린 질의의 앞 조각은 다음 읽기와 이어 본다.
+        let keep = (1..CURSOR_QUERY.len())
+            .rev()
+            .find(|&n| data.len() >= n && data.ends_with(&CURSOR_QUERY[..n]))
+            .unwrap_or(0);
+        self.carry = data.split_off(data.len() - keep);
+        (data, false)
+    }
+}
+
+/// 끝낸 뒤([`Output::close`])에는 읽은 것을 버리며 [`DRAIN_AFTER_CLOSE`] 까지만 더 읽는다. `answer` 가 있으면(Windows) 시작 질의에
+/// 답한다([`StartupQuery`]) — 답했거나 더 찾지 않게 되면 놓는다(입력 큐를 쥐고 있지 않게).
+fn read_loop(
+    mut reader: Box<dyn Read + Send>,
+    readable: &Readable,
+    output: &Output,
+    mut answer: Option<mpsc::Sender<Vec<u8>>>,
+) {
     let mut buf = vec![0u8; CHUNK];
     let mut drain_until: Option<Instant> = None;
+    let mut startup = StartupQuery::default();
     loop {
         let room = output.wait_room();
         let max = match room {
@@ -399,12 +459,28 @@ fn read_loop(mut reader: Box<dyn Read + Send>, readable: &Readable, output: &Out
         };
         match reader.read(&mut buf[..max]) {
             Ok(0) => break,
+            Ok(n) if answer.is_some() => {
+                let (bytes, reply) = startup.filter(&buf[..n]);
+                if reply && let Some(queue) = &answer {
+                    let _ = queue.send(CURSOR_AT_HOME.to_vec());
+                }
+                if startup.done {
+                    answer = None;
+                }
+                if room.is_some() && !bytes.is_empty() {
+                    output.push(&bytes);
+                }
+            }
             Ok(n) if room.is_some() => output.push(&buf[..n]),
             Ok(_) => {}
             Err(e) if e.kind() == ErrorKind::Interrupted => {}
             // Linux 는 slave 가 모두 닫히면 EIO 로 끝난다.
             Err(_) => break,
         }
+    }
+    // 끝에 걸려 있던 앞 조각(질의가 아니었다)도 출력이다.
+    if !startup.carry.is_empty() {
+        output.push(&std::mem::take(&mut startup.carry));
     }
     output.finish();
 }
@@ -573,6 +649,28 @@ mod tests {
 
     use super::*;
 
+    /// ConPTY 의 시작 질의는 한 번만 답하고 출력에서 빠진다 — 읽기 둘에 걸쳐 와도. 앞부분 뒤의 질의는 프로그램의 것이라 그대로다.
+    #[test]
+    fn the_startup_cursor_query_is_answered_once_and_kept_out_of_the_output() {
+        let mut q = StartupQuery::default();
+        assert_eq!(q.filter(b"\x1b[?25l\x1b["), (b"\x1b[?25l".to_vec(), false));
+        assert_eq!(q.filter(b"6nhello"), (b"hello".to_vec(), true));
+        assert_eq!(q.filter(b"\x1b[6n"), (b"\x1b[6n".to_vec(), false));
+
+        let mut q = StartupQuery::default();
+        assert_eq!(q.filter(b"a\x1b[6nb"), (b"ab".to_vec(), true));
+
+        let mut q = StartupQuery::default();
+        let plain = vec![b'x'; STARTUP_SCAN];
+        assert_eq!(q.filter(&plain), (plain.clone(), false));
+        assert_eq!(q.filter(b"\x1b[6n"), (b"\x1b[6n".to_vec(), false));
+
+        // 끝에 걸렸던 앞 조각이 질의가 아니었으면 다음 읽기 앞에 그대로 붙어 나온다.
+        let mut q = StartupQuery::default();
+        assert_eq!(q.filter(b"ab\x1b"), (b"ab".to_vec(), false));
+        assert_eq!(q.filter(b"[1m"), (b"\x1b[1m".to_vec(), false));
+    }
+
     #[tokio::test]
     async fn the_reader_waits_for_room_and_peek_does_not_consume() {
         let output = Output::new(4);
@@ -607,12 +705,11 @@ mod tests {
             rows: 24,
         })
         .unwrap();
-        // 끝나기를 기다리기 전에 출력을 읽는다. ConPTY 는 portable-pty 가 `PSEUDOCONSOLE_INHERIT_CURSOR` 로 열어 시작할 때 커서
-        // 위치를 묻고(`ESC[6n`) 답이 올 때까지 명령을 돌리지 않는다 — 터미널(xterm.js)이 하듯 답한다. ConPTY 는 셸이 끝나도 PTY 를
-        // 닫기 전에는 EOF 가 오지 않으므로 그 글자가 보일 때까지만 읽는다.
+        // 끝나기를 기다리기 전에 출력을 읽는다. ConPTY 의 시작 질의(`ESC[6n`)는 PTY 가 답하고 출력에서 뺀다([`StartupQuery`]) —
+        // 출력에 남았으면 PTY 가 답하지 않은 것이라 실패한다. ConPTY 는 셸이 끝나도 PTY 를 닫기 전에는 EOF 가 오지 않으므로 그
+        // 글자가 보일 때까지만 읽는다.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         let mut text = Vec::new();
-        let mut answered = false;
         while !String::from_utf8_lossy(&text).contains("pitwall-smoke") {
             let read = tokio::time::timeout_at(deadline, pty.peek(CHUNK)).await;
             let Ok(Some(bytes)) = read else {
@@ -620,11 +717,12 @@ mod tests {
             };
             pty.consume(bytes.len());
             text.extend(bytes);
-            if !answered && text.windows(4).any(|w| w == b"\x1b[6n") {
-                assert!(pty.write(b"\x1b[1;1R".to_vec()));
-                answered = true;
-            }
         }
+        assert!(
+            !text.windows(CURSOR_QUERY.len()).any(|w| w == CURSOR_QUERY),
+            "the startup query reached the output: {:?}",
+            String::from_utf8_lossy(&text)
+        );
         let code = tokio::time::timeout_at(deadline, pty.exited())
             .await
             .unwrap();
