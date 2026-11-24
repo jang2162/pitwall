@@ -63,6 +63,7 @@ async fn pipe(
     mut from: tokio::io::ReadHalf<tokio::io::DuplexStream>,
     mut to: tokio::io::WriteHalf<tokio::io::DuplexStream>,
     lost: Arc<AtomicBool>,
+    lag: Duration,
 ) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut buf = vec![0u8; 16 * 1024];
@@ -75,6 +76,9 @@ async fn pipe(
         }
         if lost.load(Ordering::SeqCst) {
             continue;
+        }
+        if !lag.is_zero() {
+            tokio::time::sleep(lag).await;
         }
         if to.write_all(&buf[..n]).await.is_err() {
             return;
@@ -110,12 +114,19 @@ impl Cuttable {
             let lost = Arc::new(AtomicBool::new(false));
             let (near_read, near_write) = tokio::io::split(near);
             let (far_read, far_write) = tokio::io::split(far);
+            // ssh 자식처럼 끝나는 전송은 Desktop → Relay 바이트를 조금 늦게 넘긴다(ssh 가 원격에 보내는 동안) — 그 사이에 끝나면
+            // 넘기지 못한 바이트는 사라진다.
+            let lag = if self.kill_on_read_drop.load(Ordering::SeqCst) {
+                Duration::from_millis(100)
+            } else {
+                Duration::ZERO
+            };
             let both = tokio::spawn({
                 let lost = Arc::clone(&lost);
                 async move {
                     tokio::join!(
-                        pipe(near_read, far_write, Arc::clone(&lost)),
-                        pipe(far_read, near_write, lost),
+                        pipe(near_read, far_write, Arc::clone(&lost), lag),
+                        pipe(far_read, near_write, lost, Duration::ZERO),
                     );
                 }
             });
