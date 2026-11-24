@@ -137,7 +137,13 @@ async fn project_register_asks_the_front_window_and_registers_an_untrusted_proje
             McpApprovalAnswer::Session
         ]
     );
-    assert!(request.plan.summary.contains(&root.display().to_string()));
+    // 계획 글은 경로를 Debug 로 인용한다 — Windows 의 `\` 는 두 겹으로 보인다.
+    let quoted = format!("{root:?}");
+    assert!(
+        request.plan.summary.contains(quoted.trim_matches('"')),
+        "{}",
+        request.plan.summary
+    );
     let registry = host.host.registry().unwrap();
     assert_eq!(registry.list().unwrap(), Vec::new(), "묻는 동안 등록됐다");
 

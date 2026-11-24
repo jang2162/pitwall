@@ -251,8 +251,18 @@ fn broad_relative_and_missing_roots_are_refused_before_asking() {
     let file = f.dir("x").join("file.txt");
     fs::write(&file, "").unwrap();
     let home = f.base.join("home");
+    // 파일 시스템 루트 — 유닉스는 `/`, Windows 는 드라이브 루트(`C:\`). Windows 의 `/` 는 드라이브 상대 경로라 「absolute」 로 걸린다.
+    let fs_root = f.base.ancestors().last().unwrap().display().to_string();
     for (root, says) in [
-        ("/".to_owned(), "too broad"),
+        (fs_root, "too broad"),
+        (
+            "/".to_owned(),
+            if cfg!(windows) {
+                "absolute"
+            } else {
+                "too broad"
+            },
+        ),
         (home.display().to_string(), "too broad"),
         (f.base.display().to_string(), "too broad"),
         (home.join("..").display().to_string(), "too broad"),
@@ -523,8 +533,8 @@ fn line_breaks_and_control_characters_are_refused_and_values_are_quoted() {
     }
     assert_eq!(f.registry.list().unwrap(), Vec::new());
 
-    // 따옴표가 든 폴더 · 이름은 받고, 계획 글에서 인용돼 줄 구조가 그대로다.
-    let quoted = f.dir("we\"ird");
+    // 따옴표가 든 폴더 · 이름은 받고, 계획 글에서 인용돼 줄 구조가 그대로다. Windows 는 폴더 이름에 `"` 를 쓸 수 없어 이름만 본다.
+    let quoted = f.dir(if cfg!(windows) { "weird" } else { "we\"ird" });
     let p = ProjectRegisterToolParams {
         name: Some("say \"hi\"".into()),
         ..params(&quoted)

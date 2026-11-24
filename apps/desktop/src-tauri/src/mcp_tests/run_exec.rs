@@ -654,10 +654,18 @@ async fn the_run_gets_the_approved_env_values() {
     enable(&host, "");
     let (alpha, root) = trusted(&host, "alpha");
     std::fs::write(root.join(".env.local"), "PROBE=approved-value\n").unwrap();
+    // 셸은 유닉스 셸 · Windows 의 PowerShell(`pw_run::shell`) — env 를 읽는 글이 다르다.
+    let command = if cfg!(windows) {
+        "Set-Content -NoNewline -Path probe.out -Value $env:PROBE"
+    } else {
+        "printf %s \\\"$PROBE\\\" > probe.out"
+    };
     write_config(
         &root,
         "probe",
-        "name = \"probe\"\ntype = \"shell\"\ncommand = \"printf %s \\\"$PROBE\\\" > probe.out\"\nenv_file = [\".env.local\"]\n",
+        &format!(
+            "name = \"probe\"\ntype = \"shell\"\ncommand = \"{command}\"\nenv_file = [\".env.local\"]\n"
+        ),
     );
     let session = host.session(SessionRequest::default()).await;
     let mut window = listen(&host, &alpha);

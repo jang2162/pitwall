@@ -17,6 +17,8 @@ use super::run_exec::{
 
 // --- 도움 ----------------------------------------------------------------------------------------------------------
 
+/// 셸 구성. 명령은 유닉스 셸과 Windows 의 PowerShell(`pw_run::shell` — `-Command`) 둘 다에서 같은 뜻인 것만 쓴다
+/// (`exit <n>` · `sleep <초>` · `echo … > <파일>` — `true` 는 PowerShell 에 없다).
 fn shell(root: &Path, id: &str, command: &str, before: &[&str]) {
     let before = before
         .iter()
@@ -145,7 +147,7 @@ async fn a_failing_step_stops_the_chain_and_the_rest_never_starts() {
     let host = ToolHost::app();
     let (alpha, root) = trusted(&host, "alpha");
     shell(&root, "fail", "exit 3", &[]);
-    shell(&root, "ok", "true", &[]);
+    shell(&root, "ok", "exit 0", &[]);
     sleeper(&root, "server", "one");
     shell(&root, "after-fail", "sleep 30", &["fail"]);
     shell(&root, "after-ok", "sleep 30", &["ok"]);
@@ -213,11 +215,11 @@ async fn a_loop_is_unusable_and_an_agent_cannot_write_one() {
     let host = ToolHost::app();
     enable(&host, "");
     let (alpha, root) = trusted(&host, "alpha");
-    shell(&root, "selfish", "true", &["selfish"]);
-    shell(&root, "a", "true", &["b"]);
-    shell(&root, "b", "true", &["c"]);
+    shell(&root, "selfish", "exit 0", &["selfish"]);
+    shell(&root, "a", "exit 0", &["b"]);
+    shell(&root, "b", "exit 0", &["c"]);
     compound(&root, "c", &["a"], "sequence");
-    shell(&root, "plain", "true", &[]);
+    shell(&root, "plain", "exit 0", &[]);
 
     let list = host
         .window_call(&alpha, "run.config.list", json!({ "projectId": alpha }))
@@ -585,7 +587,7 @@ async fn adding_an_unseen_before_to_a_seen_config_asks() {
     enable(&host, "");
     let (alpha, root) = trusted(&host, "alpha");
     sleeper(&root, "server", "one");
-    shell(&root, "prep", "true", &[]);
+    shell(&root, "prep", "exit 0", &[]);
     // 사람이 둘을 따로 돌렸다 — 둘 다 본 구성이다. 그래도 `server` 에 `before = ["prep"]` 를 더한 것은 본 적 없는 내용이다(`before`
     // 가 `server` 의 해시에 든다 — 빼면 이 시험이 실패한다).
     window_chain(&host, &alpha, "prep").await;
@@ -924,7 +926,7 @@ async fn a_cancelled_call_also_ends_the_step_it_was_starting() {
     let host = ToolHost::app();
     enable(&host, "");
     let (alpha, root) = trusted(&host, "alpha");
-    shell(&root, "prep", "true", &[]);
+    shell(&root, "prep", "exit 0", &[]);
     shell(&root, "server", "sleep 30", &["prep"]);
     // `server` 를 띄우기 직전(블로킹 작업 안)에서 멈춰 두고, 그동안 호출을 취소한다.
     let (reached_tx, reached_rx) = std::sync::mpsc::channel::<()>();

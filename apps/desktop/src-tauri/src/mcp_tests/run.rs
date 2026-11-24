@@ -101,7 +101,7 @@ fn the_run_config_tools_are_project_write_tools_in_the_run_group() {
 async fn an_upserted_config_is_not_one_the_person_saw() {
     let host = ToolHost::app();
     let alpha = trusted(&host);
-    let root = host.base.join("work/alpha");
+    let root = host.base.join("work").join("alpha");
     let session = host.session(SessionRequest::default()).await;
     let mut window = listen(&host, &alpha);
     let command = "echo cmd-literal-9b3a";
@@ -110,7 +110,7 @@ async fn an_upserted_config_is_not_one_the_person_saw() {
         window_answers(&host, &mut window, &alpha, McpApprovalAnswer::Once)
     );
     assert_ne!(saved.is_error, Some(true), "{}", text(&saved));
-    let file = root.join(".pitwall/run/dev.toml");
+    let file = root.join(".pitwall").join("run").join("dev.toml");
     assert_eq!(
         structured(&saved)["file"],
         json!(file.display().to_string())
@@ -194,7 +194,7 @@ async fn an_upserted_config_is_not_one_the_person_saw() {
 async fn the_session_allowance_reaches_only_that_config() {
     let host = ToolHost::app();
     let alpha = trusted(&host);
-    let root = host.base.join("work/alpha");
+    let root = host.base.join("work").join("alpha");
     let session = host.session(SessionRequest::default()).await;
     let mut window = listen(&host, &alpha);
     let (first, request) = tokio::join!(

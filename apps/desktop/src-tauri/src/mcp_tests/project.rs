@@ -166,12 +166,12 @@ async fn open_with_list_answers_an_mcp_session() {
 async fn project_open_opens_the_file_without_bringing_the_window_forward() {
     let w = WindowHost::new();
     let id = w.tools.project("m5-09-open-target");
-    let root = w.tools.base.join("work/m5-09-open-target");
+    let root = w.tools.base.join("work").join("m5-09-open-target");
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
     let label = windows::project_label(&id);
     let file = |line| ProjectOpen {
-        file: Some(root.join("src/main.rs").display().to_string()),
+        file: Some(root.join("src").join("main.rs").display().to_string()),
         line: Some(line),
         ..ProjectOpen::default()
     };

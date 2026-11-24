@@ -85,7 +85,7 @@ async fn without_a_window_nothing_is_started_and_the_agent_is_told() {
     assert_eq!(got["symbols"], json!([]), "{got:?}");
     assert_eq!(
         got["unindexed"],
-        json!([host.base.join("work/closed").display().to_string()]),
+        json!([host.base.join("work").join("closed").display().to_string()]),
         "{got:?}"
     );
     assert!(

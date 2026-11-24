@@ -109,7 +109,7 @@ async fn a_request_inside_the_root_lands_in_the_openers_queue() {
         .call(json!({ "projectId": f.id, "path": "src/main.rs", "line": 10, "column": 2 }))
         .await
         .unwrap();
-    let file = f.root.join("src/main.rs");
+    let file = f.root.join("src").join("main.rs");
     assert_eq!(result["openedIn"], "existingWindow");
     assert_eq!(result["path"], file.display().to_string());
     assert_eq!(

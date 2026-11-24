@@ -1121,7 +1121,8 @@ mod tests {
     #[test]
     fn a_bundle_window_connects_only_to_its_members_and_a_remote_one_is_scoped_to_that_project() {
         let tmp = tempfile::tempdir().unwrap();
-        let base = std::fs::canonicalize(tmp.path()).unwrap();
+        // verbatim 경로(`\\?\C:\…`)가 아닌 정규화 — Windows 의 git 은 그 꼴의 작업 폴더를 만들지 못한다.
+        let base = pw_core::registry::path::normalize(tmp.path()).unwrap();
         let local =
             LocalHost::with_config("local", pw_core::config::AppPaths::under(&base.join("app")));
         let mini = Arc::new(LocalHost::with_config(
