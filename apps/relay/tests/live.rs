@@ -139,7 +139,8 @@ impl Site {
         let base = format!("{home}/t-{name}");
         // 앞 실행이 남긴 데몬 · 파일을 치운다(같은 컨테이너로 다시 돌릴 때).
         remote.sh(&format!(
-            "pkill -f '{base}/pitwall-relay' 2>/dev/null; rm -rf '{base}' && mkdir -p '{base}/work'"
+            "{}; rm -rf '{base}' && mkdir -p '{base}/work'",
+            pkill(&format!("{base}/pitwall-relay"))
         ));
         Self { remote, base }
     }
@@ -248,11 +249,25 @@ impl Drop for Site {
     fn drop(&mut self) {
         let _ = self
             .remote
-            .command(&format!("pkill -f '{}/pitwall-relay'", self.base))
+            .command(&pkill(&format!("{}/pitwall-relay", self.base)))
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
     }
+}
+
+/// `pkill -f` 원격 명령(끝에 `2>/dev/null` 과 `true` — 없으면 1 로 끝난다).
+///
+/// 원격 셸(`sh -c "<명령 전체>"`)의 명령줄도 그 글을 담는다 — 글 그대로 `-f` 로 주면 pkill 이
+/// 그 셸까지 죽여 ssh 가 255 로 끝난다(relay-live 9 개가 첫 정리에서 실패했다, CI run 45316714445).
+/// 끝 글자를 `[x]` 로 감싸면 정규식은 같은 프로세스를 고르고, 셸의 명령줄(`…[x]`)은 맞지 않는다.
+fn pkill(pattern: &str) -> String {
+    assert!(
+        pattern.is_ascii() && !pattern.contains(['\'', '[', ']']),
+        "{pattern}"
+    );
+    let (head, last) = pattern.split_at(pattern.len() - 1);
+    format!("pkill -f '{head}[{last}]' 2>/dev/null; true")
 }
 
 fn sha256_local(path: &Path) -> String {
@@ -610,10 +625,11 @@ fn live_relay_the_installer_installs_pairs_and_reconnects() {
 
     let remote = Remote::from_env();
     // 앞 실행이 남긴 설치 · 데몬을 치운다. relay.toml 은 짧은 유휴 시한만.
-    remote.sh(
-        "pkill -f pitwall-relay-dev 2>/dev/null; rm -rf \"$HOME/.local/share/pitwall\" && mkdir -p \"$HOME/.config/pitwall/relay\" && \
+    remote.sh(&format!(
+        "{}; rm -rf \"$HOME/.local/share/pitwall\" && mkdir -p \"$HOME/.config/pitwall/relay\" && \
          printf 'schema = 1\\n[idle]\\nexit_after = \"30s\"\\n' > \"$HOME/.config/pitwall/relay/relay.toml\"",
-    );
+        pkill("pitwall-relay-dev")
+    ));
     // 개발 빌드 폴더(서명 없는 매니페스트 — debug 설치기의 출처).
     let dist = tempfile::tempdir().unwrap();
     let version = semver::Version::parse(VERSION).unwrap();
@@ -703,7 +719,7 @@ fn live_relay_the_installer_installs_pairs_and_reconnects() {
     assert!(listing.contains("rwx------"), "{listing}");
     assert!(!listing.contains(".part."), "{listing}");
     let _ = remote
-        .command("pkill -f pitwall-relay-dev")
+        .command(&pkill("pitwall-relay-dev"))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
