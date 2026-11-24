@@ -77,16 +77,18 @@ pub struct Planned {
 /// 절대 경로이고 `.` · `..` 마디가 없고 `base` 아래인가(글자로만 — 그 머신의 파일 시스템은 Relay 가 본다). 그 머신은 macOS ·
 /// Linux 라(결정 M7-D4) 경로를 POSIX 로 읽는다 — 이 Desktop 의 `Path` 로 읽으면 Windows Desktop 에서는 `/home/…` 이 절대 경로가
 /// 아니라서 모든 열기가 거절됐다(CI run 45299304602). 빈 마디(`//`)는 POSIX 처럼 하나로 본다.
-fn under(path: &str, base: &str) -> bool {
+///
+/// 아래면 판정한 그 꼴(빈 마디를 접은 `/a/b`)을 돌려준다 — 넘기는 쪽은 받은 글이 아니라 이것을 쓴다. 검사한 값과 쓰는 값이 같아야
+/// `//home/…` 같은 글이 뒤에서 다르게(Windows `Path` 로는 UNC `\\home\…`) 읽힐 여지가 없다.
+fn under(path: &str, base: &str) -> Option<String> {
     fn parts(path: &str) -> Option<Vec<&str>> {
         let rest = path.strip_prefix('/')?;
         let parts: Vec<&str> = rest.split('/').filter(|p| !p.is_empty()).collect();
         (!parts.iter().any(|p| *p == "." || *p == "..")).then_some(parts)
     }
-    match (parts(path), parts(base)) {
-        (Some(path), Some(base)) => path.starts_with(&base),
-        _ => false,
-    }
+    let (path, base) = (parts(path)?, parts(base)?);
+    path.starts_with(&base)
+        .then(|| format!("/{}", path.join("/")))
 }
 
 /// 머신 `machine` 의 열기 요청을 이 Desktop 의 묶음 창 요청으로. `root` 는 그 멤버 프로젝트의 루트(그 머신이 말한 것 — 워크트리
@@ -116,25 +118,28 @@ fn plan_in(
                 .is_some_and(|m| m.project_id == request.project_id)
         })
         .ok_or_else(|| "this project is not in a Pitwall project on the desktop".to_owned())?;
-    let base = request.worktree.as_deref().or(root);
-    if let Some(path) = &request.path
-        && !base.is_some_and(|base| under(path, base))
-    {
-        return Err("the path is outside that project's checkout".to_owned());
-    }
-    if request.worktree.as_deref().is_some_and(|w| !under(w, "/")) {
-        return Err("the worktree must be an absolute path".to_owned());
-    }
+    let worktree = match request.worktree.as_deref() {
+        Some(w) => Some(under(w, "/").ok_or("the worktree must be an absolute path")?),
+        None => None,
+    };
+    let base = worktree.as_deref().or(root);
+    let file = match request.path.as_deref() {
+        Some(path) => Some(
+            base.and_then(|base| under(path, base))
+                .ok_or("the path is outside that project's checkout")?,
+        ),
+        None => None,
+    };
     Ok(Planned {
         bundle,
         open: ProjectOpen {
             worktree: None,
-            file: request.path.clone(),
-            line: request.path.as_ref().and(request.line),
-            col: request.path.as_ref().and(request.column),
+            line: file.as_ref().and(request.line),
+            col: file.as_ref().and(request.column),
+            file,
             checkout: Some(CheckoutRef {
                 machine: machine.to_owned(),
-                worktree: request.worktree.clone(),
+                worktree,
             }),
         },
     })
@@ -444,6 +449,34 @@ mod tests {
     }
 
     /// 묶음에 없는 프로젝트 · 다른 머신 · 그 체크아웃 밖의 경로(`..` 포함)는 거절한다(메인 판정 M7-P19).
+    /// 창에 넘기는 경로는 판정한 꼴이다 — `//` 앞머리 · 빈 마디 · 끝의 `/` 는 접히고, `\\` 앞머리(Windows 의 UNC 꼴)는 거절된다.
+    #[test]
+    fn the_window_gets_the_path_that_was_checked() {
+        let planned = plan_in(
+            Some(bundle()),
+            "mini-id",
+            &request(Some("//home/me//wt/README.md"), Some("//home/me/wt/")),
+            Some("/home/me/pitwall"),
+        )
+        .unwrap();
+        assert_eq!(planned.open.file.as_deref(), Some("/home/me/wt/README.md"));
+        assert_eq!(
+            planned.open.checkout.unwrap().worktree.as_deref(),
+            Some("/home/me/wt")
+        );
+        let root = Some("/home/me/pitwall");
+        for (path, worktree) in [
+            (Some("\\\\home\\me\\pitwall\\a"), None),
+            (Some("\\\\?\\C:\\home\\me\\pitwall\\a"), None),
+            (Some("/home/me/wt/a"), Some("\\\\home\\me\\wt")),
+        ] {
+            assert!(
+                plan_in(Some(bundle()), "mini-id", &request(path, worktree), root).is_err(),
+                "{path:?} {worktree:?}"
+            );
+        }
+    }
+
     #[test]
     fn opens_outside_a_bundle_member_are_refused() {
         let root = Some("/home/me/pitwall");
@@ -489,7 +522,7 @@ mod tests {
             "//home/me//pitwall/a/",
             "/home/me/pitwall",
         ] {
-            assert!(under(path, base), "{path}");
+            assert!(under(path, base).is_some(), "{path}");
         }
         for path in [
             "/home/me/pitwallx/a",
@@ -499,10 +532,15 @@ mod tests {
             "C:\\home\\me\\pitwall\\a",
             "\\home\\me\\pitwall\\a",
         ] {
-            assert!(!under(path, base), "{path}");
+            assert!(under(path, base).is_none(), "{path}");
         }
-        assert!(under("/srv/x", "/"));
-        assert!(!under("/srv/x", "relative"));
+        assert_eq!(under("/srv/x", "/").as_deref(), Some("/srv/x"));
+        assert_eq!(under("/srv/x", "relative"), None);
+        // 넘기는 것은 판정한 꼴이다 — 빈 마디를 접어 `//` · 끝의 `/` 가 남지 않는다.
+        assert_eq!(
+            under("//home/me//pitwall/a/", base).as_deref(),
+            Some("/home/me/pitwall/a")
+        );
     }
 
     /// 파일이 든 요청도 프로젝트만 연 요청도 창이 연 대로 답한다 — 파일은 그 체크아웃의 탭으로 열린다(M7-11b). 실패는 그 까닭.
