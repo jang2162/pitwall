@@ -5,6 +5,7 @@
 //!   어느 프로젝트에도 속하지 않는 호출이 있고, 「에이전트 활동」 패널은 `project_id` 로 거른다.
 //! - 결과 **내용은 남기지 않는다**(크기와 상태만). 인자는 [`summarize`] 의 요약만 남긴다.
 //! - 여러 프로세스(앱, 앱 없이 뜬 `pitwall mcp` 여럿)가 같은 파일에 쓴다. 쓰기는 `BEGIN IMMEDIATE` 와 2초 대기다.
+//!   저장은 WAL · `synchronous = FULL`([`use_wal`]), 한 프로세스 안에서는 연결 하나를 함께 쓴다([`AuditLog`]).
 //! - **`read` 호출은 끝난 뒤 한 번 쓰고**, 기록이 실패해도 호출은 실패시키지 않는다 — 경고 로그를 남긴다(감사 로그가 깨졌다고
 //!   조회 툴이 멈추면 안 된다). **`write` 이상과 승인을 지난 호출은 실행 전에 행을 `started` 로 쓰고([`AuditLog::begin`]) 못
 //!   쓰면 실행하지 않는다**(16-m5-plan 결정 M5-D11 — 쓰기의 흔적이 없으면 사람이 무엇이 바뀌었는지 뒤에 볼 길이 없다). 끝나면 **같은 행**을
@@ -640,6 +641,7 @@ fn open(file: &Path) -> rusqlite::Result<Connection> {
     private_file(file).map_err(|e| io(file, e))?;
     let mut conn = Connection::open(file)?;
     conn.busy_timeout(BUSY_TIMEOUT)?;
+    use_wal(&conn);
     let current: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if (current as usize) < MIGRATIONS.len() {
         for (from, step) in MIGRATIONS.iter().enumerate() {
@@ -654,7 +656,25 @@ fn open(file: &Path) -> rusqlite::Result<Connection> {
             tx.commit()?;
         }
     }
+    // 연결마다의 설정이라 열 때마다 건다. WAL 의 기본(`FULL`)이지만 빌드 설정에 기대지 않는다.
+    conn.pragma_update(None, "synchronous", "FULL")?;
     Ok(conn)
+}
+
+/// 감사 로그는 WAL 저널에 `synchronous = FULL` 로 쓴다(05-mcp 「감사 로그」).
+///
+/// 내구성은 rollback 저널 때와 같다 — 커밋마다 디스크에 동기화하므로 커밋된 선기록은 전원이 나가도 남는다(선기록은 「쓰기 툴이 돌기
+/// 전에 그 호출이 기록에 남는다」 는 보장이라 레지스트리(state.db)의 `NORMAL` 을 쓰지 않는다). 바뀌는 것은 다툼이다: WAL 에서는
+/// 읽기가 쓰기를 막지 않고, 커밋이 저널 파일을 만들고 지우지 않아 쓰기 잠금을 쥐는 시간이 준다 — 프로세스 여럿(앱과 헤드리스
+/// `pitwall mcp` · `pitwall tool`)이 같은 파일에 쓸 때 busy 폴링으로 2초 안에 못 끼어드는 일이 준다(CI run 45316714445 의 Windows).
+/// `-wal` · `-shm` 은 SQLite 가 본 파일과 같은 권한(0600)으로 만든다. WAL 은 로컬 파일 시스템을 전제한다(`$STATE` 는 로컬).
+///
+/// 모드는 파일 머리에 남는다 — 옛 판(rollback)의 파일도 처음 연 연결이 바꾸고, 다른 연결은 다음 트랜잭션부터 따른다. 다른 연결이
+/// 쓰는 중이라 이번에 못 바꾸면(바꾸기는 busy 대기 없이 거절될 수 있다) 이 연결은 rollback 으로 쓰고 다음 열기에서 다시 해 본다 —
+/// 열기를 실패시키지 않는다(`pw_core::registry::store` 의 `use_wal` 과 같은 규칙).
+fn use_wal(conn: &Connection) {
+    let _ =
+        conn.pragma_update_and_check(None, "journal_mode", "wal", |row| row.get::<_, String>(0));
 }
 
 /// 감사 로그는 인자 요약 · 프로젝트 · 클라이언트를 담는다. 같은 머신의 다른 사용자가 읽지 못하게 새로 만드는 폴더는 0700,
@@ -1338,6 +1358,60 @@ mod tests {
     /// 파일 잠금을 다투지 않고 Mutex 로 줄을 선다. 다른 파일 · [`AuditLog::separate`] 는 따로다. 모두 버리면 칸도 버려진다.
     fn lock(slot: &Slot) -> std::sync::MutexGuard<'_, Option<Connection>> {
         slot.lock().unwrap()
+    }
+
+    /// 감사 로그는 WAL · `synchronous = FULL` 로 쓴다 — 옛 판(rollback 저널)의 첫째 판 파일도 열면 WAL 로 바뀌고 판이 오른다.
+    /// 모드는 파일에 남아 다른 연결(다른 프로세스)도 WAL 로 본다.
+    #[test]
+    fn the_log_writes_with_wal_and_full_sync_and_moves_a_rollback_file_over() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("audit.db");
+        {
+            let conn = Connection::open(&file).unwrap();
+            conn.execute_batch(MIGRATIONS[0]).unwrap();
+            conn.pragma_update(None, "user_version", 1).unwrap();
+            let mode: String = conn
+                .pragma_query_value(None, "journal_mode", |r| r.get(0))
+                .unwrap();
+            assert_eq!(mode, "delete", "옛 판은 rollback 저널이다");
+        }
+        let log = AuditLog::separate(file.clone());
+        log.record(&entry("t", None)).unwrap();
+        {
+            let guard = lock(&log.conn);
+            let conn = guard.as_ref().unwrap();
+            let mode: String = conn
+                .pragma_query_value(None, "journal_mode", |r| r.get(0))
+                .unwrap();
+            let sync: i64 = conn
+                .pragma_query_value(None, "synchronous", |r| r.get(0))
+                .unwrap();
+            assert_eq!((mode.as_str(), sync), ("wal", 2), "WAL · FULL(2)");
+        }
+        assert_eq!(version(&file), SCHEMA_VERSION);
+        let other: String = Connection::open(&file)
+            .unwrap()
+            .pragma_query_value(None, "journal_mode", |r| r.get(0))
+            .unwrap();
+        assert_eq!(other, "wal");
+    }
+
+    /// WAL 의 곁 파일(`-wal` · `-shm`)도 본 파일처럼 이 사용자만 읽는다(0600) — 커밋 전의 행이 `-wal` 에 있다.
+    #[cfg(unix)]
+    #[test]
+    fn the_wal_side_files_are_as_private_as_the_log() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let log = AuditLog::under_state(tmp.path());
+        log.record(&entry("t", None)).unwrap();
+        for suffix in ["", "-wal", "-shm"] {
+            let path = PathBuf::from(format!("{}{suffix}", log.file().display()));
+            let mode = fs::metadata(&path)
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "{}", path.display());
+        }
     }
 
     #[test]
