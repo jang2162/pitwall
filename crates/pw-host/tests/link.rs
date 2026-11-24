@@ -384,7 +384,9 @@ async fn a_relay_terminal_outlives_the_channel_and_a_new_channel_attaches() {
     window.sink.send(
         json!({"jsonrpc": "2.0", "method": "stream.credit", "params": {"streamId": opened["streamId"], "credit": 1000}}),
     );
-    stream_item(&mut window, "attached").await;
+    let attached = stream_item(&mut window, "attached").await;
+    // 셸이 이미 끝난 터미널에 붙었는지 · 출력이 멈췄는지를 가른다(CI run 45348060085 의 「no output item」 — 원인 미확인).
+    assert_eq!(attached["terminal"]["exited"], false, "{attached}");
     common::call(
         &mut window,
         3,
@@ -395,10 +397,19 @@ async fn a_relay_terminal_outlives_the_channel_and_a_new_channel_attaches() {
     .unwrap();
     let mut text = String::new();
     while !text.contains("AGAIN-42") {
-        let output = stream_item(&mut window, "output").await;
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(20), window.source.recv())
+            .await
+            .unwrap_or_else(|_| panic!("no output for 20 s after {text:?}"))
+            .expect("connection closed");
+        assert_ne!(frame["method"], "stream.end", "{frame} after {text:?}");
+        if frame["method"] != "stream.chunk" {
+            continue;
+        }
+        let item = &frame["params"]["data"];
+        assert_eq!(item["kind"], "output", "{item} after {text:?}");
         use base64::Engine as _;
         let bytes = base64::engine::general_purpose::STANDARD
-            .decode(output["data"].as_str().unwrap())
+            .decode(item["data"].as_str().unwrap())
             .unwrap();
         text.push_str(&String::from_utf8_lossy(&bytes));
     }
