@@ -53,7 +53,11 @@ libc = "0.2.190"
 
 # Windows: HTTP 의 듣는 소켓에 `SO_EXCLUSIVEADDRUSE`(`http::listen` — 다른 프로세스가 그 포트를 가로채지 못하게). pw-link 와 같은 판.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock"] }
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_Networking_WinSock",
+] }
 
 [dev-dependencies]
 rmcp = { version = "3.9.0", default-features = false, features = [
