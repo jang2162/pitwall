@@ -191,23 +191,52 @@ pub async fn bind(addr: SocketAddr) -> Result<TcpListener, ForwardError> {
 /// `SO_EXCLUSIVEADDRUSE` 만으로는 앞서 쥔 소켓을 보지 못한다 — 다른 프로그램이 `0.0.0.0:P` 를 기본 옵션으로 쥐었어도 우리
 /// `127.0.0.1:P` 바인드는 성공하고, 루프백 연결은 더 좁은 우리 쪽으로 온다(그 서버를 가림, M7-22 리뷰 F1 의 Windows 꼴 — CI run
 /// 45316714445). 그래서 먼저 같은 가족의 와일드카드(`0.0.0.0:P` · `[::]:P`)에 배타 바인드를 해 본다: 그 포트를 어느 주소로든
-/// 쥔 소켓이 있으면 실패한다(루프백이 아닌 주소로 쥔 것도 — 더 막는 쪽으로 틀린다). 떠본 소켓은 곧바로 닫는다. 포트 0(골라
-/// 받기)은 떠볼 포트가 없다.
+/// 쥔 소켓이 있으면 실패한다(루프백이 아닌 주소로 쥔 것도 — 더 막는 쪽으로 틀린다). IPv4 를 들을 때는 `[::]:P` 도 떠본다 —
+/// 두 가족 소켓이 IPv4 와일드카드 떠보기를 지나쳤다(CI run 45333303107). 그래서 IPv6 만 듣는 `[::]:P` 가 있어도 IPv4 를
+/// 거절한다(더 막는 쪽). 떠본 소켓은 곧바로 닫는다. 포트 0(골라 받기)은 떠볼 포트가 없다.
 #[cfg(windows)]
 fn exclusive(socket: &TcpSocket, addr: SocketAddr) -> std::io::Result<()> {
     if addr.port() != 0 {
-        let (probe, any) = if addr.is_ipv4() {
-            (TcpSocket::new_v4()?, IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+        let port = addr.port();
+        if addr.is_ipv4() {
+            probe(
+                TcpSocket::new_v4()?,
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port),
+            )?;
+            // 두 가족을 함께 듣는 `[::]:P` 소켓(`IPV6_V6ONLY` 끔 — Node 등의 기본)은 IPv4 루프백 연결도 받지만, IPv4 와일드카드
+            // 떠보기에는 보이지 않는다(CI run 45333303107). 그래서 IPv6 와일드카드도 떠본다. IPv6 가 없는 기기에서는 소켓 ·
+            // 바인드가 다른 오류로 실패한다 — 그때는 가릴 IPv6 소켓도 없으니 넘어간다.
+            if let Ok(v6) = TcpSocket::new_v6() {
+                match probe(
+                    v6,
+                    SocketAddr::new(IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED), port),
+                ) {
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied
+                        ) =>
+                    {
+                        return Err(e);
+                    }
+                    _ => {}
+                }
+            }
         } else {
-            (
+            probe(
                 TcpSocket::new_v6()?,
-                IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED),
-            )
-        };
-        set_exclusive(&probe)?;
-        probe.bind(SocketAddr::new(any, addr.port()))?;
+                SocketAddr::new(IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED), port),
+            )?;
+        }
     }
     set_exclusive(socket)
+}
+
+/// 배타 바인드로 `any` 를 떠보고 곧 닫는다. 그 포트를 쥔 소켓이 있으면 `AddrInUse`(배타로 쥐었으면 `PermissionDenied`).
+#[cfg(windows)]
+fn probe(socket: TcpSocket, any: SocketAddr) -> std::io::Result<()> {
+    set_exclusive(&socket)?;
+    socket.bind(any)
 }
 
 #[cfg(windows)]
@@ -412,10 +441,13 @@ mod tests {
         for (held, ours) in cases {
             let holder = hold(held);
             let port = holder.local_addr().unwrap().port();
-            let err = bind(local_addr(Some(ours), port).unwrap())
-                .await
-                .map(|l| l.local_addr().unwrap())
-                .unwrap_err();
+            let err = match bind(local_addr(Some(ours), port).unwrap()).await {
+                Ok(l) => panic!(
+                    "{held} held, bound {ours} over it: {}",
+                    l.local_addr().unwrap()
+                ),
+                Err(e) => e,
+            };
             assert_eq!(
                 err,
                 ForwardError::PortInUse(port),
