@@ -139,7 +139,8 @@ impl DetectExec for CountingExec {
 
 fn root() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
-    let root = fs::canonicalize(tmp.path()).unwrap().join("proj");
+    let root =
+        pw_core::registry::path::simplify(fs::canonicalize(tmp.path()).unwrap()).join("proj");
     fs::create_dir_all(&root).unwrap();
     (tmp, root)
 }
@@ -163,7 +164,17 @@ fn render(detection: &Detection, root: &Path) -> String {
     let root_text = root.display().to_string();
     let mut out = String::new();
     for task in &detection.tasks {
-        let argv = argv(&task.config, None, &cx).unwrap();
+        // 스냅숏은 OS 마다 같은 글이다 — 루트 안 경로는 `<root>/…`(`/` 로), Windows 의 셸 옵션(`-Command`)은 `-c` 로 적는다. 그
+        // 옵션 자체는 `config::tests::every_kind_builds_its_argv_field_by_field` 가 OS 마다 본다.
+        let argv: Vec<String> = argv(&task.config, None, &cx)
+            .unwrap()
+            .into_iter()
+            .map(|arg| match arg.strip_prefix(&root_text) {
+                Some(rest) => format!("<root>{}", rest.replace('\\', "/")),
+                None if cfg!(windows) && arg == "-Command" => "-c".to_owned(),
+                None => arg,
+            })
+            .collect();
         out.push_str(&format!(
             "{key}\n  source: {source}\n  config: {config}\n  argv: {argv:?}\n  definition: {definition:?}\n",
             key = task.key(),
@@ -323,7 +334,7 @@ struct Host {
 
 fn host() -> Host {
     let tmp = tempfile::tempdir().unwrap();
-    let base = fs::canonicalize(tmp.path()).unwrap();
+    let base = pw_core::registry::path::simplify(fs::canonicalize(tmp.path()).unwrap());
     let paths = AppPaths::under(&base.join("app"));
     let projects = Registry::new(paths.clone(), None, EventBus::new(DEFAULT_CAPACITY));
     let root = base.join("proj");

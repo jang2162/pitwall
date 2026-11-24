@@ -28,7 +28,7 @@ impl Fixture {
     fn new() -> Self {
         let tmp = tempfile::tempdir().unwrap();
         // 시험의 비교가 실제 경로(`/private/var` …)로 하도록 처음부터 실제 경로로 둔다.
-        let base = fs::canonicalize(tmp.path()).unwrap();
+        let base = pw_core::registry::path::simplify(fs::canonicalize(tmp.path()).unwrap());
         let root = base.join("proj");
         fs::create_dir_all(&root).unwrap();
         let paths = AppPaths::under(&base.join("app"));
@@ -679,7 +679,7 @@ struct Host {
 
 fn host() -> Host {
     let tmp = tempfile::tempdir().unwrap();
-    let base = fs::canonicalize(tmp.path()).unwrap();
+    let base = pw_core::registry::path::simplify(fs::canonicalize(tmp.path()).unwrap());
     let paths = AppPaths::under(&base.join("app"));
     let projects = Registry::new(paths.clone(), None, EventBus::new(DEFAULT_CAPACITY));
     let root = base.join("proj");

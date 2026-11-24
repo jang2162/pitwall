@@ -34,7 +34,7 @@ impl Fixture {
     /// `prepare` 가 프로젝트 루트를 등록 전에 꾸민다(git 저장소 등).
     fn with_root(prepare: impl FnOnce(&Path)) -> Self {
         let tmp = tempfile::tempdir().unwrap();
-        let base = fs::canonicalize(tmp.path()).unwrap();
+        let base = pw_core::registry::path::simplify(fs::canonicalize(tmp.path()).unwrap());
         let paths = AppPaths::under(&base.join("app"));
         let projects = Registry::new(paths.clone(), None, EventBus::new(DEFAULT_CAPACITY));
         let root = base.join("proj");

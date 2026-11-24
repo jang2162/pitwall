@@ -31,6 +31,8 @@ fn desktop(
     let task = tokio::spawn(async move {
         let token = listening.token().to_owned();
         while let Some(event) = listening.recv().await {
+            // 답하기 전에 센다 — 답을 받은 `open` 이 돌아온 뒤 시험이 곧바로 센다(뒤에 세면 Windows CI 에서 빈 목록을 읽었다).
+            record.lock().unwrap().push(event.clone());
             match &event {
                 OpenEvent::Query { request_id } => {
                     if let Some(idle_ms) = idle {
@@ -48,7 +50,6 @@ fn desktop(
                 }
                 OpenEvent::Listening { .. } => {}
             }
-            record.lock().unwrap().push(event);
         }
     });
     (seen, task)

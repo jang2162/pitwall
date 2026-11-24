@@ -720,22 +720,14 @@ async fn git_status_cut_at_the_budget_continues_by_cursor() {
 /// 브랜치가 많으면 예산 안의 앞쪽만 싣고 `truncated` — 뒤의 목록(태그)도 싣지 않는다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn git_branch_list_cut_at_the_budget_says_truncated() {
-    use std::io::Write as _;
-
     let r = TestRepo::with_commit();
     let head = r.head();
-    let mut update = r
-        .command_in(r.root())
-        .args(["update-ref", "--stdin"])
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut stdin = update.stdin.take().unwrap();
+    // packed-refs 에 바로 쓴다 — 낱 ref 파일(`.git/refs/heads/<183 글자>`)은 Windows 의 경로 한도(260)를 넘어 git 이 만들지 못한다.
+    let mut packed = String::new();
     for i in 0..600 {
-        writeln!(stdin, "create refs/heads/{i:03}{} {head}", "n".repeat(180)).unwrap();
+        packed.push_str(&format!("{head} refs/heads/{i:03}{}\n", "n".repeat(180)));
     }
-    drop(stdin);
-    assert!(update.wait().unwrap().success());
+    std::fs::write(r.root().join(".git").join("packed-refs"), packed).unwrap();
     r.git(&["tag", "v1"]);
     let t = Tools::new("");
     let id = t.fx.project(r.root());

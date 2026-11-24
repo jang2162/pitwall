@@ -1267,7 +1267,7 @@ mod tool {
             .unwrap();
         assert_eq!(method["container"], "Widget");
         assert_eq!(method["relative"], "src/lib.rs");
-        assert_eq!(method["path"], json!(root.join("src/lib.rs")));
+        assert_eq!(method["path"], json!(root.join("src").join("lib.rs")));
         assert_eq!(method["language"], "rust");
         // `    pub fn render` — 이름은 3째 줄 12째 열(1 부터).
         assert_eq!(

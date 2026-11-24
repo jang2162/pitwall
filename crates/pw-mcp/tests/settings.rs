@@ -436,7 +436,7 @@ async fn settings_get_reports_what_the_host_uses_and_what_the_project_overrides(
         .unwrap();
     let project = &view["project"];
     assert_eq!(project["projectId"], json!(f.alpha));
-    let pitwall = f.base.join("work/alpha/.pitwall");
+    let pitwall = f.base.join("work").join("alpha").join(".pitwall");
     assert_eq!(
         project["files"],
         json!([

@@ -30,7 +30,7 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let tmp = tempfile::tempdir().unwrap();
-        let base = fs::canonicalize(tmp.path()).unwrap();
+        let base = pw_core::registry::path::simplify(fs::canonicalize(tmp.path()).unwrap());
         let root = base.join("proj");
         fs::create_dir_all(&root).unwrap();
         let paths = AppPaths::under(&base.join("app"));
@@ -346,7 +346,7 @@ fn the_same_config_hashes_the_same_in_another_worktree() {
     git(&f.root, &["commit", "-q", "-m", "init"]);
     let wt = f.root.parent().unwrap().join("proj-wt");
     git(&f.root, &["worktree", "add", "-q", wt.to_str().unwrap()]);
-    let wt = fs::canonicalize(&wt).unwrap();
+    let wt = pw_core::registry::path::simplify(fs::canonicalize(&wt).unwrap());
 
     let main = f.seen("boot", None);
     let other = seen_at(
@@ -365,7 +365,7 @@ fn the_same_config_hashes_the_same_in_another_worktree() {
 #[test]
 fn missing_parts_are_refused_without_values_in_the_error() {
     let tmp = tempfile::tempdir().unwrap();
-    let base = fs::canonicalize(tmp.path()).unwrap();
+    let base = pw_core::registry::path::simplify(fs::canonicalize(tmp.path()).unwrap());
     let root = &base.join("p");
     fs::create_dir_all(root).unwrap();
     fs::create_dir_all(base.join("q")).unwrap();
@@ -534,7 +534,7 @@ fn runtime_source_files_are_part_of_the_hash() {
 #[test]
 fn the_working_directory_is_resolved_by_the_hash_itself() {
     let tmp = tempfile::tempdir().unwrap();
-    let base = fs::canonicalize(tmp.path()).unwrap();
+    let base = pw_core::registry::path::simplify(fs::canonicalize(tmp.path()).unwrap());
     let root = base.join("proj");
     for dir in ["b", "c"] {
         fs::create_dir_all(root.join(dir)).unwrap();

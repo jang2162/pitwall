@@ -116,7 +116,7 @@ fn the_two_tools_are_project_less_write_tools() {
 async fn project_register_asks_the_front_window_and_registers_an_untrusted_project() {
     let (host, sessions) = app_host();
     let mut window = welcome(&sessions);
-    let root = host.base.join("work/fresh");
+    let root = host.base.join("work").join("fresh");
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("package.json"), "{}").unwrap();
     let session = Arc::new(host.session(SessionRequest::default()).await);
@@ -233,7 +233,7 @@ async fn agent_rpc(host: &ToolHost, method: &str, params: Value) -> Result<Value
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn without_a_window_the_writes_are_refused() {
     let (host, _sessions) = app_host();
-    let root = host.base.join("work/fresh");
+    let root = host.base.join("work").join("fresh");
     std::fs::create_dir_all(&root).unwrap();
     let session = host.session(SessionRequest::default()).await;
     let result = session
@@ -396,7 +396,7 @@ async fn headless_sessions_refuse_project_register() {
         services,
         ..tools
     };
-    let root = host.base.join("work/fresh");
+    let root = host.base.join("work").join("fresh");
     std::fs::create_dir_all(&root).unwrap();
     let session = host.session(SessionRequest::default()).await;
     let result = session
