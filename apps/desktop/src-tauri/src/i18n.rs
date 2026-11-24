@@ -32,22 +32,27 @@ pub fn subscribe(bus: &EventBus) -> Subscription {
 }
 
 /// 고른 언어가 바뀔 때마다 `on_change` 를 부른다(처음 언어로는 부르지 않는다). 구독이 닫히면 끝난다.
-pub async fn follow(
+///
+/// 견줄 언어는 부른 그 자리에서 읽는다(돌려준 future 가 처음 돌 때가 아니다) — 구독(`events`)과 같은 때여야 그 사이의 변경을
+/// 놓치지 않는다. future 안에서 읽으면 구독 뒤 · 첫 poll 전에 바뀐 언어가 기준이 돼 알리지 않았다(CI run 45316714445 의 ubuntu).
+pub fn follow(
     i18n: Arc<I18n>,
     mut events: Subscription,
     on_change: impl Fn(&Localizer) + Send + 'static,
-) {
+) -> impl std::future::Future<Output = ()> + Send + 'static {
     let mut current = i18n.locales();
-    tracing::info!(locales = ?current, "ui language");
-    // 넘친 이벤트(`Lagged`)도 다시 본다 — 그 안에 설정 변경이 있었을 수 있다.
-    while events.recv().await.is_some() {
-        let next = i18n.locales();
-        if next == current {
-            continue;
+    async move {
+        tracing::info!(locales = ?current, "ui language");
+        // 넘친 이벤트(`Lagged`)도 다시 본다 — 그 안에 설정 변경이 있었을 수 있다.
+        while events.recv().await.is_some() {
+            let next = i18n.locales();
+            if next == current {
+                continue;
+            }
+            tracing::info!(locales = ?next, "ui language changed");
+            current = next;
+            on_change(&i18n.localizer());
         }
-        tracing::info!(locales = ?next, "ui language changed");
-        current = next;
-        on_change(&i18n.localizer());
     }
 }
 
@@ -188,9 +193,9 @@ mod tests {
 
         let seen = Arc::new(Mutex::new(Vec::<String>::new()));
         let record = Arc::clone(&seen);
-        let task = tokio::spawn(follow(Arc::clone(&i18n), subscribe(&bus), move |l| {
+        let following = follow(Arc::clone(&i18n), subscribe(&bus), move |l| {
             record.lock().unwrap().push(l.text("menu-file"));
-        }));
+        });
 
         std::fs::write(
             paths.config.join("settings.toml"),
@@ -198,10 +203,12 @@ mod tests {
         )
         .unwrap();
         store.reload().unwrap();
+        // 따라가기가 처음 돌기 전에 바꾼다 — 앱에서 구독과 첫 poll 사이에 바뀐 경우(늘 그렇게 돌려 그 틈을 시험한다).
         let i = Arc::clone(&i18n);
         tokio::task::spawn_blocking(move || i.set_language("ko").unwrap())
             .await
             .unwrap();
+        let task = tokio::spawn(following);
 
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         while seen.lock().unwrap().is_empty() {
