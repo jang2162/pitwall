@@ -552,8 +552,12 @@ fn write(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
         COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
     let result = (|| {
-        std::fs::write(&tmp, bytes)?;
-        std::fs::File::open(&tmp)?.sync_all()?;
+        // 쓰기 핸들로 동기화한다 — Windows 의 `FlushFileBuffers` 는 읽기 전용 핸들(`File::open`)에 「Access is denied」 로
+        // 실패해 저장이 늘 실패했다(CI run 45299304602).
+        let mut out = std::fs::File::create(&tmp)?;
+        std::io::Write::write_all(&mut out, bytes)?;
+        out.sync_all()?;
+        drop(out);
         std::fs::rename(&tmp, file)
     })();
     if result.is_err() {
