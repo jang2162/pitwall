@@ -130,11 +130,14 @@ pub struct Spec {
     pub rows: u16,
 }
 
+/// 쓰기 스레드의 입력 큐 칸 — `Pty` 와 (Windows) 읽기 스레드가 함께 본다. 끝내면 비운다.
+type InputSlot = Arc<Mutex<Option<mpsc::Sender<Vec<u8>>>>>;
+
 pub struct Pty {
     master: Mutex<Box<dyn MasterPty + Send>>,
     /// 쓰기 스레드의 큐. 끝내면 `None` 이 되어 그 스레드도 끝난다. 읽기 스레드(Windows 의 시작 질의 답)는 이 칸을 함께 보고
     /// 송신자를 따로 복제해 쥐지 않는다 — 질의가 오기 전에 끝내도 큐가 그 자리에서 닫힌다.
-    input: Arc<Mutex<Option<mpsc::Sender<Vec<u8>>>>>,
+    input: InputSlot,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     pid: Option<u32>,
     output: Arc<Output>,
@@ -443,7 +446,7 @@ fn read_loop(
     mut reader: Box<dyn Read + Send>,
     readable: &Readable,
     output: &Output,
-    mut answer: Option<Arc<Mutex<Option<mpsc::Sender<Vec<u8>>>>>>,
+    mut answer: Option<InputSlot>,
 ) {
     let mut buf = vec![0u8; CHUNK];
     let mut drain_until: Option<Instant> = None;
