@@ -159,8 +159,8 @@ pub fn local_addr(local_host: Option<&str>, port: u16) -> Result<SocketAddr, For
 /// 좁은 `127.0.0.1:P` · `[::1]:P` 에 바인드되고, 루프백으로 오는 연결이 이쪽(원격)으로 새 사람이 보던 로컬 서버가 조용히 가려진다.
 /// 그래서 소켓을 직접 만들고 `SO_REUSEADDR` 를 끈다 — 그러면 그 경우 모두 `EADDRINUSE` 다. Linux 는 듣는 소켓이 있으면 어느 쪽이든
 /// 거절한다. Windows 는 std · mio 가 `SO_REUSEADDR` 를 켜지 않고, 이쪽 소켓에 `SO_EXCLUSIVEADDRUSE` 를 걸어 뒤에 다른 프로세스가
-/// 이 포트의 더 좁은 주소로 이 포워딩을 가로채지 못하게 한다 — 다른 프로세스가 먼저 와일드카드로 든 포트 위에 Windows 가 이 바인드를
-/// 거절하는지는 실기로 확인하지 않았다. 대가: 듣기를 닫은 직후 같은 포트를 다시 열 때 `TIME_WAIT` 에 걸릴 수 있다(듣는 소켓 자체는
+/// 이 포트의 더 좁은 주소로 이 포워딩을 가로채지 못하게 한다. 다른 프로세스가 먼저 와일드카드로 든 포트 위의 이 바인드는 Windows 가
+/// 거절하지 않는다(CI run 45316714445) — 그래서 `exclusive` 가 먼저 와일드카드를 떠본다(Windows 실행 확인은 다음 CI). 대가: 듣기를 닫은 직후 같은 포트를 다시 열 때 `TIME_WAIT` 에 걸릴 수 있다(듣는 소켓 자체는
 /// 대개 `TIME_WAIT` 를 만들지 않는다).
 pub async fn bind(addr: SocketAddr) -> Result<TcpListener, ForwardError> {
     if !addr.ip().is_loopback() {
