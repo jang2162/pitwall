@@ -880,11 +880,13 @@ async fn an_edit_from_another_instance_of_the_same_server_is_not_applied() {
                 "workspace/executeCommand",
                 vec![apply_edit_request(&a_main)],
             )
+            // 명령은 a 의 둘째 편집(`fake-2`)에 창이 답한 뒤에야 끝난다 — 시험이 b 의 거절을 본 다음 a 의 문서를 고쳐 그 편집을
+            // 건다. 그래서 b 의 편집은 시간과 상관없이 a 의 명령이 도는 동안 온다(리뷰 R3).
             .reply(
                 "workspace/executeCommand",
-                Reply::result(json!(null)).delayed(3000),
+                Reply::result(json!(null)).after_responses(&["fake-2"]),
             )
-            // 문서가 바뀐 인스턴스(b)가 건다.
+            // 문서가 바뀐 인스턴스가 건다(b, 끝에 a).
             .on("textDocument/didChange", vec![apply_edit_request(&a_main)]),
             &fix,
         ),
@@ -947,7 +949,7 @@ async fn an_edit_from_another_instance_of_the_same_server_is_not_applied() {
     assert!(one, "a's answer was not recorded");
     assert_eq!(answers(&record).len(), 1, "{:?}", answers(&record));
     assert_eq!(answers(&record)[0]["applied"], true);
-    // 명령이 아직 도는 동안(답이 3 초 늦다) b 의 문서를 고친다 → b 가 편집을 건다.
+    // 명령이 아직 도는 동안(a 의 `fake-2` 전에는 끝나지 않는다) b 의 문서를 고친다 → b 가 편집을 건다.
     win.call(
         "lsp.document.change",
         json!({ "docId": doc_b, "version": 1, "changes": [{ "from": 0, "to": 0, "insert": "y" }] }),
@@ -963,6 +965,22 @@ async fn an_edit_from_another_instance_of_the_same_server_is_not_applied() {
             .is_none(),
         "b's edit must not reach the window"
     );
+    // a 의 문서를 고쳐 a 의 둘째 편집을 건다 — 같은 흐름이라 창에 오고, 답하면 명령이 끝난다.
+    win.call(
+        "lsp.document.change",
+        json!({ "docId": doc_a, "version": 1, "changes": [{ "from": 0, "to": 0, "insert": "x" }] }),
+    )
+    .await
+    .unwrap();
+    let second = next_event(&mut win, "lsp.applyEdit", Duration::from_secs(10))
+        .await
+        .expect("the window gets a's second edit");
+    win.call(
+        "lsp.applyEdit.answer",
+        json!({ "flowId": "f1", "requestId": second["requestId"], "applied": true }),
+    )
+    .await
+    .unwrap();
     win.response(call).await.unwrap();
 }
 
