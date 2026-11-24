@@ -258,9 +258,36 @@ pub struct Entry {
 }
 
 /// 감사 로그 파일. 처음 쓸 때 연다.
+///
+/// 한 프로세스 안에서 같은 파일의 [`AuditLog`] 는 SQLite 연결 하나를 함께 쓴다 — 앱 하나에 소켓 · HTTP 세션의 것과 Host 의
+/// 정리 · 목록용(`pw-host`)이 따로 있다. 연결이 따로면 같은 프로세스의 쓰기끼리 파일 잠금을 다투고, 잠금은 줄을 서지 않고
+/// busy 폴링으로 잡으므로 커밋이 느린 기기(Windows CI 의 rollback 저널 커밋 약 70 ms)에서는 2초 안에 못 끼어든 쪽의 선기록이
+/// 실패해 그 쓰기 호출이 거절됐다(CI run 45316714445). 한 연결의 Mutex 는 같은 프로세스의 쓰기를 차례로 세운다. 다툼은 프로세스
+/// 사이(앱과 헤드리스 `pitwall mcp` · `pitwall tool`)에만 남는다. 같은 파일인지는 경로 글로 가른다(호출하는 쪽은 모두
+/// [`Self::under_state`] 의 `$STATE` 를 쓴다).
 pub struct AuditLog {
     file: PathBuf,
-    conn: Mutex<Option<Connection>>,
+    conn: Arc<Mutex<Option<Connection>>>,
+}
+
+/// 이 프로세스에서 열린 감사 로그 파일과 그 연결 칸. 모든 [`AuditLog`] 가 버려지면 칸도 버려진다(연결이 닫힌다).
+type Slot = Arc<Mutex<Option<Connection>>>;
+type WeakSlot = std::sync::Weak<Mutex<Option<Connection>>>;
+static OPEN: Mutex<Vec<(PathBuf, WeakSlot)>> = Mutex::new(Vec::new());
+
+fn shared_slot(file: &Path) -> Slot {
+    let mut open = OPEN.lock().unwrap_or_else(PoisonError::into_inner);
+    open.retain(|(_, slot)| slot.strong_count() > 0);
+    if let Some(slot) = open
+        .iter()
+        .find(|(path, _)| path == file)
+        .and_then(|(_, slot)| slot.upgrade())
+    {
+        return slot;
+    }
+    let slot: Slot = Arc::new(Mutex::new(None));
+    open.push((file.to_path_buf(), Arc::downgrade(&slot)));
+    slot
 }
 
 impl AuditLog {
@@ -269,10 +296,18 @@ impl AuditLog {
         Self::at(state.join(DIR).join(FILE_NAME))
     }
 
+    /// 이 프로세스의 같은 파일 로그와 연결을 함께 쓴다.
     pub fn at(file: PathBuf) -> Self {
+        let conn = shared_slot(&file);
+        Self { file, conn }
+    }
+
+    /// 연결을 함께 쓰지 않는 로그 — 다른 프로세스의 것처럼 따로 잠금을 다툰다. 시험이 프로세스 여럿을 흉내 낼 때만 쓴다.
+    #[doc(hidden)]
+    pub fn separate(file: PathBuf) -> Self {
         Self {
             file,
-            conn: Mutex::new(None),
+            conn: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -1299,6 +1334,33 @@ mod tests {
         );
     }
 
+    /// 한 프로세스 안의 같은 파일 로그(앱의 소켓 · HTTP 세션과 Host 의 정리)는 연결 하나를 함께 쓴다 — 같은 프로세스의 쓰기가
+    /// 파일 잠금을 다투지 않고 Mutex 로 줄을 선다. 다른 파일 · [`AuditLog::separate`] 는 따로다. 모두 버리면 칸도 버려진다.
+    fn lock(slot: &Slot) -> std::sync::MutexGuard<'_, Option<Connection>> {
+        slot.lock().unwrap()
+    }
+
+    #[test]
+    fn logs_of_one_file_share_one_connection_in_a_process() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = AuditLog::under_state(tmp.path());
+        let b = AuditLog::under_state(tmp.path());
+        assert!(Arc::ptr_eq(&a.conn, &b.conn));
+        assert!(!Arc::ptr_eq(
+            &a.conn,
+            &AuditLog::under_state(&tmp.path().join("other")).conn
+        ));
+        assert!(!Arc::ptr_eq(
+            &a.conn,
+            &AuditLog::separate(a.file().to_path_buf()).conn
+        ));
+        a.record(&entry("t", None)).unwrap();
+        assert!(lock(&b.conn).is_some(), "b 는 a 가 연 연결을 본다");
+        let weak = Arc::downgrade(&a.conn);
+        drop((a, b));
+        assert!(weak.upgrade().is_none(), "버린 로그의 연결이 남았다");
+    }
+
     /// 여러 연결(프로세스 여럿 — 앱과 헤드리스 `pitwall mcp`)이 첫째 판 파일을 **동시에 처음 열어도** 모두 열리고 쓴다. 판
     /// 올림은 `user_version` 을 읽은 뒤 쓰므로 `BEGIN IMMEDIATE` 여야 한다 — `DEFERRED` 면 읽기 잠금을 쥔 채 쓰기 잠금을 기다리는
     /// 연결에 SQLite 가 바쁨 대기 없이 곧바로 `database is locked` 를 준다. 그 연결의 선기록이 실패하면 쓰기 호출이 거절된다.
@@ -1329,7 +1391,7 @@ mod tests {
                 .map(|_| {
                     let (file, barrier) = (file.clone(), Arc::clone(&barrier));
                     std::thread::spawn(move || {
-                        let log = AuditLog::at(file);
+                        let log = AuditLog::separate(file);
                         barrier.wait();
                         Ok((
                             log.begin(&entry("fake_write", None))?,

@@ -2654,7 +2654,13 @@ mod tests {
                 paths: self.paths.clone(),
                 global: self.host.config().unwrap().global.clone(),
                 bus: self.host.bus().clone(),
-                audit: Arc::new(AuditLog::under_state(&self.paths.state)),
+                // 세션마다 따로 — 프로세스 여럿(앱과 헤드리스)의 연결처럼 잠금을 다툰다.
+                audit: Arc::new(AuditLog::separate(
+                    self.paths
+                        .state
+                        .join(crate::audit::DIR)
+                        .join(crate::audit::FILE_NAME),
+                )),
                 catalog: Arc::new(Catalog::linked().routed_by(self.host.router())),
                 approval: Approval::Unavailable,
                 transport: "test",
