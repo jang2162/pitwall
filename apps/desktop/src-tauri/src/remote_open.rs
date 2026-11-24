@@ -10,7 +10,6 @@
 //!   그리는 것은 M7-11b 다.
 
 use std::collections::{HashMap, VecDeque};
-use std::path::{Component, Path};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -75,14 +74,19 @@ pub struct Planned {
     pub open: ProjectOpen,
 }
 
-/// 절대 경로이고 `.` · `..` 마디가 없고 `base` 아래인가(글자로만 — 그 머신의 파일 시스템은 Relay 가 본다).
+/// 절대 경로이고 `.` · `..` 마디가 없고 `base` 아래인가(글자로만 — 그 머신의 파일 시스템은 Relay 가 본다). 그 머신은 macOS ·
+/// Linux 라(결정 M7-D4) 경로를 POSIX 로 읽는다 — 이 Desktop 의 `Path` 로 읽으면 Windows Desktop 에서는 `/home/…` 이 절대 경로가
+/// 아니라서 모든 열기가 거절됐다(CI run 45299304602). 빈 마디(`//`)는 POSIX 처럼 하나로 본다.
 fn under(path: &str, base: &str) -> bool {
-    let path = Path::new(path);
-    path.is_absolute()
-        && !path
-            .components()
-            .any(|c| matches!(c, Component::CurDir | Component::ParentDir))
-        && path.starts_with(base)
+    fn parts(path: &str) -> Option<Vec<&str>> {
+        let rest = path.strip_prefix('/')?;
+        let parts: Vec<&str> = rest.split('/').filter(|p| !p.is_empty()).collect();
+        (!parts.iter().any(|p| *p == "." || *p == "..")).then_some(parts)
+    }
+    match (parts(path), parts(base)) {
+        (Some(path), Some(base)) => path.starts_with(&base),
+        _ => false,
+    }
 }
 
 /// 머신 `machine` 의 열기 요청을 이 Desktop 의 묶음 창 요청으로. `root` 는 그 멤버 프로젝트의 루트(그 머신이 말한 것 — 워크트리
@@ -474,6 +478,31 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// 그 머신의 경로는 이 Desktop 의 플랫폼과 상관없이 POSIX 로 읽는다 — Windows Desktop 에서도 `/home/…` 이 절대 경로다.
+    #[test]
+    fn remote_paths_are_read_as_posix_on_every_desktop() {
+        let base = "/home/me/pitwall";
+        for path in [
+            "/home/me/pitwall/a",
+            "//home/me//pitwall/a/",
+            "/home/me/pitwall",
+        ] {
+            assert!(under(path, base), "{path}");
+        }
+        for path in [
+            "/home/me/pitwallx/a",
+            "/home/me/pitwall/./a",
+            "/home/me/pitwall/../x",
+            "home/me/pitwall/a",
+            "C:\\home\\me\\pitwall\\a",
+            "\\home\\me\\pitwall\\a",
+        ] {
+            assert!(!under(path, base), "{path}");
+        }
+        assert!(under("/srv/x", "/"));
+        assert!(!under("/srv/x", "relative"));
     }
 
     /// 파일이 든 요청도 프로젝트만 연 요청도 창이 연 대로 답한다 — 파일은 그 체크아웃의 탭으로 열린다(M7-11b). 실패는 그 까닭.
