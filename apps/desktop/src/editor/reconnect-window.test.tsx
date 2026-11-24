@@ -888,18 +888,21 @@ it("keeps a remote document when the file grew past 50 MiB and the read again is
   expect(fake.dropped).toHaveLength(0);
 });
 
-it("saves 33 MiB to the remote machine in chunks, and this machine's tab with one write", async () => {
+it("saves a document over one chunk to the remote machine in chunks, and this machine's tab with one write", async () => {
   const remote = await openBoth();
-  // 따옴표는 JSON 에서 두 바이트다 — 한 번의 `fs.write` 로는 66 MiB(틀을 넘는다). 조각으로 모아 한 번에 쓴다.
+  // 따옴표는 JSON 에서 두 바이트다 — 9 MiB 는 와이어로 18 MiB, 한 조각(`CHUNK_WIRE_MAX` 16 MiB)을 넘어 조각으로 모아 한 번에
+  // 쓴다. 조각으로 가는 판정은 「한 조각보다 큰가」 하나라(project-window.tsx), 틀(64 MiB)을 넘는 크기가 아니어도 같은 길을 지난다
+  // — 예전의 33 MiB(와이어 66 MiB)는 같은 것을 증명하면서 느린 러너에서 5초를 넘겼다(CI run 45299304602).
   // (제어 문자는 6배지만 happy-dom 의 CodeMirror 가 글자마다 표시를 그려 메모리가 넘친다 — 쓰기의 제어 문자 자르기는
   // link-chunks.test.ts 가 30 MiB 로, 읽기는 위 시험이 본다.)
-  await replace(remote, '"'.repeat(33 * MIB));
+  const size = 9 * MIB;
+  await replace(remote, '"'.repeat(size));
   await saveActive();
   await vi.waitFor(() => expect(callsOf(MINI, "fs.writeCommit")).toHaveLength(1));
-  expect(callsOf(MINI, "fs.writeChunk").length).toBeGreaterThan(4);
+  expect(callsOf(MINI, "fs.writeChunk").length).toBeGreaterThan(1);
   expect(callsOf(MINI, "fs.writeChunk").every((c) => c.params.path === FILE)).toBe(true);
   expect(writes(MINI)).toHaveLength(0);
-  expect(fake.files.get(MINI)!.get(FILE)!.text.length).toBe(33 * MIB);
+  expect(fake.files.get(MINI)!.get(FILE)!.text.length).toBe(size);
   expect(fake.uploads.size).toBe(0);
   expect(fake.largest).toBeLessThanOrEqual(16 * MIB + 64 * 1024);
   expect(fake.dropped).toHaveLength(0);
@@ -915,10 +918,10 @@ it("saves 33 MiB to the remote machine in chunks, and this machine's tab with on
   expect(banner()).toBeNull();
 
   // 이 머신의 탭은 링크를 지나지 않는다 — 같은 크기도 `fs.write` 한 번.
-  await replace(await viewOf("main.rs", false), '"'.repeat(33 * MIB));
+  await replace(await viewOf("main.rs", false), '"'.repeat(size));
   await saveActive();
   expect(writes("local")).toHaveLength(1);
-  expect(fake.files.get("local")!.get(FILE)!.text.length).toBe(33 * MIB);
+  expect(fake.files.get("local")!.get(FILE)!.text.length).toBe(size);
 });
 
 it("leaves the remote file untouched and keeps the edits when the link drops while chunks are sent", async () => {
