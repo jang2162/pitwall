@@ -69,28 +69,12 @@ impl IgnoreRules {
         let Some(dir) = path.parent() else {
             return false;
         };
-        let dir = self.dir(dir);
-        let chain = || std::iter::successors(Some(&*dir), |d| d.parent.as_deref());
-        for d in chain() {
-            if let Some(ignored) = decide(d.ignore.as_ref(), path, is_dir) {
-                return ignored;
-            }
-        }
-        if !dir.in_repo {
-            return false;
-        }
-        for d in chain() {
-            if let Some(ignored) = decide(d.gitignore.as_ref(), path, is_dir) {
-                return ignored;
-            }
-            if let Some(top) = &d.top {
-                return top
-                    .iter()
-                    .find_map(|rules| decide(Some(rules), path, is_dir))
-                    .unwrap_or(false);
-            }
-        }
-        false
+        self.folder(dir).ignored(path, is_dir)
+    }
+
+    /// 폴더 `dir` 의 규칙. 그 폴더 바로 아래 항목을 여럿 판정할 때 폴더 규칙을 한 번만 찾는다(`fs.list`).
+    pub(crate) fn folder(&self, dir: &Path) -> Folder {
+        Folder(self.dir(dir))
     }
 
     fn dir(&self, dir: &Path) -> Arc<Dir> {
@@ -133,6 +117,37 @@ impl IgnoreRules {
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<PathBuf, Arc<Dir>>> {
         self.dirs.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// 한 폴더의 규칙([`IgnoreRules::folder`]).
+pub(crate) struct Folder(Arc<Dir>);
+
+impl Folder {
+    /// 이 폴더 바로 아래의 `path` 가 무시되는가([`IgnoreRules::ignored`] 와 같은 판정).
+    pub(crate) fn ignored(&self, path: &Path, is_dir: bool) -> bool {
+        let dir = &self.0;
+        let chain = || std::iter::successors(Some(&**dir), |d| d.parent.as_deref());
+        for d in chain() {
+            if let Some(ignored) = decide(d.ignore.as_ref(), path, is_dir) {
+                return ignored;
+            }
+        }
+        if !dir.in_repo {
+            return false;
+        }
+        for d in chain() {
+            if let Some(ignored) = decide(d.gitignore.as_ref(), path, is_dir) {
+                return ignored;
+            }
+            if let Some(top) = &d.top {
+                return top
+                    .iter()
+                    .find_map(|rules| decide(Some(rules), path, is_dir))
+                    .unwrap_or(false);
+            }
+        }
+        false
     }
 }
 

@@ -2,24 +2,21 @@
 //!
 //! ignore 판정은 ripgrep 의 규칙(`.gitignore` · `.git/info/exclude` · 전역 gitignore · `.ignore`)이다. ignore 파일은
 //! [`crate::ignore_rules`] 가 안전하게 읽는다 — `ignore` 크레이트의 걷기는 링크를 따라 끝까지 읽어 `.gitignore -> /dev/zero` 하나로
-//! 메모리가 끝없이 는다. 걷기는 무시된 항목을 **건너뛸** 뿐 표시하지 않으므로, 루트에서 이 폴더까지만 내려가는 걷기로 「보이는 항목」을 얻고
-//! `read_dir` 의 전체 항목과 비교한다. 루트부터 걸어야 무시된 폴더 안(`target/debug`)의 항목도 무시된 것으로 나온다 — 그 폴더에서
-//! 걷기 시작하면 걷는 시작점은 판정하지 않는다. 숨김 파일은 ignore 가 아니다(`hidden(false)`).
+//! 메모리가 끝없이 는다. 판정은 루트부터 걷는 것과 같다 — 무시된 폴더 안(`target/debug`)의 항목도 무시된 것으로 나오고, 루트
+//! 자신은 판정하지 않는다([`list`]). 숨김 파일은 ignore 가 아니다.
 //!
 //! 실제 대상이 루트 밖인 심링크는 항목으로 보이되 `outside` 로 표시하고, 대상의 종류 · 크기 · 시각을 알리지 않는다(결정 M1-D8).
 
-use std::collections::HashSet;
-use std::ffi::OsString;
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::panic::AssertUnwindSafe;
 use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 
 use pw_core::registry::path::normalize;
 
-use crate::ignore_rules::{IgnoreRules, skip_ignore_files};
+use crate::ignore_rules::{Folder, IgnoreRules};
 use crate::scope::{Readable, Roots};
 
 #[derive(
@@ -79,34 +76,44 @@ pub fn mtime_ms(meta: &fs::Metadata) -> Option<i64> {
     }
 }
 
-/// 이보다 항목이 많으면 메타데이터 읽기를 스레드로 나눈다. 항목마다 `lstat` 이 한 번이라 1만 개 폴더에서 가장 큰 비용이다.
+/// 이보다 항목이 많으면 항목 읽기(메타데이터 · ignore 판정)를 스레드로 나눈다. 항목마다 `lstat` 이 한 번이라 1만 개 폴더에서
+/// 가장 큰 비용이다.
 const PARALLEL_FROM: usize = 1024;
 
 /// `dir.real` 의 항목. 이름순. `roots` 로 심링크 항목의 실제 대상이 루트 안인지 본다.
 ///
-/// ignore 판정(걷기)과 메타데이터 읽기는 서로 기다리지 않으므로 함께 돈다. 1만 항목 폴더의 `fs.list` 100 ms(M1-01 완료 기준 ⑤)를
-/// 맞추려는 것이다 — 따로 재면 `lstat` 1만 번이 걷기보다 길다.
+/// ignore 판정은 `read_dir` 의 항목을 [`IgnoreRules`] 로 직접 한다 — 루트에서 이 폴더까지 내려가는 걷기로 「보이는 항목」을 얻던
+/// 때(걷기가 같은 폴더를 한 번 더 읽고 항목마다 경로를 비교했다)는 걷기가 1만 항목 폴더의 `fs.list` 시간의 대부분이었다(M1-01 완료
+/// 기준 ⑤ 100 ms). 판정은 걷기와 같다: 루트 아래 조상 폴더(이 폴더 포함) 하나라도 무시되면 모든 항목이 무시된 것이고(걷기가 그
+/// 폴더에 내려가지 않는다), 아니면 항목마다 그 종류(링크는 따르지 않는다)로 판정한다. 루트 자신은 판정하지 않는다(걷기의 시작점).
 pub fn list(dir: &Readable, roots: &Roots) -> io::Result<Vec<FsEntry>> {
     let raw: Vec<fs::DirEntry> = fs::read_dir(&dir.real)?.collect::<io::Result<_>>()?;
-    let (visible, mut entries) = std::thread::scope(|s| {
-        let walker = s.spawn(|| visible_names(dir, roots));
-        let entries = entries_of(&raw, roots);
-        // 걷기가 패닉하면 모두 무시되지 않은 것으로 보지 않고, 무시된 것으로 표시한다(숨김 쪽이 안전하다).
-        (walker.join().unwrap_or(None), entries)
-    });
-    for entry in &mut entries {
-        entry.0.ignored = visible
-            .as_ref()
-            .is_none_or(|names| !names.contains(&entry.1));
-    }
-    let mut entries: Vec<FsEntry> = entries.into_iter().map(|(entry, _)| entry).collect();
+    let rules = IgnoreRules::new(roots.clone());
+    // 판정이 패닉하면 모두 무시되지 않은 것으로 보지 않고, 무시된 것으로 표시한다(숨김 쪽이 안전하다).
+    let folder = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        (!inside_ignored(dir, &rules)).then(|| rules.folder(&dir.real))
+    }))
+    .unwrap_or(None);
+    let mut entries = entries_of(&raw, roots, folder.as_ref());
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(entries)
 }
 
-/// 항목과 그 원래 이름. `ignored` 는 아직 정하지 않았다.
-fn entries_of(raw: &[fs::DirEntry], roots: &Roots) -> Vec<(FsEntry, OsString)> {
-    let entry = |raw: &fs::DirEntry| entry(raw, roots);
+/// 루트 아래에서 `dir.real` 까지의 폴더(루트 자신은 빼고 `dir.real` 은 넣는다) 중 무시되는 것이 있다.
+fn inside_ignored(dir: &Readable, rules: &IgnoreRules) -> bool {
+    let Ok(below) = dir.real.strip_prefix(&dir.root) else {
+        return true;
+    };
+    let mut at = dir.root.clone();
+    below.components().any(|part| {
+        at.push(part);
+        rules.ignored(&at, true)
+    })
+}
+
+/// 항목들. `folder` 가 `None` 이면 모두 무시된 것이다.
+fn entries_of(raw: &[fs::DirEntry], roots: &Roots, folder: Option<&Folder>) -> Vec<FsEntry> {
+    let entry = |raw: &fs::DirEntry| entry(raw, roots, folder);
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
     if raw.len() < PARALLEL_FROM || threads == 1 {
         return raw.iter().filter_map(entry).collect();
@@ -125,15 +132,21 @@ fn entries_of(raw: &[fs::DirEntry], roots: &Roots) -> Vec<(FsEntry, OsString)> {
 }
 
 /// 항목을 읽는 사이 지워졌으면 `None`.
-fn entry(raw: &fs::DirEntry, roots: &Roots) -> Option<(FsEntry, OsString)> {
-    let name = raw.file_name();
+fn entry(raw: &fs::DirEntry, roots: &Roots, folder: Option<&Folder>) -> Option<FsEntry> {
     let lmeta = raw.metadata().ok()?;
     let kind = EntryKind::of(lmeta.file_type());
+    let path = raw.path();
+    let ignored = folder.is_none_or(|folder| {
+        std::panic::catch_unwind(AssertUnwindSafe(|| {
+            folder.ignored(&path, kind == EntryKind::Dir)
+        }))
+        .unwrap_or(true)
+    });
     let mut outside = false;
     let (target, meta) = if kind == EntryKind::Symlink {
         // 풀리지 않는 링크(대상 없음 · 고리)는 링크 경로 그대로 돌아와 루트 안으로 판정되고, 아래 metadata 가 실패한다.
-        outside = normalize(&raw.path()).is_ok_and(|real| !roots.contains(&real));
-        match fs::metadata(raw.path()) {
+        outside = normalize(&path).is_ok_and(|real| !roots.contains(&real));
+        match fs::metadata(&path) {
             Ok(m) if !outside => (Some(EntryKind::of(m.file_type())), Some(m)),
             _ => (None, None),
         }
@@ -141,58 +154,24 @@ fn entry(raw: &fs::DirEntry, roots: &Roots) -> Option<(FsEntry, OsString)> {
         (None, None)
     };
     let meta = meta.as_ref().unwrap_or(&lmeta);
-    Some((
-        FsEntry {
-            name: name.to_string_lossy().into_owned(),
-            kind,
-            target,
-            outside,
-            size: if kind == EntryKind::Symlink && target.is_none() {
-                0
-            } else {
-                meta.len()
-            },
-            mtime_ms: mtime_ms(meta),
-            ignored: false,
+    Some(FsEntry {
+        name: raw.file_name().to_string_lossy().into_owned(),
+        kind,
+        target,
+        outside,
+        size: if kind == EntryKind::Symlink && target.is_none() {
+            0
+        } else {
+            meta.len()
         },
-        name,
-    ))
-}
-
-/// `dir` 의 항목 중 무시되지 않는 것의 이름. `dir` 자체가 무시되는 곳(또는 그 안)이면 `None`.
-fn visible_names(dir: &Readable, roots: &Roots) -> Option<HashSet<OsString>> {
-    let depth = dir.real.strip_prefix(&dir.root).ok()?.components().count();
-    let target: PathBuf = dir.real.clone();
-    let rules = IgnoreRules::new(roots.clone());
-    let mut walk = ignore::WalkBuilder::new(&dir.root);
-    skip_ignore_files(&mut walk)
-        .hidden(false)
-        // `dir.real` 은 링크를 모두 푼 경로라 링크를 따를 일이 없다(따르면 걷기가 항목마다 stat 한다).
-        .follow_links(false)
-        .max_depth(Some(depth + 1))
-        .filter_entry(move |e| {
-            if !(target.starts_with(e.path()) || e.path().parent() == Some(&target)) {
-                return false;
-            }
-            // 시작점은 판정하지 않는다(`ignore` 의 걷기와 같다).
-            e.depth() == 0 || !rules.ignored(e.path(), e.file_type().is_some_and(|t| t.is_dir()))
-        });
-    let walk = walk.build();
-    let mut reached = false;
-    let mut names = HashSet::new();
-    for entry in walk.flatten() {
-        if entry.depth() == depth && entry.path() == dir.real {
-            reached = true;
-        } else if entry.depth() == depth + 1 {
-            names.insert(entry.file_name().to_os_string());
-        }
-    }
-    reached.then_some(names)
+        mtime_ms: mtime_ms(meta),
+        ignored,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use super::*;
     use crate::scope::Roots;
