@@ -33,7 +33,8 @@ test("the live tests never turn off host key checking", () => {
 test("arguments, container name and entry", () => {
   assert.throws(() => parseArgs([]), /--bin/);
   const options = parseArgs(["--ci", "--bin", "/x/relay"]);
-  assert.deepEqual(options, { ci: true, bin: "/x/relay" });
+  // `--bin` 은 resolve 로 절대 경로가 된다 — Windows 에선 드라이브가 붙는다(relay-build 시험과 같은 꼴, CI run 45529596394).
+  assert.deepEqual(options, { ci: true, bin: resolve("/x/relay") });
   assert.throws(() => parseArgs(["--bin", "x", "--what"]), /unknown argument/);
   const a = containerName("/w/a", 1);
   assert.match(a, /^pitwall-relay-live-[0-9a-f]{8}-1$/);

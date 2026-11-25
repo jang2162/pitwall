@@ -70,7 +70,8 @@ test("the host target and arguments", () => {
   );
   assert.deepEqual(options.targets, ["aarch64-unknown-linux-musl"]);
   assert.equal(options.complete, true);
-  assert.equal(options.out, "/tmp/x");
+  // `--out` 은 resolve 로 절대 경로가 된다 — Windows 에선 드라이브가 붙어 `D:\tmp\x`(CI run 45529596394).
+  assert.equal(options.out, resolve("/tmp/x"));
   assert.throws(() => parseArgs(["--target", "x86_64-unknown-linux-gnu"], host), /unknown target/);
   assert.throws(() => parseArgs(["--bogus"], host), /unknown argument/);
 });
