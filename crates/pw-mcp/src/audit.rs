@@ -6,6 +6,7 @@
 //! - 결과 **내용은 남기지 않는다**(크기와 상태만). 인자는 [`summarize`] 의 요약만 남긴다.
 //! - 여러 프로세스(앱, 앱 없이 뜬 `pitwall mcp` 여럿)가 같은 파일에 쓴다. 쓰기는 `BEGIN IMMEDIATE` 와 2초 대기다.
 //!   저장은 WAL · `synchronous = FULL`([`use_wal`]), 한 프로세스 안에서는 연결 하나를 함께 쓴다([`AuditLog`]).
+//!   앞 판 파일의 판 올림은 프로세스 사이에서도 한 번에 하나다([`upgrade_lock`]).
 //! - **`read` 호출은 끝난 뒤 한 번 쓰고**, 기록이 실패해도 호출은 실패시키지 않는다 — 경고 로그를 남긴다(감사 로그가 깨졌다고
 //!   조회 툴이 멈추면 안 된다). **`write` 이상과 승인을 지난 호출은 실행 전에 행을 `started` 로 쓰고([`AuditLog::begin`]) 못
 //!   쓰면 실행하지 않는다**(16-m5-plan 결정 M5-D11 — 쓰기의 흔적이 없으면 사람이 무엇이 바뀌었는지 뒤에 볼 길이 없다). 끝나면 **같은 행**을
@@ -644,7 +645,10 @@ fn open(file: &Path) -> rusqlite::Result<Connection> {
     use_wal(&conn);
     let current: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if (current as usize) < MIGRATIONS.len() {
-        for (from, step) in MIGRATIONS.iter().enumerate() {
+        let _upgrading = upgrade_lock(file).map_err(|e| io(&upgrade_lock_path(file), e))?;
+        // 기다린 사이 다른 프로세스가 올렸으면 쓰기 잠금 없이 여기서 끝난다.
+        let current: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        for (from, step) in MIGRATIONS.iter().enumerate().skip(current as usize) {
             // 다른 프로세스가 먼저 올렸으면 잠금 안에서 다시 읽은 버전으로 건너뛴다(레지스트리와 같은 규칙).
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let version: u32 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
@@ -659,6 +663,33 @@ fn open(file: &Path) -> rusqlite::Result<Connection> {
     // 연결마다의 설정이라 열 때마다 건다. WAL 의 기본(`FULL`)이지만 빌드 설정에 기대지 않는다.
     conn.pragma_update(None, "synchronous", "FULL")?;
     Ok(conn)
+}
+
+/// 판 올림 잠금 파일(`audit.db-upgrade`). 내용은 없다 — 지우지 않고 둔다(지우면 기다리던 쪽과 새로 연 쪽이 다른 파일을 잠근다).
+fn upgrade_lock_path(file: &Path) -> PathBuf {
+    let mut name = file.as_os_str().to_owned();
+    name.push("-upgrade");
+    PathBuf::from(name)
+}
+
+/// 판 올림을 프로세스 사이에서 한 번에 하나만 하게 OS 파일 잠금을 쥔다(돌려준 파일을 버리면 풀린다, 프로세스가 죽어도 풀린다).
+///
+/// 앞 판 파일을 여러 프로세스(앱이 꺼진 동안 함께 뜬 헤드리스 `pitwall mcp` 여럿, 넘기기 순간의 헤드리스와 앱)가 처음 함께 열면,
+/// 판마다의 `BEGIN IMMEDIATE` 를 모두가 busy 폴링으로 다퉜다 — 표를 새로 만들어 행을 옮기는 올림은 쓰기 잠금을 오래 쥐어, 커밋이
+/// 느린 Windows 에서 2초 안에 못 끼어든 연결의 열기가 `database is locked` 로 실패했다(CI run 45519711273). 잠금은 줄을 세우고,
+/// 기다린 쪽은 판을 다시 읽어 이미 올랐으면 쓰기 잠금 없이 넘어간다. 평상 쓰기(올림이 필요 없는 열기)는 이 잠금을 쥐지 않는다.
+/// 잠금 안에서도 판마다 `IMMEDIATE` 로 다시 읽는다 — 이 잠금을 모르는 판의 프로세스와도 맞게.
+fn upgrade_lock(file: &Path) -> std::io::Result<fs::File> {
+    let path = upgrade_lock_path(file);
+    private_file(&path)?;
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)?;
+    lock.lock()?;
+    Ok(lock)
 }
 
 /// 감사 로그는 WAL 저널에 `synchronous = FULL` 로 쓴다(05-mcp 「감사 로그」).
@@ -1486,6 +1517,45 @@ mod tests {
                 .unwrap();
             assert_eq!(total, OLD_ROWS + 2 * CONNECTIONS as i64, "round {round}");
         }
+    }
+
+    /// 판 올림은 판 올림 잠금을 쥔 쪽만 한다 — 다른 프로세스가 잠금을 쥔 동안 열기는 판을 올리지 않고 기다리고, 풀리면 판을 다시
+    /// 읽어 올린다. 평상 열기(이미 지금 판)는 잠금을 기다리지 않는다.
+    #[test]
+    fn opening_a_first_version_file_waits_for_the_upgrade_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("audit.db");
+        {
+            let conn = Connection::open(&file).unwrap();
+            conn.execute_batch(MIGRATIONS[0]).unwrap();
+            conn.pragma_update(None, "user_version", 1).unwrap();
+        }
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(upgrade_lock_path(&file))
+            .unwrap();
+        held.lock().unwrap();
+        let opener = {
+            let file = file.clone();
+            std::thread::spawn(move || open(&file).map(drop).map_err(|e| e.to_string()))
+        };
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!opener.is_finished(), "잠금을 기다리지 않았다");
+        assert_eq!(version(&file), 1, "잠금 밖에서 올렸다");
+        drop(held);
+        opener.join().unwrap().unwrap();
+        assert_eq!(version(&file), SCHEMA_VERSION);
+
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(upgrade_lock_path(&file))
+            .unwrap();
+        held.lock().unwrap();
+        open(&file).expect("지금 판 파일은 잠금 없이 열린다");
     }
 
     /// 행 id 는 다시 쓰이지 않는다(R5): 가장 큰 id 를 지워도(보관 정리 · 지우기) 새 행은 더 큰 id 다 — 커서와 `mcp.activity` 가
