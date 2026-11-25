@@ -457,7 +457,14 @@ fn a_headless_session_hands_over_when_the_app_starts() {
     drop(app);
     let answer = mcp.recv();
     assert_eq!(answer["id"], json!(6), "{answer}");
-    assert_eq!(answer["error"]["code"], json!(-32001), "{answer}");
+    // 둘 중 하나다(05-mcp 「호출 취소」): 앱의 세션이 끝나며 그 호출의 취소 결과가 rmcp 의 2초 drain 안에 나가면 그것이 먼저
+    // 오고, 아니면 소켓이 닫혀 넘김이 `-32001` 오류를 쓴다. 다른 답(성공 결과 · 다른 오류)은 실패다. 어느 쪽이든 끝은 같다.
+    let cancelled = answer["result"]["isError"] == json!(true)
+        && answer["result"]["_meta"]["pitwall/reason"] == json!("cancelled");
+    assert!(
+        cancelled || answer["error"]["code"] == json!(-32001),
+        "앱이 닫힐 때의 답이 취소 결과도 -32001 오류도 아니다: {answer}"
+    );
     let (code, stderr) = mcp.finish();
     assert_eq!(code, Some(1), "stderr: {stderr}");
     assert!(
