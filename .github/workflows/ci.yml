@@ -27,8 +27,13 @@ env:
   MISE_HTTP_RETRIES: 4
 
 jobs:
-  check:
-    name: lint · test (${{ matrix.os }})
+  # lint · Rust 시험 · TS 시험을 OS 마다 세 잡으로 나눠 나란히 돌린다. 한 잡이던 때 macOS 는 Rust 캐시가 지워진 판(저장소 캐시 10 GB
+  # 상한의 LRU — 그 판에 9.5 GB)에서 lint 12분 · 시험 빌드 16분 · nextest 8분 반 · doctest 3분에 데스크톱 vitest 가 더해져 45분을
+  # 넘겼다(CI run 45529596394). 나눈 뒤 캐시가 없어도 가장 긴 test-rust 가 macOS 에서 30분 남짓이다. Rust 캐시는 잡마다 따로다
+  # (rust-cache 의 키에 잡 id) — lint(clippy 의 메타데이터)와 test-rust(debug 시험 바이너리)는 산출물이 겹치지 않아 한 키를 나누면
+  # 먼저 끝난 잡의 것만 남는다. test-ts 는 Rust 를 빌드하지 않아 Rust 캐시가 없다.
+  lint:
+    name: lint (${{ matrix.os }})
     if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
@@ -81,6 +86,54 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: mise run lint
+
+  test-rust:
+    name: test · rust (${{ matrix.os }})
+    if: github.event_name != 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          version: ${{ env.MISE_VERSION }}
+
+      # 까닭은 lint 잡의 같은 단계.
+      - name: Rust toolchain components
+        shell: bash
+        run: env -u RUSTUP_TOOLCHAIN rustup toolchain install --no-self-update
+
+      - name: pnpm store path
+        id: pnpm-store
+        shell: bash
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-store-${{ runner.os }}-
+
+      # 까닭은 lint 잡의 같은 단계.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+
+      # 까닭은 lint 잡의 같은 단계.
+      - name: Tauri system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      # 한 잡이던 때와 같은 환경으로 시험한다(node_modules 가 있는 채).
+      - run: pnpm install --frozen-lockfile
       # pw-host 의 의존 시험(crates/pw-host/tests/deps.rs)은 Relay 의 타깃 넷(pw-release relay.rs `PLATFORMS`)마다 `cargo metadata
       # --offline --filter-platform` 을 돌린다 — 러너 자신의 타깃이 아닌 패키지를 미리 받는다. 러너의 타깃도 함께 받는다: metadata 는
       # 걸러 낸 타깃의 의존을 호스트(빌드 의존)로도 풀어, Linux 에만 쓰는 zbus 의 Windows 의존(`uds_windows`)까지 찾는다 — 빌드는
@@ -90,18 +143,48 @@ jobs:
         run: |
           cargo fetch --locked --target "$(rustc -vV | sed -n 's/^host: //p')" --target x86_64-unknown-linux-musl --target aarch64-unknown-linux-musl --target aarch64-apple-darwin --target x86_64-apple-darwin
       # nextest 의 ci 프로필(.config/nextest.toml)은 첫 실패에서 멈추지 않는다 — 실패한 시험을 한 번에 다 본다.
-      - run: mise run test
+      - run: mise run test-rust
         env:
           NEXTEST_PROFILE: ci
+
+  test-ts:
+    name: test · ts (${{ matrix.os }})
+    if: github.event_name != 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          version: ${{ env.MISE_VERSION }}
+
+      - name: pnpm store path
+        id: pnpm-store
+        shell: bash
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-store-${{ runner.os }}-
+
+      - run: pnpm install --frozen-lockfile
+      - run: mise run test-ts
       # npm 라이선스 검사는 그 OS 에 설치된 패키지만 본다. OS 전용 바이너리 패키지(esbuild·rollup·oxc 등)를
       # 각 OS 에서 보도록 매트릭스마다 돌린다. 네트워크가 필요 없다.
       - run: node scripts/licenses.mjs check
 
   # 「release 에서만 판정」하는 시간 상한 시험(검색 취소 100 ms · fs.list 1만 개 · 구문 강조 16 ms · git 감시 이벤트 500 ms 등 —
-  # mise.toml 의 test-release). check 잡의 test 는 debug 라 이것들을 판정하지 않는다. 벽시계를 재므로 러너가 일정한 Linux · macOS 만
+  # mise.toml 의 test-release). test-rust 잡은 debug 라 이것들을 판정하지 않는다. 벽시계를 재므로 러너가 일정한 Linux · macOS 만
   # 돌린다(Windows 는 파일 시스템 지연이 들쭉날쭉하다). 시험을 하나도 못 고르면 --no-tests=fail 로 실패한다.
-  # check 잡의 끝 단계였을 때는 debug 산출물을 하나도 쓰지 못하고 release 를 처음부터 컴파일해, M7 이 Relay 크레이트를 더한 뒤
-  # macOS 에서 check 잡의 45분을 넘겼다(CI run 45299304602). 따로 돌아 check 와 나란히 가고 release 캐시도 따로 남긴다.
+  # lint · test 를 한 잡에서 돌던 때(지금의 lint · test-rust · test-ts) 그 끝 단계였을 때는 debug 산출물을 하나도 쓰지 못하고 release 를 처음부터 컴파일해, M7 이 Relay 크레이트를 더한 뒤
+  # macOS 에서 그 잡의 45분을 넘겼다(CI run 45299304602). 따로 돌아 다른 잡과 나란히 가고 release 캐시도 따로 남긴다.
   release-timing:
     name: release timing (${{ matrix.os }})
     if: github.event_name != 'schedule'
@@ -118,7 +201,7 @@ jobs:
         with:
           version: ${{ env.MISE_VERSION }}
 
-      # 까닭은 check 잡의 같은 단계.
+      # 까닭은 lint 잡의 같은 단계.
       - name: Rust toolchain components
         shell: bash
         run: env -u RUSTUP_TOOLCHAIN rustup toolchain install --no-self-update
@@ -134,12 +217,12 @@ jobs:
           key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: pnpm-store-${{ runner.os }}-
 
-      # 까닭은 check 잡의 같은 단계.
+      # 까닭은 lint 잡의 같은 단계.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
 
-      # check 잡의 단계 안에서 돌던 때와 같은 시스템 라이브러리(그 잡의 같은 단계).
+      # test-rust 잡과 같은 시스템 라이브러리(lint 잡의 같은 단계).
       - name: Tauri system dependencies
         if: runner.os == 'Linux'
         run: |
@@ -363,7 +446,7 @@ jobs:
           version: ${{ env.MISE_VERSION }}
           install_args: node rust aqua:nextest-rs/nextest/cargo-nextest
 
-      # rust-toolchain.toml 의 musl 타깃을 깐다(까닭은 check 잡의 같은 단계).
+      # rust-toolchain.toml 의 musl 타깃을 깐다(까닭은 lint 잡의 같은 단계).
       - name: Rust toolchain
         run: env -u RUSTUP_TOOLCHAIN rustup toolchain install --no-self-update
 
@@ -420,7 +503,7 @@ jobs:
           # 스크립트 · TS 서버 설치(node · npm) · 빌드(rust) · 시험(nextest)만 쓴다. 저장소의 pnpm 의존성은 설치하지 않는다.
           install_args: node rust aqua:nextest-rs/nextest/cargo-nextest npm:pnpm
 
-      # rust-toolchain.toml 의 components(rust-src — rust-analyzer 가 표준 라이브러리 소스를 읽는다)를 깐다. 까닭은 check 잡의 같은 단계.
+      # rust-toolchain.toml 의 components(rust-src — rust-analyzer 가 표준 라이브러리 소스를 읽는다)를 깐다. 까닭은 lint 잡의 같은 단계.
       - name: Rust toolchain components
         shell: bash
         run: env -u RUSTUP_TOOLCHAIN rustup toolchain install --no-self-update

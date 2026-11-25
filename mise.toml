@@ -33,14 +33,26 @@ description = "데스크톱 앱을 개발 모드로 실행(워크트리 전용 �
 depends = ["install-deps"]
 run = "node apps/desktop/scripts/dev.mjs"
 
+# 둘을 차례로 돈다(동시에 돌지 않는다 — 기기 부하). CI 는 둘을 OS 마다 다른 잡으로 돌린다(.github/workflows/ci.yml 의 `test-rust` ·
+# `test-ts` — 한 잡에서 lint 와 함께 돌면 캐시를 잃은 macOS 가 45분을 넘었다, CI run 45529596394).
 [tasks.test]
-description = "Rust(nextest · doctest) 와 TS(Vitest) 테스트"
+description = "Rust(nextest · doctest) 와 TS(Vitest · 스크립트 판정) 테스트"
 depends = ["install-deps"]
+run = [{ task = "test-rust" }, { task = "test-ts" }]
+
+[tasks.test-rust]
+description = "Rust 테스트(nextest · doctest)"
 # nextest 는 doctest 를 돌리지 않는다. 문서의 사용 예는 cargo test --doc 로 따로 돌린다. `--all-features` 는 앱이 켜지 않는 기능의
 # 코드도 시험한다(pw-syntax 의 `wasm` — 외부 확장의 문법 WASM 경로).
 run = [
   "cargo nextest run --workspace --all-features --no-tests=fail",
   "cargo test --workspace --all-features --doc",
+]
+
+[tasks.test-ts]
+description = "TS 테스트(Vitest)와 scripts/*.mjs 의 판정 시험 — Rust 빌드가 필요 없다"
+depends = ["install-deps"]
+run = [
   "pnpm -r --if-present run test",
   # 실기 측정 스크립트(scripts/perf-m2.mjs)의 종료 코드 · 복사 이름 · 덮어쓰기 · 잠금 확인 — 가짜 mise 로 앱 없이 돈다.
   "node --test scripts/perf-m2.test.mjs",
