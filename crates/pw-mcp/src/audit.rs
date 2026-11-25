@@ -33,6 +33,15 @@ pub const DIR: &str = "mcp";
 pub const FILE_NAME: &str = "audit.db";
 const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// 판 올림 잠금([`upgrade_lock`])을 기다리는 상한 — 판 올림 단계마다 busy 대기 한 번(2초 × 단계 4 = 8초).
+///
+/// busy 2초는 문장 하나가 SQLite 잠금을 기다리는 상한이고 그대로다. 이것은 다른 문제 — 다른 프로세스의 판 올림 **전체**를 기다리는
+/// 상한이다. 쥔 쪽은 단계마다 쓰기 잠금을 busy 2초까지 기다릴 수 있으므로, 잠금 없이 단계마다 다투던 때 한 연결이 기다릴 수
+/// 있던 만큼(단계마다 2초)을 한 번에 준다. 넘기면 열기가 실패한다 — 쓰기 툴은 감사 불가(`audit_unavailable`)로 거절되고(닫힌 쪽)
+/// 다음 열기에서 다시 해 본다. 상한이 없으면 잠금을 쥔 채 멈춘 프로세스(디버거 정지 등) 하나에 이 프로세스의 감사 기록이 모두
+/// 매달린다(연결 뮤텍스를 쥔 채 연다).
+const UPGRADE_LOCK_TIMEOUT: Duration = BUSY_TIMEOUT.saturating_mul(MIGRATIONS.len() as u32);
+
 /// 인자 요약의 한도.
 pub const MAX_STRING: usize = 80;
 pub const MAX_ITEMS: usize = 8;
@@ -633,6 +642,11 @@ impl AuditLog {
 }
 
 fn open(file: &Path) -> rusqlite::Result<Connection> {
+    open_waiting(file, UPGRADE_LOCK_TIMEOUT)
+}
+
+/// [`open`] — 판 올림 잠금을 `wait` 까지 기다린다(시험이 짧게 준다).
+fn open_waiting(file: &Path, wait: Duration) -> rusqlite::Result<Connection> {
     let io = |path: &Path, e: std::io::Error| {
         rusqlite::Error::InvalidPath(PathBuf::from(format!("{}: {e}", path.display())))
     };
@@ -645,7 +659,7 @@ fn open(file: &Path) -> rusqlite::Result<Connection> {
     use_wal(&conn);
     let current: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if (current as usize) < MIGRATIONS.len() {
-        let _upgrading = upgrade_lock(file).map_err(|e| io(&upgrade_lock_path(file), e))?;
+        let _upgrading = upgrade_lock(file, wait).map_err(|e| io(&upgrade_lock_path(file), e))?;
         // 기다린 사이 다른 프로세스가 올렸으면 쓰기 잠금 없이 여기서 끝난다.
         let current: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
         for (from, step) in MIGRATIONS.iter().enumerate().skip(current as usize) {
@@ -678,8 +692,9 @@ fn upgrade_lock_path(file: &Path) -> PathBuf {
 /// 판마다의 `BEGIN IMMEDIATE` 를 모두가 busy 폴링으로 다퉜다 — 표를 새로 만들어 행을 옮기는 올림은 쓰기 잠금을 오래 쥐어, 커밋이
 /// 느린 Windows 에서 2초 안에 못 끼어든 연결의 열기가 `database is locked` 로 실패했다(CI run 45519711273). 잠금은 줄을 세우고,
 /// 기다린 쪽은 판을 다시 읽어 이미 올랐으면 쓰기 잠금 없이 넘어간다. 평상 쓰기(올림이 필요 없는 열기)는 이 잠금을 쥐지 않는다.
-/// 잠금 안에서도 판마다 `IMMEDIATE` 로 다시 읽는다 — 이 잠금을 모르는 판의 프로세스와도 맞게.
-fn upgrade_lock(file: &Path) -> std::io::Result<fs::File> {
+/// 잠금 안에서도 판마다 `IMMEDIATE` 로 다시 읽는다 — 이 잠금을 모르는 판의 프로세스와도 맞게. 권고 잠금이라 이 잠금을 아는
+/// 코드끼리만 줄을 선다. `wait` 안에 못 쥐면 `TimedOut`([`UPGRADE_LOCK_TIMEOUT`]).
+fn upgrade_lock(file: &Path, wait: Duration) -> std::io::Result<fs::File> {
     let path = upgrade_lock_path(file);
     private_file(&path)?;
     let lock = fs::OpenOptions::new()
@@ -688,8 +703,22 @@ fn upgrade_lock(file: &Path) -> std::io::Result<fs::File> {
         .create(true)
         .truncate(false)
         .open(&path)?;
-    lock.lock()?;
-    Ok(lock)
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        match lock.try_lock() {
+            Ok(()) => return Ok(lock),
+            Err(fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(fs::TryLockError::WouldBlock) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("another process held the upgrade lock for {wait:?}"),
+                ));
+            }
+            Err(fs::TryLockError::Error(e)) => return Err(e),
+        }
+    }
 }
 
 /// 감사 로그는 WAL 저널에 `synchronous = FULL` 로 쓴다(05-mcp 「감사 로그」).
@@ -1556,6 +1585,49 @@ mod tests {
             .unwrap();
         held.lock().unwrap();
         open(&file).expect("지금 판 파일은 잠금 없이 열린다");
+    }
+
+    /// 판 올림 잠금을 쥔 채 놓지 않는 프로세스가 있어도 열기는 매달리지 않는다 — 시한 뒤 오류로 끝나고(선기록 실패 → 쓰기 툴은
+    /// `audit_unavailable` 로 거절) 판은 그대로다. 잠금이 풀린 뒤의 열기는 올린다.
+    #[test]
+    fn a_held_upgrade_lock_fails_the_open_after_the_wait() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("audit.db");
+        {
+            let conn = Connection::open(&file).unwrap();
+            conn.execute_batch(MIGRATIONS[0]).unwrap();
+            conn.pragma_update(None, "user_version", 1).unwrap();
+        }
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(upgrade_lock_path(&file))
+            .unwrap();
+        held.lock().unwrap();
+        let opener = {
+            let file = file.clone();
+            std::thread::spawn(move || {
+                open_waiting(&file, Duration::from_millis(200))
+                    .map(drop)
+                    .map_err(|e| e.to_string())
+            })
+        };
+        let started = std::time::Instant::now();
+        while !opener.is_finished() {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "열기가 잠금에 매달렸다"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let err = opener.join().unwrap().expect_err("잠금을 쥔 채 열렸다");
+        assert!(err.contains("upgrade lock"), "{err}");
+        assert_eq!(version(&file), 1);
+        drop(held);
+        open(&file).unwrap();
+        assert_eq!(version(&file), SCHEMA_VERSION);
     }
 
     /// 행 id 는 다시 쓰이지 않는다(R5): 가장 큰 id 를 지워도(보관 정리 · 지우기) 새 행은 더 큰 id 다 — 커서와 `mcp.activity` 가
