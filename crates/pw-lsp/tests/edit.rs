@@ -732,7 +732,9 @@ async fn another_servers_edit_during_a_command_is_not_applied() {
     win.response(call).await.unwrap();
 }
 
-/// 편집을 기다리는 동안 명령을 부른 창이 닫히면 `applied: false`.
+/// 편집을 기다리는 동안 명령을 부른 창이 닫히면 `applied: false`. 같은 프로젝트의 다른 창이 그 서버에 문서를 열어 둔다 — 창이
+/// 하나뿐이면 그 창이 닫힐 때 관리자가 서버를 곧바로 끝내고(`session_closed`), 답과 `shutdown` · `exit` 중 어느 것이 먼저
+/// 나갈지는 태스크 차례에 달린다(Ubuntu CI 에서 답이 `exit` 뒤로 밀려 서버가 받지 못했다). 끝나는 서버에는 답이 쓸모없다.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_closed_window_answers_no() {
     let fix = json!({ "title": "Fix", "command": "fix.it" });
@@ -754,6 +756,7 @@ async fn a_closed_window_answers_no() {
         ),
     );
     let mut win = env.window();
+    let mut other = env.window();
     win.call(
         "events.subscribe",
         json!({ "projectId": env.id, "topics": ["lsp.applyEdit"] }),
@@ -761,6 +764,8 @@ async fn a_closed_window_answers_no() {
     .await
     .unwrap();
     let doc = ready(&env, &mut win, "src/main.rs", "Rust", "fn main() {}\n").await;
+    let lib = env.file("src/lib.rs", "pub fn lib() {}\n");
+    other.open(&env, &lib, "Rust", "pub fn lib() {}\n").await;
     list_actions(&mut win, &doc).await;
     win.send(
         "lsp.command.execute",
@@ -771,6 +776,11 @@ async fn a_closed_window_answers_no() {
         .unwrap();
     drop(win);
     assert_eq!(answer_to(&record, "fake-1").await["applied"], false);
+    assert!(
+        !received(&record).iter().any(|m| m["method"] == "shutdown"),
+        "the other window keeps the server"
+    );
+    drop(other);
 }
 
 /// 명령은 프로젝트 창에서만 돈다(웰컴 · 설정 창의 연결은 문서도 없다 — 연결 범위가 먼저 막는다).
