@@ -198,6 +198,7 @@ mod tests {
         let (_tmp, root) = repo();
         fs::write(root.join(".gitignore"), "target/\n*.log\n").unwrap();
         fs::create_dir_all(root.join("target/debug")).unwrap();
+        fs::write(root.join("target/debug/x"), "x").unwrap();
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
         fs::write(root.join("src/run.log"), "x").unwrap();
@@ -226,6 +227,11 @@ mod tests {
             listed(&roots, &root.join("target")),
             [("debug".to_owned(), EntryKind::Dir, true)]
         );
+        // 두 단계 아래도 그렇다 — 목록 폴더(`target/debug`) 자신은 `target/` 에 걸리지 않고 그 조상이 걸린다.
+        assert_eq!(
+            listed(&roots, &root.join("target/debug")),
+            [("x".to_owned(), EntryKind::File, true)]
+        );
     }
 
     #[test]
@@ -252,6 +258,22 @@ mod tests {
         assert_eq!(get("to-dir").kind, EntryKind::Symlink);
         assert_eq!(get("to-dir").target, Some(EntryKind::Dir));
         assert_eq!(get("broken").target, None);
+    }
+
+    /// 폴더를 가리키는 링크는 폴더 전용 패턴(`build/`)에 걸리지 않는다 — 링크 자신의 종류로 판정한다(git 도 링크를 파일로 본다).
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_a_folder_is_not_caught_by_a_folder_only_pattern() {
+        let (_tmp, root) = repo();
+        fs::write(root.join(".gitignore"), "build/\n").unwrap();
+        fs::create_dir_all(root.join("realdir")).unwrap();
+        fs::create_dir_all(root.join("y")).unwrap();
+        std::os::unix::fs::symlink("../realdir", root.join("y/build")).unwrap();
+        let roots = Roots::new([root.clone()]);
+        assert_eq!(
+            listed(&roots, &root.join("y")),
+            [("build".to_owned(), EntryKind::Symlink, false)]
+        );
     }
 
     /// 메인 체크아웃이 워크트리 폴더(`.worktrees/`)를 무시해도, 워크트리 루트 아래 항목은 워크트리의 규칙으로 판정한다.
