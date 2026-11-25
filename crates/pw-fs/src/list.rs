@@ -275,6 +275,36 @@ mod tests {
         );
     }
 
+    /// 루트 자신은 판정하지 않는다 — 바깥 저장소가 루트 폴더를 그대로 무시해도(`/wt/`) 루트 아래 항목은 무시되지 않는다.
+    #[test]
+    fn the_root_itself_is_not_judged_by_an_outer_repository() {
+        let (_tmp, main) = repo();
+        fs::write(main.join(".gitignore"), "/wt/\n").unwrap();
+        let wt = main.join("wt");
+        fs::create_dir_all(wt.join("src")).unwrap();
+        fs::write(wt.join(".git"), "gitdir: elsewhere\n").unwrap();
+        fs::write(wt.join("src/a.rs"), "").unwrap();
+        let roots = Roots::new([main.clone(), wt.clone()]);
+        assert_eq!(
+            listed(&roots, &wt),
+            [
+                (".git".to_owned(), EntryKind::File, false),
+                ("src".to_owned(), EntryKind::Dir, false),
+            ]
+        );
+        assert_eq!(
+            listed(&roots, &wt.join("src")),
+            [("a.rs".to_owned(), EntryKind::File, false)]
+        );
+        // 바깥 루트에서 보면 그 폴더는 무시된 것이다.
+        assert_eq!(
+            listed(&roots, &main)
+                .into_iter()
+                .find(|(name, ..)| name == "wt"),
+            Some(("wt".to_owned(), EntryKind::Dir, true))
+        );
+    }
+
     /// `.gitignore -> /dev/zero` 링크는 읽지 않는다(없는 것으로 본다) — 끝까지 읽으면 메모리가 끝없이 는다. 같은 폴더의 `.ignore`
     /// 는 그대로 적용된다.
     #[cfg(unix)]
