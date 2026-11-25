@@ -355,6 +355,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
+      # rust-cache 가 깔던 값. 캐시 없는 CI 빌드에 증분 산출물은 시간 · 디스크만 든다.
+      CARGO_INCREMENTAL: "0"
       # mise run 은 기본으로 mise.toml 의 빠진 도구를 전부 설치한다. 아래 install_args 로 고른 것만 쓰게 끈다.
       MISE_TASK_RUN_AUTO_INSTALL: "false"
       NEXTEST_PROFILE: ci
@@ -398,7 +400,7 @@ jobs:
           # 스크립트(node) · 빌드(rust) · 시험(nextest)만 쓴다. pnpm 의존성은 설치하지 않는다.
           install_args: node rust aqua:nextest-rs/nextest/cargo-nextest
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # Rust 빌드 캐시는 두지 않는다 — 저장소 캐시 10 GB 상한에서 한 판의 작업 집합이 12 ~ 13 GB 라 매 판 축출됐다(ci-fix8 보고서 캐시 절).
 
       # TLS 시험 서버(14-m3-plan.md M3-06): 서비스 컨테이너는 checkout 전에 떠 저장소의 파일을 마운트할 수 없어 여기서 띄운다. 시험
       # CA · 서버 인증서를 그 자리에서 만들고 시험 CA 로 서명한 두 번째 PG 와 TLS 만 받는 Redis 를 띄운 뒤 PW_TEST_PG_TLS_URL ·
@@ -441,6 +443,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
+      # rust-cache 가 깔던 값. 캐시 없는 CI 빌드에 증분 산출물은 시간 · 디스크만 든다.
+      CARGO_INCREMENTAL: "0"
       MISE_TASK_RUN_AUTO_INSTALL: "false"
       NEXTEST_PROFILE: ci
     steps:
@@ -455,7 +459,7 @@ jobs:
       - name: Rust toolchain
         run: env -u RUSTUP_TOOLCHAIN rustup toolchain install --no-self-update
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # Rust 빌드 캐시는 두지 않는다 — 저장소 캐시 10 GB 상한에서 한 판의 작업 집합이 12 ~ 13 GB 라 매 판 축출됐다(ci-fix8 보고서 캐시 절).
 
       # C 코드(tree-sitter 문법 · sqlite · ring)를 musl 로 컴파일한다.
       - name: musl tools
@@ -488,6 +492,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
     env:
+      # rust-cache 가 깔던 값. 캐시 없는 CI 빌드에 증분 산출물은 시간 · 디스크만 든다.
+      CARGO_INCREMENTAL: "0"
       # mise run 은 기본으로 mise.toml 의 빠진 도구를 전부 설치한다. 아래 install_args 로 고른 것만 쓰게 끈다.
       MISE_TASK_RUN_AUTO_INSTALL: "false"
       NEXTEST_PROFILE: ci
@@ -526,7 +532,7 @@ jobs:
           echo "PW_TEST_JDK17=$(mise where "java@$LSP_LIVE_PROJECT_JAVA")" >> "$GITHUB_ENV"
           echo "JAVA_HOME=" >> "$GITHUB_ENV"
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # Rust 빌드 캐시는 두지 않는다 — 저장소 캐시 10 GB 상한에서 한 판의 작업 집합이 12 ~ 13 GB 라 매 판 축출됐다(ci-fix8 보고서 캐시 절).
 
       # 설치본 캐시. 키는 받는 것(고정 표 · 덮어쓰기)과 설치기 코드(받기 · 풀기 · 런처 · 실행 링크 — 시험은 뺀다)다. 설치기만 바뀌어도
       # 캐시가 맞으면 `tools_install` 이 기록을 보고 `AlreadyInstalled` 로 끝나 새 설치기 코드가 이 서버들에서 돌지 않는다.
@@ -582,6 +588,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
+      # rust-cache 가 깔던 값. 캐시 없는 CI 빌드에 증분 산출물은 시간 · 디스크만 든다.
+      CARGO_INCREMENTAL: "0"
       MISE_TASK_RUN_AUTO_INSTALL: "false"
       NEXTEST_PROFILE: ci
       PW_DAP_ADAPTERS_DIR: ${{ github.workspace }}/.dap-adapters
@@ -612,7 +620,7 @@ jobs:
           echo "JAVA_HOME=" >> "$GITHUB_ENV"
           sudo sysctl -w kernel.yama.ptrace_scope=0
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # Rust 빌드 캐시는 두지 않는다 — 저장소 캐시 10 GB 상한에서 한 판의 작업 집합이 12 ~ 13 GB 라 매 판 축출됐다(ci-fix8 보고서 캐시 절).
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
