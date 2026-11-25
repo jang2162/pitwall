@@ -8,6 +8,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// 첫 커밋의 시각(초). 커밋마다 1분씩 늘린다 — 해시와 시각 순서가 실행마다 같다.
 const EPOCH: u64 = 1_700_000_000;
 
+/// [`git_command`] 가 쓰는 작성자 · 커미터의 이름과 메일.
+pub const TEST_NAME: &str = "Pitwall Test";
+pub const TEST_EMAIL: &str = "test@pitwall.invalid";
+
 /// 사람의 git 설정 · 저장소와 떨어진 git 명령. 시스템 · 전역 설정을 읽지 않고(`GIT_CONFIG_NOSYSTEM`, 빈 `GIT_CONFIG_GLOBAL`),
 /// 위로 찾기를 `ceiling` 에서 멈춘다(임시 폴더가 어느 저장소 안이어도 그 저장소를 건드리지 않는다). 실행기가 자식 환경에서 빼는
 /// 변수(`crate::cli::is_dropped` — `GIT_DIR` 처럼 시험이 git 훅 안에서 돌 때 남아 있는 것, 부른 쪽이 `-c` 로 넣은 설정)는 지운다.
@@ -29,10 +33,10 @@ pub fn git_command(dir: &Path, ceiling: &Path) -> Command {
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_EDITOR", ":")
         .env("GIT_MERGE_AUTOEDIT", "no")
-        .env("GIT_AUTHOR_NAME", "Pitwall Test")
-        .env("GIT_AUTHOR_EMAIL", "test@pitwall.invalid")
-        .env("GIT_COMMITTER_NAME", "Pitwall Test")
-        .env("GIT_COMMITTER_EMAIL", "test@pitwall.invalid")
+        .env("GIT_AUTHOR_NAME", TEST_NAME)
+        .env("GIT_AUTHOR_EMAIL", TEST_EMAIL)
+        .env("GIT_COMMITTER_NAME", TEST_NAME)
+        .env("GIT_COMMITTER_EMAIL", TEST_EMAIL)
         .args([
             "-c",
             "init.defaultBranch=main",

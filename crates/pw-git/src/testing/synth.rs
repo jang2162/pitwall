@@ -13,7 +13,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::Stdio;
 
-use super::repo::git_command;
+use super::repo::{TEST_EMAIL, TEST_NAME, git_command};
 
 /// 기본 시드. 보고의 수치는 이 시드로 잰다.
 pub const SEED: u64 = 0x5eed_2026_1026;
@@ -366,6 +366,11 @@ pub fn fanout(
 pub(super) fn import(dir: &Path, ceiling: &Path, stream: &[u8]) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     run(git_command(dir, ceiling).args(["init", "--quiet"]))?;
+    fast_import(dir, ceiling, stream)
+}
+
+/// 있는 저장소에 fast-import 입력 `stream` 을 들인다.
+fn fast_import(dir: &Path, ceiling: &Path, stream: &[u8]) -> std::io::Result<()> {
     let mut child = git_command(dir, ceiling)
         .args(["fast-import", "--quiet", "--done"])
         .stdin(Stdio::piped())
@@ -440,18 +445,37 @@ pub fn perf_fixture(dir: &Path, ceiling: &Path) -> std::io::Result<PerfFixture> 
     for (key, value) in [("maintenance.auto", "false"), ("gc.auto", "0")] {
         run(git_command(dir, ceiling).args(["config", key, value]))?;
     }
-    // 합성 이력은 커밋마다 90초까지 늘어 100만 커밋이어도 이 시각에 닿지 않는다.
-    let commit = |step: i64, message: &str| {
-        let at = format!("{} +0000", EPOCH + 100_000_000 + 60 * step);
-        run(git_command(dir, ceiling)
-            .env("GIT_AUTHOR_DATE", &at)
-            .env("GIT_COMMITTER_DATE", &at)
-            .args(["commit", "--quiet", "-m", message]))
+    // 커밋 셋을 fast-import 한 번으로 팩 하나에 넣는다. `git add` 로 넣으면 작은 파일 1만 개가 낱 객체 1만 개(새 파일 1만 개 더)가
+    // 돼 Windows CI 에서 픽스처 시험이 300 s 를 넘겼다(run 45519711273). 커밋은 `git commit -m` 으로 만들던 때와 같은 바이트다 —
+    // 메시지 끝의 줄바꿈, `git_command` 의 작성자, 아래 시각 — 그래서 해시도 같다(시험의 `PERF_FIXTURE_COMMIT`).
+    let mut stream = Vec::new();
+    let file = |out: &mut Vec<u8>, path: &str, content: &str| {
+        let _ = write!(
+            out,
+            "M 100644 inline {path}\ndata {}\n{content}\n",
+            content.len()
+        );
     };
-    let many = dir.join(PERF_CHANGES_DIR);
-    std::fs::create_dir_all(&many)?;
+    let commit = |out: &mut Vec<u8>, step: i64, message: &str| {
+        // 합성 이력은 커밋마다 90초까지 늘어 100만 커밋이어도 이 시각에 닿지 않는다.
+        let at = EPOCH + 100_000_000 + 60 * step;
+        let message = format!("{message}\n");
+        let _ = writeln!(out, "commit refs/heads/main");
+        let _ = writeln!(out, "author {TEST_NAME} <{TEST_EMAIL}> {at} +0000");
+        let _ = writeln!(out, "committer {TEST_NAME} <{TEST_EMAIL}> {at} +0000");
+        let _ = write!(out, "data {}\n{message}", message.len());
+        if step == 0 {
+            // 저장소에 있는 `main` 위에 잇는다. 뒤 커밋은 fast-import 가 쥔 끝 위에 이어진다.
+            let _ = writeln!(out, "from refs/heads/main^0");
+        }
+    };
+    commit(&mut stream, 0, "perf: add 10,000 small files and typing.rs");
     for i in 0..PERF_CHANGES {
-        std::fs::write(many.join(format!("f{i:05}.txt")), format!("file {i}\n"))?;
+        file(
+            &mut stream,
+            &format!("{PERF_CHANGES_DIR}/f{i:05}.txt"),
+            &format!("file {i}\n"),
+        );
     }
     let typing: Vec<String> = std::iter::once(PERF_TYPING_FIRST_LINE.to_owned())
         .chain(
@@ -459,13 +483,11 @@ pub fn perf_fixture(dir: &Path, ceiling: &Path) -> std::io::Result<PerfFixture> 
                 .map(|i| format!("    let value_{i} = compute({i}, \"some text on line {i}\");")),
         )
         .collect();
-    std::fs::write(
-        dir.join(PERF_TYPING_PATH),
-        format!("{}\n", typing.join("\n")),
-    )?;
-    run(git_command(dir, ceiling).args(["add", PERF_CHANGES_DIR, PERF_TYPING_PATH]))?;
-    commit(0, "perf: add 10,000 small files and typing.rs")?;
-    let path = dir.join(PERF_PATH);
+    file(
+        &mut stream,
+        PERF_TYPING_PATH,
+        &format!("{}\n", typing.join("\n")),
+    );
     for (step, (lines, message)) in [
         (&before, "perf: add big.rs"),
         (&after, "perf: change 10,000 lines"),
@@ -473,10 +495,13 @@ pub fn perf_fixture(dir: &Path, ceiling: &Path) -> std::io::Result<PerfFixture> 
     .into_iter()
     .enumerate()
     {
-        std::fs::write(&path, format!("{}\n", lines.join("\n")))?;
-        run(git_command(dir, ceiling).args(["add", PERF_PATH]))?;
-        commit(1 + step as i64, message)?;
+        commit(&mut stream, 1 + step as i64, message);
+        file(&mut stream, PERF_PATH, &format!("{}\n", lines.join("\n")));
     }
+    let _ = writeln!(stream, "done");
+    fast_import(dir, ceiling, &stream)?;
+    // fast-import 는 작업 트리를 맞추지 않는다 — `main` 을 꺼낸다(status 가 깨끗하게).
+    run(git_command(dir, ceiling).args(["reset", "--quiet", "--hard", "main"]))?;
     run(git_command(dir, ceiling).args(["branch", PERF_BRANCH]))?;
     let commit = run(git_command(dir, ceiling).args(["rev-parse", "HEAD"]))?;
     Ok(PerfFixture {
@@ -521,7 +546,8 @@ mod tests {
     /// 픽스처는 `main` 끝에 1만 줄을 바꾼 파일 하나짜리 커밋을 두고, 같은 커밋에 체크아웃용 브랜치를 단다. 그 앞에 측정하는 쪽이 고칠
     /// 파일 1만 개와 타이핑 대상 파일이 있다. 같은 저장소면 같은 해시다 — 저장소를 둘 만들어 견주는 대신 고정한 해시
     /// [`PERF_FIXTURE_COMMIT`] 와 견준다(같은 것을 OS · 실행 사이까지 본다). 저장소 둘(새 파일 약 4만 개)은 Windows 에서 300 s 를
-    /// 넘겼다(CI run 45333303107) — 하나면 절반이다.
+    /// 넘겼고(CI run 45333303107), 하나여도 `git add` 의 낱 객체 1만 개 때문에 넘겼다(run 45519711273) — 픽스처는 이제 fast-import 로
+    /// 팩 하나에 넣는다. 해시가 그대로이므로 측정 쪽이 받는 저장소는 `git commit` 으로 만들던 때와 같다.
     #[test]
     fn the_perf_fixture_changes_ten_thousand_lines_of_one_file_on_main() {
         let tmp = tempfile::tempdir().unwrap();
