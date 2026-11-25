@@ -1724,8 +1724,9 @@ async fn a_reloaded_window_takes_its_open_transaction_back() {
     assert_eq!(payload["notice"]["kind"], "unattended");
     assert!(payload["notice"]["until"].is_u64());
     assert_eq!(payload["session"]["sessionId"], s.as_str());
+    // 세션은 표에서 먼저 빠지고 그 뒤에 드라이버 연결을 닫는다(`close_session`) — 드라이버의 닫기까지 기다린다.
     let deadline = Instant::now() + Duration::from_secs(2);
-    while e.sessions.session_count() > 1 {
+    while e.sessions.session_count() > 1 || e.pg.count(&FakeCall::Close) == 0 {
         assert!(
             Instant::now() < deadline,
             "the idle tab's session stayed open"
