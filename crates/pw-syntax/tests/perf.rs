@@ -1,5 +1,5 @@
 //! 강조 성능(`docs/design/12-m1-plan.md` M1-10 완료 기준): 5,000줄 Rust 파일의 첫 파싱 + 화면 범위 강조가 100 ms 안, 한 글자
-//! 편집 뒤 재강조가 16 ms 안. 에디터 첫 화면 강조의 서버 몫(M1-17, `measure_editor_first_screen`). 그리고 상한 · 메모리의 측정(`measure_*` — 단언 없이 수치만 찍는다): 정상 5 MiB 문서의 첫 파싱,
+//! 편집 뒤 재강조가 16 ms 안(50회 중 넘김 한 번까지 · 중앙값 4 ms 아래 — `judge_edits`). 에디터 첫 화면 강조의 서버 몫(M1-17, `measure_editor_first_screen`). 그리고 상한 · 메모리의 측정(`measure_*` — 단언 없이 수치만 찍는다): 정상 5 MiB 문서의 첫 파싱,
 //! 오류 회복이 폭주하는 문서가 끝나는 시간, 큰 편집, 문법을 올리는 시간 · 올리고 내린 메모리. release 로 잰다 — debug 빌드는
 //! tree-sitter · 문법의 C 코드가 최적화되지 않는다. 앱과 같게 `wasm` 기능 없이 잰다. 기본 시험에서는 빠진다(`#[ignore]`):
 //!
@@ -123,9 +123,10 @@ fn a_5000_line_rust_file_highlights_within_budget() {
         );
         times.push(started.elapsed());
     }
-    times.sort();
-    let median = times[EDITS / 2];
-    let max = *times.last().unwrap();
+    let mut sorted = times.clone();
+    sorted.sort();
+    let median = sorted[EDITS / 2];
+    let max = *sorted.last().unwrap();
 
     println!(
         "5000-line Rust: first screen incl. grammar load {cold:?} (open + load {loaded:?}); \
@@ -136,7 +137,52 @@ fn a_5000_line_rust_file_highlights_within_budget() {
         cold < Duration::from_millis(100),
         "first screen took {cold:?}"
     );
-    assert!(max < Duration::from_millis(16), "re-highlight took {max:?}");
+    // 공유 러너가 한 번 멈춘 것(CI run 45519711273 — 중앙값 1.5 ms 에 한 번만 136 ms)은 넘기고, 두 번 이상 넘김과 평소 속도의
+    // 회귀(중앙값)는 잡는다(사람의 판정 2026-11-25 — 전에는 최댓값 < 16 ms).
+    if let Err(why) = judge_edits(&times) {
+        panic!("{why}");
+    }
+}
+
+/// 한 글자 편집 + 다시 강조의 판정: 16 ms 를 넘은 것이 한 번 이하이고 중앙값이 4 ms 아래. 실패 글에 중앙값 · 넘은 횟수 · 최댓값 ·
+/// 넘은 값들을 모두 싣는다 — CI 로그만으로 꼬리인지 회귀인지 가리게.
+fn judge_edits(times: &[Duration]) -> Result<(), String> {
+    const FRAME: Duration = Duration::from_millis(16);
+    const MEDIAN: Duration = Duration::from_millis(4);
+    const OVER_ALLOWED: usize = 1;
+    let mut sorted = times.to_vec();
+    sorted.sort();
+    let median = sorted[sorted.len() / 2];
+    let max = *sorted.last().expect("표본이 있다");
+    let over: Vec<Duration> = times.iter().copied().filter(|t| *t > FRAME).collect();
+    if over.len() <= OVER_ALLOWED && median < MEDIAN {
+        return Ok(());
+    }
+    Err(format!(
+        "re-highlight over budget: median {median:?} (< {MEDIAN:?}), {} of {} over {FRAME:?} (<= {OVER_ALLOWED} allowed), \
+         max {max:?}, over: {over:?}",
+        over.len(),
+        times.len()
+    ))
+}
+
+/// 판정이 실제로 갈린다 — 한 번 튐은 통과, 두 번 튐 · 중앙값 5 ms 는 실패.
+#[test]
+fn the_edit_judgement_allows_one_spike_but_not_two_or_a_slow_median() {
+    let ms = Duration::from_millis;
+    let mut one = vec![ms(1); EDITS];
+    one[7] = ms(136);
+    assert_eq!(judge_edits(&one), Ok(()));
+
+    let mut two = one.clone();
+    two[30] = ms(17);
+    let why = judge_edits(&two).expect_err("두 번 넘김이 지났다");
+    assert!(why.contains("2 of 50 over"), "{why}");
+    assert!(why.contains("136ms") && why.contains("17ms"), "{why}");
+
+    let slow = vec![ms(5); EDITS];
+    let why = judge_edits(&slow).expect_err("중앙값 5 ms 가 지났다");
+    assert!(why.contains("median 5ms"), "{why}");
 }
 
 /// 에디터 강조(M1-17 완료 기준 「5,000줄 파일을 열고 화면 강조가 release 에서 150 ms 안」)의 서버 몫: 웹뷰가 보내는 JSON 을 읽어
