@@ -127,7 +127,8 @@ pub fn lock(endpoint: &Path, uid: u32) -> io::Result<Option<DaemonLock>> {
 
 /// 그 판의 데몬 자리를 누가 쥐고 있는가 — 「데몬 없음」 을 확실히 하려고 본다(`status`). 붙기가 거절(`ConnectionRefused`)돼도
 /// 데몬이 없다는 뜻만은 아니다: macOS 는 받는 줄(listen backlog)이 찬 소켓에도 같은 오류를 낸다(CI 열째 판 조사). 자리 파일이
-/// 없으면 `Ok(false)`. 공유 잠금을 잠깐 잡아 보고 곧바로 놓는다 — 그 사이에 뜨는 데몬은 자리를 못 쥐고 물러난다(붙는 쪽이 다시 띄운다).
+/// 없으면 `Ok(false)`. 공유 잠금을 잠깐 잡아 보고 곧바로 놓는다 — 그 사이에 뜨는 같은 판 데몬은 자리를 못 쥐고 물러나고, 그 데몬을 띄운
+/// 붙기(`proxy::connect_or_spawn` 은 한 번만 띄운다)는 [`crate::proxy::SPAWN_DEADLINE`] 안에 받는 쪽이 없어 실패한다. 다음 붙기가 다시 띄운다.
 pub fn held(endpoint: &Path) -> io::Result<bool> {
     use std::os::unix::fs::OpenOptionsExt;
     let path = endpoint.with_extension("lock");

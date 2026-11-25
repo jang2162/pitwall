@@ -545,6 +545,15 @@ fn a_refused_socket_with_a_held_place_is_not_no_daemon() {
     let home = dir.path().canonicalize().unwrap().join("home");
     let socket = socket_of(&home, "7.7.8");
     let uid = pw_relay::socket::current_uid();
+    // 이 시험의 자리 파일 · 소켓은 임시 폴더의 대체 자리(`sun_path` 가 짧아 tempdir 밖)에 생긴다 — 실패해도 지운다.
+    struct Leftovers(PathBuf);
+    impl Drop for Leftovers {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+            let _ = std::fs::remove_file(self.0.with_extension("lock"));
+        }
+    }
+    let _leftovers = Leftovers(socket.clone());
     let place = pw_relay::socket::lock(&socket, uid).unwrap().unwrap();
     // 소켓 파일이 없다.
     let _ = std::fs::remove_file(&socket);
@@ -564,5 +573,25 @@ fn a_refused_socket_with_a_held_place_is_not_no_daemon() {
         status_code(&home, "7.7.8", Duration::from_secs(20)),
         Some(3)
     );
+    // 자리를 볼 수 없으면(잠금 파일이 심링크 · 읽을 수 없음) 모른다 — 「없음」 으로 읽어 바이너리를 지우지 않는다.
     let _ = std::fs::remove_file(&socket);
+    let lock_file = socket.with_extension("lock");
+    std::fs::remove_file(&lock_file).unwrap();
+    let target = dir.path().join("elsewhere");
+    std::fs::write(&target, "").unwrap();
+    std::os::unix::fs::symlink(&target, &lock_file).unwrap();
+    assert_eq!(
+        status_code(&home, "7.7.8", Duration::from_secs(20)),
+        Some(4),
+        "a symlinked lock file"
+    );
+    std::fs::remove_file(&lock_file).unwrap();
+    std::fs::write(&lock_file, "").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&lock_file, std::fs::Permissions::from_mode(0o000)).unwrap();
+    assert_eq!(
+        status_code(&home, "7.7.8", Duration::from_secs(20)),
+        Some(4),
+        "an unreadable lock file"
+    );
 }
