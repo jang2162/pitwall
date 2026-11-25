@@ -1,6 +1,7 @@
 // scripts/perf-m6.mjs 의 단계 · 복사 이름 — 앱 없이 돈다.
 
 import assert from "node:assert/strict";
+import { normalize, win32 } from "node:path";
 import { test } from "node:test";
 
 import {
@@ -51,7 +52,9 @@ test("steps write under target/perf and are copied to dated report names", () =>
   const [empty, idle] = measurements({ short: false });
   assert.equal(stepSpawn(empty, "target/perf/x").command, "cargo");
   const d = stepSpawn(idle, "target/perf/y");
-  assert.ok(d.command.endsWith(DRIVER));
+  // 스크립트는 path.join 으로 붙인다 — Windows 시험 기기에선 구분자가 `\` 다(CI 6판).
+  assert.ok(d.command.endsWith(normalize(DRIVER)), d.command);
+  assert.ok(win32.join("D:\\a\\pitwall", DRIVER).endsWith(win32.normalize(DRIVER)));
   assert.equal(arg(d.args, "--out"), "target/perf/y");
   const pairs = reportCopies({
     date: "2026-11-19",

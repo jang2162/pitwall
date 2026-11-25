@@ -2,6 +2,7 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { normalize, win32 } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -66,7 +67,9 @@ test("pw-perf runs through cargo and the driver runs as the built binary", () =>
   assert.deepEqual(a.args.slice(0, 6), ["run", "-q", "--release", "-p", "pw-perf", "--"]);
   assert.deepEqual(a.args.slice(-2), ["--out", "target/perf/x"]);
   const b = stepSpawn(cli, "target/perf/y");
-  assert.ok(b.command.endsWith(DRIVER), b.command);
+  // 스크립트는 path.join 으로 붙인다 — Windows 시험 기기에선 구분자가 `\` 다(CI 6판).
+  assert.ok(b.command.endsWith(normalize(DRIVER)), b.command);
+  assert.ok(win32.join("D:\\a\\pitwall", DRIVER).endsWith(win32.normalize(DRIVER)));
   assert.deepEqual(b.args.slice(-2), ["--out", "target/perf/y"]);
 });
 
