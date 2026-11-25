@@ -448,7 +448,30 @@ async fn a_busy_old_daemon_keeps_its_binary() {
             }
         })
     };
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // 자리가 찼다는 것을 본 뒤에 묻는다 — 정해 둔 시간을 기다리면 느린 기기(macOS CI)에서 채우기가 덜 끝난 채 물어 데몬이
+    // 답한다(`Some(0)`, CI 열째 판). 데몬이 곧바로 닫는 연결(EOF)이 「찼다」 는 표시다. 받아들여진 시험 연결은 쥔 채 둔다.
+    let probe_at = socket_of(&remote.home, &old_version);
+    let mut probes = Vec::new();
+    let full_by = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        assert!(
+            std::time::Instant::now() < full_by,
+            "the old daemon's unproven slots never filled"
+        );
+        let Ok(mut probe) = std::os::unix::net::UnixStream::connect(&probe_at) else {
+            std::thread::sleep(Duration::from_millis(20));
+            continue;
+        };
+        probe
+            .set_read_timeout(Some(Duration::from_millis(300)))
+            .unwrap();
+        let mut byte = [0u8; 1];
+        match std::io::Read::read(&mut probe, &mut byte) {
+            Ok(0) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => break,
+            _ => probes.push(probe),
+        }
+    }
     assert_eq!(
         status_code(&remote.home, &old_version, Duration::from_secs(15)),
         Some(4),
@@ -468,6 +491,7 @@ async fn a_busy_old_daemon_keeps_its_binary() {
     assert!(remote.relay_dir().join(&old_file).exists());
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     filler.join().unwrap();
+    drop(probes);
 
     // 상한이 풀리면(쥔 연결은 첫 틀 시한 5초에 닫힌다) 다시 답한다.
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
@@ -511,4 +535,34 @@ fn status_gives_up_on_a_daemon_that_never_answers() {
         status_code(&home, "7.7.7", Duration::from_secs(20)),
         Some(3)
     );
+}
+
+/// 붙기가 거절되거나 소켓이 없어도 그 판의 자리(`.lock`)를 누가 쥐고 있으면 「없음」(3)이 아니라 「모름」(4)이다 — macOS 는 받는
+/// 줄이 찬 소켓에도 거절을 내고(CI 열째 판 조사), 뜨는 중인 데몬은 자리를 쥔 뒤에 소켓을 연다. 정리가 그 바이너리를 지우면 안 된다.
+#[test]
+fn a_refused_socket_with_a_held_place_is_not_no_daemon() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap().join("home");
+    let socket = socket_of(&home, "7.7.8");
+    let uid = pw_relay::socket::current_uid();
+    let place = pw_relay::socket::lock(&socket, uid).unwrap().unwrap();
+    // 소켓 파일이 없다.
+    let _ = std::fs::remove_file(&socket);
+    assert_eq!(
+        status_code(&home, "7.7.8", Duration::from_secs(20)),
+        Some(4)
+    );
+    // 받는 쪽이 없는 소켓 파일(거절).
+    drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+    assert_eq!(
+        status_code(&home, "7.7.8", Duration::from_secs(20)),
+        Some(4)
+    );
+    // 자리를 놓으면 확실히 없다.
+    drop(place);
+    assert_eq!(
+        status_code(&home, "7.7.8", Duration::from_secs(20)),
+        Some(3)
+    );
+    let _ = std::fs::remove_file(&socket);
 }

@@ -125,6 +125,35 @@ pub fn lock(endpoint: &Path, uid: u32) -> io::Result<Option<DaemonLock>> {
     }
 }
 
+/// 그 판의 데몬 자리를 누가 쥐고 있는가 — 「데몬 없음」 을 확실히 하려고 본다(`status`). 붙기가 거절(`ConnectionRefused`)돼도
+/// 데몬이 없다는 뜻만은 아니다: macOS 는 받는 줄(listen backlog)이 찬 소켓에도 같은 오류를 낸다(CI 열째 판 조사). 자리 파일이
+/// 없으면 `Ok(false)`. 공유 잠금을 잠깐 잡아 보고 곧바로 놓는다 — 그 사이에 뜨는 데몬은 자리를 못 쥐고 물러난다(붙는 쪽이 다시 띄운다).
+pub fn held(endpoint: &Path) -> io::Result<bool> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = endpoint.with_extension("lock");
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&path)
+    {
+        Ok(file) => file,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    // SAFETY: 열린 파일의 fd 다. flock 은 메모리를 건드리지 않는다.
+    let locked = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) };
+    if locked == 0 {
+        // 파일을 닫으면 잠금도 놓인다.
+        return Ok(false);
+    }
+    let e = io::Error::last_os_error();
+    if e.kind() == io::ErrorKind::WouldBlock {
+        Ok(true)
+    } else {
+        Err(e)
+    }
+}
+
 /// 쥔 데몬 자리. 버리면(프로세스가 끝나면) 놓인다.
 pub struct DaemonLock {
     _file: File,
@@ -268,9 +297,12 @@ mod tests {
         assert_ne!(a, b);
         let held = lock(&a, uid).unwrap().expect("first");
         assert!(lock(&a, uid).unwrap().is_none());
+        assert!(super::held(&a).unwrap(), "a held place is held");
+        assert!(!super::held(&b).unwrap(), "no lock file is not held");
         let other = lock(&b, uid).unwrap();
         assert!(other.is_some());
         drop(held);
+        assert!(!super::held(&a).unwrap(), "a let-go place is free");
         assert!(lock(&a, uid).unwrap().is_some());
     }
 

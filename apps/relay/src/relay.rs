@@ -450,12 +450,13 @@ const STATUS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 pub(crate) const STATUS_NO_DAEMON: u8 = 3;
 pub(crate) const STATUS_UNKNOWN: u8 = 4;
 
-/// 연결 오류가 「데몬 없음」 을 확실히 말하는가.
-fn no_daemon(e: &std::io::Error) -> bool {
+/// 연결 오류가 「데몬 없음」 을 확실히 말하는가. 소켓이 없거나 거절돼도 그 판의 자리(`.lock`)를 누가 쥐고 있으면 데몬은
+/// 있다 — macOS 는 받는 줄이 찬 소켓에도 거절을 내고, 뜨는 중인 데몬은 자리를 쥔 뒤에 소켓을 연다. 자리를 못 보면 모른다.
+fn no_daemon(e: &std::io::Error, socket: &std::path::Path) -> bool {
     matches!(
         e.kind(),
         std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
-    )
+    ) && matches!(pw_relay::socket::held(socket), Ok(false))
 }
 
 fn status() -> ExitCode {
@@ -474,7 +475,7 @@ fn status() -> ExitCode {
                 .await
             {
                 Ok(Ok(stream)) => stream,
-                Ok(Err(e)) => return Err((no_daemon(&e), e.to_string())),
+                Ok(Err(e)) => return Err((no_daemon(&e, &socket), e.to_string())),
                 Err(_) => {
                     return Err((
                         false,
