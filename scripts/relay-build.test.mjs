@@ -65,13 +65,14 @@ test("the host target and arguments", () => {
   const host = "x86_64-unknown-linux-musl";
   assert.deepEqual(parseArgs([], host).targets, [host]);
   const options = parseArgs(
-    ["--target", "aarch64-unknown-linux-musl", "--complete", "--out", "/tmp/x"],
+    ["--target", "aarch64-unknown-linux-musl", "--complete", "--out", "x/out"],
     host,
   );
   assert.deepEqual(options.targets, ["aarch64-unknown-linux-musl"]);
   assert.equal(options.complete, true);
-  // `--out` 은 resolve 로 절대 경로가 된다 — Windows 에선 드라이브가 붙어 `D:\tmp\x`(CI run 45529596394).
-  assert.equal(options.out, resolve("/tmp/x"));
+  // `--out` 은 resolve 로 절대 경로가 된다. 상대 입력이라 어느 OS 에서든 resolve 를 빼면 실패한다 — `/` 로 쓴 절대 경로를
+  // 기대하면 Windows 에선 드라이브가 붙어 어긋난다(CI run 45529596394).
+  assert.equal(options.out, resolve("x/out"));
   assert.throws(() => parseArgs(["--target", "x86_64-unknown-linux-gnu"], host), /unknown target/);
   assert.throws(() => parseArgs(["--bogus"], host), /unknown argument/);
 });

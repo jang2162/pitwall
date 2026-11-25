@@ -29,9 +29,11 @@ env:
 jobs:
   # lint · Rust 시험 · TS 시험을 OS 마다 세 잡으로 나눠 나란히 돌린다. 한 잡이던 때 macOS 는 Rust 캐시가 지워진 판(저장소 캐시 10 GB
   # 상한의 LRU — 그 판에 9.5 GB)에서 lint 12분 · 시험 빌드 16분 · nextest 8분 반 · doctest 3분에 데스크톱 vitest 가 더해져 45분을
-  # 넘겼다(CI run 45529596394). 나눈 뒤 캐시가 없어도 가장 긴 test-rust 가 macOS 에서 30분 남짓이다. Rust 캐시는 잡마다 따로다
-  # (rust-cache 의 키에 잡 id) — lint(clippy 의 메타데이터)와 test-rust(debug 시험 바이너리)는 산출물이 겹치지 않아 한 키를 나누면
-  # 먼저 끝난 잡의 것만 남는다. test-ts 는 Rust 를 빌드하지 않아 Rust 캐시가 없다.
+  # 넘겼다(CI run 45529596394). 나눈 뒤 캐시가 없을 때 가장 긴 것은 test-rust 다 — macOS 33 ~ 36분, Windows 37 ~ 41분(CI run
+  # 45299304602 의 Windows 는 캐시 없이 시험 빌드만 22분). Rust 캐시는 OS 마다 키 하나(`shared-key: check` → 한 잡이던 때의 키
+  # `v0-rust-check-<OS>-…` 그대로)를 test-rust 만 저장하고, lint 는 같은 키를 복원만 한다(`save-if: false`) — 빌드 스크립트 ·
+  # proc-macro 는 둘이 같이 쓰고, 저장하는 잡을 늘리면 저장소 캐시 10 GB 상한에서 다른 잡의 캐시가 더 밀려난다. test-ts 는 Rust 를
+  # 빌드하지 않아 Rust 캐시가 없다.
   lint:
     name: lint (${{ matrix.os }})
     if: github.event_name != 'schedule'
@@ -68,11 +70,12 @@ jobs:
           key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: pnpm-store-${{ runner.os }}-
 
-      # 시험이 실패하거나 시간 제한으로 취소돼도 빌드 산출물을 남긴다. 기본(성공 때만)이면 한 번도 통과하지 못한 OS(M6 뒤의 Linux ·
-      # Windows)는 매번 처음부터 빌드한다 — CI run 45299304602 의 Windows 는 캐시 없이 lint 13분 · 시험 빌드 22분을 썼다.
+      # test-rust 가 저장하는 키를 복원만 한다(위 머리 주석). clippy 의 rmeta 는 그 캐시에 없을 수 있다 — 캐시 없는 lint 는 macOS ·
+      # Windows 에서 12 ~ 13분이다(CI run 45529596394 · 45299304602).
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          cache-on-failure: true
+          shared-key: check
+          save-if: false
 
       # 데스크톱 크레이트(Tauri 2)를 clippy·nextest 가 컴파일하는 데 필요한 시스템 라이브러리.
       # 목록은 Tauri 2 공식 문서 「Prerequisites → Linux(Debian/Ubuntu)」 그대로다. macOS 는 Xcode 명령행 도구,
@@ -119,9 +122,11 @@ jobs:
           key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: pnpm-store-${{ runner.os }}-
 
-      # 까닭은 lint 잡의 같은 단계.
+      # OS 마다 Rust 캐시를 저장하는 유일한 잡이다(위 머리 주석). 시험이 실패하거나 시간 제한으로 취소돼도 빌드 산출물을 남긴다.
+      # 기본(성공 때만)이면 한 번도 통과하지 못한 OS(M6 뒤의 Linux · Windows)는 매번 처음부터 빌드한다.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          shared-key: check
           cache-on-failure: true
 
       # 까닭은 lint 잡의 같은 단계.
@@ -217,7 +222,7 @@ jobs:
           key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: pnpm-store-${{ runner.os }}-
 
-      # 까닭은 lint 잡의 같은 단계.
+      # 실패 · 취소에도 저장하는 까닭은 test-rust 잡의 같은 단계. release 산출물이라 키는 따로(잡 id)다.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
